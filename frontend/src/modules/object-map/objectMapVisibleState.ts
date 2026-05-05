@@ -11,7 +11,9 @@ import { getDisplayKind } from '@/utils/kindAliasMap';
 import { OBJECT_MAP_EDGE_KINDS } from './objectMapEdgeStyle';
 import { contractObjectMapKindFilter, FILTERED_PATH_EDGE_TYPE } from './objectMapKindFilter';
 import {
+  computeObjectMapBounds,
   computeObjectMapLayout,
+  routeObjectMapEdges,
   type ObjectMapLayout,
   type PositionedEdge,
   type PositionedNode,
@@ -21,6 +23,7 @@ import type { ObjectMapSelectionState } from './objectMapRendererTypes';
 
 export interface ObjectMapVisibleStateInput {
   layout: ObjectMapLayout;
+  seedNodeId: string;
   activeNodeId: string | null;
   focusMode: boolean;
   selectedKinds: string[];
@@ -106,12 +109,12 @@ const applyKindFilter = ({
   layout,
   selectedKindSet,
   enabledEdgeTypes,
-  activeNodeId,
+  seedNodeId,
 }: {
   layout: ObjectMapLayout;
   selectedKindSet: Set<string>;
   enabledEdgeTypes: Set<string> | null;
-  activeNodeId: string | null;
+  seedNodeId: string;
 }): ObjectMapLayout => {
   if (selectedKindSet.size === 0) return layout;
 
@@ -130,8 +133,8 @@ const applyKindFilter = ({
   return computeObjectMapLayout(
     contracted.nodes,
     edges,
-    contracted.nodes.some((node) => node.id === activeNodeId)
-      ? activeNodeId!
+    contracted.nodes.some((node) => node.id === seedNodeId)
+      ? seedNodeId
       : (contracted.nodes[0]?.id ?? '')
   );
 };
@@ -141,7 +144,10 @@ const applyFocusMode = (
   focusMode: boolean,
   activeNodeId: string | null
 ): ObjectMapLayout => {
-  if (!focusMode || !activeNodeId || !layout.nodes.some((node) => node.id === activeNodeId)) {
+  const activeNode = activeNodeId
+    ? (layout.nodes.find((node) => node.id === activeNodeId) ?? null)
+    : null;
+  if (!focusMode || !activeNodeId || !activeNode) {
     return layout;
   }
 
@@ -151,12 +157,34 @@ const applyFocusMode = (
   const focusedEdges = layout.edges.filter((edge) =>
     focusSelectionState.connectedEdgeIds.has(edge.id)
   );
+  const focusedEdgeInputs = focusedEdges.map(toLayoutEdgeInput);
 
-  return computeObjectMapLayout(
+  const focusedLayout = computeObjectMapLayout(
     focusedNodes.map(toLayoutNodeInput),
-    focusedEdges.map(toLayoutEdgeInput),
+    focusedEdgeInputs,
     activeNodeId
   );
+  const focusedActiveNode = focusedLayout.nodes.find((node) => node.id === activeNodeId);
+  if (!focusedActiveNode) {
+    return focusedLayout;
+  }
+
+  const dx = activeNode.x - focusedActiveNode.x;
+  const dy = activeNode.y - focusedActiveNode.y;
+  if (dx === 0 && dy === 0) {
+    return focusedLayout;
+  }
+
+  const nodes = focusedLayout.nodes.map((node) => ({
+    ...node,
+    x: node.x + dx,
+    y: node.y + dy,
+  }));
+  return {
+    nodes,
+    edges: routeObjectMapEdges(nodes, focusedEdgeInputs),
+    bounds: computeObjectMapBounds(nodes),
+  };
 };
 
 const computeSearchMatches = (
@@ -176,6 +204,7 @@ const computeSearchMatches = (
 
 export const deriveObjectMapVisibleState = ({
   layout,
+  seedNodeId,
   activeNodeId,
   focusMode,
   selectedKinds,
@@ -194,7 +223,7 @@ export const deriveObjectMapVisibleState = ({
     layout: edgeFilteredLayout,
     selectedKindSet,
     enabledEdgeTypes,
-    activeNodeId,
+    seedNodeId,
   });
   const visibleLayout = applyFocusMode(kindFilteredLayout, focusMode, activeNodeId);
   const visibleSelectionState = computeObjectMapSelectionState(visibleLayout.edges, activeNodeId);

@@ -8,6 +8,7 @@
 import ReactDOM from 'react-dom/client';
 import { act } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { OBJECT_ACTION_IDS, objectActionLabel } from '@shared/actions/objectActionDescriptors';
 
 vi.mock('@modules/namespace/components/useNamespaceColumnLink', () => ({
   useNamespaceColumnLink: () => ({
@@ -201,11 +202,12 @@ describe('NsViewEvents', () => {
     const props = await renderEventsView([event]);
 
     const menu = props.getCustomContextMenuItems(event, 'objectName');
-    expect(menu).toHaveLength(1);
-    expect(menu[0].label).toBe('View Pod');
+    const labels = menu.map((item: any) => item.label);
+    expect(labels).not.toContain(objectActionLabel(OBJECT_ACTION_IDS.goToTable));
+    expect(labels).toContain('View Pod');
 
     await act(async () => {
-      menu[0].onClick?.();
+      menu.find((item: any) => item.actionId === OBJECT_ACTION_IDS.viewInvolvedObject)?.onClick?.();
       await Promise.resolve();
     });
 
@@ -325,7 +327,7 @@ describe('NsViewEvents', () => {
     const props = await renderEventsView([noNamespaceEvent]);
     const menu = props.getCustomContextMenuItems(noNamespaceEvent, 'objectName');
     await act(async () => {
-      menu[0].onClick?.();
+      menu.find((item: any) => item.actionId === OBJECT_ACTION_IDS.viewInvolvedObject)?.onClick?.();
       await Promise.resolve();
     });
     expect(openWithObjectMock).toHaveBeenCalledWith(

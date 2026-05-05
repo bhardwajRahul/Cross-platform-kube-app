@@ -19,6 +19,11 @@ import {
 } from '@shared/components/icons/MenuIcons';
 import { resolveBuiltinGroupVersion } from '@shared/constants/builtinGroupVersions';
 import { buildObjectDiffSelection } from '@shared/components/diff/objectDiffSelection';
+import {
+  OBJECT_ACTION_IDS,
+  objectActionInvolvedObjectLabel,
+  objectActionLabel,
+} from '@shared/actions/objectActionDescriptors';
 
 // Normalized kind mapping for permission checks
 const WORKLOAD_KIND_MAP: Record<string, string> = {
@@ -74,6 +79,7 @@ export interface ObjectActionData {
 // Action handlers
 export interface ObjectActionHandlers {
   onOpen?: () => void;
+  onNavigateView?: () => void;
   onRestart?: () => void;
   onRollback?: () => void;
   onScale?: () => void;
@@ -119,7 +125,7 @@ const PORT_FORWARDABLE_TARGETS: Record<string, { group: string; version: string 
 // Options for building action items
 export interface BuildObjectActionsOptions {
   object: ObjectActionData;
-  context: 'gridtable' | 'object-panel';
+  context: 'gridtable' | 'object-map' | 'object-panel';
   handlers: ObjectActionHandlers;
   permissions: {
     restart?: PermissionStatus | null;
@@ -139,7 +145,11 @@ function getPortForwardAvailability(
   const expectedTarget = PORT_FORWARDABLE_TARGETS[normalizedKind];
 
   if (!expectedTarget || !handlers.onPortForward) {
-    return { show: false, enabled: false, label: 'Port Forward' };
+    return {
+      show: false,
+      enabled: false,
+      label: objectActionLabel(OBJECT_ACTION_IDS.portForward),
+    };
   }
 
   const builtin = resolveBuiltinGroupVersion(object.kind);
@@ -150,7 +160,7 @@ function getPortForwardAvailability(
     return {
       show: true,
       enabled: false,
-      label: 'Port Forward',
+      label: objectActionLabel(OBJECT_ACTION_IDS.portForward),
     };
   }
 
@@ -158,7 +168,7 @@ function getPortForwardAvailability(
     return {
       show: true,
       enabled: false,
-      label: 'Port Forward',
+      label: objectActionLabel(OBJECT_ACTION_IDS.portForward),
     };
   }
 
@@ -166,14 +176,14 @@ function getPortForwardAvailability(
     return {
       show: true,
       enabled: false,
-      label: 'Port Forward',
+      label: objectActionLabel(OBJECT_ACTION_IDS.portForward),
     };
   }
 
   return {
     show: true,
     enabled: true,
-    label: 'Port Forward',
+    label: objectActionLabel(OBJECT_ACTION_IDS.portForward),
   };
 }
 
@@ -202,10 +212,11 @@ export function buildObjectActionItems({
     portForward: portForwardStatus,
   } = permissions;
 
-  // Open - only for gridtable context
-  if (context === 'gridtable' && handlers.onOpen) {
+  // Open - only for surfaces that are not already the object panel.
+  if ((context === 'gridtable' || context === 'object-map') && handlers.onOpen) {
     menuItems.push({
-      label: 'Open',
+      actionId: OBJECT_ACTION_IDS.viewDetails,
+      label: objectActionLabel(OBJECT_ACTION_IDS.viewDetails),
       icon: <OpenIcon />,
       onClick: handlers.onOpen,
     });
@@ -216,15 +227,26 @@ export function buildObjectActionItems({
   // handler is opt-in per call site; when omitted, no item is added.
   if (handlers.onObjectMap) {
     menuItems.push({
-      label: 'Map',
+      actionId: OBJECT_ACTION_IDS.viewMap,
+      label: objectActionLabel(OBJECT_ACTION_IDS.viewMap),
       icon: <ObjectMapIcon />,
       onClick: handlers.onObjectMap,
     });
   }
 
+  if (context !== 'gridtable' && handlers.onNavigateView) {
+    menuItems.push({
+      actionId: OBJECT_ACTION_IDS.goToTable,
+      label: objectActionLabel(OBJECT_ACTION_IDS.goToTable),
+      icon: <OpenIcon />,
+      onClick: handlers.onNavigateView,
+    });
+  }
+
   if (diffSelection) {
     menuItems.push({
-      label: 'Diff',
+      actionId: OBJECT_ACTION_IDS.diff,
+      label: objectActionLabel(OBJECT_ACTION_IDS.diff),
       icon: <DiffIcon />,
       onClick: () => {
         eventBus.emit('view:open-object-diff', {
@@ -241,7 +263,8 @@ export function buildObjectActionItems({
     const [involvedKind] = object.involvedObject.split('/');
     if (involvedKind && involvedKind !== '-') {
       menuItems.push({
-        label: `View ${involvedKind}`,
+        actionId: OBJECT_ACTION_IDS.viewInvolvedObject,
+        label: objectActionInvolvedObjectLabel(involvedKind),
         icon: <OpenIcon />,
         onClick: handlers.onViewInvolvedObject,
       });
@@ -279,7 +302,8 @@ export function buildObjectActionItems({
 
     if (handlers.onTrigger) {
       menuItems.push({
-        label: 'Trigger Now',
+        actionId: OBJECT_ACTION_IDS.triggerNow,
+        label: objectActionLabel(OBJECT_ACTION_IDS.triggerNow),
         icon: '▶',
         onClick: handlers.onTrigger,
         disabled: isSuspended || actionLoading,
@@ -287,8 +311,10 @@ export function buildObjectActionItems({
     }
 
     if (handlers.onSuspendToggle) {
+      const suspendActionId = isSuspended ? OBJECT_ACTION_IDS.resume : OBJECT_ACTION_IDS.suspend;
       menuItems.push({
-        label: isSuspended ? 'Resume' : 'Suspend',
+        actionId: suspendActionId,
+        label: objectActionLabel(suspendActionId),
         icon: isSuspended ? '▶' : '⏸',
         onClick: handlers.onSuspendToggle,
         disabled: actionLoading,
@@ -304,7 +330,8 @@ export function buildObjectActionItems({
     handlers.onRestart
   ) {
     menuItems.push({
-      label: 'Restart',
+      actionId: OBJECT_ACTION_IDS.restart,
+      label: objectActionLabel(OBJECT_ACTION_IDS.restart),
       icon: <RestartIcon />,
       onClick: handlers.onRestart,
       disabled: actionLoading,
@@ -319,7 +346,8 @@ export function buildObjectActionItems({
     handlers.onRollback
   ) {
     menuItems.push({
-      label: 'Rollback',
+      actionId: OBJECT_ACTION_IDS.rollback,
+      label: objectActionLabel(OBJECT_ACTION_IDS.rollback),
       icon: <RollbackIcon />,
       onClick: handlers.onRollback,
       disabled: actionLoading,
@@ -330,13 +358,15 @@ export function buildObjectActionItems({
   if (SCALABLE_KINDS.includes(normalizedKind) && scaleStatus?.allowed && !scaleStatus.pending) {
     if (object.hpaManaged) {
       menuItems.push({
-        label: 'Scale (HPA managed)',
+        actionId: OBJECT_ACTION_IDS.scaleHpaManaged,
+        label: objectActionLabel(OBJECT_ACTION_IDS.scaleHpaManaged),
         icon: <ScaleIcon />,
         disabled: true,
       });
     } else if (handlers.onScale) {
       menuItems.push({
-        label: 'Scale',
+        actionId: OBJECT_ACTION_IDS.scale,
+        label: objectActionLabel(OBJECT_ACTION_IDS.scale),
         icon: <ScaleIcon />,
         onClick: handlers.onScale,
         disabled: actionLoading,
@@ -347,6 +377,7 @@ export function buildObjectActionItems({
   // Port Forward
   if (portForwardAvailability.show && !portForwardAvailability.enabled) {
     menuItems.push({
+      actionId: OBJECT_ACTION_IDS.portForward,
       label: portForwardAvailability.label,
       icon: <PortForwardIcon />,
       disabled: true,
@@ -358,6 +389,7 @@ export function buildObjectActionItems({
     handlers.onPortForward
   ) {
     menuItems.push({
+      actionId: OBJECT_ACTION_IDS.portForward,
       label: portForwardAvailability.label,
       icon: <PortForwardIcon />,
       onClick: handlers.onPortForward,
@@ -375,7 +407,8 @@ export function buildObjectActionItems({
     }
 
     menuItems.push({
-      label: 'Delete',
+      actionId: OBJECT_ACTION_IDS.delete,
+      label: objectActionLabel(OBJECT_ACTION_IDS.delete),
       icon: <DeleteIcon />,
       danger: true,
       onClick: handlers.onDelete,

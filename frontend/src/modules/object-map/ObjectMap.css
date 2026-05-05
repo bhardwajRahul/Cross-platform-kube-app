@@ -179,6 +179,58 @@
   width: 100%;
   height: 100%;
   font-family: inherit;
+  z-index: 0;
+}
+
+.object-map__debug-grid {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.object-map__debug-grid-line {
+  stroke: var(--color-border);
+  stroke-width: 1;
+  opacity: 0.35;
+  vector-effect: non-scaling-stroke;
+}
+
+.object-map__debug-grid-line--major {
+  opacity: 0.55;
+}
+
+.object-map__debug-grid-axis {
+  stroke: var(--color-accent);
+  stroke-width: 2;
+  opacity: 0.95;
+  vector-effect: non-scaling-stroke;
+}
+
+.object-map__debug-grid-origin {
+  fill: var(--color-accent);
+  stroke: var(--color-bg);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.object-map__debug-grid-label,
+.object-map__debug-grid-origin-label,
+.object-map__debug-grid-zoom {
+  fill: var(--color-text);
+  paint-order: stroke;
+  stroke: var(--color-bg);
+  stroke-width: 3;
+  stroke-linejoin: round;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.object-map__debug-grid-label {
+  fill: var(--color-text-secondary);
+  font-weight: 500;
 }
 
 .object-map__g6-overlay {
@@ -188,6 +240,7 @@
   height: 100%;
   font-family: inherit;
   pointer-events: none;
+  z-index: 2;
 }
 
 .object-map__message {
@@ -316,7 +369,7 @@
   background: var(--color-bg);
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--border-radius-md);
-  padding: var(--spacing-sm) var(--spacing-md);
+  padding: var(--spacing-sm) calc(var(--spacing-md) + 20px) var(--spacing-sm) var(--spacing-md);
   font-size: 0.7rem;
   color: var(--color-text-secondary);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
@@ -329,7 +382,45 @@
   user-select: none;
   /* Keep the legend above map content but below modals/dropdowns
    * elsewhere in the app. */
-  z-index: 1;
+  z-index: 3;
+}
+
+.object-map__legend-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  line-height: 0;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.object-map__legend-close:hover {
+  background: rgb(239 68 68 / 10%);
+  color: rgb(239 68 68);
+  transform: scale(1.05);
+}
+
+.object-map__legend-close:active {
+  transform: scale(0.95);
+}
+
+.object-map__legend-close:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .object-map__legend-row {
@@ -417,34 +508,70 @@
   opacity: 0.45;
 }
 
+.object-map__legend-counts {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-xs);
+  color: var(--color-text-secondary);
+}
+
+.object-map__legend-count {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.object-map__legend-count + .object-map__legend-count::before {
+  content: "·";
+  margin-right: var(--spacing-xs);
+  color: var(--color-text-secondary);
+}
+
+.object-map__legend-count-label {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.object-map__legend-count-value {
+  color: var(--color-text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .object-map__legend-separator {
   height: var(--border-width);
   margin: var(--spacing-xs) 0;
   background: var(--color-border);
 }
 
-.object-map__legend-shortcut {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: center;
-  column-gap: var(--spacing-md);
-}
-
-.object-map__legend-key {
-  color: var(--color-text-secondary);
-  min-width: 8ch;
-  white-space: nowrap;
-}
-
-.object-map__legend-action {
-  color: var(--color-text);
-  white-space: nowrap;
-}
-
 .object-map__toolbar-button--active {
   background: var(--color-accent-bg);
   border-color: var(--color-accent);
   color: var(--color-accent);
+}
+
+.object-map__toolbar-button--refreshing:disabled {
+  background: var(--color-accent-bg);
+  color: var(--color-accent);
+  cursor: progress;
+  opacity: 1;
+}
+
+.object-map__toolbar-button--refreshing svg {
+  animation: object-map-refresh-spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .object-map__toolbar-button--refreshing svg {
+    animation: none;
+  }
+}
+
+@keyframes object-map-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* --- Banners and warnings ------------------------------------------- */

@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsMenu } from './ActionsMenu';
 import { eventBus } from '@/core/events';
 import type { ObjectActionData } from '@shared/hooks/useObjectActions';
+import { OBJECT_ACTION_IDS } from '@shared/actions/objectActionDescriptors';
 
 const openWithObjectMock = vi.hoisted(() => vi.fn());
 
@@ -47,6 +48,10 @@ vi.mock('@modules/object-panel/hooks/useObjectPanel', () => ({
   useObjectPanel: () => ({
     openWithObject: openWithObjectMock,
   }),
+}));
+
+vi.mock('@shared/hooks/useNavigateToView', () => ({
+  useNavigateToView: () => ({ navigateToView: vi.fn() }),
 }));
 
 // Mock keyboard shortcuts for ConfirmationModal
@@ -325,7 +330,7 @@ describe('ActionsMenu', () => {
     });
   });
 
-  it('shows Map for supported objects and opens the map tab', async () => {
+  it('shows the map panel action for supported objects and opens the map tab', async () => {
     await renderMenu({
       object: makeObject('ConfigMap', {
         group: '',
@@ -334,8 +339,9 @@ describe('ActionsMenu', () => {
     });
 
     openMenu(container);
-    const items = Array.from(container.querySelectorAll<HTMLElement>('.context-menu-item'));
-    const objectMapItem = items.find((item) => item.textContent?.includes('Map'));
+    const objectMapItem = container.querySelector<HTMLElement>(
+      `[data-context-action-id="${OBJECT_ACTION_IDS.viewMap}"]`
+    );
     expect(objectMapItem).toBeTruthy();
 
     act(() => {

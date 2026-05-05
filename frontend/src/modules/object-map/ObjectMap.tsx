@@ -10,8 +10,8 @@ import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } fr
 import './ObjectMap.css';
 import type { ObjectMapReference, ObjectMapSnapshotPayload } from '@core/refresh/types';
 import { useShortNames } from '@/hooks/useShortNames';
-import { isMacPlatform } from '@/utils/platform';
 import ContextMenu, { type ContextMenuItem } from '@shared/components/ContextMenu';
+import Tooltip from '@shared/components/Tooltip';
 import { Dropdown } from '@shared/components/dropdowns/Dropdown';
 import type { DropdownOption } from '@shared/components/dropdowns/Dropdown';
 import { useObjectActionController } from '@shared/hooks/useObjectActionController';
@@ -21,6 +21,12 @@ import type { ObjectMapContextMenuRequest } from './objectMapRendererTypes';
 import type { ObjectMapViewportControls } from './objectMapRendererTypes';
 import { useObjectMapModel } from './useObjectMapModel';
 import {
+  createObjectMapDebugId,
+  publishObjectMapDebugSnapshot,
+  removeObjectMapDebugSnapshot,
+  useObjectMapDebugOverlayVisible,
+} from './objectMapDebugStore';
+import {
   deriveObjectMapVisibleState,
   pruneObjectMapEnabledEdgeTypes,
   pruneObjectMapSelectedKinds,
@@ -28,16 +34,21 @@ import {
 import { useObjectMapLegendDrag } from './useObjectMapLegendDrag';
 import {
   AutoFitIcon,
+  CloseIcon,
   FitToViewIcon,
   FocusModeIcon,
   LegendIcon,
   RefreshIcon,
   ResetFiltersIcon,
+  ResetZoomIcon,
   ZoomInIcon,
   ZoomOutIcon,
 } from '@shared/components/icons/MenuIcons';
 
 const ObjectMapG6Renderer = React.lazy(() => import('./ObjectMapG6Renderer'));
+
+const objectMapTimingNow = (): number =>
+  typeof performance === 'undefined' ? Date.now() : performance.now();
 
 type ObjectMapMenuState =
   | { type: 'object'; request: ObjectMapContextMenuRequest }
@@ -58,9 +69,9 @@ export interface ObjectMapProps {
   onRefresh?: () => void;
   // Disables the refresh button while a fetch is in flight.
   isRefreshing?: boolean;
-  // Modifier-click handlers. Cmd-click (mac) / Ctrl-click (other) on
-  // a node fires `onOpenPanel`; Alt-click fires `onNavigateView`. Both
-  // are optional — when omitted the modifier click silently no-ops.
+  // Modifier-click handlers. Cmd-click (mac) / Ctrl-click (other) opens
+  // details, Shift-click opens the map, and Alt-click navigates to the table.
+  // Handlers are optional — when omitted the modifier click silently no-ops.
   onOpenPanel?: (ref: ObjectMapReference) => void;
   onNavigateView?: (ref: ObjectMapReference) => void;
   onOpenObjectMap?: (ref: ObjectMapReference) => void;
@@ -74,7 +85,9 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
   onNavigateView,
   onOpenObjectMap,
 }) => {
+  const modelTimingStartedAt = objectMapTimingNow();
   const model = useObjectMapModel(payload);
+  const modelTimingMs = objectMapTimingNow() - modelTimingStartedAt;
   const useShortResourceNames = useShortNames();
   const [showLegend, setShowLegend] = useState(true);
   const [focusMode, setFocusMode] = useState(false);
@@ -84,33 +97,37 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
   const [searchIndex, setSearchIndex] = useState(0);
   const [contextMenu, setContextMenu] = useState<ObjectMapMenuState | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const debugMapIdRef = useRef(createObjectMapDebugId());
+  const isMapDebugOverlayVisible = useObjectMapDebugOverlayVisible();
   const { legendPosition, legendPointerHandlers } = useObjectMapLegendDrag(canvasRef);
   const [g6ViewportControls, setG6ViewportControls] = useState<ObjectMapViewportControls | null>(
     null
   );
-  const primaryModifierLabel = useMemo(() => (isMacPlatform() ? 'cmd' : 'ctrl'), []);
 
-  const visibleState = useMemo(
-    () =>
-      deriveObjectMapVisibleState({
-        layout: model.layout,
-        activeNodeId: model.activeNodeId,
-        focusMode,
-        selectedKinds,
-        enabledEdgeTypes,
-        searchQuery,
-        useShortResourceNames,
-      }),
-    [
-      enabledEdgeTypes,
+  const visibleStateResult = useMemo(() => {
+    const startedAt = objectMapTimingNow();
+    const state = deriveObjectMapVisibleState({
+      layout: model.layout,
+      seedNodeId: model.seedId,
+      activeNodeId: model.activeNodeId,
       focusMode,
-      model.activeNodeId,
-      model.layout,
-      searchQuery,
       selectedKinds,
+      enabledEdgeTypes,
+      searchQuery,
       useShortResourceNames,
-    ]
-  );
+    });
+    return { state, durationMs: objectMapTimingNow() - startedAt };
+  }, [
+    enabledEdgeTypes,
+    focusMode,
+    model.activeNodeId,
+    model.layout,
+    model.seedId,
+    searchQuery,
+    selectedKinds,
+    useShortResourceNames,
+  ]);
+  const visibleState = visibleStateResult.state;
 
   useEffect(() => {
     setEnabledEdgeTypes((previous) => {
@@ -208,14 +225,100 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
     model.resetLayout();
     setFocusMode(false);
   }, [model]);
+  const refreshLabel = isRefreshing ? 'Refreshing' : 'Refresh';
 
   const viewportControlsReady = Boolean(g6ViewportControls);
+  const visibleNodeIds = useMemo(
+    () => new Set(visibleState.visibleLayout.nodes.map((node) => node.id)),
+    [visibleState.visibleLayout.nodes]
+  );
+  const selectedViewportNodeId =
+    model.activeNodeId && visibleNodeIds.has(model.activeNodeId) ? model.activeNodeId : null;
+  const seedViewportNodeId = visibleNodeIds.has(model.seedId) ? model.seedId : null;
+  const fallbackViewportNodeId = visibleState.visibleLayout.nodes[0]?.id ?? null;
+  const preserveViewportNodeId =
+    model.autoFit || focusMode
+      ? null
+      : (selectedViewportNodeId ?? seedViewportNodeId ?? fallbackViewportNodeId);
+
+  useEffect(() => {
+    const debugId = debugMapIdRef.current;
+    return () => removeObjectMapDebugSnapshot(debugId);
+  }, []);
+
+  useEffect(() => {
+    const debugId = debugMapIdRef.current;
+    publishObjectMapDebugSnapshot({
+      id: debugId,
+      clusterId: payload.clusterId,
+      clusterName: payload.clusterName,
+      seedRef: payload.seed,
+      seedNodeId: model.seedId,
+      activeNodeId: model.activeNodeId,
+      focusMode,
+      autoFit: model.autoFit,
+      selectedKinds,
+      enabledEdgeTypes: enabledEdgeTypes ? Array.from(enabledEdgeTypes).sort() : null,
+      preserveViewportNodeId,
+      payload: {
+        nodes: payload.nodes.length,
+        edges: payload.edges.length,
+        maxDepth: payload.maxDepth,
+        maxNodes: payload.maxNodes,
+        truncated: payload.truncated,
+        warnings: payload.warnings?.length ?? 0,
+      },
+      layout: {
+        nodes: model.layout.nodes.length,
+        edges: model.layout.edges.length,
+        bounds: model.layout.bounds,
+      },
+      visibleLayout: {
+        nodes: visibleState.visibleLayout.nodes.length,
+        edges: visibleState.visibleLayout.edges.length,
+        bounds: visibleState.visibleLayout.bounds,
+      },
+      search: {
+        query: searchQuery,
+        matches: visibleState.searchMatches.length,
+      },
+      timings: {
+        modelMs: modelTimingMs,
+        visibleStateMs: visibleStateResult.durationMs,
+      },
+      renderer: null,
+      updatedAt: Date.now(),
+    });
+  }, [
+    enabledEdgeTypes,
+    focusMode,
+    model.activeNodeId,
+    model.autoFit,
+    model.layout.bounds,
+    model.layout.edges.length,
+    model.layout.nodes.length,
+    model.seedId,
+    modelTimingMs,
+    payload,
+    preserveViewportNodeId,
+    searchQuery,
+    selectedKinds,
+    visibleStateResult.durationMs,
+    visibleState.searchMatches.length,
+    visibleState.visibleLayout.bounds,
+    visibleState.visibleLayout.edges.length,
+    visibleState.visibleLayout.nodes.length,
+  ]);
+
   const contextMenuObject = contextMenu?.type === 'object' ? contextMenu.request.ref : null;
   const objectActions = useObjectActionController({
-    context: 'gridtable',
+    context: 'object-map',
     onOpen: onOpenPanel ? (object) => onOpenPanel(object as ObjectMapReference) : undefined,
     onOpenObjectMap: onOpenObjectMap
       ? (object) => onOpenObjectMap(object as ObjectMapReference)
+      : undefined,
+    onNavigateView: onNavigateView
+      ? (object) => onNavigateView(object as ObjectMapReference)
       : undefined,
   });
   const canvasContextMenuItems = useMemo<ContextMenuItem[]>(() => {
@@ -232,6 +335,13 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
         onClick: g6ViewportControls?.zoomIn,
         disabled: !viewportControlsReady,
       },
+      {
+        label: 'Reset zoom',
+        icon: <ResetZoomIcon />,
+        onClick: g6ViewportControls?.resetZoom,
+        disabled: !viewportControlsReady,
+      },
+      { divider: true },
       {
         label: 'Fit',
         icon: <FitToViewIcon />,
@@ -259,7 +369,7 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
     ];
     if (onRefresh) {
       items.push({
-        label: 'Refresh',
+        label: refreshLabel,
         icon: <RefreshIcon />,
         onClick: onRefresh,
         disabled: isRefreshing,
@@ -278,6 +388,7 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
     isRefreshing,
     model,
     onRefresh,
+    refreshLabel,
     resetMapLayout,
     showLegend,
     viewportControlsReady,
@@ -377,6 +488,17 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
       <button
         type="button"
         className="object-map__toolbar-button"
+        onClick={g6ViewportControls?.resetZoom}
+        title="Reset zoom to 100%"
+        aria-label="Reset zoom"
+        disabled={!viewportControlsReady}
+      >
+        <ResetZoomIcon />
+      </button>
+      <span className="object-map__toolbar-separator" aria-hidden="true" />
+      <button
+        type="button"
+        className="object-map__toolbar-button"
         onClick={g6ViewportControls?.fitToView}
         title="Fit visible objects into the viewport"
         aria-label="Fit"
@@ -427,10 +549,13 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
       {onRefresh && (
         <button
           type="button"
-          className="object-map__toolbar-button"
+          className={`object-map__toolbar-button ${
+            isRefreshing ? 'object-map__toolbar-button--refreshing' : ''
+          }`}
           onClick={onRefresh}
-          title="Refresh"
-          aria-label="Refresh"
+          title={refreshLabel}
+          aria-label={refreshLabel}
+          aria-busy={isRefreshing}
           disabled={isRefreshing}
         >
           <RefreshIcon />
@@ -479,11 +604,14 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
             onNodeDragEnd={model.endNodeDrag}
             onClearSelection={model.clearSelection}
             onOpenPanel={onOpenPanel}
+            onOpenObjectMap={onOpenObjectMap}
             onNavigateView={onNavigateView}
             onNodeContextMenu={handleNodeContextMenu}
             onCanvasContextMenu={handleCanvasContextMenu}
             autoFit={model.autoFit}
-            preserveViewportNodeId={!model.autoFit && focusMode ? model.activeNodeId : null}
+            preserveViewportNodeId={preserveViewportNodeId}
+            debugMapId={debugMapIdRef.current}
+            showDebugGrid={isMapDebugOverlayVisible}
             onUserViewportChange={disableAutoFitForManualViewport}
             onViewportControlsChange={setG6ViewportControls}
           />
@@ -501,6 +629,25 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
             {...legendPointerHandlers}
             onClick={(e) => e.stopPropagation()}
           >
+            <Tooltip
+              content="Close the legend. You can open it again with the Legend button on the toolbar."
+              placement="bottom"
+              hoverDelay={500}
+              showArrow={false}
+            >
+              <button
+                type="button"
+                className="object-map__legend-close"
+                aria-label="Close legend"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setShowLegend(false);
+                }}
+              >
+                <CloseIcon width={10} height={10} />
+              </button>
+            </Tooltip>
             {legendGroups.map((group) => (
               <div key={group.family} className="object-map__legend-group">
                 <div className="object-map__legend-category">{group.label}</div>
@@ -534,35 +681,39 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
               </div>
             ))}
             {visibleState.legendEntries.length > 0 && (
-              <>
-                <div className="object-map__legend-actions">
-                  <button
-                    type="button"
-                    className="object-map__legend-action-button"
-                    onClick={showAllEdgeTypes}
-                    disabled={enabledLegendEntryCount === visibleState.legendEntries.length}
-                  >
-                    Show all
-                  </button>
-                  <button
-                    type="button"
-                    className="object-map__legend-action-button"
-                    onClick={hideAllEdgeTypes}
-                    disabled={enabledLegendEntryCount === 0}
-                  >
-                    Hide all
-                  </button>
-                </div>
-                <div className="object-map__legend-separator" aria-hidden="true" />
-              </>
+              <div className="object-map__legend-actions">
+                <button
+                  type="button"
+                  className="object-map__legend-action-button"
+                  onClick={showAllEdgeTypes}
+                  disabled={enabledLegendEntryCount === visibleState.legendEntries.length}
+                >
+                  Show all
+                </button>
+                <button
+                  type="button"
+                  className="object-map__legend-action-button"
+                  onClick={hideAllEdgeTypes}
+                  disabled={enabledLegendEntryCount === 0}
+                >
+                  Hide all
+                </button>
+              </div>
             )}
-            <div className="object-map__legend-shortcut">
-              <span className="object-map__legend-key">{primaryModifierLabel}+click</span>
-              <span className="object-map__legend-action">Open View</span>
-            </div>
-            <div className="object-map__legend-shortcut">
-              <span className="object-map__legend-key">alt+click</span>
-              <span className="object-map__legend-action">Open Object</span>
+            <div className="object-map__legend-separator" aria-hidden="true" />
+            <div className="object-map__legend-counts" aria-label="Visible map totals">
+              <span className="object-map__legend-count">
+                <span className="object-map__legend-count-value">
+                  {visibleState.visibleLayout.nodes.length}
+                </span>
+                <span className="object-map__legend-count-label">Objects</span>
+              </span>
+              <span className="object-map__legend-count">
+                <span className="object-map__legend-count-value">
+                  {visibleState.visibleLayout.edges.length}
+                </span>
+                <span className="object-map__legend-count-label">Links</span>
+              </span>
             </div>
           </div>
         )}

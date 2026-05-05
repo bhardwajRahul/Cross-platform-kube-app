@@ -2,13 +2,24 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { eventBus } from '@/core/events';
 import { buildObjectActionItems } from './useObjectActions';
+import {
+  OBJECT_ACTION_IDS,
+  objectActionLabel,
+  type ObjectActionId,
+} from '@shared/actions/objectActionDescriptors';
+import type { ContextMenuItem } from '@shared/components/ContextMenu';
+
+const findAction = (
+  items: ContextMenuItem[],
+  actionId: ObjectActionId
+): ContextMenuItem | undefined => items.find((item) => item.actionId === actionId);
 
 describe('buildObjectActionItems', () => {
   afterEach(() => {
     eventBus.clear();
   });
 
-  it('omits the Map item when no handler is provided (default for non-workloads views)', () => {
+  it('omits the map panel item when no handler is provided (default for unsupported views)', () => {
     const items = buildObjectActionItems({
       object: {
         kind: 'Deployment',
@@ -22,11 +33,11 @@ describe('buildObjectActionItems', () => {
       },
       permissions: {},
     });
-    const item = items.find((i) => 'label' in i && i.label === 'Map');
+    const item = findAction(items, OBJECT_ACTION_IDS.viewMap);
     expect(item).toBeUndefined();
   });
 
-  it('adds the Map item when a handler is provided and invokes it on click', () => {
+  it('adds the map panel item when a handler is provided and invokes it on click', () => {
     let invoked = false;
     const items = buildObjectActionItems({
       object: {
@@ -44,13 +55,64 @@ describe('buildObjectActionItems', () => {
       },
       permissions: {},
     });
-    const item = items.find((i) => 'label' in i && i.label === 'Map');
+    const item = findAction(items, OBJECT_ACTION_IDS.viewMap);
     expect(item).toBeTruthy();
     if (!item || !('onClick' in item)) {
-      throw new Error('Map item missing onClick');
+      throw new Error('map panel item missing onClick');
     }
     item.onClick?.();
     expect(invoked).toBe(true);
+  });
+
+  it('adds shared object navigation labels without shortcut hints', () => {
+    const items = buildObjectActionItems({
+      object: {
+        kind: 'Deployment',
+        name: 'api',
+        namespace: 'apps',
+        clusterId: 'cluster-a',
+      },
+      context: 'object-map',
+      handlers: {
+        onOpen: () => undefined,
+        onObjectMap: () => undefined,
+        onNavigateView: () => undefined,
+      },
+      permissions: {},
+    });
+
+    expect(items.slice(0, 3)).toMatchObject([
+      {
+        actionId: OBJECT_ACTION_IDS.viewDetails,
+        label: objectActionLabel(OBJECT_ACTION_IDS.viewDetails),
+      },
+      { actionId: OBJECT_ACTION_IDS.viewMap, label: objectActionLabel(OBJECT_ACTION_IDS.viewMap) },
+      {
+        actionId: OBJECT_ACTION_IDS.goToTable,
+        label: objectActionLabel(OBJECT_ACTION_IDS.goToTable),
+      },
+    ]);
+    expect(items.slice(0, 3).some((item) => 'shortcut' in item)).toBe(false);
+  });
+
+  it('omits table navigation when already in a grid table', () => {
+    const items = buildObjectActionItems({
+      object: {
+        kind: 'Deployment',
+        name: 'api',
+        namespace: 'apps',
+        clusterId: 'cluster-a',
+      },
+      context: 'gridtable',
+      handlers: {
+        onOpen: () => undefined,
+        onObjectMap: () => undefined,
+        onNavigateView: () => undefined,
+      },
+      permissions: {},
+    });
+
+    expect(findAction(items, OBJECT_ACTION_IDS.goToTable)).toBeUndefined();
   });
 
   it('adds a Diff action for gridtable objects with a resolvable identity', () => {
@@ -68,7 +130,7 @@ describe('buildObjectActionItems', () => {
       permissions: {},
     });
 
-    const diffItem = items.find((item) => 'label' in item && item.label === 'Diff');
+    const diffItem = findAction(items, OBJECT_ACTION_IDS.diff);
     expect(diffItem).toBeTruthy();
 
     let payload: unknown;
@@ -113,7 +175,7 @@ describe('buildObjectActionItems', () => {
       permissions: {},
     });
 
-    const diffItem = items.find((item) => 'label' in item && item.label === 'Diff');
+    const diffItem = findAction(items, OBJECT_ACTION_IDS.diff);
     expect(diffItem).toBeTruthy();
   });
 
@@ -137,7 +199,7 @@ describe('buildObjectActionItems', () => {
       permissions: {},
     });
 
-    const diffItem = items.find((item) => 'label' in item && item.label === 'Diff');
+    const diffItem = findAction(items, OBJECT_ACTION_IDS.diff);
     expect(diffItem).toBeTruthy();
 
     let payload: unknown;
@@ -168,7 +230,7 @@ describe('buildObjectActionItems', () => {
     });
   });
 
-  it('places the divider below the ungated Open/Diff section', () => {
+  it('places the divider below the ungated navigation and Diff section', () => {
     const items = buildObjectActionItems({
       object: {
         kind: 'Deployment',
@@ -186,8 +248,8 @@ describe('buildObjectActionItems', () => {
       },
     });
 
-    expect(items[0]).toMatchObject({ label: 'Open' });
-    expect(items[1]).toMatchObject({ label: 'Diff' });
+    expect(items[0]).toMatchObject({ actionId: OBJECT_ACTION_IDS.viewDetails });
+    expect(items[1]).toMatchObject({ actionId: OBJECT_ACTION_IDS.diff });
     expect(items[2]).toMatchObject({ divider: true });
     expect(items[3]).toMatchObject({ label: 'Restart' });
   });
@@ -211,10 +273,10 @@ describe('buildObjectActionItems', () => {
     });
 
     expect(items.map((item) => ('divider' in item ? 'divider' : item.label))).toEqual([
-      'Open',
-      'Diff',
+      objectActionLabel(OBJECT_ACTION_IDS.viewDetails),
+      objectActionLabel(OBJECT_ACTION_IDS.diff),
       'divider',
-      'Delete',
+      objectActionLabel(OBJECT_ACTION_IDS.delete),
     ]);
   });
 
@@ -237,8 +299,8 @@ describe('buildObjectActionItems', () => {
     });
 
     expect(items.map((item) => ('divider' in item ? 'divider' : item.label))).toEqual([
-      'Open',
-      'Diff',
+      objectActionLabel(OBJECT_ACTION_IDS.viewDetails),
+      objectActionLabel(OBJECT_ACTION_IDS.diff),
     ]);
   });
 

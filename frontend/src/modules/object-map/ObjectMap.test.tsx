@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ObjectMapReference, ObjectMapSnapshotPayload } from '@core/refresh/types';
 import ObjectMap from './ObjectMap';
 import type { ObjectMapViewportControls } from './objectMapRendererTypes';
+import { OBJECT_ACTION_IDS, objectActionLabel } from '@shared/actions/objectActionDescriptors';
 
 const useShortNamesMock = vi.hoisted(() => vi.fn(() => false));
 
@@ -17,11 +18,28 @@ vi.mock('@/hooks/useShortNames', () => ({
   useShortNames: () => useShortNamesMock(),
 }));
 
+vi.mock('@/utils/platform', () => ({
+  isMacPlatform: () => true,
+}));
+
+vi.mock('@core/contexts/ZoomContext', () => ({
+  useZoom: () => ({ zoomLevel: 100 }),
+}));
+
+vi.mock('@shared/hooks/useNavigateToView', () => ({
+  useNavigateToView: () => ({ navigateToView: vi.fn() }),
+}));
+
+vi.mock('@modules/object-panel/hooks/useObjectPanel', () => ({
+  useObjectPanel: () => ({ openWithObject: vi.fn() }),
+}));
+
 vi.mock('@shared/components/ContextMenu', () => ({
   default: ({
     items,
   }: {
     items: Array<{
+      actionId?: string;
       label?: string;
       onClick?: () => void;
       icon?: React.ReactNode;
@@ -32,7 +50,12 @@ vi.mock('@shared/components/ContextMenu', () => ({
     <div data-testid="mock-context-menu">
       {items.map((item, index) =>
         item.divider || item.header ? null : (
-          <button key={index} type="button" onClick={item.onClick}>
+          <button
+            key={index}
+            type="button"
+            data-context-action-id={item.actionId}
+            onClick={item.onClick}
+          >
             {item.icon && <span data-testid="mock-context-menu-icon">{item.icon}</span>}
             {item.label}
           </button>
@@ -106,6 +129,8 @@ vi.mock('./ObjectMapG6Renderer', () => {
     }) => void;
     onCanvasContextMenu?: (request: { position: { x: number; y: number } }) => void;
     onViewportControlsChange?: (controls: ObjectMapViewportControls | null) => void;
+    debugMapId?: string;
+    preserveViewportNodeId?: string | null;
     useShortResourceNames?: boolean;
   }) => {
     const firstNode = props.layout.nodes[0];
@@ -114,6 +139,8 @@ vi.mock('./ObjectMapG6Renderer', () => {
       <div
         data-testid="object-map-g6-mock"
         data-auto-fit={String(props.autoFit)}
+        data-debug-map-id={props.debugMapId ?? ''}
+        data-preserve-viewport-node-id={props.preserveViewportNodeId ?? ''}
         data-short-names={String(props.useShortResourceNames)}
       >
         <button type="button" data-testid="mock-clear-selection" onClick={props.onClearSelection}>
@@ -133,6 +160,7 @@ vi.mock('./ObjectMapG6Renderer', () => {
             props.onViewportControlsChange?.({
               zoomOut: vi.fn(),
               zoomIn: vi.fn(),
+              resetZoom: vi.fn(),
               fitToView: vi.fn(),
               focusNode: vi.fn(),
             })
@@ -211,6 +239,10 @@ vi.mock('./ObjectMapG6Renderer', () => {
                   onClick={(event) => {
                     if (event.metaKey || event.ctrlKey) {
                       props.onOpenPanel?.(node.ref);
+                      return;
+                    }
+                    if (event.shiftKey) {
+                      props.onOpenObjectMap?.(node.ref);
                       return;
                     }
                     if (event.altKey) {
@@ -403,12 +435,14 @@ const renderObjectMap = async ({
   onNavigateView,
   onOpenObjectMap,
   onRefresh,
+  isRefreshing = false,
 }: {
   testPayload?: ObjectMapSnapshotPayload;
   onOpenPanel?: (ref: ObjectMapReference) => void;
   onNavigateView?: (ref: ObjectMapReference) => void;
   onOpenObjectMap?: (ref: ObjectMapReference) => void;
   onRefresh?: () => void;
+  isRefreshing?: boolean;
 } = {}) => {
   const container = document.createElement('div');
   document.body.appendChild(container);
@@ -422,6 +456,7 @@ const renderObjectMap = async ({
         onNavigateView={onNavigateView}
         onOpenObjectMap={onOpenObjectMap}
         onRefresh={onRefresh}
+        isRefreshing={isRefreshing}
       />
     );
     await Promise.resolve();
@@ -463,6 +498,7 @@ const pointerEvent = (
 afterEach(() => {
   useShortNamesMock.mockReturnValue(false);
   document.body.innerHTML = '';
+  vi.useRealTimers();
 });
 
 describe('ObjectMap', () => {
@@ -536,6 +572,15 @@ describe('ObjectMap', () => {
     expect(hideAll).toBeTruthy();
     expect(showAll?.disabled).toBe(true);
     expect(hideAll?.disabled).toBe(false);
+    const legend = container.querySelector<HTMLElement>('.object-map__legend');
+    const legendText = legend?.textContent ?? '';
+    expect(legendText).not.toContain('cmd+click');
+    expect(legendText).not.toContain('alt+click');
+    expect(container.querySelectorAll('.object-map__legend-separator').length).toBeGreaterThan(0);
+    expect(container.querySelector('.object-map__legend-counts')?.textContent).toContain(
+      '2Objects'
+    );
+    expect(container.querySelector('.object-map__legend-counts')?.textContent).toContain('1Links');
     expect(container.querySelector('[data-testid="mock-edge-edge-1"]')).toBeTruthy();
     expect(container.querySelector('[aria-label="Deployment: web"]')).toBeTruthy();
     expect(container.querySelector('[aria-label="Pod: web-abc"]')).toBeTruthy();
@@ -548,6 +593,10 @@ describe('ObjectMap', () => {
     expect(container.querySelector('[data-testid="mock-edge-edge-1"]')).toBeNull();
     expect(container.querySelector('[aria-label="Deployment: web"]')).toBeTruthy();
     expect(container.querySelector('[aria-label="Pod: web-abc"]')).toBeTruthy();
+    expect(container.querySelector('.object-map__legend-counts')?.textContent).toContain(
+      '2Objects'
+    );
+    expect(container.querySelector('.object-map__legend-counts')?.textContent).toContain('0Links');
     expect(showAll?.disabled).toBe(false);
     expect(hideAll?.disabled).toBe(true);
 
@@ -628,6 +677,48 @@ describe('ObjectMap', () => {
     cleanup();
   });
 
+  it('closes the legend from the legend close button and explains how to reopen it', async () => {
+    vi.useFakeTimers();
+    const { container, cleanup } = await renderObjectMap();
+    const legend = container.querySelector<HTMLElement>('.object-map__legend');
+    const closeButton = container.querySelector<HTMLButtonElement>('[aria-label="Close legend"]');
+
+    expect(legend).toBeTruthy();
+    expect(closeButton).toBeTruthy();
+
+    await act(async () => {
+      closeButton!.dispatchEvent(mouseEvent('mouseover'));
+      vi.advanceTimersByTime(499);
+    });
+
+    expect(document.body.textContent).not.toContain(
+      'Close the legend. You can open it again with the Legend button on the toolbar.'
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(document.body.textContent).toContain(
+      'Close the legend. You can open it again with the Legend button on the toolbar.'
+    );
+    expect(document.body.querySelector('.tooltip')?.getAttribute('data-placement')).toBeNull();
+
+    await act(async () => {
+      closeButton!.click();
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('.object-map__legend')).toBeNull();
+    expect(
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Toggle legend"]')
+        ?.getAttribute('aria-pressed')
+    ).toBe('false');
+
+    cleanup();
+  });
+
   it('turns off auto-fit after a manual viewport change', async () => {
     const { container, cleanup } = await renderObjectMap();
     const renderer = container.querySelector<HTMLElement>('[data-testid="object-map-g6-mock"]');
@@ -652,6 +743,10 @@ describe('ObjectMap', () => {
     expect(
       container.querySelector<HTMLElement>('[data-testid="object-map-g6-mock"]')?.dataset.autoFit
     ).toBe('false');
+    expect(
+      container.querySelector<HTMLElement>('[data-testid="object-map-g6-mock"]')?.dataset
+        .preserveViewportNodeId
+    ).toBe('deploy');
     expect(autoFitToggle?.getAttribute('aria-pressed')).toBe('false');
 
     cleanup();
@@ -695,9 +790,9 @@ describe('ObjectMap', () => {
     expect(resetButton?.disabled).toBe(false);
     expect(container.querySelector('[aria-label="Deployment: web"]')).toBeTruthy();
     expect(container.querySelector('[aria-label="Pod: web-a"]')).toBeTruthy();
-    expect(
-      container.querySelector<HTMLElement>('[data-testid="mock-node-pod-a"]')?.dataset.x
-    ).not.toBe(initialPodAX);
+    expect(container.querySelector<HTMLElement>('[data-testid="mock-node-pod-a"]')?.dataset.x).toBe(
+      initialPodAX
+    );
     expect(container.querySelector('[aria-label="ConfigMap: web-a-config"]')).toBeTruthy();
     expect(container.querySelector('[aria-label="Secret: web-a-secret"]')).toBeTruthy();
     expect(container.querySelector('[aria-label="Pod: web-b"]')).toBeNull();
@@ -715,6 +810,35 @@ describe('ObjectMap', () => {
     expect(container.querySelector('[aria-label="Pod: web-b"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="mock-edge-edge-b"]')).toBeTruthy();
     expect(resetButton?.disabled).toBe(true);
+
+    cleanup();
+  });
+
+  it('does not preserve a selected node viewport anchor while focus mode is active', async () => {
+    const { container, cleanup } = await renderObjectMap({ testPayload: focusModePayload });
+    const focusToggle = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Toggle focus mode"]'
+    );
+    const manualViewportChange = container.querySelector<HTMLButtonElement>(
+      '[data-testid="mock-user-viewport-change"]'
+    );
+    const podA = container.querySelector<HTMLButtonElement>('[aria-label="Pod: web-a"]');
+
+    expect(focusToggle).toBeTruthy();
+    expect(manualViewportChange).toBeTruthy();
+    expect(podA).toBeTruthy();
+
+    await act(async () => {
+      manualViewportChange!.click();
+      podA!.dispatchEvent(mouseEvent('click'));
+      focusToggle!.click();
+      await Promise.resolve();
+    });
+
+    expect(
+      container.querySelector<HTMLElement>('[data-testid="object-map-g6-mock"]')?.dataset
+        .preserveViewportNodeId
+    ).toBe('');
 
     cleanup();
   });
@@ -871,7 +995,12 @@ describe('ObjectMap', () => {
   it('passes full object references for modifier-click actions', async () => {
     const onOpenPanel = vi.fn();
     const onNavigateView = vi.fn();
-    const { container, cleanup } = await renderObjectMap({ onOpenPanel, onNavigateView });
+    const onOpenObjectMap = vi.fn();
+    const { container, cleanup } = await renderObjectMap({
+      onOpenPanel,
+      onNavigateView,
+      onOpenObjectMap,
+    });
     const pod = container.querySelector<HTMLButtonElement>('[aria-label="Pod: web-abc"]');
 
     expect(pod).toBeTruthy();
@@ -900,6 +1029,24 @@ describe('ObjectMap', () => {
     });
 
     expect(onOpenPanel).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      pod!.dispatchEvent(mouseEvent('click', { shiftKey: true }));
+      await Promise.resolve();
+    });
+
+    expect(onOpenObjectMap).toHaveBeenCalledTimes(1);
+    expect(onOpenObjectMap).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clusterId: 'cluster-a',
+        group: '',
+        version: 'v1',
+        kind: 'Pod',
+        namespace: 'default',
+        name: 'web-abc',
+        uid: 'pod-uid',
+      })
+    );
 
     await act(async () => {
       pod!.dispatchEvent(mouseEvent('click', { altKey: true }));
@@ -936,15 +1083,19 @@ describe('ObjectMap', () => {
     });
 
     const menu = container.querySelector<HTMLElement>('[data-testid="mock-context-menu"]');
-    expect(menu?.textContent).toContain('Open');
-    expect(menu?.textContent).toContain('Map');
+    expect(menu?.textContent).toContain(objectActionLabel(OBJECT_ACTION_IDS.viewDetails));
+    expect(menu?.textContent).toContain(objectActionLabel(OBJECT_ACTION_IDS.viewMap));
+    expect(menu?.textContent).toContain(objectActionLabel(OBJECT_ACTION_IDS.goToTable));
     expect(menu?.textContent).toContain('Diff');
+    expect(menu?.textContent).not.toContain('cmd');
+    expect(menu?.textContent).not.toContain('shift');
+    expect(menu?.textContent).not.toContain('alt');
 
-    const openItem = Array.from(menu!.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Open'
+    const openItem = menu!.querySelector<HTMLButtonElement>(
+      `[data-context-action-id="${OBJECT_ACTION_IDS.viewDetails}"]`
     );
-    const mapItem = Array.from(menu!.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Map'
+    const mapItem = menu!.querySelector<HTMLButtonElement>(
+      `[data-context-action-id="${OBJECT_ACTION_IDS.viewMap}"]`
     );
 
     await act(async () => {
@@ -970,8 +1121,8 @@ describe('ObjectMap', () => {
     });
 
     const nextMenu = container.querySelector<HTMLElement>('[data-testid="mock-context-menu"]');
-    const nextMapItem = Array.from(nextMenu!.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Map'
+    const nextMapItem = nextMenu!.querySelector<HTMLButtonElement>(
+      `[data-context-action-id="${OBJECT_ACTION_IDS.viewMap}"]`
     );
     expect(mapItem).toBeTruthy();
 
@@ -1017,13 +1168,14 @@ describe('ObjectMap', () => {
     const menu = container.querySelector<HTMLElement>('[data-testid="mock-context-menu"]');
     expect(menu?.textContent).toContain('Zoom out');
     expect(menu?.textContent).toContain('Zoom in');
+    expect(menu?.textContent).toContain('Reset zoom');
     expect(menu?.textContent).toContain('Fit');
     expect(menu?.textContent).toContain('Auto-fit off');
     expect(menu?.textContent).toContain('Focus on');
     expect(menu?.textContent).toContain('Reset layout');
     expect(menu?.textContent).toContain('Refresh');
     expect(menu?.textContent).toContain('Hide legend');
-    expect(container.querySelectorAll('[data-testid="mock-context-menu-icon"]')).toHaveLength(8);
+    expect(container.querySelectorAll('[data-testid="mock-context-menu-icon"]')).toHaveLength(9);
 
     const autoFitItem = Array.from(menu!.querySelectorAll('button')).find(
       (button) => button.textContent === 'Auto-fit off'
@@ -1062,6 +1214,19 @@ describe('ObjectMap', () => {
       await Promise.resolve();
     });
     expect(container.querySelector('.object-map__legend')).toBeNull();
+
+    cleanup();
+  });
+
+  it('marks the refresh control as busy while a refresh is running', async () => {
+    const onRefresh = vi.fn();
+    const { container, cleanup } = await renderObjectMap({ onRefresh, isRefreshing: true });
+    const refreshButton = container.querySelector<HTMLButtonElement>('[aria-label="Refreshing"]');
+
+    expect(refreshButton).toBeTruthy();
+    expect(refreshButton?.disabled).toBe(true);
+    expect(refreshButton?.getAttribute('aria-busy')).toBe('true');
+    expect(refreshButton?.classList.contains('object-map__toolbar-button--refreshing')).toBe(true);
 
     cleanup();
   });
