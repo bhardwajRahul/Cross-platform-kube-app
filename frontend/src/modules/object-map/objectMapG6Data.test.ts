@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { ObjectMapReference } from '@core/refresh/types';
+import { formatAge } from '@/utils/ageFormatter';
 import type { ObjectMapLayout, PositionedEdge, PositionedNode } from './objectMapLayout';
 import {
   objectMapG6EdgeState,
@@ -33,7 +34,8 @@ const node = (
   kind: string,
   name: string,
   x: number,
-  isSeed = false
+  isSeed = false,
+  creationTimestamp?: string
 ): PositionedNode => ({
   id,
   x,
@@ -43,6 +45,7 @@ const node = (
   column: x / 320,
   isSeed,
   ref: ref(kind, name, kind === 'Node' ? undefined : 'default'),
+  creationTimestamp,
 });
 
 const edge = (id: string, sourceId: string, targetId: string, type: string): PositionedEdge => ({
@@ -66,13 +69,15 @@ const selectionState = (activeId: string | null): ObjectMapSelectionState => ({
 
 const layout: ObjectMapLayout = {
   nodes: [
-    node('deploy', 'Deployment', 'web', 0, true),
+    node('deploy', 'Deployment', 'web', 0, true, '2024-01-01T00:00:00Z'),
     node('pod', 'Pod', 'web-abc', 320),
     node('node', 'Node', 'ip-10-0-0-1.ec2.internal', -320),
   ],
   edges: [edge('edge-owner', 'deploy', 'pod', 'owner'), edge('edge-uses', 'pod', 'node', 'uses')],
   bounds: { minX: -320, minY: 20, maxX: 540, maxY: 84 },
 };
+
+layout.nodes[0].status = { state: 'healthy', label: '2/2 ready' };
 
 const palette: ObjectMapG6Palette = {
   accent: '#2563eb',
@@ -84,6 +89,11 @@ const palette: ObjectMapG6Palette = {
   textSecondary: '#64748b',
   textTertiary: '#9ca3af',
   textInverse: '#ffffff',
+  statusHealthy: '#22c55e',
+  statusRefreshing: '#16a34a',
+  statusDegraded: '#f59e0b',
+  statusUnhealthy: '#ef4444',
+  statusInactive: '#94a3b8',
   edgeOwner: '#0f766e',
   edgeRoutes: '#1d4ed8',
   edgeSelector: '#4f46e5',
@@ -198,6 +208,8 @@ describe('objectMapG6Data', () => {
         kindLabel: 'Deployment',
         nameLabel: 'web',
         namespaceLabel: 'default',
+        ageLabel: formatAge('2024-01-01T00:00:00Z'),
+        status: { state: 'healthy', label: '2/2 ready' },
       })
     );
     expect(deploy?.style).toEqual(
@@ -216,6 +228,11 @@ describe('objectMapG6Data', () => {
         cardCollapseBadgeTextFill: '#64748b',
         cardNameText: 'web',
         cardNamespaceText: 'default',
+        cardAgeText: formatAge('2024-01-01T00:00:00Z'),
+        cardAgeFill: '#64748b',
+        cardStatusText: '2/2 ready',
+        cardStatusFill: '#22c55e',
+        cardStatusStroke: '#f8fafc',
       })
     );
     expect(deploy?.style?.badges).toBeUndefined();

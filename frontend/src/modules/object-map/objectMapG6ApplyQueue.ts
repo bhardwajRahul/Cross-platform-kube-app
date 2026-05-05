@@ -88,9 +88,15 @@ const nodeChanged = (previous: NodeData, next: NodeData): boolean => {
     previousStyle.cardCollapseBadgeStroke !== nextStyle.cardCollapseBadgeStroke ||
     previousStyle.cardNameText !== nextStyle.cardNameText ||
     previousStyle.cardNamespaceText !== nextStyle.cardNamespaceText ||
+    previousStyle.cardAgeText !== nextStyle.cardAgeText ||
+    previousStyle.cardStatusText !== nextStyle.cardStatusText ||
+    previousStyle.cardStatusReason !== nextStyle.cardStatusReason ||
+    previousStyle.cardStatusFill !== nextStyle.cardStatusFill ||
+    previousStyle.cardStatusStroke !== nextStyle.cardStatusStroke ||
     previousStyle.cardFontFamily !== nextStyle.cardFontFamily ||
     previousStyle.cardNameFill !== nextStyle.cardNameFill ||
-    previousStyle.cardNamespaceFill !== nextStyle.cardNamespaceFill
+    previousStyle.cardNamespaceFill !== nextStyle.cardNamespaceFill ||
+    previousStyle.cardAgeFill !== nextStyle.cardAgeFill
   );
 };
 

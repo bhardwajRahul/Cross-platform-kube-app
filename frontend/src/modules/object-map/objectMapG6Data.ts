@@ -8,6 +8,7 @@ import type { EdgeData, GraphData, NodeData } from '@antv/g6';
 import type { PathArray } from '@antv/g6';
 import type { KindBadgeVisualStyle } from '@shared/utils/kindBadgeColors';
 import { fallbackKindBadgeVisualStyle } from '@shared/utils/kindBadgeColors';
+import { formatAge } from '@/utils/ageFormatter';
 import { getDisplayKind } from '@/utils/kindAliasMap';
 import type { ObjectMapLayout, PositionedEdge, PositionedNode } from './objectMapLayout';
 import { OBJECT_MAP_CARD_STYLE } from './objectMapCardStyle';
@@ -29,6 +30,11 @@ export interface ObjectMapG6Palette {
   textSecondary: string;
   textTertiary: string;
   textInverse: string;
+  statusHealthy: string;
+  statusRefreshing: string;
+  statusDegraded: string;
+  statusUnhealthy: string;
+  statusInactive: string;
   edgeOwner: string;
   edgeRoutes: string;
   edgeSelector: string;
@@ -86,6 +92,32 @@ const truncate = (text: string, maxChars: number): string => {
 
 const formatNamespace = (node: PositionedNode): string =>
   node.ref.namespace?.trim() ? node.ref.namespace : 'cluster-scoped';
+
+const formatNodeAge = (creationTimestamp?: string): string => {
+  if (!creationTimestamp) return '';
+  const age = formatAge(creationTimestamp);
+  return age === '-' ? '' : age;
+};
+
+const objectMapStatusFill = (
+  status: PositionedNode['status'] | undefined,
+  palette: ObjectMapG6Palette
+): string | undefined => {
+  switch (status?.state) {
+    case 'healthy':
+      return palette.statusHealthy;
+    case 'refreshing':
+      return palette.statusRefreshing;
+    case 'degraded':
+      return palette.statusDegraded;
+    case 'unhealthy':
+      return palette.statusUnhealthy;
+    case 'inactive':
+      return palette.statusInactive;
+    default:
+      return undefined;
+  }
+};
 
 export const objectMapG6EdgeStroke = (type: string, palette: ObjectMapG6Palette): string => {
   switch (type.trim().toLowerCase()) {
@@ -191,6 +223,8 @@ export const toObjectMapG6Data = (
     const badge = badgeForNode(node.id);
     const kindLabel = getDisplayKind(node.ref.kind, useShortResourceNames);
     const namespaceLabel = truncate(formatNamespace(node), NODE_NAMESPACE_MAX_CHARS);
+    const ageLabel = formatNodeAge(node.creationTimestamp);
+    const statusFill = objectMapStatusFill(node.status, palette);
     const kindBadgeStyle = kindBadgeStyleForKind(node.ref.kind);
     const states = objectMapG6NodeState(node, selectionState);
     const isDimmed = states.includes('dimmed');
@@ -204,6 +238,8 @@ export const toObjectMapG6Data = (
         kindLabel,
         nameLabel: node.ref.name,
         namespaceLabel,
+        ageLabel,
+        status: node.status,
       },
       states,
       style: {
@@ -239,9 +275,15 @@ export const toObjectMapG6Data = (
         cardCollapseBadgeStroke: palette.textTertiary,
         cardNameText: node.ref.name,
         cardNamespaceText: namespaceLabel,
+        cardAgeText: ageLabel,
+        cardStatusText: node.status?.label,
+        cardStatusReason: node.status?.reason,
+        cardStatusFill: statusFill,
+        cardStatusStroke: palette.backgroundSecondary,
         cardFontFamily: palette.fontFamily,
         cardNameFill: palette.text,
         cardNamespaceFill: palette.textSecondary,
+        cardAgeFill: palette.textSecondary,
       },
     };
   }),

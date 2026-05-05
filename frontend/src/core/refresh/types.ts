@@ -512,6 +512,14 @@ export interface ObjectMapNode {
   id: string;
   depth: number;
   ref: ObjectMapReference;
+  creationTimestamp?: string;
+  status?: ObjectMapStatus;
+}
+
+export interface ObjectMapStatus {
+  state: 'healthy' | 'refreshing' | 'degraded' | 'unhealthy' | 'inactive';
+  label: string;
+  reason?: string;
 }
 
 // Edge `type` is one of the backend tracer categories: owner, selector,

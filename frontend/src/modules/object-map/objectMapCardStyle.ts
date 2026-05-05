@@ -19,6 +19,7 @@ export const OBJECT_MAP_CARD_STYLE = {
   kindBadgePaddingHoriz: 4,
   badgeNameGap: 18,
   nameNamespaceGap: 16,
+  metadataColumnGap: 8,
   textFontSize: 11,
   nameFontWeight: 500,
   namespaceFontWeight: 400,
@@ -27,4 +28,7 @@ export const OBJECT_MAP_CARD_STYLE = {
   collapseBadgeRadius: 3,
   collapseBadgeRightInset: 8,
   collapseBadgeTopInset: 8,
+  statusDotSize: 8.5,
+  statusDotRightInset: 6,
+  statusDotCenterY: 10,
 } as const;

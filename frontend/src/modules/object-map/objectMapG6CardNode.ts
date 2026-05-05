@@ -5,8 +5,14 @@
  * object names, namespaces, and collapse/expand badges.
  */
 
-import { Rect as GRect, Text as GText } from '@antv/g';
-import type { DisplayObjectConfig, Group, RectStyleProps, TextStyleProps } from '@antv/g';
+import { Circle as GCircle, Rect as GRect, Text as GText } from '@antv/g';
+import type {
+  CircleStyleProps,
+  DisplayObjectConfig,
+  Group,
+  RectStyleProps,
+  TextStyleProps,
+} from '@antv/g';
 import { BaseNode, ExtensionCategory, register } from '@antv/g6';
 import type { BaseNodeStyleProps } from '@antv/g6';
 import { OBJECT_MAP_CARD_STYLE } from './objectMapCardStyle';
@@ -54,9 +60,15 @@ interface ObjectMapG6CardNodeStyleProps extends BaseNodeStyleProps {
   cardCollapseBadgeStroke?: string;
   cardNameText?: string;
   cardNamespaceText?: string;
+  cardAgeText?: string;
+  cardStatusText?: string;
+  cardStatusReason?: string;
+  cardStatusFill?: string;
+  cardStatusStroke?: string;
   cardFontFamily?: string;
   cardNameFill?: string;
   cardNamespaceFill?: string;
+  cardAgeFill?: string;
 }
 
 class ObjectMapG6CardNode extends BaseNode<ObjectMapG6CardNodeStyleProps> {
@@ -99,7 +111,8 @@ class ObjectMapG6CardNode extends BaseNode<ObjectMapG6CardNodeStyleProps> {
     baselineY: number,
     fill: string,
     fontWeight: TextStyleProps['fontWeight'],
-    letterSpacing = 0
+    letterSpacing = 0,
+    wordWrapWidth?: number
   ): TextStyleProps {
     const [width, height] = this.getSize(attributes);
     return {
@@ -114,10 +127,44 @@ class ObjectMapG6CardNode extends BaseNode<ObjectMapG6CardNodeStyleProps> {
       textBaseline: 'alphabetic',
       maxLines: 1,
       wordWrap: true,
-      wordWrapWidth: width - OBJECT_MAP_CARD_STYLE.paddingX * 2,
+      wordWrapWidth: wordWrapWidth ?? width - OBJECT_MAP_CARD_STYLE.paddingX * 2,
       textOverflow: '...',
       opacity: this.getForegroundOpacity(attributes),
     };
+  }
+
+  private getAgeTextStyle(
+    attributes: Required<ObjectMapG6CardNodeStyleProps>,
+    baselineY: number
+  ): TextStyleProps {
+    const [width, height] = this.getSize(attributes);
+    return {
+      x: width / 2 - OBJECT_MAP_CARD_STYLE.paddingX,
+      y: -height / 2 + baselineY,
+      text: attributes.cardAgeText,
+      fill: attributes.cardAgeFill,
+      fontSize: OBJECT_MAP_CARD_STYLE.textFontSize,
+      fontWeight: OBJECT_MAP_CARD_STYLE.namespaceFontWeight,
+      fontFamily: attributes.cardFontFamily,
+      textAlign: 'right',
+      textBaseline: 'alphabetic',
+      maxLines: 1,
+      opacity: this.getForegroundOpacity(attributes),
+    };
+  }
+
+  private getNamespaceTextWidth(attributes: Required<ObjectMapG6CardNodeStyleProps>): number {
+    const [width] = this.getSize(attributes);
+    const fullWidth = width - OBJECT_MAP_CARD_STYLE.paddingX * 2;
+    if (!attributes.cardAgeText) return fullWidth;
+    const ageWidth = measureTextWidth(
+      attributes.cardAgeText,
+      attributes.cardFontFamily,
+      OBJECT_MAP_CARD_STYLE.textFontSize,
+      OBJECT_MAP_CARD_STYLE.namespaceFontWeight,
+      0
+    );
+    return Math.max(1, fullWidth - ageWidth - OBJECT_MAP_CARD_STYLE.metadataColumnGap);
   }
 
   private getBadgeMetrics(attributes: Required<ObjectMapG6CardNodeStyleProps>) {
@@ -228,6 +275,33 @@ class ObjectMapG6CardNode extends BaseNode<ObjectMapG6CardNodeStyleProps> {
     };
   }
 
+  private getStatusDotStyle(
+    attributes: Required<ObjectMapG6CardNodeStyleProps>
+  ): CircleStyleProps | false {
+    if (!attributes.cardStatusFill) return false;
+    const [cardWidth, cardHeight] = this.getSize(attributes);
+    const radius = OBJECT_MAP_CARD_STYLE.statusDotSize / 2;
+    const x = cardWidth / 2 - OBJECT_MAP_CARD_STYLE.statusDotRightInset - radius;
+    const y = -cardHeight / 2 + OBJECT_MAP_CARD_STYLE.statusDotCenterY;
+    return {
+      cx: x,
+      cy: y,
+      r: radius,
+      fill: attributes.cardStatusFill,
+      stroke: attributes.cardStatusStroke,
+      lineWidth: 1.5,
+      fillOpacity: this.getForegroundOpacity(attributes),
+      strokeOpacity: this.getBackgroundOpacity(attributes),
+    };
+  }
+
+  private drawStatusDot(
+    attributes: Required<ObjectMapG6CardNodeStyleProps>,
+    container: Group
+  ): void {
+    this.upsert('card-status-dot', GCircle, this.getStatusDotStyle(attributes), container);
+  }
+
   private drawCollapseBadge(
     attributes: Required<ObjectMapG6CardNodeStyleProps>,
     container: Group
@@ -284,6 +358,7 @@ class ObjectMapG6CardNode extends BaseNode<ObjectMapG6CardNodeStyleProps> {
     const baselines = this.getCardTextBaselines(attributes);
     this.drawKindBadge(attributes, container);
     this.drawCollapseBadge(attributes, container);
+    this.drawStatusDot(attributes, container);
     this.upsert(
       'card-name',
       GText,
@@ -304,10 +379,22 @@ class ObjectMapG6CardNode extends BaseNode<ObjectMapG6CardNodeStyleProps> {
         attributes.cardNamespaceText,
         baselines.namespaceBaselineY,
         attributes.cardNamespaceFill,
-        OBJECT_MAP_CARD_STYLE.namespaceFontWeight
+        OBJECT_MAP_CARD_STYLE.namespaceFontWeight,
+        0,
+        this.getNamespaceTextWidth(attributes)
       ),
       container
     );
+    if (attributes.cardAgeText) {
+      this.upsert(
+        'card-age',
+        GText,
+        this.getAgeTextStyle(attributes, baselines.namespaceBaselineY),
+        container
+      );
+    } else {
+      this.upsert('card-age', GText, false, container);
+    }
   }
 
   render(attributes = this.parsedAttributes, container = this): void {
