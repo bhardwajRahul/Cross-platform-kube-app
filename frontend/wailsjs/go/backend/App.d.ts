@@ -167,7 +167,7 @@ export function GetReplicaSet(arg1:string,arg2:string,arg3:string):Promise<types
 
 export function GetResourceQuota(arg1:string,arg2:string,arg3:string):Promise<types.ResourceQuotaDetails>;
 
-export function GetRevisionHistory(arg1:string,arg2:string,arg3:string,arg4:string):Promise<Array<backend.RevisionEntry>>;
+export function GetRevisionHistory(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<Array<backend.RevisionEntry>>;
 
 export function GetRole(arg1:string,arg2:string,arg3:string):Promise<types.RoleDetails>;
 
@@ -199,8 +199,6 @@ export function GetThemes():Promise<Array<types.Theme>>;
 
 export function GetValidatingWebhookConfiguration(arg1:string,arg2:string):Promise<types.ValidatingWebhookConfigurationDetails>;
 
-export function GetWorkloads(arg1:string,arg2:string,arg3:string):Promise<backend.VersionedResponse>;
-
 export function GetZoomLevel():Promise<number>;
 
 export function IsAppLogsPanelVisible():Promise<boolean>;
@@ -209,7 +207,7 @@ export function IsDiagnosticsPanelVisible():Promise<boolean>;
 
 export function IsSidebarVisible():Promise<boolean>;
 
-export function IsWorkloadHPAManaged(arg1:string,arg2:string,arg3:string,arg4:string):Promise<boolean>;
+export function IsWorkloadHPAManaged(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<boolean>;
 
 export function ListPortForwards():Promise<Array<backend.PortForwardSession>>;
 
@@ -231,19 +229,19 @@ export function ReorderThemes(arg1:Array<string>):Promise<void>;
 
 export function ResizeShellSession(arg1:string,arg2:number,arg3:number):Promise<void>;
 
-export function RestartWorkload(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
+export function RestartWorkload(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<void>;
 
 export function RetryAuth():Promise<void>;
 
 export function RetryClusterAuth(arg1:string):Promise<void>;
 
-export function RollbackWorkload(arg1:string,arg2:string,arg3:string,arg4:string,arg5:number):Promise<void>;
+export function RollbackWorkload(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:number):Promise<void>;
 
 export function SaveTheme(arg1:types.Theme):Promise<void>;
 
 export function SaveWindowSettings():Promise<void>;
 
-export function ScaleWorkload(arg1:string,arg2:string,arg3:string,arg4:string,arg5:number):Promise<void>;
+export function ScaleWorkload(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:number):Promise<void>;
 
 export function SendShellInput(arg1:string,arg2:string):Promise<void>;
 

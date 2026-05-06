@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
@@ -13,11 +14,48 @@ import (
 )
 
 const rolloutAnnotation = "kubectl.kubernetes.io/restartedAt"
+const maxScaleReplicas = 1<<31 - 1
+
+var (
+	actionRestartableWorkloadKinds = map[string]struct{}{
+		"Deployment":  {},
+		"StatefulSet": {},
+		"DaemonSet":   {},
+	}
+	actionScalableWorkloadKinds = map[string]struct{}{
+		"Deployment":  {},
+		"StatefulSet": {},
+		"ReplicaSet":  {},
+	}
+)
+
+func validateAppsV1WorkloadAction(action, group, version, kind string, supported map[string]struct{}) (string, error) {
+	normalizedKind := strings.TrimSpace(kind)
+	if _, ok := supported[normalizedKind]; !ok {
+		return "", fmt.Errorf("%s not supported for workload kind %q", action, normalizedKind)
+	}
+	if strings.TrimSpace(group) != "apps" || strings.TrimSpace(version) != "v1" {
+		apiVersion := strings.Trim(strings.TrimSpace(group)+"/"+strings.TrimSpace(version), "/")
+		if apiVersion == "" {
+			return "", fmt.Errorf("%s requires apiVersion for workload kind %q", action, normalizedKind)
+		}
+		return "", fmt.Errorf("%s not supported for %s %q", action, apiVersion, normalizedKind)
+	}
+	return normalizedKind, nil
+}
 
 // RestartWorkload performs a rollout restart by patching the pod template metadata on the target workload.
 // Supported workload kinds: Deployment, StatefulSet, DaemonSet.
-func (a *App) RestartWorkload(clusterID, namespace, name, workloadKind string) error {
-	deps, _, err := a.resolveClusterDependencies(clusterID)
+func (a *App) RestartWorkload(clusterID, namespace, group, version, workloadKind, name string) error {
+	if err := requireNamespacedObject(namespace, name); err != nil {
+		return err
+	}
+	workloadKind, err := validateAppsV1WorkloadAction("restart", group, version, workloadKind, actionRestartableWorkloadKinds)
+	if err != nil {
+		return err
+	}
+
+	deps, selectionKey, err := a.resolveClusterDependencies(clusterID)
 	if err != nil {
 		return err
 	}
@@ -50,6 +88,16 @@ func (a *App) RestartWorkload(clusterID, namespace, name, workloadKind string) e
 
 	switch workloadKind {
 	case "Deployment":
+		if err := a.requireResourcePermission(ctx, deps, resourcePermissionCheck{
+			Group:     group,
+			Version:   version,
+			Kind:      workloadKind,
+			Namespace: namespace,
+			Name:      name,
+			Verb:      "patch",
+		}); err != nil {
+			return err
+		}
 		_, err = deps.KubernetesClient.AppsV1().Deployments(namespace).Patch(
 			ctx,
 			name,
@@ -58,6 +106,16 @@ func (a *App) RestartWorkload(clusterID, namespace, name, workloadKind string) e
 			metav1.PatchOptions{},
 		)
 	case "StatefulSet":
+		if err := a.requireResourcePermission(ctx, deps, resourcePermissionCheck{
+			Group:     group,
+			Version:   version,
+			Kind:      workloadKind,
+			Namespace: namespace,
+			Name:      name,
+			Verb:      "patch",
+		}); err != nil {
+			return err
+		}
 		_, err = deps.KubernetesClient.AppsV1().StatefulSets(namespace).Patch(
 			ctx,
 			name,
@@ -66,6 +124,16 @@ func (a *App) RestartWorkload(clusterID, namespace, name, workloadKind string) e
 			metav1.PatchOptions{},
 		)
 	case "DaemonSet":
+		if err := a.requireResourcePermission(ctx, deps, resourcePermissionCheck{
+			Group:     group,
+			Version:   version,
+			Kind:      workloadKind,
+			Namespace: namespace,
+			Name:      name,
+			Verb:      "patch",
+		}); err != nil {
+			return err
+		}
 		_, err = deps.KubernetesClient.AppsV1().DaemonSets(namespace).Patch(
 			ctx,
 			name,
@@ -84,22 +152,33 @@ func (a *App) RestartWorkload(clusterID, namespace, name, workloadKind string) e
 	if deps.Logger != nil {
 		deps.Logger.Info(fmt.Sprintf("Restarted %s %s/%s", workloadKind, namespace, name), "RestartWorkload")
 	}
+	a.invalidateResponseCache(selectionKey, workloadKind, namespace, name)
 	return nil
 }
 
 // ScaleWorkload updates the replica count on a scalable workload.
 // Supported workload kinds: Deployment, StatefulSet, ReplicaSet.
-func (a *App) ScaleWorkload(clusterID, namespace, name, workloadKind string, replicas int) error {
-	deps, _, err := a.resolveClusterDependencies(clusterID)
+func (a *App) ScaleWorkload(clusterID, namespace, group, version, workloadKind, name string, replicas int) error {
+	if err := requireNamespacedObject(namespace, name); err != nil {
+		return err
+	}
+	if replicas < 0 {
+		return fmt.Errorf("replicas must be non-negative")
+	}
+	if replicas > maxScaleReplicas {
+		return fmt.Errorf("replicas must be less than or equal to %d", maxScaleReplicas)
+	}
+	workloadKind, err := validateAppsV1WorkloadAction("scaling", group, version, workloadKind, actionScalableWorkloadKinds)
+	if err != nil {
+		return err
+	}
+
+	deps, selectionKey, err := a.resolveClusterDependencies(clusterID)
 	if err != nil {
 		return err
 	}
 	if deps.KubernetesClient == nil {
 		return fmt.Errorf("kubernetes client is not initialized")
-	}
-
-	if replicas < 0 {
-		return fmt.Errorf("replicas must be non-negative")
 	}
 
 	scale := &autoscalingv1.Scale{
@@ -117,6 +196,17 @@ func (a *App) ScaleWorkload(clusterID, namespace, name, workloadKind string, rep
 
 	switch workloadKind {
 	case "Deployment":
+		if err := a.requireResourcePermission(ctx, deps, resourcePermissionCheck{
+			Group:       group,
+			Version:     version,
+			Kind:        workloadKind,
+			Namespace:   namespace,
+			Name:        name,
+			Verb:        "update",
+			Subresource: "scale",
+		}); err != nil {
+			return err
+		}
 		_, err := deps.KubernetesClient.AppsV1().Deployments(namespace).UpdateScale(
 			ctx,
 			name,
@@ -127,6 +217,17 @@ func (a *App) ScaleWorkload(clusterID, namespace, name, workloadKind string, rep
 			return fmt.Errorf("failed to scale deployment %s/%s: %w", namespace, name, err)
 		}
 	case "StatefulSet":
+		if err := a.requireResourcePermission(ctx, deps, resourcePermissionCheck{
+			Group:       group,
+			Version:     version,
+			Kind:        workloadKind,
+			Namespace:   namespace,
+			Name:        name,
+			Verb:        "update",
+			Subresource: "scale",
+		}); err != nil {
+			return err
+		}
 		_, err := deps.KubernetesClient.AppsV1().StatefulSets(namespace).UpdateScale(
 			ctx,
 			name,
@@ -137,6 +238,17 @@ func (a *App) ScaleWorkload(clusterID, namespace, name, workloadKind string, rep
 			return fmt.Errorf("failed to scale statefulset %s/%s: %w", namespace, name, err)
 		}
 	case "ReplicaSet":
+		if err := a.requireResourcePermission(ctx, deps, resourcePermissionCheck{
+			Group:       group,
+			Version:     version,
+			Kind:        workloadKind,
+			Namespace:   namespace,
+			Name:        name,
+			Verb:        "update",
+			Subresource: "scale",
+		}); err != nil {
+			return err
+		}
 		_, err := deps.KubernetesClient.AppsV1().ReplicaSets(namespace).UpdateScale(
 			ctx,
 			name,
@@ -156,13 +268,17 @@ func (a *App) ScaleWorkload(clusterID, namespace, name, workloadKind string, rep
 			"ScaleWorkload",
 		)
 	}
+	a.invalidateResponseCache(selectionKey, workloadKind, namespace, name)
 	return nil
 }
 
 // TriggerCronJob creates a Job immediately from a CronJob's jobTemplate spec.
 // Returns the name of the created Job on success.
 func (a *App) TriggerCronJob(clusterID, namespace, name string) (string, error) {
-	deps, _, err := a.resolveClusterDependencies(clusterID)
+	if err := requireNamespacedObject(namespace, name); err != nil {
+		return "", err
+	}
+	deps, selectionKey, err := a.resolveClusterDependencies(clusterID)
 	if err != nil {
 		return "", err
 	}
@@ -179,6 +295,13 @@ func (a *App) TriggerCronJob(clusterID, namespace, name string) (string, error) 
 	cronJob, err := deps.KubernetesClient.BatchV1().CronJobs(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to get cronjob %s/%s: %w", namespace, name, err)
+	}
+	if err := a.requireResourcePermission(ctx, deps, resourcePermissionCheck{
+		Kind:      "Job",
+		Namespace: namespace,
+		Verb:      "create",
+	}); err != nil {
+		return "", err
 	}
 
 	// Generate a unique job name with timestamp
@@ -225,18 +348,31 @@ func (a *App) TriggerCronJob(clusterID, namespace, name string) (string, error) 
 	if deps.Logger != nil {
 		deps.Logger.Info(fmt.Sprintf("Triggered CronJob %s/%s, created Job %s", namespace, name, createdJob.Name), "TriggerCronJob")
 	}
+	a.invalidateResponseCache(selectionKey, "CronJob", namespace, name)
 	return createdJob.Name, nil
 }
 
 // SuspendCronJob sets the suspend field on a CronJob.
 // When suspended, the CronJob will not create new Jobs on schedule.
 func (a *App) SuspendCronJob(clusterID, namespace, name string, suspend bool) error {
-	deps, _, err := a.resolveClusterDependencies(clusterID)
+	if err := requireNamespacedObject(namespace, name); err != nil {
+		return err
+	}
+	deps, selectionKey, err := a.resolveClusterDependencies(clusterID)
 	if err != nil {
 		return err
 	}
 	if deps.KubernetesClient == nil {
 		return fmt.Errorf("kubernetes client is not initialized")
+	}
+
+	if err := a.requireResourcePermission(deps.Context, deps, resourcePermissionCheck{
+		Kind:      "CronJob",
+		Namespace: namespace,
+		Name:      name,
+		Verb:      "patch",
+	}); err != nil {
+		return err
 	}
 
 	ctx := deps.Context
@@ -273,6 +409,7 @@ func (a *App) SuspendCronJob(clusterID, namespace, name string, suspend bool) er
 	if deps.Logger != nil {
 		deps.Logger.Info(fmt.Sprintf("%s CronJob %s/%s", action, namespace, name), "SuspendCronJob")
 	}
+	a.invalidateResponseCache(selectionKey, "CronJob", namespace, name)
 	return nil
 }
 

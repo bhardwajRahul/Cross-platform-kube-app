@@ -29,6 +29,14 @@ import (
 // For workloads (Deployment, StatefulSet, DaemonSet) and Services, the session
 // will automatically reconnect if the underlying pod is replaced.
 func (a *App) StartPortForward(clusterID string, req PortForwardRequest) (string, error) {
+	target, err := portForwardTargetFromRequest(req)
+	if err != nil {
+		return "", err
+	}
+	if req.ContainerPort <= 0 {
+		return "", fmt.Errorf("container port must be positive")
+	}
+
 	deps, _, err := a.resolveClusterDependencies(clusterID)
 	if err != nil {
 		return "", err
@@ -40,31 +48,6 @@ func (a *App) StartPortForward(clusterID string, req PortForwardRequest) (string
 		return "", fmt.Errorf("kubernetes rest config not initialized")
 	}
 
-	// Validate request.
-	if req.Namespace == "" {
-		return "", fmt.Errorf("namespace is required")
-	}
-	if req.TargetKind == "" {
-		return "", fmt.Errorf("target kind is required")
-	}
-	if req.TargetName == "" {
-		return "", fmt.Errorf("target name is required")
-	}
-	if req.ContainerPort <= 0 {
-		return "", fmt.Errorf("container port must be positive")
-	}
-
-	target := portForwardTargetRef{
-		Namespace: req.Namespace,
-		Kind:      req.TargetKind,
-		Group:     req.TargetGroup,
-		Version:   req.TargetVersion,
-		Name:      req.TargetName,
-	}
-	if err := validatePortForwardTargetGVK(target); err != nil {
-		return "", err
-	}
-
 	// Resolve the target to a pod.
 	ctx, cancel := context.WithTimeout(context.Background(), config.PortForwardResolveTimeout)
 	defer cancel()
@@ -72,6 +55,16 @@ func (a *App) StartPortForward(clusterID string, req PortForwardRequest) (string
 	resolved, err := resolvePortForwardDestination(ctx, deps.KubernetesClient, target, req.ContainerPort)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve pod: %w", err)
+	}
+
+	if err := a.requireResourcePermission(deps.Context, deps, resourcePermissionCheck{
+		Kind:        "Pod",
+		Namespace:   target.Namespace,
+		Name:        resolved.PodName,
+		Verb:        "create",
+		Subresource: "portforward",
+	}); err != nil {
+		return "", err
 	}
 
 	// Create session.
@@ -83,14 +76,14 @@ func (a *App) StartPortForward(clusterID string, req PortForwardRequest) (string
 			ID:            sessionID,
 			ClusterID:     clusterID,
 			ClusterName:   deps.ClusterName,
-			Namespace:     req.Namespace,
+			Namespace:     target.Namespace,
 			PodName:       resolved.PodName,
 			ContainerPort: req.ContainerPort,
 			LocalPort:     req.LocalPort,
-			TargetKind:    req.TargetKind,
-			TargetGroup:   req.TargetGroup,
-			TargetVersion: req.TargetVersion,
-			TargetName:    req.TargetName,
+			TargetKind:    target.Kind,
+			TargetGroup:   target.Group,
+			TargetVersion: target.Version,
+			TargetName:    target.Name,
 			Status:        "connecting",
 			StartedAt:     time.Now().Format(time.RFC3339),
 		},

@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/luxury-yacht/app/backend/capabilities"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -132,6 +133,7 @@ func newCollidingDBInstanceCluster(t *testing.T, clusterID string) *App {
 	app.Ctx = context.Background()
 
 	kubeClient := kubernetesfake.NewClientset()
+	allowSelfSubjectAccessReviews(kubeClient)
 	discoveryClient := kubeClient.Discovery().(*fakediscovery.FakeDiscovery)
 	discoveryClient.Resources = collidingDBInstanceDiscoveryLists()
 
@@ -284,6 +286,16 @@ func TestGetObjectYAMLByGVKDisambiguatesCollidingDBInstances(t *testing.T) {
 			t.Fatalf("kinda.rocks lookup returned ack-rds object by mistake:\n%s", yamlStr)
 		}
 	})
+
+	t.Run("missing name returns boundary error", func(t *testing.T) {
+		_, err := app.GetObjectYAMLByGVK(clusterID, "kinda.rocks/v1beta1", "DbInstance", "default", "")
+		if err == nil {
+			t.Fatal("expected error when name is empty")
+		}
+		if !strings.Contains(err.Error(), "name is required") {
+			t.Errorf("expected error to mention missing name, got %v", err)
+		}
+	})
 }
 
 // TestQueryPermissionsDisambiguatesCollidingDBInstances is the step-4
@@ -427,10 +439,21 @@ func TestDeleteResourceByGVKDisambiguatesCollidingDBInstances(t *testing.T) {
 	t.Run("ACK DBInstance", func(t *testing.T) {
 		const clusterID = "collision-delete-ack"
 		app := newCollidingDBInstanceCluster(t, clusterID)
+		app.responseCache = newResponseCache(time.Minute, 10)
 		dynamicClient := app.clusterClients[clusterID].dynamicClient.(*dynamicfake.FakeDynamicClient)
+		ackCacheKey := objectDetailCacheKeyForGVK(ackDBInstanceGVK, "default", "my-db")
+		kindaCacheKey := objectDetailCacheKeyForGVK(kindaRocksDBInstanceGVK, "default", "my-db")
+		app.responseCacheStore(clusterID, ackCacheKey, "stale-ack")
+		app.responseCacheStore(clusterID, kindaCacheKey, "fresh-kinda")
 
 		if err := app.DeleteResourceByGVK(clusterID, "rds.services.k8s.aws/v1alpha1", "DBInstance", "default", "my-db"); err != nil {
 			t.Fatalf("DeleteResourceByGVK returned error for ACK: %v", err)
+		}
+		if _, ok := app.responseCacheLookup(clusterID, ackCacheKey); ok {
+			t.Fatalf("expected ACK detail cache to be evicted")
+		}
+		if _, ok := app.responseCacheLookup(clusterID, kindaCacheKey); !ok {
+			t.Fatalf("expected sibling CRD detail cache to remain")
 		}
 
 		ackGVR := schema.GroupVersionResource{
@@ -452,10 +475,21 @@ func TestDeleteResourceByGVKDisambiguatesCollidingDBInstances(t *testing.T) {
 	t.Run("kinda.rocks DbInstance", func(t *testing.T) {
 		const clusterID = "collision-delete-kinda-rocks"
 		app := newCollidingDBInstanceCluster(t, clusterID)
+		app.responseCache = newResponseCache(time.Minute, 10)
 		dynamicClient := app.clusterClients[clusterID].dynamicClient.(*dynamicfake.FakeDynamicClient)
+		ackCacheKey := objectDetailCacheKeyForGVK(ackDBInstanceGVK, "default", "my-db")
+		kindaCacheKey := objectDetailCacheKeyForGVK(kindaRocksDBInstanceGVK, "default", "my-db")
+		app.responseCacheStore(clusterID, ackCacheKey, "fresh-ack")
+		app.responseCacheStore(clusterID, kindaCacheKey, "stale-kinda")
 
 		if err := app.DeleteResourceByGVK(clusterID, "kinda.rocks/v1beta1", "DbInstance", "default", "my-db"); err != nil {
 			t.Fatalf("DeleteResourceByGVK returned error for kinda.rocks: %v", err)
+		}
+		if _, ok := app.responseCacheLookup(clusterID, kindaCacheKey); ok {
+			t.Fatalf("expected kinda.rocks detail cache to be evicted")
+		}
+		if _, ok := app.responseCacheLookup(clusterID, ackCacheKey); !ok {
+			t.Fatalf("expected sibling CRD detail cache to remain")
 		}
 
 		ackGVR := schema.GroupVersionResource{
@@ -484,6 +518,19 @@ func TestDeleteResourceByGVKDisambiguatesCollidingDBInstances(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "apiVersion") {
 			t.Errorf("expected error to mention apiVersion, got %v", err)
+		}
+	})
+
+	t.Run("missing name returns boundary error", func(t *testing.T) {
+		const clusterID = "collision-delete-missing-name"
+		app := newCollidingDBInstanceCluster(t, clusterID)
+
+		err := app.DeleteResourceByGVK(clusterID, "kinda.rocks/v1beta1", "DbInstance", "default", "")
+		if err == nil {
+			t.Fatal("expected error when name is empty")
+		}
+		if !strings.Contains(err.Error(), "name is required") {
+			t.Errorf("expected error to mention missing name, got %v", err)
 		}
 	})
 }

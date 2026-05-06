@@ -9,6 +9,7 @@ import (
 	apiextensionsinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 	gatewayinformers "sigs.k8s.io/gateway-api/pkg/client/informers/externalversions"
@@ -16,6 +17,7 @@ import (
 	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/refresh/permissions"
 	"github.com/luxury-yacht/app/backend/refresh/system"
+	resourcecommon "github.com/luxury-yacht/app/backend/resources/common"
 )
 
 const (
@@ -249,11 +251,6 @@ func (a *App) registerAPIExtensionsInvalidation(shared apiextensionsinformers.Sh
 	}
 	informer := shared.Apiextensions().V1().CustomResourceDefinitions().Informer()
 	a.addResponseCacheInvalidationHandler(informer, selectionKey, "CustomResourceDefinition", guard)
-	// The backend no longer caches GVR discovery lookups — the strict GVK
-	// resolver (common.ResolveGVRForGVK) hits discovery on every call,
-	// and discovery clients cache their own results against the API
-	// server. Nothing to invalidate here on CRD changes.
-
 }
 
 // addResponseCacheInvalidationHandler evicts cached responses when an informer update arrives.
@@ -311,6 +308,9 @@ func (a *App) invalidateResponseCacheForObjectEvent(
 	if shouldSkipWarmupInvalidation(guard, eventType, metaObj) {
 		return
 	}
+	if strings.EqualFold(kind, "CustomResourceDefinition") {
+		resourcecommon.ClearGVRCacheForCluster(selectionKey)
+	}
 	name := strings.TrimSpace(metaObj.GetName())
 	if name == "" {
 		return
@@ -328,11 +328,32 @@ func (a *App) invalidateResponseCacheForResource(selectionKey, kind, namespace, 
 	a.invalidateResponseCache(selectionKey, kind, namespace, name)
 }
 
+// invalidateResponseCacheForGVK drops the exact cached detail entry for a
+// fully-qualified resource. Built-ins also retain their legacy kind-only detail
+// key, so evict both forms for those resources.
+func (a *App) invalidateResponseCacheForGVK(selectionKey string, gvk schema.GroupVersionKind, namespace, name string) {
+	if strings.TrimSpace(gvk.Kind) == "" || strings.TrimSpace(name) == "" {
+		return
+	}
+	if info, ok := lookupBuiltinResourceByGVK(gvk.Group, gvk.Version, gvk.Kind); ok {
+		a.invalidateResponseCache(selectionKey, info.Kind, namespace, name)
+		return
+	}
+	a.responseCacheDelete(selectionKey, objectDetailCacheKeyForGVK(gvk, namespace, name))
+}
+
 // invalidateResponseCache drops the cached detail entry for the resource.
 // (The legacy YAML response-cache entry was retired with App.GetObjectYAML —
 // the GVK-aware fetch path doesn't write to the response cache.)
 func (a *App) invalidateResponseCache(selectionKey, kind, namespace, name string) {
 	a.responseCacheDelete(selectionKey, objectDetailCacheKey(kind, namespace, name))
+	if info, ok := lookupBuiltinResourceByKind(kind); ok {
+		a.responseCacheDelete(selectionKey, objectDetailCacheKeyForGVK(schema.GroupVersionKind{
+			Group:   info.Group,
+			Version: info.Version,
+			Kind:    info.Kind,
+		}, namespace, name))
+	}
 }
 
 // invalidateHelmCacheIfNeeded evicts Helm release cache entries when a release secret/configmap changes.

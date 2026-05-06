@@ -12,6 +12,7 @@ package backend
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -194,8 +195,53 @@ func TestResourceWrappersRequireClient(t *testing.T) {
 		}
 	}
 
-	// Directly cover no-op cache clearer.
-	app.clearNodeCaches("node")
+	// Directly cover cache clearer when the response cache is unset.
+	app.clearNodeCaches(clusterID, "node")
+}
+
+func TestDeletePodEvictsDetailCache(t *testing.T) {
+	app := wrapperTestApp(t)
+	app.responseCache = newResponseCache(time.Minute, 10)
+	clusterID := "config:ctx"
+	client := cgofake.NewClientset(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pod",
+			Namespace: "ns",
+		},
+	})
+	allowSelfSubjectAccessReviews(client)
+	app.clusterClients = map[string]*clusterClients{
+		clusterID: {
+			meta:              ClusterMeta{ID: clusterID, Name: "ctx"},
+			kubeconfigPath:    "/path",
+			kubeconfigContext: "ctx",
+			client:            client,
+		},
+	}
+
+	detailKey := objectDetailCacheKey("Pod", "ns", "pod")
+	app.responseCacheStore(clusterID, detailKey, "stale")
+
+	if err := app.DeletePod(clusterID, "ns", "pod"); err != nil {
+		t.Fatalf("DeletePod returned error: %v", err)
+	}
+	if _, ok := app.responseCacheLookup(clusterID, detailKey); ok {
+		t.Fatalf("expected pod detail cache to be evicted")
+	}
+}
+
+func TestClearNodeCachesEvictsDetailCache(t *testing.T) {
+	app := wrapperTestApp(t)
+	app.responseCache = newResponseCache(time.Minute, 10)
+	clusterID := "config:ctx"
+	detailKey := objectDetailCacheKey("Node", "", "node")
+	app.responseCacheStore(clusterID, detailKey, "stale")
+
+	app.clearNodeCaches(clusterID, "node")
+
+	if _, ok := app.responseCacheLookup(clusterID, detailKey); ok {
+		t.Fatalf("expected node detail cache to be evicted")
+	}
 }
 
 func TestWrapperHappyPathsWithFakeClients(t *testing.T) {
@@ -522,5 +568,79 @@ func TestWrapperGuardPathsRequireClient(t *testing.T) {
 	resp := app.FetchContainerLogs(clusterID, ContainerLogsFetchRequest{Namespace: "ns", PodName: "pod"})
 	if resp.Error == "" {
 		t.Fatalf("expected error for FetchContainerLogs without client")
+	}
+}
+
+func TestActionWrappersRequireTargetIdentity(t *testing.T) {
+	app := newTestAppWithDefaults(t)
+
+	errorCases := []struct {
+		name    string
+		call    func() error
+		wantErr string
+	}{
+		{"DeletePod namespace", func() error { return app.DeletePod("cluster-a", "", "pod") }, "namespace is required"},
+		{"DeletePod name", func() error { return app.DeletePod("cluster-a", "ns", "") }, "pod name is required"},
+		{"PodContainers namespace", func() error { _, err := app.GetPodContainers("cluster-a", "", "pod"); return err }, "namespace is required"},
+		{"PodContainers name", func() error { _, err := app.GetPodContainers("cluster-a", "ns", ""); return err }, "pod name is required"},
+		{"Debug namespace", func() error {
+			_, err := app.CreateDebugContainer("cluster-a", DebugContainerRequest{PodName: "pod", Image: "busybox"})
+			return err
+		}, "namespace is required"},
+		{"Debug name", func() error {
+			_, err := app.CreateDebugContainer("cluster-a", DebugContainerRequest{Namespace: "ns", Image: "busybox"})
+			return err
+		}, "pod name is required"},
+		{"HelmDelete namespace", func() error { return app.DeleteHelmRelease("cluster-a", "", "release") }, "namespace is required"},
+		{"HelmDelete name", func() error { return app.DeleteHelmRelease("cluster-a", "ns", "") }, "name is required"},
+		{"Cordon name", func() error { return app.CordonNode("cluster-a", "") }, "name is required"},
+		{"Uncordon name", func() error { return app.UncordonNode("cluster-a", "") }, "name is required"},
+		{"Drain name", func() error { return app.DrainNode("cluster-a", "", DrainNodeOptions{}) }, "name is required"},
+		{"DeleteNode name", func() error { return app.DeleteNode("cluster-a", "") }, "name is required"},
+		{"ForceDeleteNode name", func() error { return app.ForceDeleteNode("cluster-a", "") }, "name is required"},
+	}
+
+	for _, tc := range errorCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+			if err == nil {
+				t.Fatalf("expected %q", tc.wantErr)
+			}
+			if err.Error() != tc.wantErr {
+				t.Fatalf("expected %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+
+	if resp := app.DiscoverNodeLogs("cluster-a", ""); resp.Reason != "name is required" {
+		t.Fatalf("expected DiscoverNodeLogs name error, got %+v", resp)
+	}
+	if resp := app.FetchNodeLogs("cluster-a", "", NodeLogFetchRequest{SourcePath: "/var/log"}); resp.Error != "name is required" {
+		t.Fatalf("expected FetchNodeLogs name error, got %+v", resp)
+	}
+}
+
+func TestNodeLogsRequireNodeProxyPermission(t *testing.T) {
+	app := wrapperTestApp(t)
+	clusterID := "config:ctx"
+	client := cgofake.NewClientset()
+	denySelfSubjectAccessReviews(client, "node proxy denied")
+	app.clusterClients = map[string]*clusterClients{
+		clusterID: {
+			meta:              ClusterMeta{ID: clusterID, Name: "ctx"},
+			kubeconfigPath:    "/path",
+			kubeconfigContext: "ctx",
+			client:            client,
+		},
+	}
+
+	discovery := app.DiscoverNodeLogs(clusterID, "node-a")
+	if !strings.Contains(discovery.Reason, "node proxy denied") {
+		t.Fatalf("expected node proxy denial, got %+v", discovery)
+	}
+
+	fetch := app.FetchNodeLogs(clusterID, "node-a", NodeLogFetchRequest{SourcePath: "journal/kubelet"})
+	if !strings.Contains(fetch.Error, "node proxy denied") {
+		t.Fatalf("expected node proxy denial, got %+v", fetch)
 	}
 }

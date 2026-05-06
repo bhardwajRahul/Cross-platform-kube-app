@@ -99,6 +99,14 @@ func (a *App) ValidateObjectYaml(clusterID string, req ObjectYAMLMutationRequest
 	if err != nil {
 		return nil, err
 	}
+	if err := a.requireResolvedResourcePermission(ctx, deps, mc.gvr, mc.isNamespaced, resourcePermissionCheck{
+		Kind:      req.Kind,
+		Namespace: req.Namespace,
+		Name:      req.Name,
+		Verb:      "patch",
+	}); err != nil {
+		return nil, err
+	}
 
 	result, err := mc.resource.Patch(
 		ctx,
@@ -134,6 +142,14 @@ func (a *App) ApplyObjectYaml(clusterID string, req ObjectYAMLMutationRequest) (
 	if err != nil {
 		return nil, err
 	}
+	if err := a.requireResolvedResourcePermission(ctx, deps, mc.gvr, mc.isNamespaced, resourcePermissionCheck{
+		Kind:      req.Kind,
+		Namespace: req.Namespace,
+		Name:      req.Name,
+		Verb:      "patch",
+	}); err != nil {
+		return nil, err
+	}
 
 	result, err := mc.resource.Patch(
 		ctx,
@@ -147,6 +163,8 @@ func (a *App) ApplyObjectYaml(clusterID string, req ObjectYAMLMutationRequest) (
 	if err != nil {
 		return nil, wrapKubernetesError(err, "apply failed")
 	}
+
+	a.invalidateResponseCacheForGVK(selectionKey, schema.FromAPIVersionAndKind(req.APIVersion, req.Kind), req.Namespace, req.Name)
 
 	return &ObjectYAMLMutationResponse{
 		ResourceVersion: result.GetResourceVersion(),

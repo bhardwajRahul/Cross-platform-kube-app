@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -120,10 +121,12 @@ func TestRestartWorkloadAddsRestartAnnotation(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			allowSelfSubjectAccessReviews(tc.object)
 
 			// Per-cluster clients are stored in clusterClients, not in global fields.
 			app := &App{
-				logger: NewLogger(100),
+				logger:        NewLogger(100),
+				responseCache: newResponseCache(time.Minute, 10),
 			}
 			app.clusterClients = map[string]*clusterClients{
 				workloadClusterID: {
@@ -133,9 +136,13 @@ func TestRestartWorkloadAddsRestartAnnotation(t *testing.T) {
 					client:            tc.object,
 				},
 			}
+			detailKey := objectDetailCacheKey(tc.kind, "default", "demo")
+			app.responseCacheStore(workloadClusterID, detailKey, "stale")
 
-			err := app.RestartWorkload(workloadClusterID, "default", "demo", tc.kind)
+			err := app.RestartWorkload(workloadClusterID, "default", "apps", "v1", tc.kind, "demo")
 			require.NoError(t, err)
+			_, cached := app.responseCacheLookup(workloadClusterID, detailKey)
+			require.False(t, cached, "expected workload detail cache to be evicted after restart")
 
 			annotations, err := tc.get(context.Background(), tc.object)
 			require.NoError(t, err)
@@ -155,6 +162,7 @@ func TestRestartWorkloadErrors(t *testing.T) {
 
 	// Per-cluster clients are stored in clusterClients, not in global fields.
 	fakeClient := cgofake.NewClientset()
+	allowSelfSubjectAccessReviews(fakeClient)
 	app := &App{
 		logger: NewLogger(10),
 	}
@@ -167,7 +175,7 @@ func TestRestartWorkloadErrors(t *testing.T) {
 		},
 	}
 
-	err := app.RestartWorkload(workloadClusterID, "default", "demo", "Job")
+	err := app.RestartWorkload(workloadClusterID, "default", "batch", "v1", "Job", "demo")
 	require.EqualError(t, err, `restart not supported for workload kind "Job"`)
 
 	appNilClient := &App{}
@@ -178,8 +186,37 @@ func TestRestartWorkloadErrors(t *testing.T) {
 			kubeconfigContext: "ctx",
 		},
 	}
-	err = appNilClient.RestartWorkload(workloadClusterID, "default", "demo", "Deployment")
+	err = appNilClient.RestartWorkload(workloadClusterID, "default", "apps", "v1", "Deployment", "demo")
 	require.EqualError(t, err, "kubernetes client is not initialized")
+}
+
+func TestWorkloadActionsRequireNamespacedObjectIdentity(t *testing.T) {
+	app := NewApp()
+
+	require.EqualError(t,
+		app.RestartWorkload("", "", "apps", "v1", "Deployment", "demo"),
+		"namespace is required",
+	)
+	require.EqualError(t,
+		app.RestartWorkload("", "default", "apps", "v1", "Deployment", ""),
+		"name is required",
+	)
+	require.EqualError(t,
+		app.ScaleWorkload("", "", "apps", "v1", "Deployment", "demo", 1),
+		"namespace is required",
+	)
+	require.EqualError(t,
+		app.ScaleWorkload("", "default", "apps", "v1", "Deployment", "", 1),
+		"name is required",
+	)
+
+	_, err := app.TriggerCronJob("", "", "backup")
+	require.EqualError(t, err, "namespace is required")
+	_, err = app.TriggerCronJob("", "default", "")
+	require.EqualError(t, err, "name is required")
+
+	require.EqualError(t, app.SuspendCronJob("", "", "backup", true), "namespace is required")
+	require.EqualError(t, app.SuspendCronJob("", "default", "", true), "name is required")
 }
 
 func TestScaleWorkloadUpdatesScaleSubresource(t *testing.T) {
@@ -207,6 +244,7 @@ func TestScaleWorkloadUpdatesScaleSubresource(t *testing.T) {
 			t.Parallel()
 
 			client := cgofake.NewClientset()
+			allowSelfSubjectAccessReviews(client)
 			var observed capture
 			client.Fake.PrependReactor("update", tc.resource, func(action cgotesting.Action) (handled bool, ret runtime.Object, err error) {
 				updateAction, ok := action.(cgotesting.UpdateAction)
@@ -229,7 +267,8 @@ func TestScaleWorkloadUpdatesScaleSubresource(t *testing.T) {
 
 			// Per-cluster clients are stored in clusterClients, not in global fields.
 			app := &App{
-				logger: NewLogger(100),
+				logger:        NewLogger(100),
+				responseCache: newResponseCache(time.Minute, 10),
 			}
 			app.clusterClients = map[string]*clusterClients{
 				workloadClusterID: {
@@ -239,9 +278,13 @@ func TestScaleWorkloadUpdatesScaleSubresource(t *testing.T) {
 					client:            client,
 				},
 			}
+			detailKey := objectDetailCacheKey(tc.kind, "default", "demo")
+			app.responseCacheStore(workloadClusterID, detailKey, "stale")
 
-			err := app.ScaleWorkload(workloadClusterID, "default", "demo", tc.kind, 3)
+			err := app.ScaleWorkload(workloadClusterID, "default", "apps", "v1", tc.kind, "demo", 3)
 			require.NoError(t, err)
+			_, cached := app.responseCacheLookup(workloadClusterID, detailKey)
+			require.False(t, cached, "expected workload detail cache to be evicted after scale")
 
 			require.Equal(t, int32(3), observed.replicas, "expected replicas to be updated")
 			require.Equal(t, "demo", observed.name)
@@ -254,6 +297,7 @@ func TestScaleWorkloadErrors(t *testing.T) {
 
 	// Per-cluster clients are stored in clusterClients, not in global fields.
 	client := cgofake.NewClientset()
+	allowSelfSubjectAccessReviews(client)
 	app := &App{
 		logger: NewLogger(10),
 	}
@@ -266,10 +310,15 @@ func TestScaleWorkloadErrors(t *testing.T) {
 		},
 	}
 
-	err := app.ScaleWorkload(workloadClusterID, "default", "demo", "Deployment", -1)
+	err := app.ScaleWorkload(workloadClusterID, "default", "apps", "v1", "Deployment", "demo", -1)
 	require.EqualError(t, err, "replicas must be non-negative")
 
-	err = app.ScaleWorkload(workloadClusterID, "default", "demo", "CronJob", 1)
+	if strconv.IntSize > 32 {
+		err = app.ScaleWorkload(workloadClusterID, "default", "apps", "v1", "Deployment", "demo", maxScaleReplicas+1)
+		require.EqualError(t, err, "replicas must be less than or equal to 2147483647")
+	}
+
+	err = app.ScaleWorkload(workloadClusterID, "default", "batch", "v1", "CronJob", "demo", 1)
 	require.EqualError(t, err, `scaling not supported for workload kind "CronJob"`)
 
 	appNilClient := &App{}
@@ -280,7 +329,7 @@ func TestScaleWorkloadErrors(t *testing.T) {
 			kubeconfigContext: "ctx",
 		},
 	}
-	err = appNilClient.ScaleWorkload(workloadClusterID, "default", "demo", "Deployment", 1)
+	err = appNilClient.ScaleWorkload(workloadClusterID, "default", "apps", "v1", "Deployment", "demo", 1)
 	require.EqualError(t, err, "kubernetes client is not initialized")
 }
 
@@ -314,8 +363,10 @@ func TestTriggerCronJobCreatesJob(t *testing.T) {
 	}
 
 	client := cgofake.NewClientset(cronJob)
+	allowSelfSubjectAccessReviews(client)
 	app := &App{
-		logger: NewLogger(100),
+		logger:        NewLogger(100),
+		responseCache: newResponseCache(time.Minute, 10),
 	}
 	app.clusterClients = map[string]*clusterClients{
 		workloadClusterID: {
@@ -325,9 +376,13 @@ func TestTriggerCronJobCreatesJob(t *testing.T) {
 			client:            client,
 		},
 	}
+	detailKey := objectDetailCacheKey("CronJob", "default", "backup")
+	app.responseCacheStore(workloadClusterID, detailKey, "stale")
 
 	jobName, err := app.TriggerCronJob(workloadClusterID, "default", "backup")
 	require.NoError(t, err)
+	_, cached := app.responseCacheLookup(workloadClusterID, detailKey)
+	require.False(t, cached, "expected cronjob detail cache to be evicted after manual trigger")
 	require.True(t, strings.HasPrefix(jobName, "backup-manual-"), "job name should have manual prefix")
 
 	// Verify the job was created
@@ -353,6 +408,7 @@ func TestTriggerCronJobErrors(t *testing.T) {
 
 	// Test with non-existent cronjob
 	client := cgofake.NewClientset()
+	allowSelfSubjectAccessReviews(client)
 	app := &App{
 		logger: NewLogger(10),
 	}
@@ -421,8 +477,10 @@ func TestSuspendCronJobTogglesSuspendField(t *testing.T) {
 			}
 
 			client := cgofake.NewClientset(cronJob)
+			allowSelfSubjectAccessReviews(client)
 			app := &App{
-				logger: NewLogger(100),
+				logger:        NewLogger(100),
+				responseCache: newResponseCache(time.Minute, 10),
 			}
 			app.clusterClients = map[string]*clusterClients{
 				workloadClusterID: {
@@ -432,9 +490,13 @@ func TestSuspendCronJobTogglesSuspendField(t *testing.T) {
 					client:            client,
 				},
 			}
+			detailKey := objectDetailCacheKey("CronJob", "default", "backup")
+			app.responseCacheStore(workloadClusterID, detailKey, "stale")
 
 			err := app.SuspendCronJob(workloadClusterID, "default", "backup", tc.setSuspend)
 			require.NoError(t, err)
+			_, cached := app.responseCacheLookup(workloadClusterID, detailKey)
+			require.False(t, cached, "expected cronjob detail cache to be evicted after suspend update")
 
 			// Verify the cronjob was updated
 			updated, err := client.BatchV1().CronJobs("default").Get(context.Background(), "backup", metav1.GetOptions{})
@@ -450,6 +512,7 @@ func TestSuspendCronJobErrors(t *testing.T) {
 
 	// Test with non-existent cronjob
 	client := cgofake.NewClientset()
+	allowSelfSubjectAccessReviews(client)
 	app := &App{
 		logger: NewLogger(10),
 	}

@@ -27,6 +27,7 @@ const (
 
 	// shellOutputBacklogMaxBytes bounds replay memory used per shell session.
 	shellOutputBacklogMaxBytes = 256 * 1024
+	maxTerminalDimension       = 65535
 )
 
 var (
@@ -184,6 +185,10 @@ func (w *shellEventWriter) Write(p []byte) (int, error) {
 
 // StartShellSession launches a kubectl exec session and begins streaming data back to the frontend.
 func (a *App) StartShellSession(clusterID string, req ShellSessionRequest) (*ShellSession, error) {
+	if err := requirePodObject(req.Namespace, req.PodName); err != nil {
+		return nil, err
+	}
+
 	deps, _, err := a.resolveClusterDependencies(clusterID)
 	if err != nil {
 		return nil, err
@@ -193,12 +198,6 @@ func (a *App) StartShellSession(clusterID string, req ShellSessionRequest) (*She
 	}
 	if deps.RestConfig == nil {
 		return nil, fmt.Errorf("kubernetes rest config not initialized")
-	}
-	if req.Namespace == "" {
-		return nil, fmt.Errorf("namespace is required")
-	}
-	if req.PodName == "" {
-		return nil, fmt.Errorf("pod name is required")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), config.ShellSessionShutdownTimeout)
@@ -226,6 +225,25 @@ func (a *App) StartShellSession(clusterID string, req ShellSessionRequest) (*She
 	}
 	if !hasContainer(pod.Spec.Containers, container) && !hasEphemeralContainer(pod.Spec.EphemeralContainers, container) {
 		return nil, fmt.Errorf("container %q not found in pod %s", container, req.PodName)
+	}
+
+	if err := a.requireAnyResourcePermission(deps.Context, deps,
+		resourcePermissionCheck{
+			Kind:        "Pod",
+			Namespace:   req.Namespace,
+			Name:        req.PodName,
+			Verb:        "get",
+			Subresource: "exec",
+		},
+		resourcePermissionCheck{
+			Kind:        "Pod",
+			Namespace:   req.Namespace,
+			Name:        req.PodName,
+			Verb:        "create",
+			Subresource: "exec",
+		},
+	); err != nil {
+		return nil, err
 	}
 
 	command := req.Command
@@ -363,6 +381,9 @@ func (a *App) SendShellInput(sessionID string, data string) error {
 func (a *App) ResizeShellSession(sessionID string, columns, rows int) error {
 	if columns <= 0 || rows <= 0 {
 		return fmt.Errorf("columns and rows must be positive")
+	}
+	if columns > maxTerminalDimension || rows > maxTerminalDimension {
+		return fmt.Errorf("columns and rows must be less than or equal to %d", maxTerminalDimension)
 	}
 	sess := a.getShellSession(sessionID)
 	if sess == nil {

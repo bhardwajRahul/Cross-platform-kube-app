@@ -3,6 +3,7 @@ package backend
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -15,6 +16,7 @@ import (
 
 // buildRevisionHistoryApp creates an App with a fake Kubernetes client pre-populated with the given objects.
 func buildRevisionHistoryApp(client *cgofake.Clientset) *App {
+	allowSelfSubjectAccessReviews(client)
 	app := &App{logger: NewLogger(100)}
 	app.clusterClients = map[string]*clusterClients{
 		"config:ctx": {
@@ -161,7 +163,7 @@ func TestGetRevisionHistoryDeployment(t *testing.T) {
 	client := cgofake.NewClientset(deploy, rs1, rs2, rs3, rsOther)
 	app := buildRevisionHistoryApp(client)
 
-	entries, err := app.GetRevisionHistory("config:ctx", "default", "myapp", "Deployment")
+	entries, err := app.GetRevisionHistory("config:ctx", "default", "apps", "v1", "Deployment", "myapp")
 	require.NoError(t, err)
 
 	// Expect exactly 3 revisions (the unrelated ReplicaSet must be filtered out).
@@ -192,7 +194,7 @@ func TestGetRevisionHistoryUnsupportedKind(t *testing.T) {
 	client := cgofake.NewClientset()
 	app := buildRevisionHistoryApp(client)
 
-	_, err := app.GetRevisionHistory("config:ctx", "default", "myapp", "ReplicaSet")
+	_, err := app.GetRevisionHistory("config:ctx", "default", "apps", "v1", "ReplicaSet", "myapp")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ReplicaSet")
 }
@@ -211,7 +213,7 @@ func TestGetRevisionHistoryNilClient(t *testing.T) {
 		},
 	}
 
-	_, err := app.GetRevisionHistory("config:ctx", "default", "myapp", "Deployment")
+	_, err := app.GetRevisionHistory("config:ctx", "default", "apps", "v1", "Deployment", "myapp")
 	require.EqualError(t, err, "kubernetes client is not initialized")
 }
 
@@ -318,7 +320,7 @@ func TestGetRevisionHistoryStatefulSet(t *testing.T) {
 	client := cgofake.NewClientset(sts, cr1, cr2, cr3)
 	app := buildRevisionHistoryApp(client)
 
-	entries, err := app.GetRevisionHistory("config:ctx", "default", "db", "StatefulSet")
+	entries, err := app.GetRevisionHistory("config:ctx", "default", "apps", "v1", "StatefulSet", "db")
 	require.NoError(t, err)
 
 	// Expect exactly 3 revisions.
@@ -413,7 +415,7 @@ func TestGetRevisionHistoryDaemonSet(t *testing.T) {
 	client := cgofake.NewClientset(ds, cr1, cr2)
 	app := buildRevisionHistoryApp(client)
 
-	entries, err := app.GetRevisionHistory("config:ctx", "kube-system", "logging-agent", "DaemonSet")
+	entries, err := app.GetRevisionHistory("config:ctx", "kube-system", "apps", "v1", "DaemonSet", "logging-agent")
 	require.NoError(t, err)
 
 	// Expect exactly 2 revisions.
@@ -523,9 +525,14 @@ func TestRollbackWorkloadDeployment(t *testing.T) {
 
 	client := cgofake.NewClientset(deploy, rs1, rs2)
 	app := buildRevisionHistoryApp(client)
+	app.responseCache = newResponseCache(time.Minute, 10)
+	detailKey := objectDetailCacheKey("Deployment", "default", "webapp")
+	app.responseCacheStore("config:ctx", detailKey, "stale")
 
-	err := app.RollbackWorkload("config:ctx", "default", "webapp", "Deployment", 1)
+	err := app.RollbackWorkload("config:ctx", "default", "apps", "v1", "Deployment", "webapp", 1)
 	require.NoError(t, err)
+	_, cached := app.responseCacheLookup("config:ctx", detailKey)
+	require.False(t, cached, "expected workload detail cache to be evicted after rollback")
 
 	// Read the deployment back from the fake client and verify the container image was rolled back.
 	updated, err := client.AppsV1().Deployments("default").Get(t.Context(), "webapp", metav1.GetOptions{})
@@ -617,7 +624,7 @@ func TestRollbackWorkloadStatefulSet(t *testing.T) {
 	client := cgofake.NewClientset(sts, cr1, cr2)
 	app := buildRevisionHistoryApp(client)
 
-	err := app.RollbackWorkload("config:ctx", "default", "cache", "StatefulSet", 1)
+	err := app.RollbackWorkload("config:ctx", "default", "apps", "v1", "StatefulSet", "cache", 1)
 	require.NoError(t, err)
 
 	// Read the statefulset back and verify the container image changed.
@@ -684,7 +691,7 @@ func TestRollbackWorkloadRevisionNotFound(t *testing.T) {
 	app := buildRevisionHistoryApp(client)
 
 	// Revision 99 does not exist — expect an error.
-	err := app.RollbackWorkload("config:ctx", "default", "api", "Deployment", 99)
+	err := app.RollbackWorkload("config:ctx", "default", "apps", "v1", "Deployment", "api", 99)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "revision 99 not found")
 }
@@ -697,7 +704,20 @@ func TestRollbackWorkloadUnsupportedKind(t *testing.T) {
 	client := cgofake.NewClientset()
 	app := buildRevisionHistoryApp(client)
 
-	err := app.RollbackWorkload("config:ctx", "default", "myset", "ReplicaSet", 1)
+	err := app.RollbackWorkload("config:ctx", "default", "apps", "v1", "ReplicaSet", "myset", 1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ReplicaSet")
+}
+
+func TestRollbackWorkloadRequiresNamespacedObjectIdentity(t *testing.T) {
+	app := NewApp()
+
+	require.EqualError(t,
+		app.RollbackWorkload("config:ctx", "", "apps", "v1", "Deployment", "webapp", 1),
+		"namespace is required",
+	)
+	require.EqualError(t,
+		app.RollbackWorkload("config:ctx", "default", "apps", "v1", "Deployment", "", 1),
+		"name is required",
+	)
 }

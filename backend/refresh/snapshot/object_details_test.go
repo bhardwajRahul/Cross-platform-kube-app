@@ -5,9 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/luxury-yacht/app/backend/refresh/domain"
 )
@@ -17,10 +15,12 @@ type stubDetailProvider struct {
 	version string
 	err     error
 	calls   int
+	gvk     schema.GroupVersionKind
 }
 
-func (s *stubDetailProvider) FetchObjectDetails(_ context.Context, _ string, _ string, _ string) (interface{}, string, error) {
+func (s *stubDetailProvider) FetchObjectDetails(_ context.Context, gvk schema.GroupVersionKind, _ string, _ string) (interface{}, string, error) {
 	s.calls++
+	s.gvk = gvk
 	return s.details, s.version, s.err
 }
 
@@ -31,17 +31,19 @@ func TestObjectDetailsBuilderUsesProviderWhenAvailable(t *testing.T) {
 	}
 
 	builder := &ObjectDetailsBuilder{
-		client:   fake.NewClientset(),
 		provider: provider,
 	}
 
-	snapshot, err := builder.Build(context.Background(), "default:Pod:demo")
+	snapshot, err := builder.Build(context.Background(), "default:/v1:Pod:demo")
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
 	if provider.calls != 1 {
 		t.Fatalf("expected provider to be called once, got %d", provider.calls)
+	}
+	if provider.gvk.Group != "" || provider.gvk.Version != "v1" || provider.gvk.Kind != "Pod" {
+		t.Fatalf("expected provider to receive full core Pod GVK, got %v", provider.gvk)
 	}
 
 	payload, ok := snapshot.Payload.(ObjectDetailsSnapshotPayload)
@@ -58,23 +60,14 @@ func TestObjectDetailsBuilderUsesProviderWhenAvailable(t *testing.T) {
 	}
 }
 
-func TestObjectDetailsBuilderFallsBackToClientFetcher(t *testing.T) {
-	cfg := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            "demo",
-			Namespace:       "default",
-			ResourceVersion: "101",
-		},
-	}
-	client := fake.NewClientset(cfg)
+func TestObjectDetailsBuilderFallsBackToGenericDetails(t *testing.T) {
 	provider := &stubDetailProvider{err: ErrObjectDetailNotImplemented}
 
 	builder := &ObjectDetailsBuilder{
-		client:   client,
 		provider: provider,
 	}
 
-	snapshot, err := builder.Build(context.Background(), "default:ConfigMap:demo")
+	snapshot, err := builder.Build(context.Background(), "default:/v1:configmap:demo")
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -83,8 +76,8 @@ func TestObjectDetailsBuilderFallsBackToClientFetcher(t *testing.T) {
 		t.Fatalf("expected provider to be consulted once, got %d", provider.calls)
 	}
 
-	if snapshot.Version != 101 {
-		t.Fatalf("expected version 101, got %d", snapshot.Version)
+	if snapshot.Version != 0 {
+		t.Fatalf("expected generic fallback version 0, got %d", snapshot.Version)
 	}
 
 	payload, ok := snapshot.Payload.(ObjectDetailsSnapshotPayload)
@@ -92,13 +85,38 @@ func TestObjectDetailsBuilderFallsBackToClientFetcher(t *testing.T) {
 		t.Fatalf("unexpected payload type: %T", snapshot.Payload)
 	}
 
-	cm, ok := payload.Details.(*corev1.ConfigMap)
+	details, ok := payload.Details.(map[string]string)
 	if !ok {
-		t.Fatalf("expected ConfigMap details, got %T", payload.Details)
+		t.Fatalf("expected generic details map, got %T", payload.Details)
+	}
+	if details["kind"] != "Configmap" || details["name"] != "demo" || details["namespace"] != "default" {
+		t.Fatalf("unexpected generic details: %#v", details)
+	}
+}
+
+func TestObjectDetailsBuilderDoesNotFetchBuiltInDetailsAfterProviderNotImplemented(t *testing.T) {
+	builder := &ObjectDetailsBuilder{
+		provider: &stubDetailProvider{err: ErrObjectDetailNotImplemented},
 	}
 
-	if cm.Name != "demo" {
-		t.Fatalf("expected ConfigMap name demo, got %s", cm.Name)
+	snapshot, err := builder.Build(context.Background(), "default:/v1:ConfigMap:demo")
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	if snapshot.Version != 0 {
+		t.Fatalf("expected generic fallback version 0, got %d", snapshot.Version)
+	}
+
+	payload, ok := snapshot.Payload.(ObjectDetailsSnapshotPayload)
+	if !ok {
+		t.Fatalf("unexpected payload type: %T", snapshot.Payload)
+	}
+	details, ok := payload.Details.(map[string]string)
+	if !ok {
+		t.Fatalf("expected generic details map, got %T", payload.Details)
+	}
+	if details["kind"] != "ConfigMap" || details["name"] != "demo" {
+		t.Fatalf("unexpected generic details: %#v", details)
 	}
 }
 
@@ -107,7 +125,6 @@ func TestObjectDetailsBuilderPropagatesProviderErrors(t *testing.T) {
 	provider := &stubDetailProvider{err: expectedErr}
 
 	builder := &ObjectDetailsBuilder{
-		client:   fake.NewClientset(),
 		provider: provider,
 	}
 
@@ -193,19 +210,18 @@ func TestParseObjectScopeGVKFormCoreResource(t *testing.T) {
 	}
 }
 
-func TestRegisterObjectDetailsDomainRequiresClient(t *testing.T) {
+func TestRegisterObjectDetailsDomainRequiresProvider(t *testing.T) {
 	reg := domain.New()
-	if err := RegisterObjectDetailsDomain(reg, nil, nil, nil); err == nil {
-		t.Fatal("expected error when client is missing")
+	if err := RegisterObjectDetailsDomain(reg, nil); err == nil {
+		t.Fatal("expected error when provider is missing")
 	}
 }
 
 func TestRegisterObjectDetailsDomainRegistersBuilder(t *testing.T) {
 	reg := domain.New()
 	provider := &stubDetailProvider{details: map[string]string{"ok": "true"}, version: "7"}
-	client := fake.NewClientset()
 
-	if err := RegisterObjectDetailsDomain(reg, client, nil, provider); err != nil {
+	if err := RegisterObjectDetailsDomain(reg, provider); err != nil {
 		t.Fatalf("RegisterObjectDetailsDomain returned error: %v", err)
 	}
 
