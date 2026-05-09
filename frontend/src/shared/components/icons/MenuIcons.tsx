@@ -588,7 +588,92 @@ export const FavoritePinIcon: React.FC<IconProps> = ({ width = 14, height = 14 }
   </svg>
 );
 
-export const ThemeIcon: React.FC<IconProps> = ({
+// Checkmark icon for confirm/save actions on inline rows.
+export const CheckIcon: React.FC<IconProps> = ({
+  width = 16,
+  height = 16,
+  fill = 'currentColor',
+}) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill={fill}
+    width={width}
+    height={height}
+  >
+    <path d="M9.99963 15.1709L19.1922 5.97852L20.6065 7.39273L9.99963 18.0007L3.63574 11.6368L5.04996 10.2225L9.99963 15.1709Z" />
+  </svg>
+);
+
+// Pencil icon for inline edit actions (e.g., load/edit a saved theme).
+export const EditIcon: React.FC<IconProps> = ({
+  width = 16,
+  height = 16,
+  fill = 'currentColor',
+}) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill={fill}
+    width={width}
+    height={height}
+  >
+    <path d="M6.41421 15.89L16.5563 5.74785L15.1421 4.33363L5 14.4758V15.89H6.41421ZM7.24264 17.89H3V13.6473L14.435 2.21231C14.8256 1.82179 15.4587 1.82179 15.8492 2.21231L18.6777 5.04074C19.0682 5.43126 19.0682 6.06443 18.6777 6.45495L7.24264 17.89ZM3 19.89H21V21.89H3V19.89Z" />
+  </svg>
+);
+
+// Funnel/filter icon for the Kubeconfigs settings tab.
+export const KubeconfigsIcon: React.FC<IconProps> = ({
+  width = 16,
+  height = 16,
+  fill = 'currentColor',
+}) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill={fill}
+    width={width}
+    height={height}
+  >
+    <path d="M21 4V6L14 14V21H10V14L3 6V4H21ZM5.4254 6L12 13.5114L18.5746 6H5.4254Z" />
+  </svg>
+);
+
+// Monitor icon for the Display settings tab.
+export const DisplayIcon: React.FC<IconProps> = ({
+  width = 16,
+  height = 16,
+  fill = 'currentColor',
+}) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill={fill}
+    width={width}
+    height={height}
+  >
+    <path d="M13 18V20H17V22H7V20H11V18H3.00094C2.4485 18 2 17.5551 2 17.0066V3.9934C2 3.44476 2.45531 3 2.9918 3H21.0082C21.556 3 22 3.44495 22 3.9934V17.0066C22 17.5552 21.5447 18 21.0091 18H13ZM4 5V16H20V5H4Z" />
+  </svg>
+);
+
+// Sliders icon for the Advanced settings tab.
+export const AdvancedIcon: React.FC<IconProps> = ({
+  width = 16,
+  height = 16,
+  fill = 'currentColor',
+}) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill={fill}
+    width={width}
+    height={height}
+  >
+    <path d="M17 16V18H22V20H17V22H15V20H2V18H15V16H17ZM7 10V12H2V14H7V16H9V10H7ZM22 12V14H11V12H22ZM17 4V6H22V8H17V10H15V4H17ZM2 6H13V8H2V6Z" />
+  </svg>
+);
+
+export const AppearanceModeIcon: React.FC<IconProps> = ({
   width = 16,
   height = 16,
   fill = 'currentColor',

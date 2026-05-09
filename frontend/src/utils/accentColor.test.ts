@@ -57,14 +57,14 @@ describe('hexToHsl', () => {
     expect(l).toBe(0);
   });
 
-  it('converts teal (#0d9488)', () => {
-    const { h, s, l } = hexToHsl('#0d9488');
-    // Teal is roughly hue ~174, saturation ~83%, lightness ~31%
-    expect(h).toBeGreaterThanOrEqual(170);
-    expect(h).toBeLessThanOrEqual(180);
+  it('converts blue (#326ce5)', () => {
+    const { h, s, l } = hexToHsl('#326ce5');
+    // Kubernetes blue is roughly hue ~221, saturation ~77%, lightness ~55%.
+    expect(h).toBeGreaterThanOrEqual(215);
+    expect(h).toBeLessThanOrEqual(225);
     expect(s).toBeGreaterThan(70);
-    expect(l).toBeGreaterThan(25);
-    expect(l).toBeLessThan(40);
+    expect(l).toBeGreaterThan(50);
+    expect(l).toBeLessThan(60);
   });
 });
 
@@ -91,7 +91,7 @@ describe('hslToHex', () => {
 });
 
 describe('hexToHsl / hslToHex round-trip', () => {
-  const testColors = ['#0d9488', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6'];
+  const testColors = ['#326ce5', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6'];
 
   for (const hex of testColors) {
     it(`round-trips ${hex}`, () => {
@@ -112,14 +112,14 @@ describe('hexToRgb', () => {
     expect(hexToRgb('#ff0000')).toEqual({ r: 255, g: 0, b: 0 });
   });
 
-  it('parses #0d9488', () => {
-    expect(hexToRgb('#0d9488')).toEqual({ r: 13, g: 148, b: 136 });
+  it('parses #326ce5', () => {
+    expect(hexToRgb('#326ce5')).toEqual({ r: 50, g: 108, b: 229 });
   });
 });
 
 describe('generateAccentShades', () => {
   it('generates 5 shades for light mode', () => {
-    const shades = generateAccentShades('#0d9488', 'light');
+    const shades = generateAccentShades('#326ce5', 'light');
     expect(shades).toHaveLength(Object.keys(LIGHT_OFFSETS).length);
     // All tokens should be --color-accent-light-*
     for (const shade of shades) {
@@ -154,9 +154,9 @@ describe('generateAccentShades', () => {
 
 describe('generateAccentBg', () => {
   it('generates rgba with 0.1 alpha for light mode', () => {
-    const { token, value } = generateAccentBg('#0d9488', 'light');
+    const { token, value } = generateAccentBg('#326ce5', 'light');
     expect(token).toBe('--color-accent-bg');
-    expect(value).toBe('rgba(13, 148, 136, 0.1)');
+    expect(value).toBe('rgba(50, 108, 229, 0.1)');
   });
 
   it('generates rgba with 0.15 alpha for dark mode', () => {
@@ -179,7 +179,7 @@ describe('applyAccentColor', () => {
   });
 
   it('sets CSS custom properties when hex is provided', () => {
-    applyAccentColor('#0d9488', '#f59e0b');
+    applyAccentColor('#326ce5', '#f59e0b');
     const root = document.documentElement;
     // Light shades should be set.
     for (const token of Object.keys(LIGHT_OFFSETS)) {
@@ -193,7 +193,7 @@ describe('applyAccentColor', () => {
 
   it('removes CSS custom properties when hex is empty', () => {
     // First set them.
-    applyAccentColor('#0d9488', '#f59e0b');
+    applyAccentColor('#326ce5', '#f59e0b');
     // Then clear them.
     applyAccentColor('', '');
     const root = document.documentElement;
@@ -206,7 +206,7 @@ describe('applyAccentColor', () => {
   });
 
   it('only sets light shades when dark hex is empty', () => {
-    applyAccentColor('#0d9488', '');
+    applyAccentColor('#326ce5', '');
     const root = document.documentElement;
     for (const token of Object.keys(LIGHT_OFFSETS)) {
       expect(root.style.getPropertyValue(token)).not.toBe('');
@@ -222,14 +222,14 @@ describe('applyAccentBg', () => {
     document.documentElement.style.removeProperty('--color-accent-bg');
   });
 
-  it('sets --color-accent-bg for light theme', () => {
-    applyAccentBg('#0d9488', 'light');
+  it('sets --color-accent-bg for light mode', () => {
+    applyAccentBg('#326ce5', 'light');
     expect(document.documentElement.style.getPropertyValue('--color-accent-bg')).toBe(
-      'rgba(13, 148, 136, 0.1)'
+      'rgba(50, 108, 229, 0.1)'
     );
   });
 
-  it('sets --color-accent-bg for dark theme', () => {
+  it('sets --color-accent-bg for dark mode', () => {
     applyAccentBg('#f59e0b', 'dark');
     expect(document.documentElement.style.getPropertyValue('--color-accent-bg')).toBe(
       'rgba(245, 158, 11, 0.15)'
@@ -237,7 +237,7 @@ describe('applyAccentBg', () => {
   });
 
   it('removes --color-accent-bg when hex is empty', () => {
-    applyAccentBg('#0d9488', 'light');
+    applyAccentBg('#326ce5', 'light');
     applyAccentBg('', 'light');
     expect(document.documentElement.style.getPropertyValue('--color-accent-bg')).toBe('');
   });
@@ -245,8 +245,8 @@ describe('applyAccentBg', () => {
 
 describe('clearAccentColor', () => {
   it('removes all accent palette overrides and accent-bg', () => {
-    applyAccentColor('#0d9488', '#f59e0b');
-    applyAccentBg('#0d9488', 'light');
+    applyAccentColor('#326ce5', '#f59e0b');
+    applyAccentBg('#326ce5', 'light');
     clearAccentColor();
     const root = document.documentElement;
     for (const token of Object.keys(LIGHT_OFFSETS)) {
@@ -268,26 +268,26 @@ describe('localStorage bridge', () => {
     localStorage.clear();
   });
 
-  it('saves and retrieves accent color for light theme', () => {
-    saveAccentColorToLocalStorage('light', '#0d9488');
-    expect(localStorage.getItem('app-accent-color-light')).toBe('#0d9488');
+  it('saves and retrieves accent color for light mode', () => {
+    saveAccentColorToLocalStorage('light', '#326ce5');
+    expect(localStorage.getItem('app-accent-color-light')).toBe('#326ce5');
     expect(localStorage.getItem('app-accent-color-dark')).toBeNull();
   });
 
-  it('saves and retrieves accent color for dark theme', () => {
+  it('saves and retrieves accent color for dark mode', () => {
     saveAccentColorToLocalStorage('dark', '#f59e0b');
     expect(localStorage.getItem('app-accent-color-dark')).toBe('#f59e0b');
     expect(localStorage.getItem('app-accent-color-light')).toBeNull();
   });
 
   it('removes key when color is empty', () => {
-    saveAccentColorToLocalStorage('light', '#0d9488');
+    saveAccentColorToLocalStorage('light', '#326ce5');
     saveAccentColorToLocalStorage('light', '');
     expect(localStorage.getItem('app-accent-color-light')).toBeNull();
   });
 
   it('clearAccentColorFromLocalStorage removes all keys', () => {
-    saveAccentColorToLocalStorage('light', '#0d9488');
+    saveAccentColorToLocalStorage('light', '#326ce5');
     saveAccentColorToLocalStorage('dark', '#f59e0b');
     clearAccentColorFromLocalStorage();
     expect(localStorage.getItem('app-accent-color-light')).toBeNull();

@@ -1,23 +1,76 @@
 package backend
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestGetThemes_Empty verifies that GetThemes returns an empty slice when no
-// themes have been saved.
-func TestGetThemes_Empty(t *testing.T) {
+// TestGetThemes_Default verifies that GetThemes always returns the protected
+// default theme.
+func TestGetThemes_Default(t *testing.T) {
 	setTestConfigEnv(t)
 	app := newTestAppWithDefaults(t)
 
 	themes, err := app.GetThemes()
 	require.NoError(t, err)
-	assert.Empty(t, themes)
-	// Ensure we get an empty slice, not nil, so JSON serialises to [].
-	assert.NotNil(t, themes)
+	require.Len(t, themes, 1)
+	assert.Equal(t, "default", themes[0].ID)
+	assert.Equal(t, "default", themes[0].Name)
+	assert.Empty(t, themes[0].ClusterPattern)
+}
+
+// TestLoadSettingsFileSeedsDefaultThemeFromActivePreferences verifies that
+// upgrades from settings files without a saved default theme preserve the
+// user's active appearance values as the new fallback theme.
+func TestLoadSettingsFileSeedsDefaultThemeFromActivePreferences(t *testing.T) {
+	setTestConfigEnv(t)
+	app := newTestAppWithDefaults(t)
+
+	configPath, err := app.getSettingsFilePath()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, []byte(`{
+		"schemaVersion": 1,
+		"preferences": {
+			"appearanceMode": "dark",
+			"paletteHueLight": 18,
+			"paletteSaturationLight": 22,
+			"paletteBrightnessLight": 4,
+			"paletteHueDark": 210,
+			"paletteSaturationDark": 35,
+			"paletteBrightnessDark": -7,
+			"accentColorLight": "#123456",
+			"accentColorDark": "#abcdef",
+			"linkColorLight": "#654321",
+			"linkColorDark": "#fedcba"
+		}
+	}`), 0o644))
+
+	themes, err := app.GetThemes()
+	require.NoError(t, err)
+	require.Len(t, themes, 1)
+	defaultTheme := themes[0]
+	assert.Equal(t, "default", defaultTheme.ID)
+	assert.Equal(t, 18, defaultTheme.PaletteHueLight)
+	assert.Equal(t, 22, defaultTheme.PaletteSaturationLight)
+	assert.Equal(t, 4, defaultTheme.PaletteBrightnessLight)
+	assert.Equal(t, 210, defaultTheme.PaletteHueDark)
+	assert.Equal(t, 35, defaultTheme.PaletteSaturationDark)
+	assert.Equal(t, -7, defaultTheme.PaletteBrightnessDark)
+	assert.Equal(t, "#123456", defaultTheme.AccentColorLight)
+	assert.Equal(t, "#abcdef", defaultTheme.AccentColorDark)
+	assert.Equal(t, "#654321", defaultTheme.LinkColorLight)
+	assert.Equal(t, "#fedcba", defaultTheme.LinkColorDark)
+
+	require.NoError(t, app.ApplyTheme("default"))
+	settings, err := app.loadSettingsFile()
+	require.NoError(t, err)
+	assert.Equal(t, 18, settings.Preferences.PaletteHueLight)
+	assert.Equal(t, 210, settings.Preferences.PaletteHueDark)
+	assert.Equal(t, "#123456", settings.Preferences.AccentColorLight)
+	assert.Equal(t, "#abcdef", settings.Preferences.AccentColorDark)
 }
 
 // TestSaveTheme_Create verifies that saving a theme with a new ID appends it
@@ -27,9 +80,9 @@ func TestSaveTheme_Create(t *testing.T) {
 	app := newTestAppWithDefaults(t)
 
 	theme := Theme{
-		ID:             "t-1",
-		Name:           "Danger Red",
-		ClusterPattern: "prod*",
+		ID:              "t-1",
+		Name:            "Danger Red",
+		ClusterPattern:  "prod*",
 		PaletteHueLight: 0,
 	}
 
@@ -37,10 +90,11 @@ func TestSaveTheme_Create(t *testing.T) {
 
 	themes, err := app.GetThemes()
 	require.NoError(t, err)
-	require.Len(t, themes, 1)
+	require.Len(t, themes, 2)
 	assert.Equal(t, "t-1", themes[0].ID)
 	assert.Equal(t, "Danger Red", themes[0].Name)
 	assert.Equal(t, "prod*", themes[0].ClusterPattern)
+	assert.Equal(t, "default", themes[1].ID)
 }
 
 // TestSaveTheme_Update verifies that saving a theme with an existing ID
@@ -58,7 +112,7 @@ func TestSaveTheme_Update(t *testing.T) {
 
 	themes, err := app.GetThemes()
 	require.NoError(t, err)
-	require.Len(t, themes, 2)
+	require.Len(t, themes, 3)
 	// Order is preserved; the first theme should be the updated one.
 	assert.Equal(t, "t-1", themes[0].ID)
 	assert.Equal(t, "Updated Red", themes[0].Name)
@@ -66,6 +120,7 @@ func TestSaveTheme_Update(t *testing.T) {
 	// Second theme unchanged.
 	assert.Equal(t, "t-2", themes[1].ID)
 	assert.Equal(t, "Blue", themes[1].Name)
+	assert.Equal(t, "default", themes[2].ID)
 }
 
 // TestSaveTheme_Validation verifies that SaveTheme rejects themes without
@@ -85,6 +140,31 @@ func TestSaveTheme_Validation(t *testing.T) {
 	assert.Contains(t, err.Error(), "theme name is required")
 }
 
+// TestSaveTheme_DefaultProtectedFields verifies that the default theme can
+// store palette values but cannot be renamed or assigned a pattern.
+func TestSaveTheme_DefaultProtectedFields(t *testing.T) {
+	setTestConfigEnv(t)
+	app := newTestAppWithDefaults(t)
+
+	require.NoError(t, app.SaveTheme(Theme{
+		ID:                     "default",
+		ClusterPattern:         "prod-*",
+		PaletteHueLight:        25,
+		PaletteSaturationLight: 50,
+		PaletteBrightnessLight: 10,
+	}))
+
+	themes, err := app.GetThemes()
+	require.NoError(t, err)
+	require.Len(t, themes, 1)
+	assert.Equal(t, "default", themes[0].ID)
+	assert.Equal(t, "default", themes[0].Name)
+	assert.Empty(t, themes[0].ClusterPattern)
+	assert.Equal(t, 25, themes[0].PaletteHueLight)
+	assert.Equal(t, 50, themes[0].PaletteSaturationLight)
+	assert.Equal(t, 10, themes[0].PaletteBrightnessLight)
+}
+
 // TestDeleteTheme verifies that DeleteTheme removes a theme by ID.
 func TestDeleteTheme(t *testing.T) {
 	setTestConfigEnv(t)
@@ -99,8 +179,9 @@ func TestDeleteTheme(t *testing.T) {
 
 	themes, err := app.GetThemes()
 	require.NoError(t, err)
-	require.Len(t, themes, 1)
+	require.Len(t, themes, 2)
 	assert.Equal(t, "t-2", themes[0].ID)
+	assert.Equal(t, "default", themes[1].ID)
 }
 
 // TestDeleteTheme_NotFound verifies that deleting a non-existent theme ID
@@ -112,6 +193,17 @@ func TestDeleteTheme_NotFound(t *testing.T) {
 	err := app.DeleteTheme("non-existent")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "theme not found: non-existent")
+}
+
+// TestDeleteTheme_DefaultProtected verifies that the default theme cannot be
+// deleted.
+func TestDeleteTheme_DefaultProtected(t *testing.T) {
+	setTestConfigEnv(t)
+	app := newTestAppWithDefaults(t)
+
+	err := app.DeleteTheme("default")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default theme cannot be deleted")
 }
 
 // TestReorderThemes verifies that ReorderThemes rearranges themes according to
@@ -126,14 +218,15 @@ func TestReorderThemes(t *testing.T) {
 	require.NoError(t, app.SaveTheme(Theme{ID: "t-3", Name: "Green"}))
 
 	// Reorder: reverse the list.
-	require.NoError(t, app.ReorderThemes([]string{"t-3", "t-2", "t-1"}))
+	require.NoError(t, app.ReorderThemes([]string{"t-3", "t-2", "t-1", "default"}))
 
 	themes, err := app.GetThemes()
 	require.NoError(t, err)
-	require.Len(t, themes, 3)
+	require.Len(t, themes, 4)
 	assert.Equal(t, "t-3", themes[0].ID)
 	assert.Equal(t, "t-2", themes[1].ID)
 	assert.Equal(t, "t-1", themes[2].ID)
+	assert.Equal(t, "default", themes[3].ID)
 	// Verify full theme data survived the reorder.
 	assert.Equal(t, "Green", themes[0].Name)
 	assert.Equal(t, "Blue", themes[1].Name)
@@ -150,19 +243,24 @@ func TestReorderThemes_InvalidIDs(t *testing.T) {
 	require.NoError(t, app.SaveTheme(Theme{ID: "t-2", Name: "Blue"}))
 
 	// Wrong count (too few IDs).
-	err := app.ReorderThemes([]string{"t-1"})
+	err := app.ReorderThemes([]string{"t-1", "default"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "id count mismatch")
 
 	// Wrong count (too many IDs).
-	err = app.ReorderThemes([]string{"t-1", "t-2", "t-3"})
+	err = app.ReorderThemes([]string{"t-1", "t-2", "t-3", "default"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "id count mismatch")
 
 	// Correct count but unknown ID.
-	err = app.ReorderThemes([]string{"t-1", "unknown"})
+	err = app.ReorderThemes([]string{"t-1", "unknown", "default"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown theme ID: unknown")
+
+	// Correct IDs but default moved away from the bottom.
+	err = app.ReorderThemes([]string{"default", "t-2", "t-1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default theme must remain last")
 }
 
 // TestApplyTheme verifies that ApplyTheme copies a saved theme's palette values
@@ -239,9 +337,9 @@ func TestMatchThemeForCluster_Match(t *testing.T) {
 	assert.Equal(t, "Prod Red", matched.Name)
 }
 
-// TestMatchThemeForCluster_NoMatch verifies that MatchThemeForCluster returns
-// nil when no saved theme pattern matches the context name.
-func TestMatchThemeForCluster_NoMatch(t *testing.T) {
+// TestMatchThemeForCluster_DefaultFallback verifies that MatchThemeForCluster
+// returns the protected default theme when no other pattern matches.
+func TestMatchThemeForCluster_DefaultFallback(t *testing.T) {
 	setTestConfigEnv(t)
 	app := newTestAppWithDefaults(t)
 
@@ -249,7 +347,8 @@ func TestMatchThemeForCluster_NoMatch(t *testing.T) {
 
 	matched, err := app.MatchThemeForCluster("staging-us-east-1")
 	require.NoError(t, err)
-	assert.Nil(t, matched)
+	require.NotNil(t, matched)
+	assert.Equal(t, "default", matched.ID)
 }
 
 // TestMatchThemeForCluster_FirstMatchWins verifies that when multiple themes
@@ -269,24 +368,25 @@ func TestMatchThemeForCluster_FirstMatchWins(t *testing.T) {
 }
 
 // TestMatchThemeForCluster_EmptyPattern verifies that themes with an empty
-// ClusterPattern are skipped during matching.
+// ClusterPattern are treated as a catch-all "*" pattern.
 func TestMatchThemeForCluster_EmptyPattern(t *testing.T) {
 	setTestConfigEnv(t)
 	app := newTestAppWithDefaults(t)
 
-	// First theme has no pattern, second does.
-	require.NoError(t, app.SaveTheme(Theme{ID: "t-nopat", Name: "No Pattern", ClusterPattern: ""}))
+	// First theme has no pattern, so it behaves like "*".
+	require.NoError(t, app.SaveTheme(Theme{ID: "t-catchall", Name: "Catch All", ClusterPattern: ""}))
 	require.NoError(t, app.SaveTheme(Theme{ID: "t-dev", Name: "Dev", ClusterPattern: "dev-*"}))
 
 	matched, err := app.MatchThemeForCluster("dev-cluster")
 	require.NoError(t, err)
 	require.NotNil(t, matched)
-	assert.Equal(t, "t-dev", matched.ID, "theme with empty pattern should be skipped")
+	assert.Equal(t, "t-catchall", matched.ID, "empty pattern should match and preserve first-match ordering")
 
-	// With a context name that only the empty-pattern theme could match, we get nil.
+	// Empty pattern also matches a context name no explicit pattern covers.
 	matched, err = app.MatchThemeForCluster("random-cluster")
 	require.NoError(t, err)
-	assert.Nil(t, matched)
+	require.NotNil(t, matched)
+	assert.Equal(t, "t-catchall", matched.ID)
 }
 
 // TestMatchThemeForCluster_Wildcards tests various glob patterns supported by
@@ -313,15 +413,15 @@ func TestMatchThemeForCluster_Wildcards(t *testing.T) {
 		// stg-? matches "stg-" followed by exactly one character.
 		{"stg-1", "t-question", false},
 		{"stg-a", "t-question", false},
-		// stg-? does NOT match "stg-12" (two chars after dash).
-		{"stg-12", "", true},
+		// stg-? does NOT match "stg-12" (two chars after dash), so default wins.
+		{"stg-12", "default", false},
 
 		// prod* matches anything starting with "prod".
 		{"prod-us-east-1", "t-prefix", false},
 		{"production", "t-prefix", false},
 
-		// No match.
-		{"local-cluster", "", true},
+		// No explicit match, so default wins.
+		{"local-cluster", "default", false},
 	}
 
 	for _, tc := range tests {

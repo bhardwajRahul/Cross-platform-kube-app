@@ -6,7 +6,6 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import './modals.css';
 import './AboutModal.css';
 import logo from '@assets/luxury-yacht-logo.png';
 import captainK8s from '@assets/captain-k8s-color.png';
@@ -80,6 +79,7 @@ const AboutModal: React.FC<AboutModalProps> = React.memo(({ isOpen, onClose }) =
       onClose={onClose}
       containerClassName="about-modal"
       isClosing={isClosing}
+      closeOnBackdrop={true}
     >
       <div className="modal-header">
         <h2 id="about-modal-title">About</h2>

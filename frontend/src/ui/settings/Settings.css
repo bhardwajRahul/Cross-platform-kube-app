@@ -1,58 +1,101 @@
-/* Settings  */
+/* Settings — per-tab section layout
+   Each tab renders a `<div class="settings-panel">` containing:
+     - h2.settings-panel-title (e.g., "Appearance")
+     - alternating `.settings-subgroup-label` + `<hr.settings-subgroup-divider>`
+     - one or more `.settings-row` (label/help on left, control on right)
+*/
 
-.settings-view {
-  padding: 0 0.3rem;
-  flex: 1;
-  overflow-y: auto;
-  position: relative;
-  box-sizing: border-box;
+.settings-panel {
   display: flex;
   flex-direction: column;
 }
 
-.settings-close-button {
-  display: none;
+.settings-panel-title {
+  font-family: var(--font-family-display, var(--font-family-base));
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 0 0 1.25rem 0;
+  letter-spacing: -0.02em;
 }
 
-.settings-section {
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--border-radius-lg);
-  padding: 1rem;
-  margin-bottom: 1.2rem;
+/* Subgroup label (e.g., "MODE", "THEME") rendered as small uppercase caption */
+.settings-subgroup-label {
+  font-size: var(--font-size-small);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  margin-top: 0.5rem;
 }
 
-.settings-section:last-child {
+.settings-subgroup-label:first-of-type {
+  margin-top: 0;
+}
+
+.settings-subgroup-divider {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  margin: 0.4rem 0 1rem 0;
+}
+
+/* Row: label/description on left, control on right */
+.settings-row {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 1.5rem;
+  padding: 1.1rem 0;
+  align-items: start;
+}
+
+.settings-row + .settings-row {
+  border-top: 1px solid transparent;
+}
+
+.settings-row-label-title {
+  font-size: var(--font-size-normal);
+  font-weight: 600;
+  color: var(--color-text);
   margin-bottom: 0.2rem;
 }
 
-.settings-section h3 {
+.settings-row-label-help {
+  font-size: var(--font-size-small);
   color: var(--color-text-secondary);
-  /* margin: 0 0 1rem 0; */
-  margin-bottom: 1rem;
-  font-size: var(--font-size-title);
-  text-transform: uppercase;
+  line-height: 1.4;
 }
 
-.settings-subsection {
-  margin-bottom: 1rem;
+.settings-row-control {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  /* Children hug their content by default. Controls that need to fill the
+     row's content area (sliders grid, themes table, etc.) opt in with
+     width: 100%. */
+  align-items: flex-start;
 }
 
-.settings-subsection:last-child {
-  margin-bottom: 0;
-}
-
-.settings-subsection h4 {
+/* Inline checkbox label inside a row control */
+.settings-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   font-size: var(--font-size-normal);
-  font-weight: 600;
-  color: var(--color-text-secondary);
-  margin: 0 0 0.5rem 0;
+  color: var(--color-text);
+  cursor: pointer;
 }
 
+.settings-checkbox-label input[type="checkbox"] {
+  margin: 0;
+}
+
+/* Items list inside a row control (kubeconfig paths, panel layout fields) */
 .settings-items {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-sm);
+  width: 100%;
 }
 
 .setting-item {
@@ -67,18 +110,6 @@
 
 .setting-actions button {
   margin-top: 0;
-}
-
-.setting-item label {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  font-size: var(--font-size-normal);
-  color: var(--color-text);
-}
-
-.setting-item input[type="checkbox"] {
-  margin: 0;
 }
 
 .setting-item-inline {
@@ -125,12 +156,6 @@
   min-width: auto;
 }
 
-.object-panel-defaults .opd-row-label {
-  display: inline-block;
-  width: 5em;
-  flex-shrink: 0;
-}
-
 .object-panel-defaults .opd-field-label {
   display: inline-block;
   width: 3em;
@@ -165,11 +190,11 @@
   margin: 0;
 }
 
-[data-theme="dark"] .setting-item-inline input[type="number"] {
+[data-appearance-mode="dark"] .setting-item-inline input[type="number"] {
   color-scheme: dark;
 }
 
-[data-theme="dark"] .setting-item-inline input[type="text"] {
+[data-appearance-mode="dark"] .setting-item-inline input[type="text"] {
   color-scheme: dark;
 }
 
@@ -180,24 +205,17 @@
   opacity: 1;
 }
 
-/* Palette Tint Controls — 4-column grid: label | control | value | reset */
+/* ==========================================================================
+   Palette Tint Controls (Appearance > Theme > Tint)
+   4-column grid: label | slider | value | reset
+   ========================================================================== */
+
 .palette-tint-controls {
   display: grid;
   grid-template-columns: auto 1fr auto auto;
-  gap: var(--spacing-xs) var(--spacing-sm);
+  gap: var(--spacing-sm) var(--spacing-md);
   align-items: center;
-  margin-top: var(--spacing-sm);
-}
-
-/* Theme selector row — extra spacing before the palette sliders */
-.palette-tint-controls > label:has(+ .segmented-button),
-.palette-tint-controls > .segmented-button {
-  margin-bottom: var(--spacing-md);
-}
-
-.palette-tint-controls > .segmented-button {
-  grid-column: 2 / -1;
-  justify-self: start;
+  width: 100%;
 }
 
 .palette-tint-controls > label {
@@ -210,13 +228,13 @@
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 6px;
-  border-radius: 3px;
+  height: 10px;
+  border-radius: 10px;
   outline: none;
   cursor: pointer;
 }
 
-/* Hue slider has a fixed rainbow gradient */
+/* Hue slider: fixed rainbow gradient */
 .palette-slider-hue {
   background: linear-gradient(
     to right,
@@ -235,35 +253,31 @@
   background: linear-gradient(to right, hsl(0, 0%, 50%), hsl(0, 20%, 50%));
 }
 
-/* Brightness slider: dark-to-light gradient */
 .palette-slider-brightness {
   background: linear-gradient(to right, hsl(0, 0%, 20%), hsl(0, 0%, 50%), hsl(0, 0%, 80%));
 }
 
-/* Custom thumb styling */
 .palette-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
-  background: var(--color-text);
-  border: 2px solid var(--color-bg);
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
-  cursor: pointer;
-}
-
-.palette-slider::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--color-text);
-  border: 2px solid var(--color-bg);
+  background: var(--palette-slider-thumb, var(--color-text));
+  border: 1px solid var(--color-bg);
   box-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
   cursor: pointer;
 }
 
 .palette-slider-value {
+  width: 2.5rem;
+  text-align: right;
+  font-size: var(--font-size-small);
+  color: var(--color-text);
+  font-family: var(--font-family-mono);
+}
+
+.color-swatch-value {
   width: 4rem;
   text-align: right;
   font-size: var(--font-size-small);
@@ -271,7 +285,6 @@
   font-family: var(--font-family-mono);
 }
 
-/* Clickable hex value */
 .palette-hex-clickable {
   cursor: pointer;
   border-bottom: 1px dashed var(--color-border);
@@ -281,7 +294,6 @@
   color: var(--color-text);
 }
 
-/* Inline hex input */
 .palette-hex-input {
   width: 4rem;
   border: 1px solid var(--color-border);
@@ -295,42 +307,35 @@
   border-color: var(--color-accent);
 }
 
-/* Color pickers row — 9-column grid: label|swatch|value|reset | spacer | label|swatch|value|reset */
-.palette-color-controls {
-  display: grid;
-  grid-template-columns: auto auto auto auto 1fr auto auto auto auto;
-  gap: var(--spacing-xs) var(--spacing-sm);
+/* Color picker field (Accent / Link rows) — swatch + hex value + reset */
+.palette-color-field {
+  display: flex;
   align-items: center;
-  margin-top: var(--spacing-sm);
+  gap: var(--spacing-sm);
+  width: fit-content;
 }
 
-.palette-color-controls > label {
-  font-size: var(--font-size-normal);
-  color: var(--color-text);
-  white-space: nowrap;
-}
-
-.palette-color-spacer {
-  /* Empty spacer column — the 1fr gap does the work */
-}
-
-/* Bottom action row spans all columns in color-controls grid */
-.palette-color-controls > .palette-bottom-actions {
-  grid-column: 1 / -1;
-}
-
-/* Accent color swatch in the grid */
 .palette-accent-swatch {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border: none;
+  border-radius: 10%;
   cursor: pointer;
   padding: 0;
   background: none;
-  justify-self: start;
+  overflow: hidden;
 }
 
-/* Per-row reset button */
+/* Native color input renders the chosen color as an inner block; round it to
+   match the outer circle. */
+.palette-accent-swatch::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.palette-accent-swatch::-webkit-color-swatch {
+  border: none;
+  border-radius: 10%;
+}
+
 .palette-row-reset {
   background: transparent;
   border: 1px solid var(--color-border);
@@ -355,12 +360,10 @@
   cursor: default;
 }
 
-/* Bottom action row spans the full grid width */
 .palette-bottom-actions {
-  grid-column: 1 / -1;
   display: flex;
   gap: var(--spacing-sm);
-  margin-top: var(--spacing-xs);
+  flex-wrap: wrap;
 }
 
 .setting-description {
@@ -368,48 +371,77 @@
   color: var(--color-text-secondary);
 }
 
-/* Kubeconfig paths */
-.kubeconfig-path-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+/* ==========================================================================
+   Kubeconfig paths
+   ========================================================================== */
+
+.kubeconfig-path-list {
+  align-items: stretch;
   gap: var(--spacing-sm);
 }
 
-.kubeconfig-path-remove-button {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  line-height: 1;
-  font-size: 0.6rem;
-  transition: color var(--transition-fast);
+.kubeconfig-path-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 0.25rem 0.75rem;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius-lg);
+  min-width: 0;
 }
 
-.kubeconfig-path-remove-button:hover {
+.kubeconfig-path-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+.kubeconfig-path-value {
+  flex: 1 1 auto;
+  min-width: 0;
   color: var(--color-text);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kubeconfig-path-remove-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  padding: 0.2rem;
+  border-radius: var(--border-radius-sm);
+  flex-shrink: 0;
+  transition:
+    color var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.kubeconfig-path-remove-button:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-bg-tertiary, var(--color-bg));
 }
 
 .kubeconfig-path-remove-button:disabled {
   cursor: not-allowed;
-  color: var(--color-text-tertiary);
+  opacity: 0.4;
 }
 
-.kubeconfig-path-label {
-  color: var(--color-text-secondary);
-}
-
-.kubeconfig-path-value {
-  flex: 1 1 260px;
-  color: var(--color-text);
-  font-family: var(--font-family-mono);
-  overflow-wrap: anywhere;
-}
-
-.kubeconfig-path-actions {
-  display: flex;
-  gap: var(--spacing-sm);
-  flex-wrap: wrap;
+/* Inline + icon next to the button label */
+.kubeconfig-path-add {
+  display: inline-flex;
   align-items: center;
+  gap: 0.35rem;
+  align-self: flex-start;
 }
 
 .kubeconfig-path-status,
@@ -418,59 +450,77 @@
   font-size: var(--font-size-small);
 }
 
-/* Saved Themes section */
+/* ==========================================================================
+   Saved Themes list
+   ========================================================================== */
+
 .themes-section {
-  margin-top: var(--spacing-md);
+  width: 100%;
 }
 
-.themes-section h4 {
-  color: var(--color-text);
-  margin: 1.5rem 0 0.5rem 0;
+.themes-help-list {
+  padding: 1rem;
+  margin: 0;
 }
 
-/* Themes table — 5-column grid: drag handle | name | pattern | open | delete */
 .themes-table {
-  display: grid;
-  grid-template-columns: 10px 1fr 1fr auto auto;
-  gap: var(--spacing-xs);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.themes-unsaved-default {
+  display: flex;
   align-items: center;
-}
-
-.themes-table-header {
-  display: contents;
-}
-
-.themes-table-header > span {
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--color-warning-border, var(--color-warning, #e6a700));
+  border-radius: var(--border-radius-sm);
+  background: var(--status-warning-bg, var(--color-warning-bg, rgba(245, 158, 11, 0.1)));
+  color: var(--status-warning-text);
   font-size: var(--font-size-small);
-  color: var(--color-text-secondary);
-  font-weight: 600;
+  line-height: 1.35;
 }
 
-/* "Theme Name" header spans the drag-handle + name columns */
-.themes-header-name {
-  grid-column: 1 / 3;
+.themes-unsaved-default-action {
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: var(--border-radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: var(--font-size-small);
+  padding: 0.25rem 0.45rem;
+}
+
+.themes-unsaved-default-action:hover {
+  color: var(--color-text);
 }
 
 .themes-table-row {
-  display: contents;
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr) 2rem 2rem;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.45rem 0;
+  min-width: 0;
+  /* border-top: 1px solid var(--color-border); */
+  border-bottom: 1px solid var(--color-border);
 }
 
-/* Dim non-active rows when a theme is open for editing */
-.themes-table-row--dimmed > * {
+.themes-table-row--dimmed {
   opacity: 0.4;
 }
 
-/* Reduce opacity of the dragged row's cells */
-.themes-table-row--dragging > * {
+.themes-table-row--dragging {
   opacity: 0.4;
 }
 
-/* Visual drop-target indicator on the first cell of the target row */
-.themes-table-row--drop-target > *:first-child {
-  box-shadow: 0 -2px 0 0 var(--color-accent);
+.themes-table-row--drop-target {
+  box-shadow: inset 0 2px 0 0 var(--color-accent);
 }
 
-/* Drag handle */
 .themes-drag-handle {
   cursor: grab;
   text-align: center;
@@ -484,67 +534,74 @@
   color: var(--color-text-secondary);
 }
 
-/* Theme name in read mode */
-.theme-name {
-  font-weight: 500;
-  font-size: var(--font-size-normal);
-  color: var(--color-text);
+.theme-summary,
+.theme-fields {
+  min-width: 0;
 }
 
-/* Cluster pattern in read mode */
+.theme-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.theme-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.theme-name,
 .theme-pattern {
-  color: var(--color-text);
-  font-size: var(--font-size-small);
+  font-size: var(--font-size-mono);
+  font-family: var(--font-family-mono);
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Clickable theme name/pattern — same pattern as palette-hex-clickable */
-.theme-field-clickable {
-  cursor: pointer;
-  border-bottom: 1px dashed var(--color-border);
-}
-
-.theme-field-clickable:hover {
+.theme-name {
   color: var(--color-text);
 }
 
-/* Inline text inputs for editing theme name/pattern */
 .theme-name-input,
 .theme-pattern-input {
+  font-size: var(--font-size-mono);
+  font-family: var(--font-family-mono);
+  color: var(--color-text);
   width: 100%;
   min-width: 0;
-  padding: 0.15rem 0.35rem;
+  border: none;
   border: 1px solid var(--color-border);
-  border-radius: var(--border-radius-sm);
-  background: var(--color-bg);
-  color: var(--color-text);
-  font-size: var(--font-size-normal);
-  outline: none;
+  padding: 0.15rem 0.4rem;
+  background: transparent;
   box-sizing: border-box;
 }
 
-.theme-name-input:focus,
-.theme-pattern-input:focus {
-  border-color: var(--color-accent);
-}
-
-/* Minimal action buttons (Edit, Delete, Save, Cancel) */
 .theme-action-button {
   background: transparent;
-  border: 1px solid var(--color-border);
+  border: none;
   border-radius: var(--border-radius-sm);
   color: var(--color-text-secondary);
   cursor: pointer;
   font-size: var(--font-size-small);
-  padding: 2px 8px;
   white-space: nowrap;
+  padding: 0.3rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  min-height: 2rem;
+  line-height: 0;
   transition:
     color var(--transition-fast),
-    border-color var(--transition-fast);
+    background-color var(--transition-fast);
 }
 
 .theme-action-button:hover:not(:disabled) {
   color: var(--color-text);
-  border-color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary, var(--color-bg-secondary));
 }
 
 .theme-action-button:disabled {
@@ -552,27 +609,43 @@
   cursor: default;
 }
 
-/* Delete button turns red on hover */
+.theme-action-spacer {
+  min-width: 2rem;
+  min-height: 2rem;
+}
+
 .theme-action-delete:hover {
   color: var(--color-danger, #f87171);
-  border-color: var(--color-danger, #f87171);
+  background: rgba(248, 113, 113, 0.1);
 }
 
-/* New theme form — flex row layout */
-.themes-new-form {
-  display: flex;
-  gap: var(--spacing-sm);
-  align-items: center;
-  margin-top: var(--spacing-sm);
+/* "+ Save new theme" button rendered as the last row of the themes table */
+.themes-save-new-row {
+  display: block;
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-normal);
+  cursor: pointer;
+  text-align: center;
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
-.themes-new-form .theme-name-input,
-.themes-new-form .theme-pattern-input {
-  flex: 1;
+.themes-save-new-row:hover {
+  background: var(--color-bg-tertiary, var(--color-bg-secondary));
+  color: var(--color-text);
 }
 
-/* Loading text */
+.themes-drag-handle--placeholder {
+  pointer-events: none;
+}
+
 .themes-loading {
   color: var(--color-text-secondary);
   font-size: var(--font-size-small);
+  padding: 0.75rem;
 }

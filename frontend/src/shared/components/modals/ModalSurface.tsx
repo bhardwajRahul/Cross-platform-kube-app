@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 
 interface ModalSurfaceProps {
@@ -12,6 +12,8 @@ interface ModalSurfaceProps {
   closeOnBackdrop?: boolean;
 }
 
+let openModalSurfaceCount = 0;
+
 const ModalSurface: React.FC<ModalSurfaceProps> = ({
   children,
   modalRef,
@@ -20,8 +22,23 @@ const ModalSurface: React.FC<ModalSurfaceProps> = ({
   overlayClassName,
   containerClassName,
   isClosing = false,
-  closeOnBackdrop = true,
+  closeOnBackdrop = false,
 }) => {
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    openModalSurfaceCount += 1;
+    document.body.classList.add('modal-surface-open');
+
+    return () => {
+      openModalSurfaceCount = Math.max(0, openModalSurfaceCount - 1);
+      if (openModalSurfaceCount === 0) {
+        document.body.classList.remove('modal-surface-open');
+      }
+    };
+  }, []);
+
   if (typeof document === 'undefined') {
     return null;
   }
@@ -40,15 +57,22 @@ const ModalSurface: React.FC<ModalSurfaceProps> = ({
       data-modal-surface="true"
     >
       <div
-        ref={modalRef}
-        className={containerClasses}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={labelledBy}
-        tabIndex={-1}
+        className="modal-window-drag-region"
+        aria-hidden="true"
         onClick={(event) => event.stopPropagation()}
-      >
-        {children}
+      />
+      <div className="modal-backdrop">
+        <div
+          ref={modalRef}
+          className={containerClasses}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={labelledBy}
+          tabIndex={-1}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {children}
+        </div>
       </div>
     </div>,
     document.body
