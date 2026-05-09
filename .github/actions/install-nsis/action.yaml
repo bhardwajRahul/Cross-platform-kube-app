@@ -60,8 +60,9 @@ runs:
     - name: Apply NSIS long string patch
       shell: pwsh
       run: |
+        $Ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         $patchArchive = Join-Path $env:RUNNER_TEMP "nsis-${{ inputs.nsis-version }}-strlen_8192.zip"
-        Invoke-WebRequest "https://downloads.sourceforge.net/project/nsis/NSIS%203/${{ inputs.nsis-version }}/nsis-${{ inputs.nsis-version }}-strlen_8192.zip" -OutFile $patchArchive -MaximumRedirection 10
+        Invoke-WebRequest "https://downloads.sourceforge.net/project/nsis/NSIS%203/${{ inputs.nsis-version }}/nsis-${{ inputs.nsis-version }}-strlen_8192.zip?ts=$Ts&use_mirror=autoselect" -OutFile $patchArchive -MaximumRedirection 10
         Expand-Archive $patchArchive -DestinationPath "C:\Program Files (x86)\NSIS" -Force
 
     - name: Install NSIS EnvVar plugin
