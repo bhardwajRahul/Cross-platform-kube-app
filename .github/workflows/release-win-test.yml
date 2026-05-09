@@ -1,4 +1,4 @@
-name: Release
+name: Release Win Test
 
 on:
   workflow_dispatch:
