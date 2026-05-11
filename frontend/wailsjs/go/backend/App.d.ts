@@ -139,6 +139,8 @@ export function GetKubeconfigSearchPaths():Promise<Array<string>>;
 
 export function GetKubeconfigs():Promise<Array<types.KubeconfigInfo>>;
 
+export function GetKubernetesAPIClientDiagnostics():Promise<Array<backend.KubernetesAPIClientDiagnostics>>;
+
 export function GetLimitRange(arg1:string,arg2:string,arg3:string):Promise<types.LimitRangeDetails>;
 
 export function GetListenerSet(arg1:string,arg2:string,arg3:string):Promise<types.ListenerSetDetails>;
@@ -275,6 +277,10 @@ export function SetKubeconfig(arg1:string):Promise<void>;
 
 export function SetKubeconfigSearchPaths(arg1:Array<string>):Promise<void>;
 
+export function SetKubernetesClientBurst(arg1:number):Promise<void>;
+
+export function SetKubernetesClientQPS(arg1:number):Promise<void>;
+
 export function SetLinkColor(arg1:string,arg2:string):Promise<void>;
 
 export function SetMaxTableRows(arg1:number):Promise<void>;
@@ -292,6 +298,8 @@ export function SetObjPanelLogsTargetPerScopeLimit(arg1:number):Promise<void>;
 export function SetObjectPanelLayout(arg1:number,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number):Promise<void>;
 
 export function SetPaletteTint(arg1:string,arg2:number,arg3:number,arg4:number):Promise<void>;
+
+export function SetPermissionSSRRFetchConcurrency(arg1:number):Promise<void>;
 
 export function SetSelectedKubeconfigs(arg1:Array<string>):Promise<void>;
 

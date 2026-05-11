@@ -1,21 +1,8 @@
 # TODO
 
-- Restarting deployment does not show 2/3 in the table
-- Debug panels are too easy to forget about, need a ref somewhere
-  - Debug menu only available in dev mode?
-  - Move app logs & deb ug to this menu?
-  - Browser console?
-- Settings
-  - Setting to show Debug menu? Requires restart?
-- Map view -- max default zoom when object count is low
-
 ## Feature Ideas
 
 - In daemonset details, show a "NOT RUNNING ON" label that lists the nodes where the ds is missing
-
-- Configurable backend thresholds
-  - QPS (500) and Burst (1000)
-  - SSRR concurrency cap (32)
 
 - Gridtable improvements
 - Allow column order change via drag

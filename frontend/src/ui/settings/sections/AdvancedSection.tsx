@@ -10,11 +10,26 @@ import { useAutoRefresh, useBackgroundRefresh } from '@/core/refresh';
 import { clearAllGridTableState } from '@shared/components/tables/persistence/gridTablePersistenceReset';
 import {
   hydrateAppPreferences,
+  getKubernetesClientBurst,
+  getKubernetesClientQPS,
   getMaxTableRows,
+  getPermissionSSRRFetchConcurrency,
+  KUBERNETES_CLIENT_BURST_DEFAULT,
+  KUBERNETES_CLIENT_BURST_MAX,
+  KUBERNETES_CLIENT_BURST_MIN,
+  KUBERNETES_CLIENT_QPS_DEFAULT,
+  KUBERNETES_CLIENT_QPS_MAX,
+  KUBERNETES_CLIENT_QPS_MIN,
   MAX_TABLE_ROWS_DEFAULT,
   MAX_TABLE_ROWS_MAX,
   MAX_TABLE_ROWS_MIN,
+  PERMISSION_SSRR_FETCH_CONCURRENCY_DEFAULT,
+  PERMISSION_SSRR_FETCH_CONCURRENCY_MAX,
+  PERMISSION_SSRR_FETCH_CONCURRENCY_MIN,
+  setKubernetesClientBurst,
+  setKubernetesClientQPS,
   setMaxTableRows,
+  setPermissionSSRRFetchConcurrency,
 } from '@/core/settings/appPreferences';
 import { clearTintedPalette } from '@utils/paletteTint';
 import { clearAccentColor } from '@utils/accentColor';
@@ -33,6 +48,14 @@ function AdvancedSection() {
   const [maxTableRowsInput, setMaxTableRowsInput] = useState<string>(() =>
     String(getMaxTableRows())
   );
+  const [kubernetesClientQPSInput, setKubernetesClientQPSInput] = useState<string>(() =>
+    String(getKubernetesClientQPS())
+  );
+  const [kubernetesClientBurstInput, setKubernetesClientBurstInput] = useState<string>(() =>
+    String(getKubernetesClientBurst())
+  );
+  const [permissionSSRRFetchConcurrencyInput, setPermissionSSRRFetchConcurrencyInput] =
+    useState<string>(() => String(getPermissionSSRRFetchConcurrency()));
   const [persistenceMode, setPersistenceMode] = useState<GridTablePersistenceMode>(() =>
     getGridTablePersistenceMode()
   );
@@ -46,6 +69,17 @@ function AdvancedSection() {
         const prefs = await hydrateAppPreferences({ force: true });
         if (!cancelled) {
           setMaxTableRowsInput(String(prefs.maxTableRows ?? MAX_TABLE_ROWS_DEFAULT));
+          setKubernetesClientQPSInput(
+            String(prefs.kubernetesClientQPS ?? KUBERNETES_CLIENT_QPS_DEFAULT)
+          );
+          setKubernetesClientBurstInput(
+            String(prefs.kubernetesClientBurst ?? KUBERNETES_CLIENT_BURST_DEFAULT)
+          );
+          setPermissionSSRRFetchConcurrencyInput(
+            String(
+              prefs.permissionSSRRFetchConcurrency ?? PERMISSION_SSRR_FETCH_CONCURRENCY_DEFAULT
+            )
+          );
           setPersistenceMode(getGridTablePersistenceMode());
         }
       } catch (error) {
@@ -73,6 +107,39 @@ function AdvancedSection() {
         : Math.max(MAX_TABLE_ROWS_MIN, Math.min(MAX_TABLE_ROWS_MAX, parsed));
     setMaxTableRowsInput(String(normalized));
     setMaxTableRows(normalized);
+  };
+
+  const commitKubernetesClientQPS = (raw: string) => {
+    const parsed = parseInt(raw, 10);
+    const normalized =
+      Number.isNaN(parsed) || parsed <= 0
+        ? KUBERNETES_CLIENT_QPS_DEFAULT
+        : Math.max(KUBERNETES_CLIENT_QPS_MIN, Math.min(KUBERNETES_CLIENT_QPS_MAX, parsed));
+    setKubernetesClientQPSInput(String(normalized));
+    setKubernetesClientQPS(normalized);
+  };
+
+  const commitKubernetesClientBurst = (raw: string) => {
+    const parsed = parseInt(raw, 10);
+    const normalized =
+      Number.isNaN(parsed) || parsed <= 0
+        ? KUBERNETES_CLIENT_BURST_DEFAULT
+        : Math.max(KUBERNETES_CLIENT_BURST_MIN, Math.min(KUBERNETES_CLIENT_BURST_MAX, parsed));
+    setKubernetesClientBurstInput(String(normalized));
+    setKubernetesClientBurst(normalized);
+  };
+
+  const commitPermissionSSRRFetchConcurrency = (raw: string) => {
+    const parsed = parseInt(raw, 10);
+    const normalized =
+      Number.isNaN(parsed) || parsed <= 0
+        ? PERMISSION_SSRR_FETCH_CONCURRENCY_DEFAULT
+        : Math.max(
+            PERMISSION_SSRR_FETCH_CONCURRENCY_MIN,
+            Math.min(PERMISSION_SSRR_FETCH_CONCURRENCY_MAX, parsed)
+          );
+    setPermissionSSRRFetchConcurrencyInput(String(normalized));
+    setPermissionSSRRFetchConcurrency(normalized);
   };
 
   const handleResetViews = async () => {
@@ -116,6 +183,10 @@ function AdvancedSection() {
     <div className="settings-panel">
       <h2 className="settings-panel-title">Advanced</h2>
 
+      <div className="settings-advanced-warning">
+        ⚠️ Modifying these settings could negatively impact app behavior or performance.
+      </div>
+
       <div className="settings-subgroup-label">Refresh</div>
       <hr className="settings-subgroup-divider" />
 
@@ -123,7 +194,8 @@ function AdvancedSection() {
         <div className="settings-row-label">
           <div className="settings-row-label-title">Auto-refresh</div>
           <div className="settings-row-label-help">
-            Automatically refresh resource data at regular intervals to keep views up to date.
+            Automatically refresh data at regular intervals. If disabled, you will have to manually
+            refresh for updated data.
           </div>
         </div>
         <div className="settings-row-control">
@@ -138,10 +210,9 @@ function AdvancedSection() {
 
       <div className="settings-row">
         <div className="settings-row-label">
-          <div className="settings-row-label-title">Background clusters</div>
+          <div className="settings-row-label-title">Refresh background clusters</div>
           <div className="settings-row-label-help">
-            When enabled, clusters that are not actively selected will be refreshed in the
-            background so their data stays current.
+            When enabled, open cluster tabs that are not active will be refreshed in the background.
           </div>
         </div>
         <div className="settings-row-control">
@@ -161,8 +232,8 @@ function AdvancedSection() {
         <div className="settings-row-label">
           <div className="settings-row-label-title">Max rows</div>
           <div className="settings-row-label-help">
-            Max number of rows in a data table. Larger values will show more data, but app
-            performance may be impacted.
+            Max number of rows in a data table. Larger values will show more data, but could impact
+            app rendering performance.
           </div>
         </div>
         <div className="settings-row-control">
@@ -182,7 +253,101 @@ function AdvancedSection() {
                   e.currentTarget.blur();
                 }
               }}
-            />
+            />{' '}
+            rows
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-subgroup-label">Kubernetes API</div>
+      <hr className="settings-subgroup-divider" />
+
+      <div className="settings-row">
+        <div className="settings-row-label">
+          <div className="settings-row-label-title">Client QPS</div>
+          <div className="settings-row-label-help">
+            Sustained per-second rate for K8s API requests. This value is per-cluster.
+          </div>
+        </div>
+        <div className="settings-row-control">
+          <div className="setting-item setting-item-inline">
+            <input
+              type="number"
+              id="settings-kubernetes-client-qps"
+              min={KUBERNETES_CLIENT_QPS_MIN}
+              max={KUBERNETES_CLIENT_QPS_MAX}
+              step={10}
+              value={kubernetesClientQPSInput}
+              onChange={(e) => setKubernetesClientQPSInput(e.target.value)}
+              onBlur={(e) => commitKubernetesClientQPS(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }
+              }}
+            />{' '}
+            queries per second
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-row">
+        <div className="settings-row-label">
+          <div className="settings-row-label-title">Client burst allowance</div>
+          <div className="settings-row-label-help">
+            Short-term burst allowance for K8s API requests. This value is per-cluster.
+          </div>
+        </div>
+        <div className="settings-row-control">
+          <div className="setting-item setting-item-inline">
+            <input
+              type="number"
+              id="settings-kubernetes-client-burst"
+              min={KUBERNETES_CLIENT_BURST_MIN}
+              max={KUBERNETES_CLIENT_BURST_MAX}
+              step={10}
+              value={kubernetesClientBurstInput}
+              onChange={(e) => setKubernetesClientBurstInput(e.target.value)}
+              onBlur={(e) => commitKubernetesClientBurst(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }
+              }}
+            />{' '}
+            queries per second
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-row">
+        <div className="settings-row-label">
+          <div className="settings-row-label-title">SSRR concurrency</div>
+          <div className="settings-row-label-help">
+            Concurrent <code>SelfSubjectRulesReview</code> requests during permission checks.
+          </div>
+        </div>
+        <div className="settings-row-control">
+          <div className="setting-item setting-item-inline">
+            <input
+              type="number"
+              id="settings-permission-ssrr-concurrency"
+              min={PERMISSION_SSRR_FETCH_CONCURRENCY_MIN}
+              max={PERMISSION_SSRR_FETCH_CONCURRENCY_MAX}
+              step={1}
+              value={permissionSSRRFetchConcurrencyInput}
+              onChange={(e) => setPermissionSSRRFetchConcurrencyInput(e.target.value)}
+              onBlur={(e) => commitPermissionSSRRFetchConcurrency(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }
+              }}
+            />{' '}
+            concurrent requests
           </div>
         </div>
       </div>
@@ -210,10 +375,9 @@ function AdvancedSection() {
 
       <div className="settings-row">
         <div className="settings-row-label">
-          <div className="settings-row-label-title">Reset</div>
+          <div className="settings-row-label-title">Reset Views</div>
           <div className="settings-row-label-help">
-            Reset Views clears column/sort/filter settings. Factory Reset wipes all preferences and
-            restarts the app.
+            Clears column/sort/filter settings in all views.
           </div>
         </div>
         <div className="settings-row-control">
@@ -225,6 +389,19 @@ function AdvancedSection() {
             >
               Reset Views
             </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-row">
+        <div className="settings-row-label">
+          <div className="settings-row-label-title">Factory Reset</div>
+          <div className="settings-row-label-help">
+            Deletes all preferences and saved state, then restarts the app.
+          </div>
+        </div>
+        <div className="settings-row-control">
+          <div className="setting-item setting-actions">
             <button
               type="button"
               className="button generic"
