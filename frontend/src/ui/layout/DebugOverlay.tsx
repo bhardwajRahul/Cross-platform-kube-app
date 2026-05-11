@@ -9,7 +9,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CloseIcon } from '@shared/components/icons/MenuIcons';
+import { CloseIcon } from '@shared/components/icons/SharedIcons';
 import './DebugOverlay.css';
 
 interface DebugOverlayProps {
@@ -32,6 +32,8 @@ type OverlayLayout = {
 
 const DEBUG_OVERLAY_MIN_WIDTH = 320;
 const DEBUG_OVERLAY_MIN_HEIGHT = 180;
+const DEBUG_OVERLAY_DEFAULT_WIDTH = 600;
+const DEBUG_OVERLAY_DEFAULT_HEIGHT = 600;
 const DEBUG_OVERLAY_BASE_Z_INDEX = 20000;
 
 let topDebugOverlayZIndex = DEBUG_OVERLAY_BASE_Z_INDEX;
@@ -50,8 +52,14 @@ const getViewportSize = () => ({
 
 const getDefaultLayout = (testId?: string): OverlayLayout => {
   const viewport = getViewportSize();
-  const width = clamp(Math.round(viewport.width * 0.28), 360, 520);
-  const height = clamp(Math.round(viewport.height * 0.42), 280, 520);
+  const width = Math.min(
+    DEBUG_OVERLAY_DEFAULT_WIDTH,
+    Math.max(DEBUG_OVERLAY_MIN_WIDTH, viewport.width - 12)
+  );
+  const height = Math.min(
+    DEBUG_OVERLAY_DEFAULT_HEIGHT,
+    Math.max(DEBUG_OVERLAY_MIN_HEIGHT, viewport.height - 12)
+  );
 
   const defaults: Record<string, { x: number; y: number }> = {
     'panel-debug-overlay': { x: 40, y: 90 },
@@ -204,6 +212,17 @@ export const DebugOverlay: React.FC<DebugOverlayProps> = ({
     };
   };
 
+  const stopHeaderControlInteraction = (
+    event: React.PointerEvent<HTMLButtonElement> | React.MouseEvent<HTMLButtonElement>
+  ) => {
+    event.stopPropagation();
+  };
+
+  const handleCloseClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    onClose?.();
+  };
+
   const overlayClassName = useMemo(
     () => (className ? `debug-overlay-window ${className}` : 'debug-overlay-window'),
     [className]
@@ -248,8 +267,9 @@ export const DebugOverlay: React.FC<DebugOverlayProps> = ({
               <button
                 type="button"
                 className="debug-overlay__close"
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={onClose}
+                onPointerDown={stopHeaderControlInteraction}
+                onMouseDown={stopHeaderControlInteraction}
+                onClick={handleCloseClick}
                 aria-label="Close debug overlay"
                 title="Close"
               >

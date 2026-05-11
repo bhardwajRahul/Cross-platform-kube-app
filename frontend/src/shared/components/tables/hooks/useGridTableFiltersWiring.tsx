@@ -226,7 +226,7 @@ export function useGridTableFiltersWiring<T>({
       {
         type: 'action',
         id: 'copy-gridtable-csv',
-        icon: <CopyIcon />,
+        icon: <CopyIcon width={18} height={18} />,
         onClick: () => {
           void handleCopyCsv();
         },

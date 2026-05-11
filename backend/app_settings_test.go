@@ -85,6 +85,8 @@ func TestAppSaveAndLoadAppSettingsRoundTrip(t *testing.T) {
 		AppearanceMode:                           "dark",
 		SelectedKubeconfigs:                      []string{"/tmp/config:ctx"},
 		UseShortResourceNames:                    true,
+		DimInactiveNamespaces:                    false,
+		ExclusiveNamespaces:                      false,
 		AutoRefreshEnabled:                       false,
 		RefreshBackgroundClustersEnabled:         false,
 		MetricsRefreshIntervalMs:                 7000,
@@ -118,6 +120,8 @@ func TestAppSaveAndLoadAppSettingsRoundTrip(t *testing.T) {
 	require.NoError(t, app.loadAppSettings())
 	require.Equal(t, "dark", app.appSettings.AppearanceMode)
 	require.True(t, app.appSettings.UseShortResourceNames)
+	require.False(t, app.appSettings.DimInactiveNamespaces)
+	require.False(t, app.appSettings.ExclusiveNamespaces)
 	require.Equal(t, []string{"/tmp/config:ctx"}, app.appSettings.SelectedKubeconfigs)
 	require.False(t, app.appSettings.AutoRefreshEnabled)
 	require.False(t, app.appSettings.RefreshBackgroundClustersEnabled)
@@ -183,6 +187,50 @@ func TestAppSetUseShortResourceNamesPersists(t *testing.T) {
 	last := entries[len(entries)-1]
 	require.Equal(t, "INFO", last.Level)
 	require.Contains(t, last.Message, "Use short resource names changed to: true")
+}
+
+func TestAppSetDimInactiveNamespacesPersists(t *testing.T) {
+	setTestConfigEnv(t)
+	app := newTestAppWithDefaults(t)
+
+	settings, err := app.GetAppSettings()
+	require.NoError(t, err)
+	require.True(t, settings.DimInactiveNamespaces)
+
+	require.NoError(t, app.SetDimInactiveNamespaces(false))
+	require.False(t, app.appSettings.DimInactiveNamespaces)
+
+	app.appSettings = nil
+	require.NoError(t, app.loadAppSettings())
+	require.False(t, app.appSettings.DimInactiveNamespaces)
+
+	entries := app.logger.GetEntries()
+	require.NotEmpty(t, entries)
+	last := entries[len(entries)-1]
+	require.Equal(t, "INFO", last.Level)
+	require.Contains(t, last.Message, "Dim inactive namespaces changed to: false")
+}
+
+func TestAppSetExclusiveNamespacesPersists(t *testing.T) {
+	setTestConfigEnv(t)
+	app := newTestAppWithDefaults(t)
+
+	settings, err := app.GetAppSettings()
+	require.NoError(t, err)
+	require.True(t, settings.ExclusiveNamespaces)
+
+	require.NoError(t, app.SetExclusiveNamespaces(false))
+	require.False(t, app.appSettings.ExclusiveNamespaces)
+
+	app.appSettings = nil
+	require.NoError(t, app.loadAppSettings())
+	require.False(t, app.appSettings.ExclusiveNamespaces)
+
+	entries := app.logger.GetEntries()
+	require.NotEmpty(t, entries)
+	last := entries[len(entries)-1]
+	require.Equal(t, "INFO", last.Level)
+	require.Contains(t, last.Message, "Exclusive namespaces changed to: false")
 }
 
 func TestAppSetAutoRefreshEnabledPersists(t *testing.T) {

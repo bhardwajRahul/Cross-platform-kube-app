@@ -12,8 +12,6 @@ import { useKubeconfig } from '@modules/kubernetes/config/KubeconfigContext';
 import { useFavorites } from '@core/contexts/FavoritesContext';
 import { navigateToFavorite } from '@ui/favorites/navigateToFavorite';
 import {
-  FavoriteGenericIcon,
-  FavoritePinIcon,
   SettingsIcon,
   CollapseSidebarIcon,
   ExpandSidebarIcon,
@@ -24,8 +22,17 @@ import {
   DiagnosticsIcon,
   DiffIcon,
   LogsIcon,
+  CategoryIcon,
+  NamespaceIcon,
+} from '@shared/components/icons/SharedIcons';
+import { FavoriteGenericIcon, FavoritePinIcon } from '@shared/components/icons/FavoriteIcons';
+import { ZoomInIcon, ZoomOutIcon } from '@shared/components/icons/ObjectMapIcons';
+import {
   AppearanceModeIcon,
-} from '@shared/components/icons/MenuIcons';
+  DarkModeIcon,
+  KubeconfigsIcon,
+  LightModeIcon,
+} from '@shared/components/icons/SettingsIcons';
 import { useAppearanceMode } from '@core/contexts/AppearanceModeContext';
 import { useZoom } from '@core/contexts/ZoomContext';
 import { requestContextRefresh } from '@/core/data-access';
@@ -36,7 +43,14 @@ import type { ClusterViewType, NamespaceViewType } from '@/types/navigation/view
 import { clearAllGridTableState } from '@shared/components/tables/persistence/gridTablePersistenceReset';
 import { eventBus } from '@/core/events';
 import { isMacPlatform } from '@/utils/platform';
-import { getUseShortResourceNames, setUseShortResourceNames } from '@/core/settings/appPreferences';
+import {
+  setDimInactiveNamespaces,
+  setExclusiveNamespaces,
+  setUseShortResourceNames,
+} from '@/core/settings/appPreferences';
+import { useDimInactiveNamespaces } from '@/hooks/useDimInactiveNamespaces';
+import { useExclusiveNamespaces } from '@/hooks/useExclusiveNamespaces';
+import { useShortNames } from '@/hooks/useShortNames';
 
 export interface Command {
   id: string;
@@ -66,7 +80,10 @@ export function useCommandPaletteCommands() {
   const { favorites, setPendingFavorite } = useFavorites();
   const { mode } = useAppearanceMode();
   const { zoomIn, zoomOut, resetZoom, zoomLevel } = useZoom();
-  const { toggle: toggleAutoRefresh } = useAutoRefresh();
+  const { enabled: autoRefreshEnabled, toggle: toggleAutoRefresh } = useAutoRefresh();
+  const useShortResourceNames = useShortNames();
+  const dimInactiveNamespaces = useDimInactiveNamespaces();
+  const exclusiveNamespaces = useExclusiveNamespaces();
 
   const openClusterTab = useCallback(
     (tab: ClusterViewType) => {
@@ -154,7 +171,7 @@ export function useCommandPaletteCommands() {
       },
       {
         id: 'open-object-diff',
-        label: 'Diff Objects',
+        label: 'Diff objects',
         icon: <DiffIcon width={16} height={16} />,
         description: 'Compare Kubernetes objects in a side-by-side YAML diff',
         category: 'Application',
@@ -166,7 +183,7 @@ export function useCommandPaletteCommands() {
       },
       {
         id: 'toggle-application-logs',
-        label: 'Application Logs Panel',
+        label: 'Application Logs panel',
         icon: <LogsIcon width={16} height={16} />,
         description: 'Toggle application logs',
         category: 'Application',
@@ -178,7 +195,7 @@ export function useCommandPaletteCommands() {
       },
       {
         id: 'toggle-diagnostics',
-        label: 'Diagnostics Panel',
+        label: 'Diagnostics panel',
         icon: <DiagnosticsIcon width={16} height={16} />,
         description: 'Show diagnostics (refresh, permissions)',
         category: 'Application',
@@ -192,7 +209,8 @@ export function useCommandPaletteCommands() {
       // Zoom Commands
       {
         id: 'zoom-in',
-        label: 'Zoom In',
+        label: 'Zoom in',
+        icon: <ZoomInIcon width={16} height={16} />,
         description: `Increase zoom level (currently ${zoomLevel}%)`,
         category: 'View',
         action: zoomIn,
@@ -201,7 +219,8 @@ export function useCommandPaletteCommands() {
       },
       {
         id: 'zoom-out',
-        label: 'Zoom Out',
+        label: 'Zoom out',
+        icon: <ZoomOutIcon width={16} height={16} />,
         description: `Decrease zoom level (currently ${zoomLevel}%)`,
         category: 'View',
         action: zoomOut,
@@ -210,7 +229,7 @@ export function useCommandPaletteCommands() {
       },
       {
         id: 'zoom-reset',
-        label: 'Reset Zoom',
+        label: 'Reset zoom',
         description: `Reset zoom to 100% (currently ${zoomLevel}%)`,
         category: 'View',
         action: resetZoom,
@@ -220,47 +239,24 @@ export function useCommandPaletteCommands() {
 
       // Settings Commands
       {
-        id: 'reset-all-gridtable-state',
-        label: 'Reset All Views',
-        icon: <ResetFiltersIcon width={16} height={16} />,
-        description: 'Clear all persisted GridTable state (columns, sort, filters)',
-        category: 'Settings',
-        action: () => {
-          void clearAllGridTableState();
-        },
-        keywords: ['reset', 'grid', 'views', 'table', 'columns', 'sort'],
-      },
-      {
-        id: 'toggle-auto-refresh',
-        label: 'Toggle Auto-Refresh',
-        icon: <RefreshIcon width={16} height={16} />,
-        description: 'Enable or disable automatic refresh',
-        category: 'Settings',
-        action: toggleAutoRefresh,
-        keywords: ['auto', 'refresh', 'toggle', 'pause', 'resume', 'automatic'],
-      },
-      {
-        id: 'toggle-short-names',
-        label: 'Toggle Short Names',
-        description: 'Toggle between short and full resource type names',
+        id: 'mode-system',
+        label: 'Follow the system for light/dark mode',
+        icon: <AppearanceModeIcon width={16} height={16} />,
+        description: `Use system appearance mode${mode === 'system' ? ' (current)' : ''}`,
         category: 'Settings',
         action: async () => {
-          // Get current state
-          const currentState = getUseShortResourceNames();
-          const newState = !currentState;
-
           try {
-            await setUseShortResourceNames(newState);
+            await changeAppearanceMode('system');
           } catch (error) {
-            console.error('Failed to toggle short names:', error);
+            console.error('Failed to set system mode:', error);
           }
         },
-        keywords: ['short', 'names', 'abbreviations', 'types', 'resources', 'toggle'],
+        keywords: ['mode', 'system', 'auto', 'automatic', 'appearance', 'os'],
       },
       {
         id: 'mode-light',
-        label: 'Mode - Light',
-        icon: <AppearanceModeIcon width={16} height={16} />,
+        label: 'Light mode',
+        icon: <LightModeIcon width={16} height={16} />,
         description: `Switch to light mode${mode === 'light' ? ' (current)' : ''}`,
         category: 'Settings',
         action: async () => {
@@ -274,8 +270,8 @@ export function useCommandPaletteCommands() {
       },
       {
         id: 'mode-dark',
-        label: 'Mode - Dark',
-        icon: <AppearanceModeIcon width={16} height={16} />,
+        label: 'Dark mode',
+        icon: <DarkModeIcon width={16} height={16} />,
         description: `Switch to dark mode${mode === 'dark' ? ' (current)' : ''}`,
         category: 'Settings',
         action: async () => {
@@ -288,28 +284,64 @@ export function useCommandPaletteCommands() {
         keywords: ['mode', 'dark', 'night', 'black', 'appearance'],
       },
       {
-        id: 'mode-system',
-        label: 'Mode - System',
-        icon: <AppearanceModeIcon width={16} height={16} />,
-        description: `Use system appearance mode${mode === 'system' ? ' (current)' : ''}`,
+        id: 'toggle-exclusive-namespaces',
+        label: exclusiveNamespaces ? 'Disable exclusive namespaces' : 'Enable exclusive namespaces',
+        icon: viewState.isSidebarVisible ? (
+          <CollapseSidebarIcon width={16} height={16} />
+        ) : (
+          <ExpandSidebarIcon width={16} height={16} />
+        ),
+        description: 'When enabled, only one namespace at a time can be expanded in the Sidebar.',
         category: 'Settings',
         action: async () => {
+          const newState = !exclusiveNamespaces;
+
           try {
-            await changeAppearanceMode('system');
+            await setExclusiveNamespaces(newState);
           } catch (error) {
-            console.error('Failed to set system mode:', error);
+            console.error('Failed to toggle exclusive namespaces:', error);
           }
         },
-        keywords: ['mode', 'system', 'auto', 'automatic', 'appearance', 'os'],
+        keywords: ['exclusive', 'namespaces', 'sidebar', 'expand', 'collapse', 'toggle'],
       },
+      {
+        id: 'toggle-dim-inactive-namespaces',
+        label: dimInactiveNamespaces
+          ? 'Disable inactive namespace dimming'
+          : 'Enable inactive namespace dimming',
+        icon: viewState.isSidebarVisible ? (
+          <CollapseSidebarIcon width={16} height={16} />
+        ) : (
+          <ExpandSidebarIcon width={16} height={16} />
+        ),
+        description: 'Dim namespaces in the Sidebar that have no Workloads.',
+        category: 'Settings',
+        action: async () => {
+          const newState = !dimInactiveNamespaces;
 
-      // Navigation Commands
+          try {
+            await setDimInactiveNamespaces(newState);
+          } catch (error) {
+            console.error('Failed to toggle dim inactive namespaces:', error);
+          }
+        },
+        keywords: ['dim', 'inactive', 'namespaces', 'sidebar', 'workloads', 'toggle'],
+      },
+      {
+        id: 'toggle-auto-refresh',
+        label: autoRefreshEnabled ? 'Disable auto-refresh' : 'Enable auto-refresh',
+        icon: <RefreshIcon width={16} height={16} />,
+        description: 'Enable or disable automatic refresh',
+        category: 'Settings',
+        action: toggleAutoRefresh,
+        keywords: ['auto', 'refresh', 'toggle', 'pause', 'resume', 'automatic'],
+      },
       {
         id: 'refresh-view',
-        label: 'Refresh Current View',
+        label: 'Refresh current view',
         icon: <RefreshIcon width={16} height={16} />,
         description: 'Manually refresh the current view',
-        category: 'Navigation',
+        category: 'Settings',
         action: () => {
           void requestContextRefresh({ reason: 'user' });
         },
@@ -317,8 +349,38 @@ export function useCommandPaletteCommands() {
         shortcut: ['⌘', 'R'],
       },
       {
+        id: 'reset-all-gridtable-state',
+        label: 'Reset all views',
+        icon: <ResetFiltersIcon width={16} height={16} />,
+        description: 'Clear all persisted GridTable state (columns, sort, filters)',
+        category: 'Settings',
+        action: () => {
+          void clearAllGridTableState();
+        },
+        keywords: ['reset', 'grid', 'views', 'table', 'columns', 'sort'],
+      },
+      {
+        id: 'toggle-short-names',
+        label: useShortResourceNames ? 'Disable short names' : 'Enable short names',
+        icon: <SettingsIcon width={16} height={16} />,
+        description: 'Toggle between short and full resource type names',
+        category: 'Settings',
+        action: async () => {
+          const newState = !useShortResourceNames;
+
+          try {
+            await setUseShortResourceNames(newState);
+          } catch (error) {
+            console.error('Failed to toggle short names:', error);
+          }
+        },
+        keywords: ['short', 'names', 'abbreviations', 'types', 'resources', 'toggle'],
+      },
+
+      // Navigation Commands
+      {
         id: 'close-cluster-tab',
-        label: 'Close Current Cluster Tab',
+        label: 'Close active cluster tab',
         icon: <CloseIcon width={16} height={16} />,
         description: 'Close the active cluster tab',
         category: 'Navigation',
@@ -328,7 +390,8 @@ export function useCommandPaletteCommands() {
       },
       {
         id: 'select-kubeconfig',
-        label: 'Select Kubeconfig',
+        label: 'Select kubeconfig...',
+        icon: <KubeconfigsIcon width={16} height={16} />,
         description: 'Switch to a different kubeconfig',
         category: 'Navigation',
         action: () => {
@@ -338,7 +401,8 @@ export function useCommandPaletteCommands() {
       },
       {
         id: 'select-namespace',
-        label: 'Select Namespace',
+        label: 'Select namespace... ',
+        icon: <NamespaceIcon width={16} height={16} />,
         description: 'Change to a different namespace',
         category: 'Navigation',
         action: () => {
@@ -349,6 +413,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'cluster-browse',
         label: 'Cluster - Browse',
+        icon: <CategoryIcon width={16} height={16} />,
         description: 'Browse all catalogued Kubernetes objects',
         category: 'Navigation',
         action: () => openClusterTab('browse'),
@@ -357,6 +422,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'cluster-nodes',
         label: 'Cluster - Nodes',
+        icon: <CategoryIcon width={16} height={16} />,
         description: 'View nodes',
         category: 'Navigation',
         action: () => openClusterTab('nodes'),
@@ -365,6 +431,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'cluster-config',
         label: 'Cluster - Config',
+        icon: <CategoryIcon width={16} height={16} />,
         description: 'View cluster configuration resources',
         category: 'Navigation',
         action: () => openClusterTab('config'),
@@ -373,6 +440,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'cluster-storage',
         label: 'Cluster - Storage',
+        icon: <CategoryIcon width={16} height={16} />,
         description: 'View persistent volumes and storage classes',
         category: 'Navigation',
         action: () => openClusterTab('storage'),
@@ -381,6 +449,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'cluster-rbac',
         label: 'Cluster - RBAC',
+        icon: <CategoryIcon width={16} height={16} />,
         description: 'View cluster RBAC resources',
         category: 'Navigation',
         action: () => openClusterTab('rbac'),
@@ -389,6 +458,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'cluster-crds',
         label: 'Cluster - CRDs',
+        icon: <CategoryIcon width={16} height={16} />,
         description: 'View custom resource definitions',
         category: 'Navigation',
         action: () => openClusterTab('crds'),
@@ -397,6 +467,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'cluster-custom',
         label: 'Cluster - Custom Resources',
+        icon: <CategoryIcon width={16} height={16} />,
         description: 'View cluster-scoped custom resources',
         category: 'Navigation',
         action: () => openClusterTab('custom'),
@@ -405,6 +476,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'cluster-events',
         label: 'Cluster - Events',
+        icon: <CategoryIcon width={16} height={16} />,
         description: 'View cluster events',
         category: 'Navigation',
         action: () => openClusterTab('events'),
@@ -419,6 +491,10 @@ export function useCommandPaletteCommands() {
       closeTabShortcut,
       toggleAutoRefresh,
       diffObjectsShortcut,
+      autoRefreshEnabled,
+      useShortResourceNames,
+      dimInactiveNamespaces,
+      exclusiveNamespaces,
       zoomIn,
       zoomOut,
       resetZoom,
@@ -443,6 +519,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'namespace-workloads',
         label: 'Namespace - Workloads',
+        icon: <NamespaceIcon width={16} height={16} />,
         description: 'View deployments, statefulsets, daemonsets',
         category: 'Navigation',
         action: () => openNamespaceTab('workloads'),
@@ -459,6 +536,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'namespace-pods',
         label: 'Namespace - Pods',
+        icon: <NamespaceIcon width={16} height={16} />,
         description: 'View pods and their current status',
         category: 'Navigation',
         action: () => openNamespaceTab('pods'),
@@ -467,6 +545,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'namespace-config',
         label: 'Namespace - Config',
+        icon: <NamespaceIcon width={16} height={16} />,
         description: 'View configmaps and secrets',
         category: 'Navigation',
         action: () => openNamespaceTab('config'),
@@ -475,6 +554,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'namespace-storage',
         label: 'Namespace - Storage',
+        icon: <NamespaceIcon width={16} height={16} />,
         description: 'View persistent volume claims',
         category: 'Navigation',
         action: () => openNamespaceTab('storage'),
@@ -483,6 +563,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'namespace-network',
         label: 'Namespace - Network',
+        icon: <NamespaceIcon width={16} height={16} />,
         description: 'View services and ingresses',
         category: 'Navigation',
         action: () => openNamespaceTab('network'),
@@ -491,6 +572,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'namespace-rbac',
         label: 'Namespace - RBAC',
+        icon: <NamespaceIcon width={16} height={16} />,
         description: 'View roles and bindings',
         category: 'Navigation',
         action: () => openNamespaceTab('rbac'),
@@ -499,6 +581,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'namespace-autoscaling',
         label: 'Namespace - Autoscaling',
+        icon: <NamespaceIcon width={16} height={16} />,
         description: 'View horizontal pod autoscalers',
         category: 'Navigation',
         action: () => openNamespaceTab('autoscaling'),
@@ -507,6 +590,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'namespace-quotas',
         label: 'Namespace - Quotas',
+        icon: <NamespaceIcon width={16} height={16} />,
         description: 'View resource quotas and limits',
         category: 'Navigation',
         action: () => openNamespaceTab('quotas'),
@@ -515,6 +599,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'namespace-custom',
         label: 'Namespace - Custom',
+        icon: <NamespaceIcon width={16} height={16} />,
         description: 'View custom resources',
         category: 'Navigation',
         action: () => openNamespaceTab('custom'),
@@ -523,6 +608,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'namespace-helm',
         label: 'Namespace - Helm',
+        icon: <NamespaceIcon width={16} height={16} />,
         description: 'View Helm releases',
         category: 'Navigation',
         action: () => openNamespaceTab('helm'),
@@ -531,6 +617,7 @@ export function useCommandPaletteCommands() {
       {
         id: 'namespace-events',
         label: 'Namespace - Events',
+        icon: <NamespaceIcon width={16} height={16} />,
         description: 'View namespace events',
         category: 'Navigation',
         action: () => openNamespaceTab('events'),
@@ -548,6 +635,7 @@ export function useCommandPaletteCommands() {
     return namespace.namespaces.map((ns) => ({
       id: `namespace-${ns.scope}`,
       label: ns.name,
+      icon: <NamespaceIcon width={16} height={16} />,
       description: 'Switch to this namespace',
       category: 'Namespaces',
       action: () => selectNamespace(ns.scope),

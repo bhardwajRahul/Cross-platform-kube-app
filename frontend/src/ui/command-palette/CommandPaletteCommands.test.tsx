@@ -11,6 +11,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { useCommandPaletteCommands, type Command } from './CommandPaletteCommands';
 import type { types } from '@wailsjs/go/models';
 import { DockablePanelProvider } from '@ui/dockable/DockablePanelProvider';
+import {
+  resetAppPreferencesCacheForTesting,
+  setAppPreferencesForTesting,
+} from '@/core/settings/appPreferences';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
@@ -38,7 +42,13 @@ const { mocks } = vi.hoisted(() => ({
       setSelectedNamespace: vi.fn(),
     },
     autoRefresh: {
+      enabled: true,
       toggle: vi.fn(),
+    },
+    appSettings: {
+      SetUseShortResourceNames: vi.fn(),
+      SetDimInactiveNamespaces: vi.fn(),
+      SetExclusiveNamespaces: vi.fn(),
     },
     refreshOrchestrator: {
       triggerManualRefreshForContext: vi.fn(),
@@ -86,7 +96,11 @@ vi.mock('@/core/refresh', () => ({
 }));
 
 vi.mock('@wailsjs/go/backend/App', () => ({
-  SetUseShortResourceNames: vi.fn(),
+  SetUseShortResourceNames: (...args: unknown[]) =>
+    mocks.appSettings.SetUseShortResourceNames(...args),
+  SetDimInactiveNamespaces: (...args: unknown[]) =>
+    mocks.appSettings.SetDimInactiveNamespaces(...args),
+  SetExclusiveNamespaces: (...args: unknown[]) => mocks.appSettings.SetExclusiveNamespaces(...args),
 }));
 
 vi.mock('@/utils/appearanceMode', () => ({
@@ -154,6 +168,15 @@ describe('CommandPaletteCommands', () => {
     mocks.kubeconfig.selectedKubeconfig = '';
     mocks.kubeconfig.setActiveKubeconfig.mockReset();
     mocks.kubeconfig.setSelectedKubeconfigs.mockReset();
+    mocks.autoRefresh.enabled = true;
+    mocks.autoRefresh.toggle.mockReset();
+    mocks.appSettings.SetUseShortResourceNames.mockReset();
+    mocks.appSettings.SetDimInactiveNamespaces.mockReset();
+    mocks.appSettings.SetExclusiveNamespaces.mockReset();
+    mocks.appSettings.SetUseShortResourceNames.mockResolvedValue(undefined);
+    mocks.appSettings.SetDimInactiveNamespaces.mockResolvedValue(undefined);
+    mocks.appSettings.SetExclusiveNamespaces.mockResolvedValue(undefined);
+    resetAppPreferencesCacheForTesting();
   });
 
   afterEach(() => {
@@ -246,9 +269,131 @@ describe('CommandPaletteCommands', () => {
     const { getCommands, unmount } = renderHook();
     const commands = getCommands();
 
-    expect(commands.find((entry) => entry.id === 'mode-light')?.label).toBe('Mode - Light');
-    expect(commands.find((entry) => entry.id === 'mode-dark')?.label).toBe('Mode - Dark');
-    expect(commands.find((entry) => entry.id === 'mode-system')?.label).toBe('Mode - System');
+    expect(commands.find((entry) => entry.id === 'mode-light')?.label).toBe('Light mode');
+    expect(commands.find((entry) => entry.id === 'mode-dark')?.label).toBe('Dark mode');
+    expect(commands.find((entry) => entry.id === 'mode-system')?.label).toBe(
+      'Follow the system for light/dark mode'
+    );
+
+    unmount();
+  });
+
+  it('includes Sidebar setting toggles and persists their inverse states', async () => {
+    setAppPreferencesForTesting({
+      dimInactiveNamespaces: true,
+      exclusiveNamespaces: true,
+    });
+
+    const { getCommands, unmount } = renderHook();
+    const commands = getCommands();
+    const dimCommand = commands.find((entry) => entry.id === 'toggle-dim-inactive-namespaces');
+    const exclusiveCommand = commands.find((entry) => entry.id === 'toggle-exclusive-namespaces');
+
+    expect(dimCommand?.label).toBe('Disable inactive namespace dimming');
+    expect(dimCommand?.description).toBe('Dim namespaces in the Sidebar that have no Workloads.');
+    expect(exclusiveCommand?.label).toBe('Disable exclusive namespaces');
+    expect(exclusiveCommand?.description).toBe(
+      'When enabled, only one namespace at a time can be expanded in the Sidebar.'
+    );
+
+    await act(async () => {
+      dimCommand?.action();
+      exclusiveCommand?.action();
+      await Promise.resolve();
+    });
+
+    expect(mocks.appSettings.SetDimInactiveNamespaces).toHaveBeenCalledWith(false);
+    expect(mocks.appSettings.SetExclusiveNamespaces).toHaveBeenCalledWith(false);
+
+    unmount();
+  });
+
+  it('orders Settings commands with appearance modes first', () => {
+    const { getCommands, unmount } = renderHook();
+    const settingsCommandIds = getCommands()
+      .filter((entry) => entry.category === 'Settings')
+      .map((entry) => entry.id);
+
+    expect(settingsCommandIds).toEqual([
+      'mode-system',
+      'mode-light',
+      'mode-dark',
+      'toggle-exclusive-namespaces',
+      'toggle-dim-inactive-namespaces',
+      'toggle-auto-refresh',
+      'refresh-view',
+      'reset-all-gridtable-state',
+      'toggle-short-names',
+    ]);
+
+    unmount();
+  });
+
+  it('places refresh current view in Settings', () => {
+    const { getCommands, unmount } = renderHook();
+    const command = getCommands().find((entry) => entry.id === 'refresh-view');
+
+    expect(command?.label).toBe('Refresh current view');
+    expect(command?.category).toBe('Settings');
+
+    unmount();
+  });
+
+  it('labels auto-refresh and short names using their disable actions when enabled', async () => {
+    setAppPreferencesForTesting({ useShortResourceNames: true });
+
+    const { getCommands, unmount } = renderHook();
+    const commands = getCommands();
+    const autoRefreshCommand = commands.find((entry) => entry.id === 'toggle-auto-refresh');
+    const shortNamesCommand = commands.find((entry) => entry.id === 'toggle-short-names');
+
+    expect(autoRefreshCommand?.label).toBe('Disable auto-refresh');
+    expect(shortNamesCommand?.label).toBe('Disable short names');
+
+    await act(async () => {
+      autoRefreshCommand?.action();
+      shortNamesCommand?.action();
+      await Promise.resolve();
+    });
+
+    expect(mocks.autoRefresh.toggle).toHaveBeenCalledTimes(1);
+    expect(mocks.appSettings.SetUseShortResourceNames).toHaveBeenCalledWith(false);
+
+    unmount();
+  });
+
+  it('labels auto-refresh and short names using their enable actions when disabled', () => {
+    mocks.autoRefresh.enabled = false;
+    setAppPreferencesForTesting({ useShortResourceNames: false });
+
+    const { getCommands, unmount } = renderHook();
+    const commands = getCommands();
+
+    expect(commands.find((entry) => entry.id === 'toggle-auto-refresh')?.label).toBe(
+      'Enable auto-refresh'
+    );
+    expect(commands.find((entry) => entry.id === 'toggle-short-names')?.label).toBe(
+      'Enable short names'
+    );
+
+    unmount();
+  });
+
+  it('labels disabled Sidebar settings as enable actions', () => {
+    setAppPreferencesForTesting({
+      dimInactiveNamespaces: false,
+      exclusiveNamespaces: false,
+    });
+
+    const { getCommands, unmount } = renderHook();
+    const commands = getCommands();
+
+    expect(commands.find((entry) => entry.id === 'toggle-dim-inactive-namespaces')?.label).toBe(
+      'Enable inactive namespace dimming'
+    );
+    expect(commands.find((entry) => entry.id === 'toggle-exclusive-namespaces')?.label).toBe(
+      'Enable exclusive namespaces'
+    );
 
     unmount();
   });

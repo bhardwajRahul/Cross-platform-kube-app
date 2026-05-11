@@ -44,6 +44,7 @@ import { usePanelSurfaceCycling } from '@ui/dockable/usePanelSurfaceCycling';
 // Auth Failure Overlay
 import { AuthFailureOverlay } from '@ui/overlays/AuthFailureOverlay';
 import { useAppDebugShortcuts } from '@ui/layout/useAppDebugShortcuts';
+import { IconDebugOverlay } from '@ui/layout/IconDebugOverlay';
 import {
   useContentRegionShiftTabHandoff,
   useTopLevelAppRegionTracking,
@@ -88,6 +89,7 @@ export const AppLayout: React.FC = () => {
   const [isErrorOverlayVisible, setIsErrorOverlayVisible] = useState(false);
   const [isPanelDebugOverlayVisible, setIsPanelDebugOverlayVisible] = useState(false);
   const [isMapDebugOverlayVisible, setIsMapDebugOverlayVisible] = useState(false);
+  const [isIconDebugOverlayVisible, setIsIconDebugOverlayVisible] = useState(false);
   const hasActiveClusters = kubeconfig.selectedClusterIds.length > 0;
   // Empty-space drop target for dockable tabs: dropping a tab in empty
   // content area spawns a new floating group at the cursor. The ref is
@@ -105,6 +107,7 @@ export const AppLayout: React.FC = () => {
     onToggleFocusDebug: () => setIsFocusOverlayVisible((prev) => !prev),
     onToggleErrorDebug: () => setIsErrorOverlayVisible((prev) => !prev),
     onToggleMapDebug: () => setIsMapDebugOverlayVisible((prev) => !prev),
+    onToggleIconDebug: () => setIsIconDebugOverlayVisible((prev) => !prev),
   });
   useContentRegionShiftTabHandoff(contentBodyRef, hasActiveClusters);
   useTopLevelAppRegionTracking(hasActiveClusters);
@@ -357,6 +360,9 @@ export const AppLayout: React.FC = () => {
       {isMapDebugOverlayVisible && (
         <MapDebugOverlay onClose={() => setIsMapDebugOverlayVisible(false)} />
       )}
+      {isIconDebugOverlayVisible && (
+        <IconDebugOverlay onClose={() => setIsIconDebugOverlayVisible(false)} />
+      )}
     </div>
   );
 };
@@ -576,7 +582,7 @@ const KeyboardFocusOverlay: React.FC<OverlayCloseProps> = ({ onClose }) => {
           aria-label="Copy keyboard focus details"
           title="Copy keyboard focus details"
         >
-          <CopyIcon width={14} height={14} />
+          <CopyIcon width={18} height={18} />
         </button>
       }
       onClose={onClose}

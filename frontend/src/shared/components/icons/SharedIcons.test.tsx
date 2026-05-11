@@ -1,8 +1,7 @@
 /**
- * frontend/src/shared/components/icons/MenuIcons.test.tsx
+ * frontend/src/shared/components/icons/SharedIcons.test.tsx
  *
- * Test suite for MenuIcons.
- * Covers key behaviors and edge cases for MenuIcons.
+ * Test suite for shared icon components.
  */
 
 import ReactDOMServer from 'react-dom/server';
@@ -26,15 +25,17 @@ import {
   SettingsIcon,
   CollapseSidebarIcon,
   ExpandSidebarIcon,
+  ClusterOverviewIcon,
+  ClusterResourcesIcon,
+  CategoryIcon,
+} from './SharedIcons';
+import {
   DockRightIcon,
   DockBottomIcon,
   FloatPanelIcon,
   MaximizePanelIcon,
   RestorePanelIcon,
-  ClusterOverviewIcon,
-  ClusterResourcesIcon,
-  CategoryIcon,
-} from './MenuIcons';
+} from './DockableIcons';
 
 const ALL_ICONS = [
   CordonIcon,
@@ -64,7 +65,7 @@ const ALL_ICONS = [
   CategoryIcon,
 ];
 
-describe('MenuIcons', () => {
+describe('SharedIcons', () => {
   it('renders each icon with default attributes', () => {
     ALL_ICONS.forEach((Icon) => {
       const markup = ReactDOMServer.renderToStaticMarkup(<Icon />);
@@ -72,8 +73,8 @@ describe('MenuIcons', () => {
       container.innerHTML = markup;
       const svg = container.querySelector('svg');
       expect(svg).toBeTruthy();
-      expect(svg?.getAttribute('width')).toBe('16');
-      expect(svg?.getAttribute('height')).toBe('16');
+      expect(svg?.getAttribute('width')).toBe('24');
+      expect(svg?.getAttribute('height')).toBe('24');
       expect(svg?.getAttribute('fill')).toBe('currentColor');
     });
   });

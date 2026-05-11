@@ -12,6 +12,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import Sidebar from './Sidebar';
 import { KeyboardProvider } from '@ui/shortcuts';
 import { ALL_NAMESPACES_SCOPE } from '@modules/namespace/constants';
+import {
+  resetAppPreferencesCacheForTesting,
+  setAppPreferencesForTesting,
+} from '@/core/settings/appPreferences';
 
 const runtimeMocks = vi.hoisted(() => ({
   eventsOn: vi.fn(),
@@ -178,6 +182,7 @@ describe('Sidebar', () => {
     viewStateMock = createViewState();
     refreshMocks.catalogScopedStates = {};
     autoRefreshLoadingState.suppressPassiveLoading = false;
+    resetAppPreferencesCacheForTesting();
   });
 
   afterEach(() => {
@@ -557,6 +562,127 @@ describe('Sidebar', () => {
     expect(namespaceViews()).toBeNull();
   });
 
+  it('collapses the previous namespace by default when another namespace expands', () => {
+    namespaceState.namespaces = [
+      {
+        name: 'default',
+        scope: 'default',
+        resourceVersion: '1',
+        hasWorkloads: true,
+        workloadsUnknown: false,
+        details: '',
+      },
+      {
+        name: 'kube-system',
+        scope: 'kube-system',
+        resourceVersion: '2',
+        hasWorkloads: true,
+        workloadsUnknown: false,
+        details: '',
+      },
+    ];
+    renderSidebar();
+
+    const defaultToggle = container!.querySelector<HTMLDivElement>(
+      `[data-sidebar-target-kind="namespace-toggle"][data-sidebar-target-namespace="${namespaceKey(
+        'default'
+      )}"]`
+    );
+    const kubeSystemToggle = container!.querySelector<HTMLDivElement>(
+      `[data-sidebar-target-kind="namespace-toggle"][data-sidebar-target-namespace="${namespaceKey(
+        'kube-system'
+      )}"]`
+    );
+    expect(defaultToggle).not.toBeNull();
+    expect(kubeSystemToggle).not.toBeNull();
+
+    act(() => {
+      defaultToggle!.click();
+    });
+    expect(
+      container!.querySelector(
+        `[data-sidebar-target-kind="namespace-view"][data-sidebar-target-namespace="${namespaceKey(
+          'default'
+        )}"]`
+      )
+    ).not.toBeNull();
+
+    act(() => {
+      kubeSystemToggle!.click();
+    });
+
+    expect(
+      container!.querySelector(
+        `[data-sidebar-target-kind="namespace-view"][data-sidebar-target-namespace="${namespaceKey(
+          'default'
+        )}"]`
+      )
+    ).toBeNull();
+    expect(
+      container!.querySelector(
+        `[data-sidebar-target-kind="namespace-view"][data-sidebar-target-namespace="${namespaceKey(
+          'kube-system'
+        )}"]`
+      )
+    ).not.toBeNull();
+  });
+
+  it('allows multiple expanded namespaces when exclusive namespaces is disabled', () => {
+    setAppPreferencesForTesting({ exclusiveNamespaces: false });
+    namespaceState.namespaces = [
+      {
+        name: 'default',
+        scope: 'default',
+        resourceVersion: '1',
+        hasWorkloads: true,
+        workloadsUnknown: false,
+        details: '',
+      },
+      {
+        name: 'kube-system',
+        scope: 'kube-system',
+        resourceVersion: '2',
+        hasWorkloads: true,
+        workloadsUnknown: false,
+        details: '',
+      },
+    ];
+    renderSidebar();
+
+    const defaultToggle = container!.querySelector<HTMLDivElement>(
+      `[data-sidebar-target-kind="namespace-toggle"][data-sidebar-target-namespace="${namespaceKey(
+        'default'
+      )}"]`
+    );
+    const kubeSystemToggle = container!.querySelector<HTMLDivElement>(
+      `[data-sidebar-target-kind="namespace-toggle"][data-sidebar-target-namespace="${namespaceKey(
+        'kube-system'
+      )}"]`
+    );
+    expect(defaultToggle).not.toBeNull();
+    expect(kubeSystemToggle).not.toBeNull();
+
+    act(() => {
+      defaultToggle!.click();
+      kubeSystemToggle!.click();
+    });
+
+    expect(
+      container!.querySelector(
+        `[data-sidebar-target-kind="namespace-view"][data-sidebar-target-namespace="${namespaceKey(
+          'default'
+        )}"]`
+      )
+    ).not.toBeNull();
+    expect(
+      container!.querySelector(
+        `[data-sidebar-target-kind="namespace-view"][data-sidebar-target-namespace="${namespaceKey(
+          'kube-system'
+        )}"]`
+      )
+    ).not.toBeNull();
+  });
+
   it('keeps All Namespaces clicks to expand/collapse only', () => {
     namespaceState.namespaces = [
       {
@@ -793,6 +919,28 @@ describe('Sidebar', () => {
       `[data-sidebar-target-namespace="${namespaceKey('unknown')}"] .status-text.warning`
     );
     expect(unknownBadge?.textContent).toBe('Unknown');
+  });
+
+  it('does not dim inactive namespaces when the display setting is disabled', () => {
+    setAppPreferencesForTesting({ dimInactiveNamespaces: false });
+    namespaceState.namespaces = [
+      {
+        name: 'inactive',
+        scope: 'inactive',
+        resourceVersion: '1',
+        hasWorkloads: false,
+        workloadsUnknown: false,
+        details: '',
+      },
+    ];
+
+    renderSidebar();
+
+    const inactiveItem = container!.querySelector(
+      `[data-sidebar-target-namespace="${namespaceKey('inactive')}"]`
+    );
+    expect(inactiveItem).not.toBeNull();
+    expect(inactiveItem!.className).not.toContain('dimmed');
   });
 
   it('renders in collapsed state when the sidebar is hidden', () => {

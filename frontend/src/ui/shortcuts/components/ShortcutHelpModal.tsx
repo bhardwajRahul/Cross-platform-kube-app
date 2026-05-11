@@ -7,8 +7,9 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { useKeyboardContext } from '../context';
-import { CloseIcon } from '@shared/components/icons/MenuIcons';
+import { CategoryIcon, ShortcutArrowIcon } from '@shared/components/icons/SharedIcons';
 import ModalSurface from '@shared/components/modals/ModalSurface';
+import ModalHeader from '@shared/components/modals/ModalHeader';
 import { useModalFocusTrap } from '@shared/components/modals/useModalFocusTrap';
 import './ShortcutHelpModal.css';
 
@@ -75,16 +76,13 @@ export function ShortcutHelpModal({ isOpen, onClose }: ShortcutHelpModalProps) {
       isClosing={isClosing}
       closeOnBackdrop={true}
     >
-      <div className="modal-header shortcut-help-modal-header">
-        <h2 id="shortcut-help-modal-title">Keyboard Shortcuts</h2>
-        <button
-          className="modal-close shortcut-help-modal-close"
-          onClick={onClose}
-          aria-label="Close"
-        >
-          <CloseIcon />
-        </button>
-      </div>
+      <ModalHeader
+        title="Keyboard Shortcuts"
+        titleId="shortcut-help-modal-title"
+        icon={CategoryIcon}
+        onClose={onClose}
+        closeClassName="shortcut-help-modal-close"
+      />
 
       <div className="modal-content shortcut-help-modal-content">
         {shortcuts.length === 0 ? (
@@ -112,60 +110,15 @@ export function ShortcutHelpModal({ isOpen, onClose }: ShortcutHelpModalProps) {
                     keyParts.push(<kbd key="shift">{isMac ? '⇧' : 'Shift'}</kbd>);
                   }
 
-                  // Format the key - use SVG for arrow keys
                   let keyContent: React.ReactNode;
                   if (shortcut.key === 'ArrowLeft') {
-                    keyContent = (
-                      <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-                        <path
-                          d="M9.5 2.5L5 7l4.5 4.5"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          fill="none"
-                        />
-                      </svg>
-                    );
+                    keyContent = <ShortcutArrowIcon direction="left" />;
                   } else if (shortcut.key === 'ArrowRight') {
-                    keyContent = (
-                      <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-                        <path
-                          d="M4.5 2.5L9 7l-4.5 4.5"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          fill="none"
-                        />
-                      </svg>
-                    );
+                    keyContent = <ShortcutArrowIcon direction="right" />;
                   } else if (shortcut.key === 'ArrowUp') {
-                    keyContent = (
-                      <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-                        <path
-                          d="M2.5 9.5L7 5l4.5 4.5"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          fill="none"
-                        />
-                      </svg>
-                    );
+                    keyContent = <ShortcutArrowIcon direction="up" />;
                   } else if (shortcut.key === 'ArrowDown') {
-                    keyContent = (
-                      <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-                        <path
-                          d="M2.5 4.5L7 9l4.5-4.5"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          fill="none"
-                        />
-                      </svg>
-                    );
+                    keyContent = <ShortcutArrowIcon direction="down" />;
                   } else {
                     const formattedKey =
                       shortcut.key.length === 1 ? shortcut.key.toUpperCase() : shortcut.key;

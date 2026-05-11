@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { FavoriteOutlineIcon, FavoriteFilledIcon } from '@shared/components/icons/MenuIcons';
+import { FavoriteOutlineIcon, FavoriteFilledIcon } from '@shared/components/icons/FavoriteIcons';
 import type { IconBarItem } from '@shared/components/IconBar/IconBar';
 import { useFavorites } from '@core/contexts/FavoritesContext';
 import { useKubeconfig } from '@modules/kubernetes/config/KubeconfigContext';
@@ -270,7 +270,11 @@ export function useFavToggle(state: FavToggleState): {
     return {
       type: 'toggle' as const,
       id: 'favorite',
-      icon: isFavorited ? <FavoriteFilledIcon /> : <FavoriteOutlineIcon />,
+      icon: isFavorited ? (
+        <FavoriteFilledIcon width={18} height={18} />
+      ) : (
+        <FavoriteOutlineIcon width={18} height={18} />
+      ),
       active: isFavorited,
       onClick: () => setModalOpen(true),
       title: isFavorited ? 'Edit favorite' : 'Save as favorite',

@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useMemo } from 'react';
-import { MetadataIcon } from '@shared/components/icons/MenuIcons';
+import { MetadataIcon } from '@shared/components/icons/SharedIcons';
 import type { IconBarItem } from '@shared/components/IconBar/IconBar';
 import type { GridTableFilterState } from '@shared/components/tables/GridTable.types';
 
@@ -72,7 +72,7 @@ export function useMetadataSearch<T>(
         ? {
             type: 'toggle' as const,
             id: 'include-metadata',
-            icon: <MetadataIcon width={16} height={16} />,
+            icon: <MetadataIcon width={18} height={18} />,
             active: includeMetadata,
             onClick: () => setIncludeMetadata(!includeMetadata),
             title: 'Include metadata',

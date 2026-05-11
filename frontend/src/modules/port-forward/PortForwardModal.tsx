@@ -9,7 +9,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { StartPortForward } from '@wailsjs/go/backend/App';
 import { readTargetPorts, requestData } from '@/core/data-access';
 import ModalSurface from '@shared/components/modals/ModalSurface';
+import ModalHeader from '@shared/components/modals/ModalHeader';
 import { useModalFocusTrap } from '@shared/components/modals/useModalFocusTrap';
+import { PortForwardIcon } from '@shared/components/icons/SharedIcons';
 import './PortForwardModal.css';
 
 /**
@@ -268,29 +270,14 @@ const PortForwardModal = ({ target, onClose, onStarted }: PortForwardModalProps)
       onClose={onClose}
       containerClassName="port-forward-modal"
     >
-      {/* Header */}
-      <div className="modal-header">
-        <h2 id="port-forward-modal-title">Port Forward</h2>
-        <button
-          className="modal-close"
-          onClick={onClose}
-          disabled={isLoading}
-          aria-label="Close modal"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </div>
+      <ModalHeader
+        title="Port Forward"
+        titleId="port-forward-modal-title"
+        icon={PortForwardIcon}
+        onClose={onClose}
+        closeLabel="Close modal"
+        closeDisabled={isLoading}
+      />
 
       {/* Body */}
       <div className="port-forward-modal-body">

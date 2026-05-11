@@ -9,6 +9,8 @@ import { OpenKubeconfigSearchPathDialog, SetKubeconfigSearchPaths } from '@wails
 import { errorHandler } from '@utils/errorHandler';
 import { readKubeconfigSearchPaths, requestAppState } from '@/core/app-state-access';
 import { useKubeconfig } from '@modules/kubernetes/config/KubeconfigContext';
+import { CloseIcon, PlusIcon } from '@shared/components/icons/SharedIcons';
+import { KubeconfigFolderIcon } from '@shared/components/icons/SettingsIcons';
 
 function KubeconfigsSection() {
   const { loadKubeconfigs } = useKubeconfig();
@@ -99,17 +101,11 @@ function KubeconfigsSection() {
                   const canRemove = kubeconfigPaths.length > 1;
                   return (
                     <div
-                      className="setting-item kubeconfig-path-row"
+                      className="setting-item setting-item-surface kubeconfig-path-row"
                       key={`kubeconfig-path-${index}`}
                     >
                       <span className="kubeconfig-path-icon" aria-hidden="true">
-                        <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
-                          <path
-                            d="M1.75 3.5h4.19c.27 0 .53.1.72.3l1.27 1.27c.19.19.45.3.72.3h5.6c.55 0 1 .45 1 1v6.88c0 .55-.45 1-1 1H1.75c-.55 0-1-.45-1-1V4.5c0-.55.45-1 1-1Z"
-                            stroke="currentColor"
-                            strokeWidth="1.25"
-                          />
-                        </svg>
+                        <KubeconfigFolderIcon width={16} height={16} />
                       </span>
                       <span className="kubeconfig-path-value">{path}</span>
                       {canRemove && (
@@ -121,14 +117,7 @@ function KubeconfigsSection() {
                           aria-label={`Remove kubeconfig path ${index + 1}`}
                           title="Remove path"
                         >
-                          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-                            <path
-                              d="M4 4l8 8M12 4l-8 8"
-                              stroke="currentColor"
-                              strokeWidth="1.5"
-                              strokeLinecap="round"
-                            />
-                          </svg>
+                          <CloseIcon width={14} height={14} />
                         </button>
                       )}
                     </div>
@@ -138,18 +127,11 @@ function KubeconfigsSection() {
             )}
             <button
               type="button"
-              className="button generic kubeconfig-path-add"
+              className="button generic settings-add-button kubeconfig-path-add"
               onClick={handleAddKubeconfigPath}
               disabled={kubeconfigPathsSaving || kubeconfigPathsLoading || kubeconfigPathsSelecting}
             >
-              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M8 3v10M3 8h10"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                />
-              </svg>
+              <PlusIcon width={12} height={12} ariaHidden />
               Add path
             </button>
           </div>
