@@ -1320,10 +1320,8 @@ it('focuses the first row when the wrapper receives focus and moves with Arrow k
 });
 
 it('activates hover overlay on focused row when wrapper receives keyboard focus', async () => {
-  // Regression test: the effect in GridTable.tsx that syncs hover with focused
-  // row uses a compound selector (.gridtable-row[data-row-key="..."]) to find
-  // the row element. If this were a descendant selector, the query would return
-  // null and the hover overlay would never activate.
+  // Regression test: focused-row hover sync must find the row element even
+  // though .gridtable-row and data-row-key live on the same DOM node.
   const { container, cleanup, scrollWrapper } = renderGridTable({
     data: createRows(4),
     virtualization: { enabled: false },
@@ -1782,6 +1780,73 @@ it('does not hide locked columns through visibility menu', async () => {
   expect(items[0].textContent).toBe('No Actions');
   expect(items[0].classList.contains('disabled')).toBe(true);
   expect(onColumnVisibilityChange).not.toHaveBeenCalled();
+
+  cleanup();
+});
+
+it('shows sort and hide actions in the sortable header context menu', async () => {
+  const onSort = vi.fn();
+  const onColumnVisibilityChange = vi.fn();
+  const columns: GridColumnDefinition<SimpleRow>[] = [
+    { key: 'label', header: 'Label', render: (row) => row.label, sortable: true },
+    { key: 'id', header: 'ID', render: (row) => row.id, sortable: true },
+  ];
+
+  const { container, cleanup } = renderGridTable({
+    data: createRows(3),
+    columns,
+    virtualization: { enabled: false },
+    enableColumnVisibilityMenu: true,
+    onSort,
+    onColumnVisibilityChange,
+  });
+  cleanupRoot = cleanup;
+
+  await flushAsync();
+
+  const labelHeader = container.querySelector<HTMLDivElement>(
+    '.grid-cell-header[data-column="label"]'
+  );
+  expect(labelHeader).not.toBeNull();
+
+  await act(async () => {
+    labelHeader!.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 20 })
+    );
+    await Promise.resolve();
+  });
+  await flushAsync();
+
+  const menuItems = Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+  const getMenuLabel = (item: HTMLElement) =>
+    item.querySelector('.context-menu-label')?.textContent?.trim();
+  expect(menuItems.map(getMenuLabel)).toEqual([
+    'Sort Ascending',
+    'Sort Descending',
+    'Clear Sort',
+    'Hide Column',
+  ]);
+
+  await act(async () => {
+    menuItems.find((item) => getMenuLabel(item) === 'Sort Descending')?.click();
+  });
+  expect(onSort).toHaveBeenCalledWith('label', 'desc');
+
+  await act(async () => {
+    labelHeader!.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 20 })
+    );
+    await Promise.resolve();
+  });
+  await flushAsync();
+
+  const reopenedItems = Array.from(
+    document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')
+  );
+  await act(async () => {
+    reopenedItems.find((item) => getMenuLabel(item) === 'Hide Column')?.click();
+  });
+  expect(onColumnVisibilityChange).toHaveBeenCalledWith({ label: false });
 
   cleanup();
 });

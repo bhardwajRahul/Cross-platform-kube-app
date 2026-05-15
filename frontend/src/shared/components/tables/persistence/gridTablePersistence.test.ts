@@ -138,4 +138,42 @@ describe('gridTablePersistence', () => {
       },
     });
   });
+
+  it('preserves non-default toggles and cluster-scoped namespace filters when saving and pruning', () => {
+    const filters = {
+      search: '',
+      kinds: [],
+      namespaces: [''],
+      caseSensitive: false,
+      includeMetadata: true,
+    };
+
+    const state = buildPersistedStateForSave({
+      columns: sampleColumns,
+      rows: sampleRows,
+      keyExtractor: (row) => row.id,
+      filters,
+      filterOptions: { isNamespaceScoped: false },
+    });
+
+    expect(state).toEqual({
+      version: 1,
+      filters,
+    });
+
+    const pruned = prunePersistedState(
+      {
+        version: 1,
+        filters,
+      },
+      {
+        columns: sampleColumns,
+        rows: sampleRows,
+        keyExtractor: (row) => row.id,
+        filterOptions: { isNamespaceScoped: false },
+      }
+    );
+
+    expect(pruned?.filters).toEqual(filters);
+  });
 });
