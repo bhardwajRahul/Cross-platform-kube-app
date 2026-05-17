@@ -4,56 +4,40 @@
  * Resource stream manager for watch-style resource updates.
  */
 
-import {
-  ensureRefreshBaseURL,
-  fetchSnapshot,
-  invalidateRefreshBaseURL,
-  type Snapshot,
-  type SnapshotStats,
-} from '../client';
+import { fetchSnapshot, type Snapshot, type SnapshotStats } from '../client';
 import { setScopedDomainState } from '../store';
-import type {
-  ClusterNodeSnapshotEntry,
-  ClusterNodeSnapshotPayload,
-  ClusterConfigEntry,
-  ClusterConfigSnapshotPayload,
-  ClusterCRDEntry,
-  ClusterCRDSnapshotPayload,
-  ClusterCustomEntry,
-  ClusterCustomSnapshotPayload,
-  ClusterRBACEntry,
-  ClusterRBACSnapshotPayload,
-  ClusterStorageEntry,
-  ClusterStorageSnapshotPayload,
-  NamespaceAutoscalingSnapshotPayload,
-  NamespaceAutoscalingSummary,
-  NamespaceConfigSnapshotPayload,
-  NamespaceConfigSummary,
-  NamespaceCustomSnapshotPayload,
-  NamespaceCustomSummary,
-  NamespaceHelmSnapshotPayload,
-  NamespaceHelmSummary,
-  NamespaceNetworkSnapshotPayload,
-  NamespaceNetworkSummary,
-  NamespaceQuotaSummary,
-  NamespaceQuotasSnapshotPayload,
-  NamespaceRBACSnapshotPayload,
-  NamespaceRBACSummary,
-  NamespaceStorageSnapshotPayload,
-  NamespaceStorageSummary,
-  NamespaceWorkloadSnapshotPayload,
-  NamespaceWorkloadSummary,
-  PodSnapshotEntry,
-  PodSnapshotPayload,
-  PermissionDeniedStatus,
-} from '../types';
-import { buildClusterScopeList, parseClusterScopeList, stripClusterScope } from '../clusterScope';
+import type { PermissionDeniedStatus } from '../types';
+import { stripClusterScope } from '../clusterScope';
 import { errorHandler } from '@utils/errorHandler';
 import { eventBus, type AppEvents } from '@/core/events';
 import { APP_LOG_SOURCES, logAppLogsInfo, logAppLogsWarn } from '@/core/logging/appLogsClient';
 import { resolvePermissionDeniedMessage } from '../permissionErrors';
+import {
+  getResourceStreamDomainDescriptor,
+  isClusterScopedDomain,
+  isSupportedDomain,
+  type ResourceDomain,
+} from './resourceStreamDomains';
+import { applyResourceRowUpdates, mergeSnapshotRows } from './resourceStreamRows';
+import { ResourceStreamConnection } from './resourceStreamConnection';
+import {
+  ResourceStreamSubscriptionStore,
+  resourceStreamSubscriptionKey,
+  type StreamSubscription,
+} from './resourceStreamSubscriptions';
 
-const RESOURCE_STREAM_PATH = '/api/v2/stream/resources';
+export {
+  normalizeResourceScope,
+  sortNodeRows,
+  sortPodRows,
+  sortWorkloadRows,
+} from './resourceStreamDomains';
+export {
+  mergeNodeMetricsRow,
+  mergePodMetricsRow,
+  mergeWorkloadMetricsRow,
+} from './resourceStreamRows';
+
 const UPDATE_COALESCE_MS = 150;
 const RESYNC_COOLDOWN_MS = 1000;
 const RESYNC_MESSAGE = 'Stream resyncing';
@@ -63,8 +47,6 @@ const DRIFT_SAMPLE_SIZE = 5;
 const STREAM_UNSUBSCRIBE_DEBOUNCE_MS = 500;
 // Cap queued updates to avoid unbounded memory growth under bursty streams.
 const MAX_UPDATE_QUEUE = 1000;
-// Add jitter to reconnect backoff to avoid thundering-herd reconnects.
-const RECONNECT_JITTER_FACTOR = 0.2;
 
 const logInfo = (message: string): void => {
   logAppLogsInfo(message, APP_LOG_SOURCES.ResourceStream);
@@ -86,9 +68,6 @@ const MESSAGE_TYPES = {
   deleted: 'DELETED',
 } as const;
 
-// Keep stream domain literals aligned with the event bus payload contract.
-type ResourceStreamDomain = AppEvents['refresh:resource-stream-drift']['domain'];
-type ResourceDomain = ResourceStreamDomain;
 type ResourceStreamHealthStatus = AppEvents['refresh:resource-stream-health']['status'];
 type ResourceStreamHealthPayload = AppEvents['refresh:resource-stream-health'];
 type ResourceStreamConnectionStatus = ResourceStreamHealthPayload['connectionStatus'];
@@ -100,15 +79,6 @@ const STREAM_HEALTH_STATUS_ORDER: Record<ResourceStreamHealthStatus, number> = {
   healthy: 0,
   degraded: 1,
   unhealthy: 2,
-};
-
-type ClientMessage = {
-  type: StreamMessageType;
-  clusterId?: string;
-  domain: ResourceDomain;
-  scope: string;
-  resourceVersion?: string;
-  resumeToken?: string;
 };
 
 type ServerMessage = {
@@ -129,44 +99,6 @@ type ServerMessage = {
 };
 
 type UpdateMessage = ServerMessage & { domain: ResourceDomain; scope: string };
-
-const isSupportedDomain = (value: string | undefined): value is ResourceDomain =>
-  value === 'pods' ||
-  value === 'namespace-workloads' ||
-  value === 'namespace-config' ||
-  value === 'namespace-network' ||
-  value === 'namespace-rbac' ||
-  value === 'namespace-custom' ||
-  value === 'namespace-helm' ||
-  value === 'namespace-autoscaling' ||
-  value === 'namespace-quotas' ||
-  value === 'namespace-storage' ||
-  value === 'cluster-rbac' ||
-  value === 'cluster-storage' ||
-  value === 'cluster-config' ||
-  value === 'cluster-crds' ||
-  value === 'cluster-custom' ||
-  value === 'nodes';
-
-const isMultiClusterDomain = (domain: ResourceDomain): boolean =>
-  domain === 'pods' ||
-  domain === 'namespace-workloads' ||
-  domain === 'nodes' ||
-  domain === 'cluster-rbac' ||
-  domain === 'cluster-storage' ||
-  domain === 'cluster-config' ||
-  domain === 'cluster-crds' ||
-  domain === 'cluster-custom';
-
-const isClusterScopedDomain = (domain: ResourceDomain): boolean =>
-  domain === 'cluster-rbac' ||
-  domain === 'cluster-storage' ||
-  domain === 'cluster-config' ||
-  domain === 'cluster-crds' ||
-  domain === 'cluster-custom' ||
-  domain === 'nodes';
-
-const isMultiClusterScope = (scope: string): boolean => parseClusterScopeList(scope).isMultiCluster;
 
 const hasMessageType = (value: unknown): value is StreamMessageType =>
   typeof value === 'string' && Object.values(MESSAGE_TYPES).includes(value as StreamMessageType);
@@ -243,383 +175,6 @@ const parseResourceVersion = (value?: string | number): bigint | null => {
 // Stream sequence parsing mirrors resourceVersion semantics for resume tokens.
 const parseStreamSequence = (value?: string | number): bigint | null => parseResourceVersion(value);
 
-const normalizeNamespaceScope = (scope: string, label: string): string => {
-  const value = scope.trim();
-  if (!value) {
-    throw new Error(`${label} scope is required`);
-  }
-  if (value.startsWith('namespace:')) {
-    const trimmed = value
-      .replace(/^namespace:/, '')
-      .replace(/^:/, '')
-      .trim();
-    const token = normalizeNamespaceToken(trimmed);
-    if (!token) {
-      throw new Error(`${label} scope is required`);
-    }
-    return `namespace:${token}`;
-  }
-  const token = normalizeNamespaceToken(value);
-  if (!token) {
-    throw new Error(`${label} scope is required`);
-  }
-  return `namespace:${token}`;
-};
-
-const normalizeNamespaceToken = (value: string): string => {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return '';
-  }
-  const lowered = trimmed.toLowerCase();
-  if (lowered === '*' || lowered === 'all') {
-    return 'all';
-  }
-  return trimmed;
-};
-
-const normalizePodScope = (scope: string): string => {
-  const trimmed = scope.trim();
-  if (!trimmed) {
-    throw new Error('pods scope is required');
-  }
-  if (trimmed.startsWith('namespace:')) {
-    return normalizeNamespaceScope(trimmed, 'pods');
-  }
-  if (trimmed.startsWith('node:')) {
-    const value = trimmed
-      .replace(/^node:/, '')
-      .replace(/^:/, '')
-      .trim();
-    if (!value) {
-      throw new Error('pods node scope is required');
-    }
-    return `node:${value}`;
-  }
-  if (trimmed.startsWith('workload:')) {
-    const value = trimmed
-      .replace(/^workload:/, '')
-      .replace(/^:/, '')
-      .trim();
-    const parts = value
-      .split(':')
-      .map((part) => part.trim())
-      .filter(Boolean);
-    if (parts.length !== 3) {
-      throw new Error('pods workload scope requires namespace:kind:name');
-    }
-    return `workload:${parts[0]}:${parts[1]}:${parts[2]}`;
-  }
-  throw new Error(`unsupported pods scope ${scope}`);
-};
-
-export const normalizeResourceScope = (domain: ResourceDomain, scope: string): string => {
-  switch (domain) {
-    case 'pods':
-      return normalizePodScope(scope);
-    case 'namespace-workloads':
-      return normalizeNamespaceScope(scope, 'namespace-workloads');
-    case 'namespace-config':
-      return normalizeNamespaceScope(scope, 'namespace-config');
-    case 'namespace-network':
-      return normalizeNamespaceScope(scope, 'namespace-network');
-    case 'namespace-rbac':
-      return normalizeNamespaceScope(scope, 'namespace-rbac');
-    case 'namespace-custom':
-      return normalizeNamespaceScope(scope, 'namespace-custom');
-    case 'namespace-helm':
-      return normalizeNamespaceScope(scope, 'namespace-helm');
-    case 'namespace-autoscaling':
-      return normalizeNamespaceScope(scope, 'namespace-autoscaling');
-    case 'namespace-quotas':
-      return normalizeNamespaceScope(scope, 'namespace-quotas');
-    case 'namespace-storage':
-      return normalizeNamespaceScope(scope, 'namespace-storage');
-    case 'cluster-rbac':
-    case 'cluster-storage':
-    case 'cluster-config':
-    case 'cluster-crds':
-    case 'cluster-custom':
-      if (!scope || scope.trim() === '' || scope.trim().toLowerCase() === 'cluster') {
-        return '';
-      }
-      throw new Error(`cluster stream does not accept scope ${scope}`);
-    case 'nodes':
-      if (!scope || scope.trim() === '' || scope.trim().toLowerCase() === 'cluster') {
-        return '';
-      }
-      throw new Error(`nodes stream does not accept scope ${scope}`);
-    default:
-      throw new Error(`unsupported resource stream domain ${domain}`);
-  }
-};
-
-const normalizeSortKey = (value: string | undefined): string => (value ?? '').toLowerCase();
-
-const shallowEqualRecord = (left: Record<string, unknown>, right: Record<string, unknown>) => {
-  if (left === right) {
-    return true;
-  }
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-  if (leftKeys.length !== rightKeys.length) {
-    return false;
-  }
-  for (const key of leftKeys) {
-    if (left[key] !== right[key]) {
-      return false;
-    }
-  }
-  return true;
-};
-
-const hasSameArrayItems = <T>(previous: T[], next: T[]): boolean =>
-  previous.length === next.length && previous.every((item, index) => Object.is(item, next[index]));
-
-export const sortPodRows = (rows: PodSnapshotEntry[]): void => {
-  rows.sort((a, b) => {
-    const ns = normalizeSortKey(a.namespace).localeCompare(normalizeSortKey(b.namespace));
-    if (ns !== 0) {
-      return ns;
-    }
-    return normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name));
-  });
-};
-
-export const sortWorkloadRows = (rows: NamespaceWorkloadSummary[]): void => {
-  rows.sort((a, b) => {
-    const kind = normalizeSortKey(a.kind).localeCompare(normalizeSortKey(b.kind));
-    if (kind !== 0) {
-      return kind;
-    }
-    const name = normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name));
-    if (name !== 0) {
-      return name;
-    }
-    const ns = normalizeSortKey(a.namespace).localeCompare(normalizeSortKey(b.namespace));
-    if (ns !== 0) {
-      return ns;
-    }
-    return normalizeSortKey(a.status).localeCompare(normalizeSortKey(b.status));
-  });
-};
-
-const sortConfigRows = (rows: NamespaceConfigSummary[]): void => {
-  rows.sort((a, b) => {
-    const ns = normalizeSortKey(a.namespace).localeCompare(normalizeSortKey(b.namespace));
-    if (ns !== 0) {
-      return ns;
-    }
-    const name = normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name));
-    if (name !== 0) {
-      return name;
-    }
-    const kind = normalizeSortKey(a.kind).localeCompare(normalizeSortKey(b.kind));
-    if (kind !== 0) {
-      return kind;
-    }
-    return normalizeSortKey(a.typeAlias).localeCompare(normalizeSortKey(b.typeAlias));
-  });
-};
-
-const sortRBACRows = (rows: NamespaceRBACSummary[]): void => {
-  rows.sort((a, b) => {
-    const ns = normalizeSortKey(a.namespace).localeCompare(normalizeSortKey(b.namespace));
-    if (ns !== 0) {
-      return ns;
-    }
-    const kind = normalizeSortKey(a.kind).localeCompare(normalizeSortKey(b.kind));
-    if (kind !== 0) {
-      return kind;
-    }
-    return normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name));
-  });
-};
-
-const sortNetworkRows = (rows: NamespaceNetworkSummary[]): void => {
-  rows.sort((a, b) => {
-    const ns = normalizeSortKey(a.namespace).localeCompare(normalizeSortKey(b.namespace));
-    if (ns !== 0) {
-      return ns;
-    }
-    const name = normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name));
-    if (name !== 0) {
-      return name;
-    }
-    return normalizeSortKey(a.kind).localeCompare(normalizeSortKey(b.kind));
-  });
-};
-
-// Keep custom rows ordered to match snapshot sorting.
-const sortCustomRows = (rows: NamespaceCustomSummary[]): void => {
-  rows.sort((a, b) => {
-    const ns = normalizeSortKey(a.namespace).localeCompare(normalizeSortKey(b.namespace));
-    if (ns !== 0) {
-      return ns;
-    }
-    const group = normalizeSortKey(a.apiGroup).localeCompare(normalizeSortKey(b.apiGroup));
-    if (group !== 0) {
-      return group;
-    }
-    const kind = normalizeSortKey(a.kind).localeCompare(normalizeSortKey(b.kind));
-    if (kind !== 0) {
-      return kind;
-    }
-    return normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name));
-  });
-};
-
-// Keep helm rows ordered to match snapshot sorting.
-const sortHelmRows = (rows: NamespaceHelmSummary[]): void => {
-  rows.sort((a, b) => {
-    const ns = normalizeSortKey(a.namespace).localeCompare(normalizeSortKey(b.namespace));
-    if (ns !== 0) {
-      return ns;
-    }
-    return normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name));
-  });
-};
-
-// Keep autoscaling rows ordered to match snapshot sorting.
-const sortAutoscalingRows = (rows: NamespaceAutoscalingSummary[]): void => {
-  rows.sort((a, b) => {
-    const ns = normalizeSortKey(a.namespace).localeCompare(normalizeSortKey(b.namespace));
-    if (ns !== 0) {
-      return ns;
-    }
-    return normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name));
-  });
-};
-
-const sortQuotaRows = (rows: NamespaceQuotaSummary[]): void => {
-  rows.sort((a, b) => {
-    const ns = normalizeSortKey(a.namespace).localeCompare(normalizeSortKey(b.namespace));
-    if (ns !== 0) {
-      return ns;
-    }
-    const name = normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name));
-    if (name !== 0) {
-      return name;
-    }
-    return normalizeSortKey(a.kind).localeCompare(normalizeSortKey(b.kind));
-  });
-};
-
-const sortStorageRows = (rows: NamespaceStorageSummary[]): void => {
-  rows.sort((a, b) => {
-    const ns = normalizeSortKey(a.namespace).localeCompare(normalizeSortKey(b.namespace));
-    if (ns !== 0) {
-      return ns;
-    }
-    return normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name));
-  });
-};
-
-// Keep cluster tab rows ordered to match snapshot sorting.
-const sortClusterRBACRows = (rows: ClusterRBACEntry[]): void => {
-  rows.sort((a, b) => {
-    const kind = normalizeSortKey(a.kind).localeCompare(normalizeSortKey(b.kind));
-    if (kind !== 0) {
-      return kind;
-    }
-    return normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name));
-  });
-};
-
-const sortClusterStorageRows = (rows: ClusterStorageEntry[]): void => {
-  rows.sort((a, b) => normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name)));
-};
-
-const sortClusterConfigRows = (rows: ClusterConfigEntry[]): void => {
-  rows.sort((a, b) => {
-    const kind = normalizeSortKey(a.kind).localeCompare(normalizeSortKey(b.kind));
-    if (kind !== 0) {
-      return kind;
-    }
-    return normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name));
-  });
-};
-
-const sortClusterCRDRows = (rows: ClusterCRDEntry[]): void => {
-  rows.sort((a, b) => normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name)));
-};
-
-const sortClusterCustomRows = (rows: ClusterCustomEntry[]): void => {
-  rows.sort((a, b) => {
-    const kind = normalizeSortKey(a.kind).localeCompare(normalizeSortKey(b.kind));
-    if (kind !== 0) {
-      return kind;
-    }
-    return normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name));
-  });
-};
-
-export const sortNodeRows = (rows: ClusterNodeSnapshotEntry[]): void => {
-  rows.sort((a, b) => normalizeSortKey(a.name).localeCompare(normalizeSortKey(b.name)));
-};
-
-const buildPodKey = (clusterId: string, namespace: string, name: string): string =>
-  `${clusterId}::${namespace}::${name}`;
-
-const buildWorkloadKey = (
-  clusterId: string,
-  namespace: string,
-  kind: string,
-  name: string
-): string => `${clusterId}::${namespace}::${kind}::${name}`;
-
-const buildConfigKey = (clusterId: string, namespace: string, kind: string, name: string): string =>
-  `${clusterId}::${namespace}::${kind}::${name}`;
-
-const buildRBACKey = (clusterId: string, namespace: string, kind: string, name: string): string =>
-  `${clusterId}::${namespace}::${kind}::${name}`;
-
-const buildNetworkKey = (
-  clusterId: string,
-  namespace: string,
-  kind: string,
-  name: string
-): string => `${clusterId}::${namespace}::${kind}::${name}`;
-
-const buildCustomKey = (clusterId: string, namespace: string, kind: string, name: string): string =>
-  `${clusterId}::${namespace}::${kind}::${name}`;
-
-const buildHelmKey = (clusterId: string, namespace: string, name: string): string =>
-  `${clusterId}::${namespace}::${name}`;
-
-// Include kind so autoscaling entries remain distinct if multiple autoscaler types land later.
-const buildAutoscalingKey = (
-  clusterId: string,
-  namespace: string,
-  kind: string,
-  name: string
-): string => `${clusterId}::${namespace}::${kind}::${name}`;
-
-const buildQuotaKey = (clusterId: string, namespace: string, kind: string, name: string): string =>
-  `${clusterId}::${namespace}::${kind}::${name}`;
-
-const buildStorageKey = (
-  clusterId: string,
-  namespace: string,
-  kind: string,
-  name: string
-): string => `${clusterId}::${namespace}::${kind}::${name}`;
-
-const buildClusterRBACKey = (clusterId: string, kind: string, name: string): string =>
-  `${clusterId}::${kind}::${name}`;
-
-const buildClusterStorageKey = (clusterId: string, name: string): string => `${clusterId}::${name}`;
-
-const buildClusterConfigKey = (clusterId: string, kind: string, name: string): string =>
-  `${clusterId}::${kind}::${name}`;
-
-const buildClusterCRDKey = (clusterId: string, name: string): string => `${clusterId}::${name}`;
-
-const buildClusterCustomKey = (clusterId: string, kind: string, name: string): string =>
-  `${clusterId}::${kind}::${name}`;
-
-const buildNodeKey = (clusterId: string, name: string): string => `${clusterId}::${name}`;
-
 type KeyDiff = {
   missingKeys: number;
   extraKeys: number;
@@ -654,357 +209,11 @@ const diffKeySets = (expected: Set<string>, actual: Set<string>, sampleLimit: nu
   return { missingKeys, extraKeys, missingSample, extraSample };
 };
 
-const buildPodKeySet = (
-  payload: PodSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.pods ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(buildPodKey(row.clusterId ?? fallbackClusterId, row.namespace, row.name));
-  });
-  return keys;
-};
-
-const buildWorkloadKeySet = (
-  payload: NamespaceWorkloadSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.workloads ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(
-      buildWorkloadKey(row.clusterId ?? fallbackClusterId, row.namespace, row.kind, row.name)
-    );
-  });
-  return keys;
-};
-
-const buildConfigKeySet = (
-  payload: NamespaceConfigSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.resources ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(buildConfigKey(row.clusterId ?? fallbackClusterId, row.namespace, row.kind, row.name));
-  });
-  return keys;
-};
-
-const buildRBACKeySet = (
-  payload: NamespaceRBACSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.resources ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(buildRBACKey(row.clusterId ?? fallbackClusterId, row.namespace, row.kind, row.name));
-  });
-  return keys;
-};
-
-const buildNetworkKeySet = (
-  payload: NamespaceNetworkSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.resources ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(
-      buildNetworkKey(row.clusterId ?? fallbackClusterId, row.namespace, row.kind, row.name)
-    );
-  });
-  return keys;
-};
-
-const buildCustomKeySet = (
-  payload: NamespaceCustomSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.resources ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(buildCustomKey(row.clusterId ?? fallbackClusterId, row.namespace, row.kind, row.name));
-  });
-  return keys;
-};
-
-const buildHelmKeySet = (
-  payload: NamespaceHelmSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.releases ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(buildHelmKey(row.clusterId ?? fallbackClusterId, row.namespace, row.name));
-  });
-  return keys;
-};
-
-const buildAutoscalingKeySet = (
-  payload: NamespaceAutoscalingSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.resources ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(
-      buildAutoscalingKey(row.clusterId ?? fallbackClusterId, row.namespace, row.kind, row.name)
-    );
-  });
-  return keys;
-};
-
-const buildQuotaKeySet = (
-  payload: NamespaceQuotasSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.resources ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(buildQuotaKey(row.clusterId ?? fallbackClusterId, row.namespace, row.kind, row.name));
-  });
-  return keys;
-};
-
-const buildStorageKeySet = (
-  payload: NamespaceStorageSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.resources ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(
-      buildStorageKey(row.clusterId ?? fallbackClusterId, row.namespace, row.kind, row.name)
-    );
-  });
-  return keys;
-};
-
-const buildClusterRBACKeySet = (
-  payload: ClusterRBACSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.resources ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(buildClusterRBACKey(row.clusterId ?? fallbackClusterId, row.kind, row.name));
-  });
-  return keys;
-};
-
-const buildClusterStorageKeySet = (
-  payload: ClusterStorageSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.volumes ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(buildClusterStorageKey(row.clusterId ?? fallbackClusterId, row.name));
-  });
-  return keys;
-};
-
-const buildClusterConfigKeySet = (
-  payload: ClusterConfigSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.resources ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(buildClusterConfigKey(row.clusterId ?? fallbackClusterId, row.kind, row.name));
-  });
-  return keys;
-};
-
-const buildClusterCRDKeySet = (
-  payload: ClusterCRDSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.definitions ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(buildClusterCRDKey(row.clusterId ?? fallbackClusterId, row.name));
-  });
-  return keys;
-};
-
-const buildClusterCustomKeySet = (
-  payload: ClusterCustomSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.resources ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(buildClusterCustomKey(row.clusterId ?? fallbackClusterId, row.kind, row.name));
-  });
-  return keys;
-};
-
-const buildNodeKeySet = (
-  payload: ClusterNodeSnapshotPayload | null | undefined,
-  fallbackClusterId: string
-): Set<string> => {
-  const rows = payload?.nodes ?? [];
-  const keys = new Set<string>();
-  rows.forEach((row) => {
-    keys.add(buildNodeKey(row.clusterId ?? fallbackClusterId, row.name));
-  });
-  return keys;
-};
-
-const preferMetric = (existing: string | undefined, incoming: string): string =>
-  existing === undefined || existing === '' ? incoming : existing;
-
-export const mergePodMetricsRow = (
-  existing: PodSnapshotEntry | undefined,
-  incoming: PodSnapshotEntry,
-  preserveMetrics: boolean
-): PodSnapshotEntry => {
-  if (!existing || !preserveMetrics) {
-    return incoming;
-  }
-  return {
-    ...incoming,
-    cpuUsage: preferMetric(existing.cpuUsage, incoming.cpuUsage),
-    memUsage: preferMetric(existing.memUsage, incoming.memUsage),
-  };
-};
-
-export const mergeWorkloadMetricsRow = (
-  existing: NamespaceWorkloadSummary | undefined,
-  incoming: NamespaceWorkloadSummary,
-  preserveMetrics: boolean
-): NamespaceWorkloadSummary => {
-  if (!existing) {
-    return incoming;
-  }
-  if (!preserveMetrics) {
-    return shallowEqualRecord(
-      existing as unknown as Record<string, unknown>,
-      incoming as unknown as Record<string, unknown>
-    )
-      ? existing
-      : incoming;
-  }
-  const merged = {
-    ...incoming,
-    cpuUsage: existing.cpuUsage ?? incoming.cpuUsage,
-    memUsage: existing.memUsage ?? incoming.memUsage,
-  };
-  return shallowEqualRecord(
-    existing as unknown as Record<string, unknown>,
-    merged as unknown as Record<string, unknown>
-  )
-    ? existing
-    : merged;
-};
-
-export const mergeNodeMetricsRow = (
-  existing: ClusterNodeSnapshotEntry | undefined,
-  incoming: ClusterNodeSnapshotEntry,
-  preserveMetrics: boolean
-): ClusterNodeSnapshotEntry => {
-  if (!existing || !preserveMetrics) {
-    return incoming;
-  }
-  return {
-    ...incoming,
-    cpuUsage: preferMetric(existing.cpuUsage, incoming.cpuUsage),
-    memoryUsage: preferMetric(existing.memoryUsage, incoming.memoryUsage),
-    podMetrics: existing.podMetrics ?? incoming.podMetrics,
-  };
-};
-
 const updateStats = (stats: SnapshotStats | null, itemCount: number): SnapshotStats => {
   if (!stats) {
     return { itemCount, buildDurationMs: 0 };
   }
   return { ...stats, itemCount };
-};
-
-// Merge cluster payloads by replacing rows for a single cluster id.
-const mergeClusterRows = <T extends { clusterId?: string | null }>(
-  existing: T[] | null | undefined,
-  incoming: T[] | null | undefined,
-  clusterId: string
-): T[] => {
-  const targetCluster = clusterId.trim();
-  const next = (existing ?? []).filter((row) => {
-    const rowCluster = row.clusterId?.trim() ?? '';
-    return rowCluster !== targetCluster;
-  });
-  if (incoming && incoming.length > 0) {
-    next.push(...incoming);
-  }
-  return next;
-};
-
-const mergeClusterRowsByKey = <T extends { clusterId?: string | null }>(
-  existing: T[] | null | undefined,
-  incoming: T[] | null | undefined,
-  clusterId: string,
-  keyFor: (item: T, fallbackClusterId: string) => string
-): T[] => {
-  const targetCluster = clusterId.trim();
-  const previousRows = existing ?? [];
-  const incomingRows = incoming ?? [];
-
-  const previousClusterRows = previousRows.filter((row) => {
-    const rowCluster = row.clusterId?.trim() ?? '';
-    return rowCluster === targetCluster;
-  });
-  const previousByKey = new Map<string, T>();
-  previousClusterRows.forEach((row) => {
-    previousByKey.set(keyFor(row, targetCluster), row);
-  });
-
-  const mergedClusterRows = incomingRows.map((row) => {
-    const cached = previousByKey.get(keyFor(row, targetCluster));
-    return cached &&
-      shallowEqualRecord(cached as Record<string, unknown>, row as Record<string, unknown>)
-      ? cached
-      : row;
-  });
-
-  const next = previousRows.filter((row) => {
-    const rowCluster = row.clusterId?.trim() ?? '';
-    return rowCluster !== targetCluster;
-  });
-  if (mergedClusterRows.length > 0) {
-    next.push(...mergedClusterRows);
-  }
-
-  return hasSameArrayItems(previousRows, next) ? previousRows : next;
-};
-
-type StreamSubscription = {
-  key: string;
-  domain: ResourceDomain;
-  storeScope: string;
-  reportScope: string;
-  normalizedScope: string;
-  clusterId: string;
-  clusterName?: string;
-  resourceVersion?: bigint;
-  // Track the last stream sequence applied so we can resume after reconnects.
-  lastSequence?: bigint;
-  // Track message activity so polling is paused only after delivery resumes.
-  lastMessageAt?: number;
-  lastDeliveryAt?: number;
-  lastDeliveryEpoch?: number;
-  lastErrorAt?: number;
-  lastErrorReason?: string;
-  updateQueue: UpdateMessage[];
-  updateTimer: number | null;
-  pendingReset: boolean;
-  resyncInFlight: boolean;
-  lastResyncAt: number;
-  preserveMetrics: boolean;
-  shadowKeys: Set<string>;
-  hasBaseline: boolean;
-  driftDetected: boolean;
 };
 
 export type ResourceStreamTelemetrySummary = {
@@ -1025,137 +234,11 @@ type StreamTelemetry = {
   lastFallbackReason?: string;
 };
 
-type PendingUnsubscribe = {
-  timerId: number;
-};
-
-class ResourceStreamConnection {
-  private socket: WebSocket | null = null;
-  private attempt = 0;
-  private closed = false;
-  private paused = false;
-  private reconnectTimer: number | null = null;
-  private pendingMessages: ClientMessage[] = [];
-
-  constructor(private readonly manager: ResourceStreamManager) {}
-
-  async connect(): Promise<void> {
-    if (this.closed || this.paused || typeof window === 'undefined') {
-      return;
-    }
-    try {
-      const baseURL = await ensureRefreshBaseURL();
-      if (this.closed || this.paused) {
-        return;
-      }
-      const url = new URL(RESOURCE_STREAM_PATH, baseURL);
-      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-
-      const socket = new WebSocket(url.toString());
-      this.socket = socket;
-      socket.onopen = () => this.handleOpen();
-      socket.onmessage = (event) => this.handleMessage(event);
-      socket.onerror = () => this.handleError('Resource stream connection error');
-      socket.onclose = () => this.handleClose('Resource stream connection closed');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to open resource stream';
-      this.handleError(message);
-      this.scheduleReconnect();
-    }
-  }
-
-  pause(): void {
-    this.paused = true;
-    this.clearReconnect();
-    if (this.socket) {
-      this.socket.close();
-      this.socket = null;
-    }
-  }
-
-  resume(): void {
-    if (!this.paused) {
-      return;
-    }
-    this.paused = false;
-    this.closed = false;
-    void this.connect();
-  }
-
-  close(): void {
-    this.closed = true;
-    this.clearReconnect();
-    if (this.socket) {
-      this.socket.close();
-      this.socket = null;
-    }
-  }
-
-  send(message: ClientMessage): void {
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify(message));
-      return;
-    }
-    this.pendingMessages.push(message);
-  }
-
-  private handleOpen(): void {
-    this.attempt = 0;
-    this.manager.handleConnectionOpen('');
-    const pending = [...this.pendingMessages];
-    this.pendingMessages = [];
-    pending.forEach((message) => this.send(message));
-  }
-
-  private handleMessage(event: MessageEvent): void {
-    this.manager.handleMessage('', event.data);
-  }
-
-  private handleError(message: string): void {
-    if (this.closed || this.paused) {
-      return;
-    }
-    // Refresh base URLs can change when the backend rebuilds the refresh subsystem.
-    invalidateRefreshBaseURL();
-    this.manager.handleConnectionError('', message);
-    this.scheduleReconnect();
-  }
-
-  private handleClose(message: string): void {
-    if (this.closed || this.paused) {
-      return;
-    }
-    // Force a fresh base URL lookup on reconnect in case the port rotated.
-    invalidateRefreshBaseURL();
-    this.manager.handleConnectionError('', message);
-    this.scheduleReconnect();
-  }
-
-  private scheduleReconnect(): void {
-    if (this.closed || this.paused) {
-      return;
-    }
-    this.clearReconnect();
-    const baseDelay = Math.min(30_000, 1000 * Math.pow(2, this.attempt));
-    const jitter = 1 + (Math.random() * 2 - 1) * RECONNECT_JITTER_FACTOR;
-    const delay = Math.max(0, Math.round(baseDelay * jitter));
-    this.attempt += 1;
-    this.reconnectTimer = window.setTimeout(() => {
-      this.reconnectTimer = null;
-      void this.connect();
-    }, delay);
-  }
-
-  private clearReconnect(): void {
-    if (this.reconnectTimer !== null) {
-      window.clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-  }
-}
-
 export class ResourceStreamManager {
-  private subscriptions = new Map<string, StreamSubscription>();
+  private subscriptions = new ResourceStreamSubscriptionStore(
+    STREAM_UNSUBSCRIBE_DEBOUNCE_MS,
+    logInfo
+  );
   // Single socket used to multiplex subscriptions across clusters.
   private connection: ResourceStreamConnection | null = null;
   private connectionStatus: ResourceStreamConnectionStatus = 'disconnected';
@@ -1166,7 +249,6 @@ export class ResourceStreamManager {
   private consecutiveErrors = new Map<string, number>();
   private suspendedForVisibility = false;
   private streamTelemetry = new Map<string, StreamTelemetry>();
-  private pendingUnsubscribes = new Map<string, PendingUnsubscribe>();
 
   constructor() {
     eventBus.on('kubeconfig:changing', () => this.stopAll(true));
@@ -1265,7 +347,11 @@ export class ResourceStreamManager {
     if (!messageClusterId) {
       return;
     }
-    const subscriptionKey = this.subscriptionKey(messageClusterId, update.domain, update.scope);
+    const subscriptionKey = resourceStreamSubscriptionKey(
+      messageClusterId,
+      update.domain,
+      update.scope
+    );
     let subscription = this.subscriptions.get(subscriptionKey);
     let resolvedUpdate = update;
     if (!subscription) {
@@ -1315,17 +401,7 @@ export class ResourceStreamManager {
     domain: ResourceDomain,
     scope: string
   ): StreamSubscription | undefined {
-    let match: StreamSubscription | undefined;
-    for (const subscription of this.subscriptions.values()) {
-      if (subscription.domain !== domain || subscription.normalizedScope !== scope) {
-        continue;
-      }
-      if (match) {
-        return undefined;
-      }
-      match = subscription;
-    }
-    return match;
+    return this.subscriptions.findByScope(domain, scope);
   }
 
   handleConnectionOpen(clusterId: string): void {
@@ -1390,94 +466,15 @@ export class ResourceStreamManager {
   }
 
   private ensureSubscriptions(domain: ResourceDomain, scope: string): StreamSubscription[] {
-    const { clusterIds, normalizedScope, reportScope } = this.resolveSubscriptionScope(
-      domain,
-      scope
+    const subscriptions = this.subscriptions.ensure(domain, scope);
+    subscriptions.forEach((subscription) =>
+      this.updateHealthForScope(subscription.domain, subscription.reportScope)
     );
-    return clusterIds.map((clusterId) =>
-      this.ensureSubscriptionForCluster(domain, clusterId, normalizedScope, reportScope)
-    );
-  }
-
-  private ensureSubscriptionForCluster(
-    domain: ResourceDomain,
-    clusterId: string,
-    normalizedScope: string,
-    reportScope: string
-  ): StreamSubscription {
-    const key = this.subscriptionKey(clusterId, domain, normalizedScope);
-    const existing = this.subscriptions.get(key);
-    if (existing) {
-      this.cancelPendingUnsubscribe(existing);
-      return existing;
-    }
-
-    const storeScope = buildClusterScopeList([clusterId], normalizedScope);
-    const subscription: StreamSubscription = {
-      key,
-      domain,
-      storeScope,
-      reportScope,
-      normalizedScope,
-      clusterId,
-      updateQueue: [],
-      updateTimer: null,
-      pendingReset: false,
-      resyncInFlight: false,
-      lastResyncAt: 0,
-      preserveMetrics: domain === 'pods' || domain === 'namespace-workloads' || domain === 'nodes',
-      shadowKeys: new Set(),
-      hasBaseline: false,
-      driftDetected: false,
-    };
-    this.subscriptions.set(key, subscription);
-    logInfo(
-      `[resource-stream] subscription created domain=${subscription.domain} scope=${subscription.storeScope}`
-    );
-    this.updateHealthForScope(subscription.domain, subscription.reportScope);
-    return subscription;
+    return subscriptions;
   }
 
   private getSubscriptions(domain: ResourceDomain, scope: string): StreamSubscription[] {
-    const parsed = parseClusterScopeList(scope);
-    if (parsed.clusterIds.length === 0) {
-      return [];
-    }
-    if (parsed.isMultiCluster && !isMultiClusterDomain(domain)) {
-      return [];
-    }
-    let normalizedScope = '';
-    try {
-      normalizedScope = normalizeResourceScope(domain, parsed.scope);
-    } catch (_err) {
-      return [];
-    }
-
-    return parsed.clusterIds
-      .map((clusterId) =>
-        this.subscriptions.get(this.subscriptionKey(clusterId, domain, normalizedScope))
-      )
-      .filter((subscription): subscription is StreamSubscription => Boolean(subscription));
-  }
-
-  private resolveSubscriptionScope(
-    domain: ResourceDomain,
-    scope: string
-  ): { clusterIds: string[]; normalizedScope: string; reportScope: string } {
-    const parsed = parseClusterScopeList(scope);
-    if (parsed.clusterIds.length === 0) {
-      throw new Error('Resource streaming requires a cluster scope');
-    }
-    if (parsed.isMultiCluster && !isMultiClusterDomain(domain)) {
-      throw new Error('Resource streaming requires a single cluster scope');
-    }
-    const normalizedScope = normalizeResourceScope(domain, parsed.scope);
-    const reportScope = buildClusterScopeList(parsed.clusterIds, normalizedScope);
-    return { clusterIds: parsed.clusterIds, normalizedScope, reportScope };
-  }
-
-  private subscriptionKey(clusterId: string, domain: ResourceDomain, scope: string): string {
-    return `${clusterId}::${domain}::${scope}`;
+    return this.subscriptions.getForScope(domain, scope);
   }
 
   private getConnection(): ResourceStreamConnection {
@@ -1492,42 +489,24 @@ export class ResourceStreamManager {
 
   private subscribe(subscription: StreamSubscription): void {
     // Avoid re-subscribing while a debounced stop is pending.
-    if (this.pendingUnsubscribes.has(subscription.key)) {
+    if (this.subscriptions.hasPendingUnsubscribe(subscription)) {
       return;
     }
     const connection = this.getConnection();
-    const resumeToken = subscription.lastSequence
-      ? subscription.lastSequence.toString()
-      : undefined;
-    subscription.pendingReset = !resumeToken;
-    connection.send({
-      type: MESSAGE_TYPES.request,
-      clusterId: subscription.clusterId,
-      domain: subscription.domain,
-      scope: subscription.storeScope,
-      resourceVersion: subscription.resourceVersion
-        ? subscription.resourceVersion.toString()
-        : undefined,
-      resumeToken,
-    });
+    connection.send(this.subscriptions.buildRequestMessage(subscription));
   }
 
   private unsubscribe(subscription: StreamSubscription, reset: boolean): void {
-    this.cancelPendingUnsubscribe(subscription);
+    this.subscriptions.cancelPendingUnsubscribe(subscription);
     const connection = this.connection;
     if (connection) {
-      connection.send({
-        type: MESSAGE_TYPES.cancel,
-        clusterId: subscription.clusterId,
-        domain: subscription.domain,
-        scope: subscription.storeScope,
-      });
+      connection.send(this.subscriptions.buildCancelMessage(subscription));
     }
 
     if (subscription.updateTimer !== null) {
       window.clearTimeout(subscription.updateTimer);
     }
-    this.subscriptions.delete(subscription.key);
+    this.subscriptions.delete(subscription);
     this.updateHealthForScope(subscription.domain, subscription.reportScope);
 
     if (reset) {
@@ -1542,38 +521,9 @@ export class ResourceStreamManager {
   }
 
   private scheduleUnsubscribe(subscription: StreamSubscription, reset: boolean): void {
-    if (reset || typeof window === 'undefined' || STREAM_UNSUBSCRIBE_DEBOUNCE_MS <= 0) {
-      this.unsubscribe(subscription, reset);
-      return;
-    }
-    if (this.pendingUnsubscribes.has(subscription.key)) {
-      return;
-    }
-    const timerId = window.setTimeout(() => {
-      this.pendingUnsubscribes.delete(subscription.key);
-      this.unsubscribe(subscription, reset);
-    }, STREAM_UNSUBSCRIBE_DEBOUNCE_MS);
-    this.pendingUnsubscribes.set(subscription.key, { timerId });
-    logInfo(
-      `[resource-stream] debounce unsubscribe domain=${subscription.domain} scope=${subscription.storeScope} delayMs=${STREAM_UNSUBSCRIBE_DEBOUNCE_MS}`
+    this.subscriptions.scheduleUnsubscribe(subscription, reset, (target, shouldReset) =>
+      this.unsubscribe(target, shouldReset)
     );
-  }
-
-  private cancelPendingUnsubscribe(subscription: StreamSubscription): void {
-    const pending = this.pendingUnsubscribes.get(subscription.key);
-    if (!pending) {
-      return;
-    }
-    window.clearTimeout(pending.timerId);
-    this.pendingUnsubscribes.delete(subscription.key);
-    logInfo(
-      `[resource-stream] debounce cancel domain=${subscription.domain} scope=${subscription.storeScope}`
-    );
-  }
-
-  private clearPendingUnsubscribes(): void {
-    this.pendingUnsubscribes.forEach((pending) => window.clearTimeout(pending.timerId));
-    this.pendingUnsubscribes.clear();
   }
 
   private healthKey(domain: ResourceDomain, scope: string): string {
@@ -1758,881 +708,56 @@ export class ResourceStreamManager {
     if (subscription.updateQueue.length === 0) {
       return;
     }
-    const updates = subscription.updateQueue.splice(0, subscription.updateQueue.length);
+    const updates = subscription.updateQueue.splice(
+      0,
+      subscription.updateQueue.length
+    ) as UpdateMessage[];
     const now = Date.now();
 
     // Always update shadow keys so drift checks can compare snapshots to streamed changes.
     this.applyShadowUpdates(subscription, updates);
+    this.applyRowUpdates(subscription, updates, now);
+  }
 
-    if (subscription.domain === 'pods') {
-      setScopedDomainState('pods', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? { pods: [], clusterId: subscription.clusterId };
-        const existingRows = currentPayload.pods ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildPodKey(row.clusterId ?? subscription.clusterId, row.namespace, row.name),
-            row,
-          ])
-        );
+  private applyRowUpdates(
+    subscription: StreamSubscription,
+    updates: UpdateMessage[],
+    now: number
+  ): void {
+    const descriptor = getResourceStreamDomainDescriptor(subscription.domain);
+    const collection = descriptor.collection;
 
-        updates.forEach((update) => {
-          const key = buildPodKey(
-            update.clusterId ?? subscription.clusterId,
-            update.namespace ?? '',
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          const incoming = update.row as PodSnapshotEntry;
-          const existing = byKey.get(key);
-          byKey.set(key, mergePodMetricsRow(existing, incoming, subscription.preserveMetrics));
-        });
+    setScopedDomainState(subscription.domain, subscription.reportScope, (previous) => {
+      const currentPayload = previous.data ?? collection.emptyPayload(subscription.clusterId);
+      const existingRows = collection.getRows(currentPayload);
+      const nextRows = applyResourceRowUpdates(
+        existingRows,
+        updates,
+        subscription.clusterId,
+        collection,
+        subscription.preserveMetrics
+      );
 
-        const nextRows = Array.from(byKey.values());
-        sortPodRows(nextRows);
-        return {
-          ...previous,
-          status: 'ready',
-          data: { ...currentPayload, pods: nextRows },
-          stats: updateStats(previous.stats, nextRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
+      if (previous.data && nextRows === existingRows) {
+        return previous;
+      }
 
-    if (subscription.domain === 'namespace-workloads') {
-      setScopedDomainState('namespace-workloads', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          workloads: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.workloads ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildWorkloadKey(
-              row.clusterId ?? subscription.clusterId,
-              row.namespace,
-              row.kind,
-              row.name
-            ),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildWorkloadKey(
-            update.clusterId ?? subscription.clusterId,
-            update.namespace ?? '',
-            update.kind ?? '',
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          const incoming = update.row as NamespaceWorkloadSummary;
-          const existing = byKey.get(key);
-          byKey.set(key, mergeWorkloadMetricsRow(existing, incoming, subscription.preserveMetrics));
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortWorkloadRows(nextRows);
-        const stableRows = hasSameArrayItems(existingRows, nextRows) ? existingRows : nextRows;
-        if (stableRows === existingRows && previous.data === currentPayload) {
-          return previous;
-        }
-        return {
-          ...previous,
-          status: 'ready',
-          data:
-            stableRows === existingRows
-              ? currentPayload
-              : { ...currentPayload, workloads: stableRows },
-          stats: updateStats(previous.stats, stableRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-config') {
-      setScopedDomainState('namespace-config', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          resources: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.resources ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildConfigKey(
-              row.clusterId ?? subscription.clusterId,
-              row.namespace,
-              row.kind,
-              row.name
-            ),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildConfigKey(
-            update.clusterId ?? subscription.clusterId,
-            update.namespace ?? '',
-            update.kind ?? '',
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          byKey.set(key, update.row as NamespaceConfigSummary);
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortConfigRows(nextRows);
-        return {
-          ...previous,
-          status: 'ready',
-          data: { ...currentPayload, resources: nextRows },
-          stats: updateStats(previous.stats, nextRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-network') {
-      setScopedDomainState('namespace-network', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          resources: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.resources ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildNetworkKey(
-              row.clusterId ?? subscription.clusterId,
-              row.namespace,
-              row.kind,
-              row.name
-            ),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildNetworkKey(
-            update.clusterId ?? subscription.clusterId,
-            update.namespace ?? '',
-            update.kind ?? '',
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          byKey.set(key, update.row as NamespaceNetworkSummary);
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortNetworkRows(nextRows);
-        return {
-          ...previous,
-          status: 'ready',
-          data: { ...currentPayload, resources: nextRows },
-          stats: updateStats(previous.stats, nextRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-rbac') {
-      setScopedDomainState('namespace-rbac', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          resources: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.resources ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildRBACKey(
-              row.clusterId ?? subscription.clusterId,
-              row.namespace,
-              row.kind,
-              row.name
-            ),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildRBACKey(
-            update.clusterId ?? subscription.clusterId,
-            update.namespace ?? '',
-            update.kind ?? '',
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          byKey.set(key, update.row as NamespaceRBACSummary);
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortRBACRows(nextRows);
-        return {
-          ...previous,
-          status: 'ready',
-          data: { ...currentPayload, resources: nextRows },
-          stats: updateStats(previous.stats, nextRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-custom') {
-      setScopedDomainState('namespace-custom', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          resources: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.resources ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildCustomKey(
-              row.clusterId ?? subscription.clusterId,
-              row.namespace,
-              row.kind,
-              row.name
-            ),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildCustomKey(
-            update.clusterId ?? subscription.clusterId,
-            update.namespace ?? '',
-            update.kind ?? '',
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          const nextRow = update.row as NamespaceCustomSummary;
-          const existingRow = byKey.get(key);
-          byKey.set(
-            key,
-            existingRow &&
-              shallowEqualRecord(
-                existingRow as unknown as Record<string, unknown>,
-                nextRow as unknown as Record<string, unknown>
-              )
-              ? existingRow
-              : nextRow
-          );
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortCustomRows(nextRows);
-        const stableRows = hasSameArrayItems(existingRows, nextRows) ? existingRows : nextRows;
-        if (stableRows === existingRows && previous.data === currentPayload) {
-          return previous;
-        }
-        return {
-          ...previous,
-          status: 'ready',
-          data:
-            currentPayload.resources === stableRows
-              ? currentPayload
-              : { ...currentPayload, resources: stableRows },
-          stats: updateStats(previous.stats, stableRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-helm') {
-      setScopedDomainState('namespace-helm', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          releases: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.releases ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildHelmKey(row.clusterId ?? subscription.clusterId, row.namespace, row.name),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildHelmKey(
-            update.clusterId ?? subscription.clusterId,
-            update.namespace ?? '',
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          const nextRow = update.row as NamespaceHelmSummary;
-          const existingRow = byKey.get(key);
-          byKey.set(
-            key,
-            existingRow &&
-              shallowEqualRecord(
-                existingRow as unknown as Record<string, unknown>,
-                nextRow as unknown as Record<string, unknown>
-              )
-              ? existingRow
-              : nextRow
-          );
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortHelmRows(nextRows);
-        const stableRows = hasSameArrayItems(existingRows, nextRows) ? existingRows : nextRows;
-        if (stableRows === existingRows && previous.data === currentPayload) {
-          return previous;
-        }
-        return {
-          ...previous,
-          status: 'ready',
-          data:
-            currentPayload.releases === stableRows
-              ? currentPayload
-              : { ...currentPayload, releases: stableRows },
-          stats: updateStats(previous.stats, stableRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-autoscaling') {
-      setScopedDomainState('namespace-autoscaling', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          resources: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.resources ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildAutoscalingKey(
-              row.clusterId ?? subscription.clusterId,
-              row.namespace,
-              row.kind,
-              row.name
-            ),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildAutoscalingKey(
-            update.clusterId ?? subscription.clusterId,
-            update.namespace ?? '',
-            update.kind ?? '',
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          const nextRow = update.row as NamespaceAutoscalingSummary;
-          const existingRow = byKey.get(key);
-          byKey.set(
-            key,
-            existingRow &&
-              shallowEqualRecord(
-                existingRow as unknown as Record<string, unknown>,
-                nextRow as unknown as Record<string, unknown>
-              )
-              ? existingRow
-              : nextRow
-          );
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortAutoscalingRows(nextRows);
-        const stableRows = hasSameArrayItems(existingRows, nextRows) ? existingRows : nextRows;
-        if (stableRows === existingRows && previous.data === currentPayload) {
-          return previous;
-        }
-        return {
-          ...previous,
-          status: 'ready',
-          data:
-            currentPayload.resources === stableRows
-              ? currentPayload
-              : { ...currentPayload, resources: stableRows },
-          stats: updateStats(previous.stats, stableRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-quotas') {
-      setScopedDomainState('namespace-quotas', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          resources: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.resources ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildQuotaKey(
-              row.clusterId ?? subscription.clusterId,
-              row.namespace,
-              row.kind,
-              row.name
-            ),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildQuotaKey(
-            update.clusterId ?? subscription.clusterId,
-            update.namespace ?? '',
-            update.kind ?? '',
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          byKey.set(key, update.row as NamespaceQuotaSummary);
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortQuotaRows(nextRows);
-        return {
-          ...previous,
-          status: 'ready',
-          data: { ...currentPayload, resources: nextRows },
-          stats: updateStats(previous.stats, nextRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-storage') {
-      setScopedDomainState('namespace-storage', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          resources: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.resources ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildStorageKey(
-              row.clusterId ?? subscription.clusterId,
-              row.namespace,
-              row.kind,
-              row.name
-            ),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildStorageKey(
-            update.clusterId ?? subscription.clusterId,
-            update.namespace ?? '',
-            update.kind ?? '',
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          byKey.set(key, update.row as NamespaceStorageSummary);
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortStorageRows(nextRows);
-        return {
-          ...previous,
-          status: 'ready',
-          data: { ...currentPayload, resources: nextRows },
-          stats: updateStats(previous.stats, nextRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'cluster-rbac') {
-      setScopedDomainState('cluster-rbac', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          resources: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.resources ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildClusterRBACKey(row.clusterId ?? subscription.clusterId, row.kind, row.name),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildClusterRBACKey(
-            update.clusterId ?? subscription.clusterId,
-            update.kind ?? '',
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          byKey.set(key, update.row as ClusterRBACEntry);
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortClusterRBACRows(nextRows);
-        return {
-          ...previous,
-          status: 'ready',
-          data: { ...currentPayload, resources: nextRows },
-          stats: updateStats(previous.stats, nextRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'cluster-storage') {
-      setScopedDomainState('cluster-storage', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          volumes: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.volumes ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildClusterStorageKey(row.clusterId ?? subscription.clusterId, row.name),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildClusterStorageKey(
-            update.clusterId ?? subscription.clusterId,
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          byKey.set(key, update.row as ClusterStorageEntry);
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortClusterStorageRows(nextRows);
-        return {
-          ...previous,
-          status: 'ready',
-          data: { ...currentPayload, volumes: nextRows },
-          stats: updateStats(previous.stats, nextRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'cluster-config') {
-      setScopedDomainState('cluster-config', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          resources: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.resources ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildClusterConfigKey(row.clusterId ?? subscription.clusterId, row.kind, row.name),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildClusterConfigKey(
-            update.clusterId ?? subscription.clusterId,
-            update.kind ?? '',
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          byKey.set(key, update.row as ClusterConfigEntry);
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortClusterConfigRows(nextRows);
-        return {
-          ...previous,
-          status: 'ready',
-          data: { ...currentPayload, resources: nextRows },
-          stats: updateStats(previous.stats, nextRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'cluster-crds') {
-      setScopedDomainState('cluster-crds', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          definitions: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.definitions ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildClusterCRDKey(row.clusterId ?? subscription.clusterId, row.name),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildClusterCRDKey(
-            update.clusterId ?? subscription.clusterId,
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          byKey.set(key, update.row as ClusterCRDEntry);
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortClusterCRDRows(nextRows);
-        return {
-          ...previous,
-          status: 'ready',
-          data: { ...currentPayload, definitions: nextRows },
-          stats: updateStats(previous.stats, nextRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'cluster-custom') {
-      setScopedDomainState('cluster-custom', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? {
-          resources: [],
-          clusterId: subscription.clusterId,
-        };
-        const existingRows = currentPayload.resources ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildClusterCustomKey(row.clusterId ?? subscription.clusterId, row.kind, row.name),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildClusterCustomKey(
-            update.clusterId ?? subscription.clusterId,
-            update.kind ?? '',
-            update.name ?? ''
-          );
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          byKey.set(key, update.row as ClusterCustomEntry);
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortClusterCustomRows(nextRows);
-        return {
-          ...previous,
-          status: 'ready',
-          data: { ...currentPayload, resources: nextRows },
-          stats: updateStats(previous.stats, nextRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'nodes') {
-      setScopedDomainState('nodes', subscription.reportScope, (previous) => {
-        const currentPayload = previous.data ?? { nodes: [], clusterId: subscription.clusterId };
-        const existingRows = currentPayload.nodes ?? [];
-        const byKey = new Map(
-          existingRows.map((row) => [
-            buildNodeKey(row.clusterId ?? subscription.clusterId, row.name),
-            row,
-          ])
-        );
-
-        updates.forEach((update) => {
-          const key = buildNodeKey(update.clusterId ?? subscription.clusterId, update.name ?? '');
-          if (update.type === MESSAGE_TYPES.deleted) {
-            byKey.delete(key);
-            return;
-          }
-          if (!update.row) {
-            return;
-          }
-          const incoming = update.row as ClusterNodeSnapshotEntry;
-          const existing = byKey.get(key);
-          byKey.set(key, mergeNodeMetricsRow(existing, incoming, subscription.preserveMetrics));
-        });
-
-        const nextRows = Array.from(byKey.values());
-        sortNodeRows(nextRows);
-        return {
-          ...previous,
-          status: 'ready',
-          data: { ...currentPayload, nodes: nextRows },
-          stats: updateStats(previous.stats, nextRows.length),
-          lastUpdated: now,
-          lastAutoRefresh: now,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-    }
+      return {
+        ...previous,
+        status: 'ready',
+        data:
+          nextRows === existingRows
+            ? currentPayload
+            : collection.withRows(currentPayload, nextRows),
+        stats: updateStats(previous.stats, nextRows.length),
+        lastUpdated: now,
+        lastAutoRefresh: now,
+        error: null,
+        isManual: false,
+        scope: subscription.reportScope,
+      };
+    });
+    this.clearStreamError(subscription.clusterId);
   }
 
   private applyShadowUpdates(subscription: StreamSubscription, updates: UpdateMessage[]): void {
@@ -2640,265 +765,18 @@ export class ResourceStreamManager {
       return;
     }
 
-    if (subscription.domain === 'pods') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as PodSnapshotEntry | undefined;
-        const namespace = update.namespace ?? row?.namespace ?? '';
-        const name = update.name ?? row?.name ?? '';
-        const key = buildPodKey(clusterId, namespace, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'namespace-workloads') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as NamespaceWorkloadSummary | undefined;
-        const namespace = update.namespace ?? row?.namespace ?? '';
-        const kind = update.kind ?? row?.kind ?? '';
-        const name = update.name ?? row?.name ?? '';
-        const key = buildWorkloadKey(clusterId, namespace, kind, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'namespace-config') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as NamespaceConfigSummary | undefined;
-        const namespace = update.namespace ?? row?.namespace ?? '';
-        const kind = update.kind ?? row?.kind ?? '';
-        const name = update.name ?? row?.name ?? '';
-        const key = buildConfigKey(clusterId, namespace, kind, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'namespace-network') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as NamespaceNetworkSummary | undefined;
-        const namespace = update.namespace ?? row?.namespace ?? '';
-        const kind = update.kind ?? row?.kind ?? '';
-        const name = update.name ?? row?.name ?? '';
-        const key = buildNetworkKey(clusterId, namespace, kind, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'namespace-rbac') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as NamespaceRBACSummary | undefined;
-        const namespace = update.namespace ?? row?.namespace ?? '';
-        const kind = update.kind ?? row?.kind ?? '';
-        const name = update.name ?? row?.name ?? '';
-        const key = buildRBACKey(clusterId, namespace, kind, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'namespace-custom') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as NamespaceCustomSummary | undefined;
-        const namespace = update.namespace ?? row?.namespace ?? '';
-        const kind = update.kind ?? row?.kind ?? '';
-        const name = update.name ?? row?.name ?? '';
-        const key = buildCustomKey(clusterId, namespace, kind, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'namespace-helm') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as NamespaceHelmSummary | undefined;
-        const namespace = update.namespace ?? row?.namespace ?? '';
-        const name = update.name ?? row?.name ?? '';
-        const key = buildHelmKey(clusterId, namespace, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'namespace-autoscaling') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as NamespaceAutoscalingSummary | undefined;
-        const namespace = update.namespace ?? row?.namespace ?? '';
-        const kind = update.kind ?? row?.kind ?? '';
-        const name = update.name ?? row?.name ?? '';
-        const key = buildAutoscalingKey(clusterId, namespace, kind, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'namespace-quotas') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as NamespaceQuotaSummary | undefined;
-        const namespace = update.namespace ?? row?.namespace ?? '';
-        const kind = update.kind ?? row?.kind ?? '';
-        const name = update.name ?? row?.name ?? '';
-        const key = buildQuotaKey(clusterId, namespace, kind, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'namespace-storage') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as NamespaceStorageSummary | undefined;
-        const namespace = update.namespace ?? row?.namespace ?? '';
-        const kind = update.kind ?? row?.kind ?? '';
-        const name = update.name ?? row?.name ?? '';
-        const key = buildStorageKey(clusterId, namespace, kind, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'cluster-rbac') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as ClusterRBACEntry | undefined;
-        const kind = update.kind ?? row?.kind ?? '';
-        const name = update.name ?? row?.name ?? '';
-        const key = buildClusterRBACKey(clusterId, kind, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'cluster-storage') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as ClusterStorageEntry | undefined;
-        const name = update.name ?? row?.name ?? '';
-        const key = buildClusterStorageKey(clusterId, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'cluster-config') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as ClusterConfigEntry | undefined;
-        const kind = update.kind ?? row?.kind ?? '';
-        const name = update.name ?? row?.name ?? '';
-        const key = buildClusterConfigKey(clusterId, kind, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'cluster-crds') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as ClusterCRDEntry | undefined;
-        const name = update.name ?? row?.name ?? '';
-        const key = buildClusterCRDKey(clusterId, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'cluster-custom') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as ClusterCustomEntry | undefined;
-        const kind = update.kind ?? row?.kind ?? '';
-        const name = update.name ?? row?.name ?? '';
-        const key = buildClusterCustomKey(clusterId, kind, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-      return;
-    }
-
-    if (subscription.domain === 'nodes') {
-      updates.forEach((update) => {
-        const clusterId = update.clusterId ?? subscription.clusterId;
-        const row = update.row as ClusterNodeSnapshotEntry | undefined;
-        const name = update.name ?? row?.name ?? '';
-        const key = buildNodeKey(clusterId, name);
-        if (update.type === MESSAGE_TYPES.deleted) {
-          subscription.shadowKeys.delete(key);
-        } else {
-          subscription.shadowKeys.add(key);
-        }
-      });
-    }
+    const collection = getResourceStreamDomainDescriptor(subscription.domain).collection;
+    updates.forEach((update) => {
+      const key = collection.buildUpdateKey(update, subscription.clusterId);
+      if (!key) {
+        return;
+      }
+      if (update.type === MESSAGE_TYPES.deleted) {
+        subscription.shadowKeys.delete(key);
+      } else {
+        subscription.shadowKeys.add(key);
+      }
+    });
   }
 
   // Track resync activity so diagnostics can surface stream health.
@@ -2944,7 +822,7 @@ export class ResourceStreamManager {
     force = false
   ): Promise<void> {
     // Skip resync work for subscriptions that are already scheduled to stop.
-    if (this.pendingUnsubscribes.has(subscription.key)) {
+    if (this.subscriptions.hasPendingUnsubscribe(subscription)) {
       return;
     }
     if (subscription.resyncInFlight) {
@@ -3024,82 +902,26 @@ export class ResourceStreamManager {
     this.updateShadowBaseline(subscription, snapshot);
 
     const generatedAt = snapshot.generatedAt || Date.now();
+    const descriptor = getResourceStreamDomainDescriptor(subscription.domain);
+    const collection = descriptor.collection;
+    const payload = snapshot.payload;
 
-    if (subscription.domain === 'pods') {
-      const payload = snapshot.payload as PodSnapshotPayload;
-      // Multi-cluster snapshots must merge per-cluster rows into the shared scope.
-      const shouldMerge = isMultiClusterScope(subscription.reportScope);
-      setScopedDomainState('pods', subscription.reportScope, (previous) => {
-        const incoming = payload.pods ?? [];
-        const merged = shouldMerge
-          ? mergeClusterRows(previous.data?.pods, incoming, subscription.clusterId)
-          : incoming;
-        if (shouldMerge) {
-          sortPodRows(merged);
-        }
-        return {
-          ...previous,
-          status: 'ready',
-          data: shouldMerge ? { ...payload, pods: merged } : payload,
-          stats: updateStats(snapshot.stats ?? previous.stats ?? null, merged.length),
-          version: snapshot.version,
-          checksum: snapshot.checksum,
-          etag: snapshot.checksum ?? previous.etag,
-          lastUpdated: generatedAt,
-          lastAutoRefresh: generatedAt,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
+    setScopedDomainState(subscription.domain, subscription.reportScope, (previous) => {
+      const previousRows = previous.data ? collection.getRows(previous.data) : [];
+      const incomingRows = collection.getRows(payload);
+      const mergedRows = mergeSnapshotRows(
+        previousRows,
+        incomingRows,
+        subscription.clusterId,
+        collection
+      );
+      const nextPayload = collection.withRows(payload, mergedRows);
 
-    if (subscription.domain === 'namespace-workloads') {
-      const payload = snapshot.payload as NamespaceWorkloadSnapshotPayload;
-      // Reconcile incoming workload snapshots by object identity so identical
-      // snapshots do not replace the entire table input on every refresh.
-      const shouldSort = isMultiClusterScope(subscription.reportScope);
-      setScopedDomainState('namespace-workloads', subscription.reportScope, (previous) => {
-        const incoming = payload.workloads ?? [];
-        const merged = mergeClusterRowsByKey(
-          previous.data?.workloads,
-          incoming,
-          subscription.clusterId,
-          (row, fallbackClusterId) =>
-            buildWorkloadKey(row.clusterId ?? fallbackClusterId, row.namespace, row.kind, row.name)
-        );
-        if (shouldSort) {
-          sortWorkloadRows(merged);
-        }
-        return {
-          ...previous,
-          status: 'ready',
-          data:
-            previous.data?.workloads === merged ? previous.data : { ...payload, workloads: merged },
-          stats: updateStats(snapshot.stats ?? previous.stats ?? null, merged.length),
-          version: snapshot.version,
-          checksum: snapshot.checksum,
-          etag: snapshot.checksum ?? previous.etag,
-          lastUpdated: generatedAt,
-          lastAutoRefresh: generatedAt,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-config') {
-      const payload = snapshot.payload as NamespaceConfigSnapshotPayload;
-      setScopedDomainState('namespace-config', subscription.reportScope, (previous) => ({
+      return {
         ...previous,
         status: 'ready',
-        data: payload,
-        stats: snapshot.stats ?? null,
+        data: nextPayload,
+        stats: updateStats(snapshot.stats ?? previous.stats ?? null, mergedRows.length),
         version: snapshot.version,
         checksum: snapshot.checksum,
         etag: snapshot.checksum ?? previous.etag,
@@ -3108,471 +930,16 @@ export class ResourceStreamManager {
         error: null,
         isManual: false,
         scope: subscription.reportScope,
-      }));
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-network') {
-      const payload = snapshot.payload as NamespaceNetworkSnapshotPayload;
-      setScopedDomainState('namespace-network', subscription.reportScope, (previous) => ({
-        ...previous,
-        status: 'ready',
-        data: payload,
-        stats: snapshot.stats ?? null,
-        version: snapshot.version,
-        checksum: snapshot.checksum,
-        etag: snapshot.checksum ?? previous.etag,
-        lastUpdated: generatedAt,
-        lastAutoRefresh: generatedAt,
-        error: null,
-        isManual: false,
-        scope: subscription.reportScope,
-      }));
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-rbac') {
-      const payload = snapshot.payload as NamespaceRBACSnapshotPayload;
-      setScopedDomainState('namespace-rbac', subscription.reportScope, (previous) => ({
-        ...previous,
-        status: 'ready',
-        data: payload,
-        stats: snapshot.stats ?? null,
-        version: snapshot.version,
-        checksum: snapshot.checksum,
-        etag: snapshot.checksum ?? previous.etag,
-        lastUpdated: generatedAt,
-        lastAutoRefresh: generatedAt,
-        error: null,
-        isManual: false,
-        scope: subscription.reportScope,
-      }));
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-custom') {
-      const payload = snapshot.payload as NamespaceCustomSnapshotPayload;
-      const shouldSort = isMultiClusterScope(subscription.reportScope);
-      setScopedDomainState('namespace-custom', subscription.reportScope, (previous) => ({
-        ...previous,
-        status: 'ready',
-        data: (() => {
-          const incoming = payload.resources ?? [];
-          const merged = mergeClusterRowsByKey(
-            previous.data?.resources,
-            incoming,
-            subscription.clusterId,
-            (row, fallbackClusterId) =>
-              buildCustomKey(row.clusterId ?? fallbackClusterId, row.namespace, row.kind, row.name)
-          );
-          if (shouldSort) {
-            sortCustomRows(merged);
-          }
-          return previous.data?.resources === merged
-            ? previous.data
-            : { ...payload, resources: merged };
-        })(),
-        stats: snapshot.stats ?? null,
-        version: snapshot.version,
-        checksum: snapshot.checksum,
-        etag: snapshot.checksum ?? previous.etag,
-        lastUpdated: generatedAt,
-        lastAutoRefresh: generatedAt,
-        error: null,
-        isManual: false,
-        scope: subscription.reportScope,
-      }));
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-helm') {
-      const payload = snapshot.payload as NamespaceHelmSnapshotPayload;
-      const shouldSort = isMultiClusterScope(subscription.reportScope);
-      setScopedDomainState('namespace-helm', subscription.reportScope, (previous) => ({
-        ...previous,
-        status: 'ready',
-        data: (() => {
-          const incoming = payload.releases ?? [];
-          const merged = mergeClusterRowsByKey(
-            previous.data?.releases,
-            incoming,
-            subscription.clusterId,
-            (row, fallbackClusterId) =>
-              buildHelmKey(row.clusterId ?? fallbackClusterId, row.namespace, row.name)
-          );
-          if (shouldSort) {
-            sortHelmRows(merged);
-          }
-          return previous.data?.releases === merged
-            ? previous.data
-            : { ...payload, releases: merged };
-        })(),
-        stats: snapshot.stats ?? null,
-        version: snapshot.version,
-        checksum: snapshot.checksum,
-        etag: snapshot.checksum ?? previous.etag,
-        lastUpdated: generatedAt,
-        lastAutoRefresh: generatedAt,
-        error: null,
-        isManual: false,
-        scope: subscription.reportScope,
-      }));
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-autoscaling') {
-      const payload = snapshot.payload as NamespaceAutoscalingSnapshotPayload;
-      const shouldSort = isMultiClusterScope(subscription.reportScope);
-      setScopedDomainState('namespace-autoscaling', subscription.reportScope, (previous) => {
-        const incoming = payload.resources ?? [];
-        const merged = mergeClusterRowsByKey(
-          previous.data?.resources,
-          incoming,
-          subscription.clusterId,
-          (row, fallbackClusterId) =>
-            buildAutoscalingKey(
-              row.clusterId ?? fallbackClusterId,
-              row.namespace,
-              row.kind,
-              row.name
-            )
-        );
-        if (shouldSort) {
-          sortAutoscalingRows(merged);
-        }
-        return {
-          ...previous,
-          status: 'ready',
-          data:
-            previous.data?.resources === merged ? previous.data : { ...payload, resources: merged },
-          stats: updateStats(snapshot.stats ?? previous.stats ?? null, merged.length),
-          version: snapshot.version,
-          checksum: snapshot.checksum,
-          etag: snapshot.checksum ?? previous.etag,
-          lastUpdated: generatedAt,
-          lastAutoRefresh: generatedAt,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-quotas') {
-      const payload = snapshot.payload as NamespaceQuotasSnapshotPayload;
-      setScopedDomainState('namespace-quotas', subscription.reportScope, (previous) => ({
-        ...previous,
-        status: 'ready',
-        data: payload,
-        stats: snapshot.stats ?? null,
-        version: snapshot.version,
-        checksum: snapshot.checksum,
-        etag: snapshot.checksum ?? previous.etag,
-        lastUpdated: generatedAt,
-        lastAutoRefresh: generatedAt,
-        error: null,
-        isManual: false,
-        scope: subscription.reportScope,
-      }));
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'namespace-storage') {
-      const payload = snapshot.payload as NamespaceStorageSnapshotPayload;
-      setScopedDomainState('namespace-storage', subscription.reportScope, (previous) => ({
-        ...previous,
-        status: 'ready',
-        data: payload,
-        stats: snapshot.stats ?? null,
-        version: snapshot.version,
-        checksum: snapshot.checksum,
-        etag: snapshot.checksum ?? previous.etag,
-        lastUpdated: generatedAt,
-        lastAutoRefresh: generatedAt,
-        error: null,
-        isManual: false,
-        scope: subscription.reportScope,
-      }));
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'cluster-rbac') {
-      const payload = snapshot.payload as ClusterRBACSnapshotPayload;
-      const shouldMerge = isMultiClusterScope(subscription.reportScope);
-      setScopedDomainState('cluster-rbac', subscription.reportScope, (previous) => {
-        const incoming = payload.resources ?? [];
-        const merged = shouldMerge
-          ? mergeClusterRows(previous.data?.resources, incoming, subscription.clusterId)
-          : incoming;
-        if (shouldMerge) {
-          sortClusterRBACRows(merged);
-        }
-        return {
-          ...previous,
-          status: 'ready',
-          data: shouldMerge ? { ...payload, resources: merged } : payload,
-          stats: updateStats(snapshot.stats ?? previous.stats ?? null, merged.length),
-          version: snapshot.version,
-          checksum: snapshot.checksum,
-          etag: snapshot.checksum ?? previous.etag,
-          lastUpdated: generatedAt,
-          lastAutoRefresh: generatedAt,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'cluster-storage') {
-      const payload = snapshot.payload as ClusterStorageSnapshotPayload;
-      const shouldMerge = isMultiClusterScope(subscription.reportScope);
-      setScopedDomainState('cluster-storage', subscription.reportScope, (previous) => {
-        const incoming = payload.volumes ?? [];
-        const merged = shouldMerge
-          ? mergeClusterRows(previous.data?.volumes, incoming, subscription.clusterId)
-          : incoming;
-        if (shouldMerge) {
-          sortClusterStorageRows(merged);
-        }
-        return {
-          ...previous,
-          status: 'ready',
-          data: shouldMerge ? { ...payload, volumes: merged } : payload,
-          stats: updateStats(snapshot.stats ?? previous.stats ?? null, merged.length),
-          version: snapshot.version,
-          checksum: snapshot.checksum,
-          etag: snapshot.checksum ?? previous.etag,
-          lastUpdated: generatedAt,
-          lastAutoRefresh: generatedAt,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'cluster-config') {
-      const payload = snapshot.payload as ClusterConfigSnapshotPayload;
-      const shouldMerge = isMultiClusterScope(subscription.reportScope);
-      setScopedDomainState('cluster-config', subscription.reportScope, (previous) => {
-        const incoming = payload.resources ?? [];
-        const merged = shouldMerge
-          ? mergeClusterRows(previous.data?.resources, incoming, subscription.clusterId)
-          : incoming;
-        if (shouldMerge) {
-          sortClusterConfigRows(merged);
-        }
-        return {
-          ...previous,
-          status: 'ready',
-          data: shouldMerge ? { ...payload, resources: merged } : payload,
-          stats: updateStats(snapshot.stats ?? previous.stats ?? null, merged.length),
-          version: snapshot.version,
-          checksum: snapshot.checksum,
-          etag: snapshot.checksum ?? previous.etag,
-          lastUpdated: generatedAt,
-          lastAutoRefresh: generatedAt,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'cluster-crds') {
-      const payload = snapshot.payload as ClusterCRDSnapshotPayload;
-      const shouldMerge = isMultiClusterScope(subscription.reportScope);
-      setScopedDomainState('cluster-crds', subscription.reportScope, (previous) => {
-        const incoming = payload.definitions ?? [];
-        const merged = shouldMerge
-          ? mergeClusterRows(previous.data?.definitions, incoming, subscription.clusterId)
-          : incoming;
-        if (shouldMerge) {
-          sortClusterCRDRows(merged);
-        }
-        return {
-          ...previous,
-          status: 'ready',
-          data: shouldMerge ? { ...payload, definitions: merged } : payload,
-          stats: updateStats(snapshot.stats ?? previous.stats ?? null, merged.length),
-          version: snapshot.version,
-          checksum: snapshot.checksum,
-          etag: snapshot.checksum ?? previous.etag,
-          lastUpdated: generatedAt,
-          lastAutoRefresh: generatedAt,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'cluster-custom') {
-      const payload = snapshot.payload as ClusterCustomSnapshotPayload;
-      const shouldMerge = isMultiClusterScope(subscription.reportScope);
-      setScopedDomainState('cluster-custom', subscription.reportScope, (previous) => {
-        const incoming = payload.resources ?? [];
-        const merged = shouldMerge
-          ? mergeClusterRows(previous.data?.resources, incoming, subscription.clusterId)
-          : incoming;
-        if (shouldMerge) {
-          sortClusterCustomRows(merged);
-        }
-        return {
-          ...previous,
-          status: 'ready',
-          data: shouldMerge ? { ...payload, resources: merged } : payload,
-          stats: updateStats(snapshot.stats ?? previous.stats ?? null, merged.length),
-          version: snapshot.version,
-          checksum: snapshot.checksum,
-          etag: snapshot.checksum ?? previous.etag,
-          lastUpdated: generatedAt,
-          lastAutoRefresh: generatedAt,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-      return;
-    }
-
-    if (subscription.domain === 'nodes') {
-      const payload = snapshot.payload as ClusterNodeSnapshotPayload;
-      const shouldMerge = isMultiClusterScope(subscription.reportScope);
-      setScopedDomainState('nodes', subscription.reportScope, (previous) => {
-        const incoming = payload.nodes ?? [];
-        const merged = shouldMerge
-          ? mergeClusterRows(previous.data?.nodes, incoming, subscription.clusterId)
-          : incoming;
-        if (shouldMerge) {
-          sortNodeRows(merged);
-        }
-        return {
-          ...previous,
-          status: 'ready',
-          data: shouldMerge ? { ...payload, nodes: merged } : payload,
-          stats: updateStats(snapshot.stats ?? previous.stats ?? null, merged.length),
-          version: snapshot.version,
-          checksum: snapshot.checksum,
-          etag: snapshot.checksum ?? previous.etag,
-          lastUpdated: generatedAt,
-          lastAutoRefresh: generatedAt,
-          error: null,
-          isManual: false,
-          scope: subscription.reportScope,
-        };
-      });
-      this.clearStreamError(subscription.clusterId);
-    }
+      };
+    });
+    this.clearStreamError(subscription.clusterId);
   }
 
   private updateShadowBaseline(subscription: StreamSubscription, snapshot: Snapshot<any>): void {
-    let snapshotKeys: Set<string> | null = null;
-
-    if (subscription.domain === 'pods') {
-      snapshotKeys = buildPodKeySet(
-        snapshot.payload as PodSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'namespace-workloads') {
-      snapshotKeys = buildWorkloadKeySet(
-        snapshot.payload as NamespaceWorkloadSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'namespace-config') {
-      snapshotKeys = buildConfigKeySet(
-        snapshot.payload as NamespaceConfigSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'namespace-network') {
-      snapshotKeys = buildNetworkKeySet(
-        snapshot.payload as NamespaceNetworkSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'namespace-rbac') {
-      snapshotKeys = buildRBACKeySet(
-        snapshot.payload as NamespaceRBACSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'namespace-custom') {
-      snapshotKeys = buildCustomKeySet(
-        snapshot.payload as NamespaceCustomSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'namespace-helm') {
-      snapshotKeys = buildHelmKeySet(
-        snapshot.payload as NamespaceHelmSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'namespace-autoscaling') {
-      snapshotKeys = buildAutoscalingKeySet(
-        snapshot.payload as NamespaceAutoscalingSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'namespace-quotas') {
-      snapshotKeys = buildQuotaKeySet(
-        snapshot.payload as NamespaceQuotasSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'namespace-storage') {
-      snapshotKeys = buildStorageKeySet(
-        snapshot.payload as NamespaceStorageSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'cluster-rbac') {
-      snapshotKeys = buildClusterRBACKeySet(
-        snapshot.payload as ClusterRBACSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'cluster-storage') {
-      snapshotKeys = buildClusterStorageKeySet(
-        snapshot.payload as ClusterStorageSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'cluster-config') {
-      snapshotKeys = buildClusterConfigKeySet(
-        snapshot.payload as ClusterConfigSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'cluster-crds') {
-      snapshotKeys = buildClusterCRDKeySet(
-        snapshot.payload as ClusterCRDSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'cluster-custom') {
-      snapshotKeys = buildClusterCustomKeySet(
-        snapshot.payload as ClusterCustomSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    } else if (subscription.domain === 'nodes') {
-      snapshotKeys = buildNodeKeySet(
-        snapshot.payload as ClusterNodeSnapshotPayload | null | undefined,
-        subscription.clusterId
-      );
-    }
-
-    if (!snapshotKeys) {
-      return;
-    }
+    const snapshotKeys = getResourceStreamDomainDescriptor(subscription.domain).buildSnapshotKeys(
+      snapshot.payload,
+      subscription.clusterId
+    );
 
     if (subscription.hasBaseline && !subscription.driftDetected) {
       const streamCount = subscription.shadowKeys.size;
@@ -4168,7 +1535,6 @@ export class ResourceStreamManager {
     this.lastNotifiedErrors.clear();
     this.consecutiveErrors.clear();
     this.streamTelemetry.clear();
-    this.clearPendingUnsubscribes();
   }
 }
 

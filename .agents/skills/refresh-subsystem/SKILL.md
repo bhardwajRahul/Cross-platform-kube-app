@@ -19,7 +19,19 @@ Per-Cluster Subsystem (manager, registry, informers, permissions)
     ↓ (snapshots, SSE, WebSocket)
 Aggregate Mux (routes requests to correct cluster)
     ↓ (HTTP API on loopback)
-Frontend RefreshManager + Stream Managers
+Frontend RefreshManager + RefreshOrchestrator
+    ↓ (per-cluster runtimes, stream managers, store writes)
+React UI
+```
+
+The frontend has one global coordinator for app lifecycle concerns, with per-cluster runtimes underneath it. Each runtime owns enabled scopes, in-flight work, stream health, metrics freshness, and streaming cleanup for exactly one cluster. Refresh domains are single-cluster by contract; background cluster refresh fans out as separate per-cluster requests instead of using multi-cluster refresh scopes.
+
+```
+Global coordinator
+    ↓
+ClusterRefreshRuntime(cluster-a)  ClusterRefreshRuntime(cluster-b)
+    ↓                             ↓
+single-cluster snapshots/streams  single-cluster snapshots/streams
     ↓ (callbacks, store updates)
 React UI
 ```
@@ -87,6 +99,28 @@ Every backend domain has a frontend counterpart:
 
 **These must stay synchronized.** A backend domain without a frontend mapping breaks diagnostics. A frontend refresher without a backend domain gets empty snapshots.
 
+Resource WebSocket domains also require:
+
+| File                                                                      | What to update                                                                  |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `frontend/src/core/refresh/streaming/resourceStreamDomains.ts`            | Scope kind, row collection, row identity, sort, drift keys, metric preservation |
+| `frontend/src/core/refresh/streaming/resourceStreamRows.ts`               | Pure row replacement, deletion, stable reuse, and metrics-preserving merge logic |
+| `frontend/src/core/refresh/streaming/resourceStreamConnection.ts`         | WebSocket connection lifecycle, queued sends, reconnect, pause/resume           |
+| `frontend/src/core/refresh/streaming/resourceStreamSubscriptions.ts`      | Single-cluster scope resolution, subscription state, unsubscribe debounce, resume tokens |
+| `backend/refresh/resourcestream/domains.go`                               | Supported streamed refresh domain list                                          |
+| `backend/refresh/resourcestream/stream_registration_*.go`                 | Informer registration and lister/indexer setup                                  |
+| `backend/refresh/resourcestream/update_helpers_test.go` and manager tests | Stream envelope metadata and row-shape parity                                   |
+
+Resource stream descriptors describe row behavior only. Domain descriptors must
+not reintroduce multi-cluster capability flags; cross-cluster UI should derive
+from separate per-cluster domain state above the refresh store.
+
+`ResourceStreamManager` should remain responsible for refresh-store mutation,
+snapshot resync, drift detection, health, telemetry, and fallback decisions.
+Keep connection lifecycle in `ResourceStreamConnection`, subscription mechanics
+in `ResourceStreamSubscriptionStore`, and pure row math in
+`resourceStreamRows.ts`.
+
 ## Snapshot Building
 
 **File:** `backend/refresh/snapshot/service.go`
@@ -111,6 +145,8 @@ Four stream types use the refresh HTTP server, with different transports:
 
 **Event stream resume:** Backend buffers recent events in a circular buffer per scope. On reconnect, frontend sends `?since=<sequence>` to resume. If the buffer overflowed, resume returns empty and the client must re-snapshot. **Resume is not guaranteed.**
 
+**Resource stream resume:** Resource WebSocket subscriptions are keyed by a single cluster, domain, and normalized scope. The frontend sends resume tokens per subscription; expired buffers trigger `RESET` and a snapshot resync. Multi-cluster resource stream scopes are rejected on both the frontend subscription path and backend stream mux path, matching the broader single-cluster refresh-domain contract.
+
 **Stream endpoints:**
 
 - `/api/v2/stream/events`
@@ -132,6 +168,23 @@ Key behaviors:
 - Global pause blocks automatic refresh but not manual refresh
 - Visibility: streams suspend on hidden tab, resume on visible
 
+## Resource Stream Registration
+
+Backend resource stream registration is split by behavior:
+
+| File                             | Purpose                                                                  |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| `stream_registration_helpers.go` | Permission checks and Add/Update/Delete event mapping                    |
+| `stream_registration_direct.go`  | Direct object-to-stream handlers without manager listers/indexers        |
+| `stream_registration_network.go` | Network and Gateway API handlers, including service/route/policy listers |
+| `stream_registration_related.go` | Pod/node/workload registrations that seed related-object lookup state    |
+| `domains.go`                     | Supported resource stream domain list used for parity guardrails         |
+
+Keep permission checks before lazy informer creation. Do not replace these files with a large descriptor table if the behavior-specific split is clearer.
+Ordinary object updates may use shared `newObjectUpdate`/`newObjectRowUpdate`
+helpers, but keep pods, endpoint slices, workloads, custom resources,
+node-derived updates, and Helm resync signals explicit.
+
 ## Known Fragility Points
 
 ### Things that break easily
@@ -140,13 +193,15 @@ Key behaviors:
 
 2. **Metrics polling** — Can be disabled for two different reasons (permissions vs discovery) with different UI messages. Getting the disabled reason wrong makes diagnostics confusing.
 
-3. **Multi-cluster add/remove** — Aggregate handlers must be updated via the update path, not just init. If a cluster is removed while a refresh is running, the aggregate handler can crash.
+3. **Multi-cluster add/remove** — Aggregate handlers must be updated via the update path, not just init. They route requests to per-cluster subsystems; they must not merge multiple clusters into one refresh-domain result.
 
-4. **Stream reconnection** — Event buffer overflow means resume fails silently. Frontend must detect empty resume and fall back to full re-snapshot. If this detection is wrong, the UI shows stale data with no indication.
+4. **Refresh scope ownership** — Refresh domains must target exactly one cluster. Do not pass multi-cluster scopes to snapshot, manual refresh, or resource stream domains; fan out to per-cluster runtimes instead.
 
-5. **Rapid context changes** — Switching namespaces/clusters quickly can leave refreshers in undefined state. The abort→retrigger path has race conditions if context updates arrive faster than abort completes.
+5. **Stream reconnection** — Event/resource buffer overflow means resume fails and the frontend must fall back to full re-snapshot. If this detection is wrong, the UI shows stale data with no indication.
 
-6. **Informer shutdown** — `Shutdown()` clears references but doesn't stop informers (context cancellation does that). If the context isn't cancelled before shutdown, informers leak.
+6. **Rapid context changes** — Switching namespaces/clusters quickly can leave refreshers in undefined state. The abort→retrigger path has race conditions if context updates arrive faster than abort completes.
+
+7. **Informer shutdown** — `Shutdown()` clears references but doesn't stop informers (context cancellation does that). If the context isn't cancelled before shutdown, informers leak.
 
 ### Before modifying this subsystem
 
@@ -154,6 +209,11 @@ Key behaviors:
 - [ ] Check if domain registration order is affected
 - [ ] Check if permission checks need updating (both layers)
 - [ ] Check if frontend mappings need updating (types, refresher config, diagnostics)
+- [ ] For resource streams, check frontend descriptors, backend supported domains, registration files, and single-cluster scope tests
+- [ ] Confirm new refresh-domain code builds one cluster scope at a time and derives any cross-cluster display above refresh state
+- [ ] Confirm `namespaces` and `cluster-overview` remain ordinary per-cluster domains, not aggregate-domain exceptions
+- [ ] Confirm backend aggregate handlers still route as a mux and do not merge snapshot/manual/event/resource results across clusters
+- [ ] For streamed table rows, check descriptor parity tests for row identity, update identity, sorting, empty payloads, and drift keys
 - [ ] Check if stream resume semantics are affected
 - [ ] Test with multiple clusters connected
 - [ ] Test with a cluster that has restricted RBAC (not cluster-admin)

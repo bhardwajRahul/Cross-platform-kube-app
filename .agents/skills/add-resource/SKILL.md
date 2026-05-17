@@ -262,11 +262,23 @@ contract together:
 - Runtime permission checks in `backend/refresh/snapshot/permission_checks.go`
 - Shared row helpers/tests in `backend/refresh/snapshot/streaming_helpers.go`
   when a resource stream emits matching rows
+- Backend resource stream support in
+  `backend/refresh/resourcestream/stream_registration_*.go`,
+  `backend/refresh/resourcestream/domains.go`, and resource stream tests when
+  live row updates are needed
 - Frontend `RefreshDomain` and `DomainPayloadMap` in
   `frontend/src/core/refresh/types.ts`
+- Frontend resource stream descriptors in
+  `frontend/src/core/refresh/streaming/resourceStreamDomains.ts` when live row
+  updates are needed
 - Frontend refresher names/config, orchestrator registration, manual refresh
   mapping, and diagnostics panel config under `frontend/src/core/refresh`
 - GridTable consumer and shared column factories when rendering a table
+
+Refresh domains are single-cluster only, including Resource WebSocket domains.
+Do not add multi-cluster descriptor flags or send multi-cluster scopes to
+snapshot, manual refresh, or stream paths; background refresh should fan out as
+separate single-cluster requests.
 
 For larger table/list work, use `.agents/skills/browse-tables/SKILL.md` and
 `.agents/skills/refresh-subsystem/SKILL.md` alongside this skill.

@@ -52,25 +52,18 @@ func TestAggregateSnapshotServiceBuildRequiresClusterScope(t *testing.T) {
 	require.Nil(t, snap)
 }
 
-func TestAggregateSnapshotServiceBuildAllowsPartialFailuresForClusterList(t *testing.T) {
-	successSnapshot := &refresh.Snapshot{
-		Domain: "namespaces",
-		Payload: snapshot.NamespaceSnapshot{
-			Namespaces: []snapshot.NamespaceSummary{
-				{Name: "default"},
-			},
-		},
-	}
-
+func TestAggregateSnapshotServiceBuildRejectsMultiClusterScope(t *testing.T) {
 	services := map[string]refresh.SnapshotService{
 		"cluster-a": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
-				return successSnapshot, nil
+				t.Fatalf("multi-cluster snapshot request should not reach a cluster service")
+				return nil, nil
 			},
 		},
 		"cluster-b": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
-				return nil, refresh.NewPermissionDeniedError(domain, "")
+				t.Fatalf("multi-cluster snapshot request should not reach a cluster service")
+				return nil, nil
 			},
 		},
 	}
@@ -80,14 +73,9 @@ func TestAggregateSnapshotServiceBuildAllowsPartialFailuresForClusterList(t *tes
 	}
 
 	snap, err := aggregate.Build(context.Background(), "namespaces", "clusters=cluster-a,cluster-b|")
-	require.NoError(t, err)
-	require.NotNil(t, snap)
-
-	payload, ok := snap.Payload.(snapshot.NamespaceSnapshot)
-	require.True(t, ok)
-	require.Len(t, payload.Namespaces, 1)
-	require.Equal(t, "default", payload.Namespaces[0].Name)
-	require.Contains(t, snap.Stats.Warnings, "Cluster cluster-b: permission denied for domain namespaces")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "single cluster scope")
+	require.Nil(t, snap)
 }
 
 func TestAggregateSnapshotServiceNamespaceSnapshotTriggersLifecycleCallback(t *testing.T) {
@@ -114,14 +102,14 @@ func TestAggregateSnapshotServiceNamespaceSnapshotTriggersLifecycleCallback(t *t
 		},
 	}
 
-	snap, err := aggregate.Build(context.Background(), "namespaces", "clusters=cluster-a|")
+	snap, err := aggregate.Build(context.Background(), "namespaces", "cluster-a|")
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 	require.Equal(t, []string{"cluster-a"}, called)
 
 	// A later namespace snapshot should trigger the callback again. The lifecycle
 	// callback decides whether the cluster currently needs a ready transition.
-	snap, err = aggregate.Build(context.Background(), "namespaces", "clusters=cluster-a|")
+	snap, err = aggregate.Build(context.Background(), "namespaces", "cluster-a|")
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 	require.Equal(t, []string{"cluster-a", "cluster-a"}, called)
@@ -149,7 +137,7 @@ func TestAggregateSnapshotServiceNonNamespaceDomainDoesNotTriggerCallback(t *tes
 		},
 	}
 
-	snap, err := aggregate.Build(context.Background(), "cluster-overview", "clusters=cluster-a|")
+	snap, err := aggregate.Build(context.Background(), "cluster-overview", "cluster-a|")
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 	require.False(t, callbackFired, "callback must only fire for namespaces domain")
@@ -173,7 +161,7 @@ func TestAggregateSnapshotServiceFailedBuildDoesNotTriggerCallback(t *testing.T)
 		},
 	}
 
-	_, _ = aggregate.Build(context.Background(), "namespaces", "clusters=cluster-a|")
+	_, _ = aggregate.Build(context.Background(), "namespaces", "cluster-a|")
 	require.False(t, callbackFired, "callback must not fire on build failure")
 }
 
@@ -207,7 +195,7 @@ func TestAggregateSnapshotServiceLifecycleTransitionsReadyAfterInPlaceRebuild(t 
 	}
 
 	// Initial namespace snapshot moves loading -> ready.
-	_, err := aggregate.Build(context.Background(), "namespaces", "clusters=cluster-a|")
+	_, err := aggregate.Build(context.Background(), "namespaces", "cluster-a|")
 	require.NoError(t, err)
 	require.Equal(t, ClusterStateReady, lifecycle.GetState("cluster-a"))
 
@@ -225,7 +213,7 @@ func TestAggregateSnapshotServiceLifecycleTransitionsReadyAfterInPlaceRebuild(t 
 		},
 	})
 
-	_, err = aggregate.Build(context.Background(), "namespaces", "clusters=cluster-a|")
+	_, err = aggregate.Build(context.Background(), "namespaces", "cluster-a|")
 	require.NoError(t, err)
 	require.Equal(t, ClusterStateReady, lifecycle.GetState("cluster-a"))
 
@@ -266,7 +254,7 @@ func TestAggregateSnapshotServiceLifecycleIntegration(t *testing.T) {
 		},
 	}
 
-	snap, err := aggregate.Build(context.Background(), "namespaces", "clusters=cluster-a|")
+	snap, err := aggregate.Build(context.Background(), "namespaces", "cluster-a|")
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 	require.Equal(t, ClusterStateReady, lifecycle.GetState("cluster-a"))
@@ -306,7 +294,7 @@ func TestAggregateSnapshotServiceLifecycleNoTransitionIfAlreadyReady(t *testing.
 		},
 	}
 
-	_, err := aggregate.Build(context.Background(), "namespaces", "clusters=cluster-a|")
+	_, err := aggregate.Build(context.Background(), "namespaces", "cluster-a|")
 	require.NoError(t, err)
 
 	// Only the initial SetState should have fired, not a duplicate ready transition.
@@ -315,26 +303,40 @@ func TestAggregateSnapshotServiceLifecycleNoTransitionIfAlreadyReady(t *testing.
 	require.Equal(t, emittedEvent{"cluster-a", "ready", ""}, events[0])
 }
 
-func TestAggregateSnapshotServiceBuildReturnsErrorWhenAllClustersFail(t *testing.T) {
+func TestAggregateSnapshotServiceBuildReturnsErrorWhenClusterFails(t *testing.T) {
 	services := map[string]refresh.SnapshotService{
 		"cluster-a": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 				return nil, refresh.NewPermissionDeniedError(domain, "")
 			},
 		},
-		"cluster-b": stubSnapshotService{
+	}
+	aggregate := &aggregateSnapshotService{
+		clusterOrder: []string{"cluster-a"},
+		services:     services,
+	}
+
+	snap, err := aggregate.Build(context.Background(), "namespaces", "cluster-a|")
+	require.Error(t, err)
+	require.True(t, refresh.IsPermissionDenied(err))
+	require.Nil(t, snap)
+}
+
+func TestAggregateSnapshotServiceBuildReturnsErrorWhenClusterUnavailable(t *testing.T) {
+	services := map[string]refresh.SnapshotService{
+		"cluster-a": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
-				return nil, refresh.NewPermissionDeniedError(domain, "")
+				return &refresh.Snapshot{Domain: domain, Scope: scope}, nil
 			},
 		},
 	}
 	aggregate := &aggregateSnapshotService{
-		clusterOrder: []string{"cluster-a", "cluster-b"},
+		clusterOrder: []string{"cluster-a"},
 		services:     services,
 	}
 
-	snap, err := aggregate.Build(context.Background(), "namespaces", "clusters=cluster-a,cluster-b|")
+	snap, err := aggregate.Build(context.Background(), "namespaces", "cluster-b|")
 	require.Error(t, err)
-	require.True(t, refresh.IsPermissionDenied(err))
+	require.Contains(t, err.Error(), "no active clusters available")
 	require.Nil(t, snap)
 }
