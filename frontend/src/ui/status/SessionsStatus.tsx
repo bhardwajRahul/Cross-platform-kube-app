@@ -18,9 +18,13 @@ import {
 } from '@shared/components/icons/SharedIcons';
 import { useKubeconfig } from '@modules/kubernetes/config/KubeconfigContext';
 import { useObjectPanel } from '@modules/object-panel/hooks/useObjectPanel';
-import { requestObjectPanelTab } from '@modules/object-panel/objectPanelTabRequests';
+import {
+  getRequestedObjectPanelTab,
+  requestObjectPanelTab,
+} from '@modules/object-panel/objectPanelTabRequests';
 import {
   readPortForwardSessions,
+  readRuntimeOperations,
   readShellSessions,
   requestAppState,
 } from '@/core/app-state-access';
@@ -60,6 +64,15 @@ interface PortForwardStatusEvent {
   statusReason?: string;
   localPort?: number;
   podName?: string;
+}
+
+interface RuntimeOperation {
+  id: string;
+  type: string;
+  clusterId: string;
+  clusterName?: string;
+  status: string;
+  startedAt: string;
 }
 
 function parseTimestamp(value?: string | { time?: string }): number {
@@ -125,15 +138,27 @@ const SessionsStatus: React.FC = () => {
     useKubeconfig();
   const [shellSessions, setShellSessions] = useState<ShellSessionInfo[]>([]);
   const [portForwardSessions, setPortForwardSessions] = useState<PortForwardSession[]>([]);
+  const [runtimeOperations, setRuntimeOperations] = useState<RuntimeOperation[]>([]);
   const [stoppingPortForwardIds, setStoppingPortForwardIds] = useState<Set<string>>(new Set());
   const [jumpingShellSessionId, setJumpingShellSessionId] = useState<string | null>(null);
   const [pendingShellJump, setPendingShellJump] = useState<{
     session: ShellSessionInfo;
     targetClusterId: string;
   } | null>(null);
+  const [statusPopoverCloseSignal, setStatusPopoverCloseSignal] = useState(0);
 
   useEffect(() => {
     const load = async () => {
+      try {
+        const operations = await requestAppState({
+          resource: 'runtime-operations',
+          adapter: 'runtime-read',
+          read: () => readRuntimeOperations(),
+        });
+        setRuntimeOperations(operations || []);
+      } catch {
+        // Ignore initial load errors; runtime events will repopulate.
+      }
       try {
         const shellList = await requestAppState({
           resource: 'shell-sessions',
@@ -179,7 +204,7 @@ const SessionsStatus: React.FC = () => {
   }, []);
 
   const openShellSessionTab = useCallback(
-    (session: ShellSessionInfo) => {
+    (session: ShellSessionInfo): boolean => {
       const targetRef = buildRequiredObjectReference({
         kind: 'Pod',
         name: session.podName,
@@ -190,9 +215,17 @@ const SessionsStatus: React.FC = () => {
       const panelId = objectPanelId(targetRef);
       openWithObject(targetRef);
       requestObjectPanelTab(panelId, 'shell');
+      if (getRequestedObjectPanelTab(panelId) !== 'shell') {
+        throw new Error('Shell session tab request was not accepted.');
+      }
+      return true;
     },
     [openWithObject, selectedClusterId]
   );
+
+  const closeStatusPopover = useCallback(() => {
+    setStatusPopoverCloseSignal((signal) => signal + 1);
+  }, []);
 
   const clusterSelectionById = useMemo(() => {
     const map = new Map<string, string>();
@@ -216,7 +249,18 @@ const SessionsStatus: React.FC = () => {
       setJumpingShellSessionId(session.sessionId);
 
       if (!targetClusterId || selectedClusterId === targetClusterId) {
-        openShellSessionTab(session);
+        try {
+          if (openShellSessionTab(session)) {
+            closeStatusPopover();
+          }
+        } catch (err) {
+          errorHandler.handle(err, {
+            action: 'jumpToShellSession',
+            sessionId: session.sessionId,
+            clusterId: targetClusterId,
+            source: 'SessionsStatus',
+          });
+        }
         setJumpingShellSessionId(null);
         return;
       }
@@ -237,6 +281,7 @@ const SessionsStatus: React.FC = () => {
       setActiveKubeconfig(targetSelection);
     },
     [
+      closeStatusPopover,
       clusterSelectionById,
       jumpingShellSessionId,
       openShellSessionTab,
@@ -257,6 +302,28 @@ const SessionsStatus: React.FC = () => {
 
     const cancelPortForwardList = runtime.EventsOn('portforward:list', (...args: unknown[]) =>
       setPortForwardSessions((args[0] as PortForwardSession[]) || [])
+    ) as unknown as (() => void) | undefined;
+
+    const cancelRuntimeOperationsList = runtime.EventsOn(
+      'runtime-operations:list',
+      (...args: unknown[]) => {
+        const operations = (args[0] as RuntimeOperation[]) || [];
+        setRuntimeOperations(operations);
+        const activeShellIds = new Set(
+          operations
+            .filter((operation) => operation.type === 'shell')
+            .map((operation) => operation.id)
+        );
+        const activePortForwardIds = new Set(
+          operations
+            .filter((operation) => operation.type === 'port-forward')
+            .map((operation) => operation.id)
+        );
+        setShellSessions((prev) => prev.filter((session) => activeShellIds.has(session.sessionId)));
+        setPortForwardSessions((prev) =>
+          prev.filter((session) => activePortForwardIds.has(session.id))
+        );
+      }
     ) as unknown as (() => void) | undefined;
 
     const cancelPortForwardStatus = runtime.EventsOn('portforward:status', (...args: unknown[]) => {
@@ -280,6 +347,7 @@ const SessionsStatus: React.FC = () => {
     return () => {
       cancelShellList?.();
       cancelPortForwardList?.();
+      cancelRuntimeOperationsList?.();
       cancelPortForwardStatus?.();
     };
   }, []);
@@ -295,10 +363,21 @@ const SessionsStatus: React.FC = () => {
     ) {
       return;
     }
-    openShellSessionTab(pendingShellJump.session);
+    try {
+      if (openShellSessionTab(pendingShellJump.session)) {
+        closeStatusPopover();
+      }
+    } catch (err) {
+      errorHandler.handle(err, {
+        action: 'jumpToShellSession',
+        sessionId: pendingShellJump.session.sessionId,
+        clusterId: pendingShellJump.targetClusterId,
+        source: 'SessionsStatus',
+      });
+    }
     setPendingShellJump(null);
     setJumpingShellSessionId(null);
-  }, [openShellSessionTab, pendingShellJump, selectedClusterId]);
+  }, [closeStatusPopover, openShellSessionTab, pendingShellJump, selectedClusterId]);
 
   useEffect(() => {
     if (!pendingShellJump) {
@@ -313,29 +392,55 @@ const SessionsStatus: React.FC = () => {
     }
   }, [pendingShellJump, shellSessions]);
 
+  const filteredRuntimeOperations = useMemo(
+    () =>
+      selectedClusterId
+        ? runtimeOperations.filter((operation) => operation.clusterId === selectedClusterId)
+        : runtimeOperations,
+    [runtimeOperations, selectedClusterId]
+  );
+
+  const runtimeShellIds = useMemo(
+    () =>
+      new Set(
+        filteredRuntimeOperations
+          .filter((operation) => operation.type === 'shell')
+          .map((operation) => operation.id)
+      ),
+    [filteredRuntimeOperations]
+  );
+
+  const runtimePortForwardIds = useMemo(
+    () =>
+      new Set(
+        filteredRuntimeOperations
+          .filter((operation) => operation.type === 'port-forward')
+          .map((operation) => operation.id)
+      ),
+    [filteredRuntimeOperations]
+  );
+
   const filteredShellSessions = useMemo(
     () =>
-      (selectedClusterId
-        ? shellSessions.filter((session) => session.clusterId === selectedClusterId)
-        : shellSessions
-      ).sort((a, b) => parseTimestamp(b.startedAt) - parseTimestamp(a.startedAt)),
-    [selectedClusterId, shellSessions]
+      shellSessions
+        .filter((session) => runtimeShellIds.has(session.sessionId))
+        .sort((a, b) => parseTimestamp(b.startedAt) - parseTimestamp(a.startedAt)),
+    [runtimeShellIds, shellSessions]
   );
 
   const filteredPortForwards = useMemo(
     () =>
-      (selectedClusterId
-        ? portForwardSessions.filter((session) => session.clusterId === selectedClusterId)
-        : portForwardSessions
-      ).sort((a, b) => {
-        const priorityA = getPortForwardStatusPriority(a.status);
-        const priorityB = getPortForwardStatusPriority(b.status);
-        if (priorityA !== priorityB) {
-          return priorityA - priorityB;
-        }
-        return parseTimestamp(b.startedAt) - parseTimestamp(a.startedAt);
-      }),
-    [portForwardSessions, selectedClusterId]
+      portForwardSessions
+        .filter((session) => runtimePortForwardIds.has(session.id))
+        .sort((a, b) => {
+          const priorityA = getPortForwardStatusPriority(a.status);
+          const priorityB = getPortForwardStatusPriority(b.status);
+          if (priorityA !== priorityB) {
+            return priorityA - priorityB;
+          }
+          return parseTimestamp(b.startedAt) - parseTimestamp(a.startedAt);
+        }),
+    [portForwardSessions, runtimePortForwardIds]
   );
 
   const shellCount = filteredShellSessions.length;
@@ -344,8 +449,7 @@ const SessionsStatus: React.FC = () => {
   const totalCount = shellCount + portForwardCount;
   const totalHealthy =
     shellCount + filteredPortForwards.filter((session) => session.status === 'active').length;
-  const totalUnhealthy =
-    portForwardCount - filteredPortForwards.filter((session) => session.status === 'active').length;
+  const totalUnhealthy = Math.max(0, totalCount - totalHealthy);
 
   const status = useMemo<StatusState>(() => {
     if (totalCount === 0) return 'inactive';
@@ -545,6 +649,7 @@ const SessionsStatus: React.FC = () => {
       ariaLabel={`Sessions: ${messageAria}`}
       tooltipClassName="sessions-status-popover"
       hideTitle
+      closeSignal={statusPopoverCloseSignal}
     />
   );
 };

@@ -6,12 +6,14 @@ import SessionsStatus from './SessionsStatus';
 
 const listShellSessionsMock = vi.hoisted(() => vi.fn());
 const listPortForwardsMock = vi.hoisted(() => vi.fn());
+const listRuntimeOperationsMock = vi.hoisted(() => vi.fn());
 const stopPortForwardMock = vi.hoisted(() => vi.fn());
 const browserOpenURLMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@wailsjs/go/backend/App', () => ({
   ListShellSessions: listShellSessionsMock,
   ListPortForwards: listPortForwardsMock,
+  ListRuntimeOperations: listRuntimeOperationsMock,
   StopPortForward: stopPortForwardMock,
 }));
 
@@ -20,9 +22,25 @@ vi.mock('@wailsjs/runtime/runtime', () => ({
 }));
 
 const statusIndicatorMock = vi.hoisted(() =>
-  vi.fn(({ message }: { message: ReactNode }) => (
-    <div data-testid="status-indicator-message">{message}</div>
-  ))
+  vi.fn(
+    ({
+      message,
+      closeSignal,
+      status,
+    }: {
+      message: ReactNode;
+      closeSignal?: unknown;
+      status?: string;
+    }) => (
+      <div
+        data-testid="status-indicator-message"
+        data-close-signal={String(closeSignal ?? '')}
+        data-status={status ?? ''}
+      >
+        {message}
+      </div>
+    )
+  )
 );
 
 vi.mock('@shared/components/status/StatusIndicator', () => ({
@@ -31,6 +49,7 @@ vi.mock('@shared/components/status/StatusIndicator', () => ({
 
 const openWithObjectMock = vi.hoisted(() => vi.fn());
 const requestObjectPanelTabMock = vi.hoisted(() => vi.fn());
+const getRequestedObjectPanelTabMock = vi.hoisted(() => vi.fn());
 const objectPanelIdMock = vi.hoisted(() => vi.fn(() => 'object-panel:pod:web-abc'));
 
 vi.mock('@modules/object-panel/hooks/useObjectPanel', () => ({
@@ -40,6 +59,7 @@ vi.mock('@modules/object-panel/hooks/useObjectPanel', () => ({
 }));
 
 vi.mock('@modules/object-panel/objectPanelTabRequests', () => ({
+  getRequestedObjectPanelTab: getRequestedObjectPanelTabMock,
   requestObjectPanelTab: requestObjectPanelTabMock,
 }));
 
@@ -102,7 +122,25 @@ describe('SessionsStatus shell session jump action', () => {
     vi.clearAllMocks();
     listShellSessionsMock.mockResolvedValue([baseShellSession]);
     listPortForwardsMock.mockResolvedValue([]);
+    listRuntimeOperationsMock.mockResolvedValue([
+      {
+        id: baseShellSession.sessionId,
+        type: 'shell',
+        clusterId: baseShellSession.clusterId,
+        clusterName: baseShellSession.clusterName,
+        target: {
+          group: '',
+          version: 'v1',
+          kind: 'Pod',
+          namespace: baseShellSession.namespace,
+          name: baseShellSession.podName,
+        },
+        status: 'open',
+        startedAt: baseShellSession.startedAt,
+      },
+    ]);
     stopPortForwardMock.mockResolvedValue(undefined);
+    getRequestedObjectPanelTabMock.mockReturnValue('shell');
     kubeconfigState.selectedClusterId = 'cluster-a';
     kubeconfigState.selectedKubeconfigs = ['selection-a', 'selection-b'];
     (
@@ -134,6 +172,11 @@ describe('SessionsStatus shell session jump action', () => {
     });
   };
 
+  const latestCloseSignal = () =>
+    statusIndicatorMock.mock.calls[statusIndicatorMock.mock.calls.length - 1]?.[0]?.closeSignal as
+      | number
+      | undefined;
+
   it('opens and focuses the shell tab immediately for sessions on the active cluster', async () => {
     await renderStatus();
 
@@ -164,6 +207,33 @@ describe('SessionsStatus shell session jump action', () => {
       })
     );
     expect(requestObjectPanelTabMock).toHaveBeenCalledWith('object-panel:pod:web-abc', 'shell');
+    expect(latestCloseSignal()).toBe(1);
+  });
+
+  it('keeps the sessions panel open when the shell tab request is not verified', async () => {
+    getRequestedObjectPanelTabMock.mockReturnValue(undefined);
+    await renderStatus();
+
+    const openButton = document.querySelector('.as-shell-session-jump') as HTMLButtonElement;
+    expect(openButton).toBeTruthy();
+    expect(latestCloseSignal()).toBe(0);
+
+    await act(async () => {
+      openButton.click();
+      await Promise.resolve();
+    });
+
+    expect(openWithObjectMock).toHaveBeenCalled();
+    expect(requestObjectPanelTabMock).toHaveBeenCalledWith('object-panel:pod:web-abc', 'shell');
+    expect(errorHandlerMock.handle).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        action: 'jumpToShellSession',
+        sessionId: 'shell-1',
+        clusterId: 'cluster-a',
+      })
+    );
+    expect(latestCloseSignal()).toBe(0);
   });
 
   it('requests a cluster switch before opening a shell session on another cluster', async () => {
@@ -174,6 +244,23 @@ describe('SessionsStatus shell session jump action', () => {
         sessionId: 'shell-2',
         clusterId: 'cluster-b',
         clusterName: 'cluster-b',
+      },
+    ]);
+    listRuntimeOperationsMock.mockResolvedValue([
+      {
+        id: 'shell-2',
+        type: 'shell',
+        clusterId: 'cluster-b',
+        clusterName: 'cluster-b',
+        target: {
+          group: '',
+          version: 'v1',
+          kind: 'Pod',
+          namespace: baseShellSession.namespace,
+          name: baseShellSession.podName,
+        },
+        status: 'open',
+        startedAt: baseShellSession.startedAt,
       },
     ]);
 
@@ -189,5 +276,35 @@ describe('SessionsStatus shell session jump action', () => {
 
     expect(setActiveKubeconfigMock).toHaveBeenCalledWith('selection-b');
     expect(openWithObjectMock).not.toHaveBeenCalled();
+  });
+
+  it('does not render node drains in the shell and port-forward sessions panel', async () => {
+    listShellSessionsMock.mockResolvedValue([]);
+    listPortForwardsMock.mockResolvedValue([]);
+    listRuntimeOperationsMock.mockResolvedValue([
+      {
+        id: 'drain-1',
+        type: 'drain',
+        clusterId: 'cluster-a',
+        clusterName: 'cluster-a',
+        target: {
+          group: '',
+          version: 'v1',
+          kind: 'Node',
+          name: 'node-a',
+        },
+        status: 'active',
+        startedAt: baseShellSession.startedAt,
+      },
+    ]);
+
+    await renderStatus();
+
+    expect(document.body.textContent).not.toContain('Node Drains');
+    expect(document.body.textContent).not.toContain('node-a');
+    expect(document.body.textContent).toContain('No active shell sessions or port forwards');
+    expect(
+      statusIndicatorMock.mock.calls[statusIndicatorMock.mock.calls.length - 1]?.[0]?.status
+    ).toBe('inactive');
   });
 });
