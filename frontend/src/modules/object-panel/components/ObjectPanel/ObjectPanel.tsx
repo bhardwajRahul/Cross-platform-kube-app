@@ -11,7 +11,11 @@ import ConfirmationModal from '@shared/components/modals/ConfirmationModal';
 import RollbackModal from '@shared/components/modals/RollbackModal';
 import type { DetailsTabProps } from '@modules/object-panel/components/ObjectPanel/Details/DetailsTab';
 import { types } from '@wailsjs/go/models';
-import { TriggerCronJob, SuspendCronJob } from '@wailsjs/go/backend/App';
+import {
+  buildObjectActionTarget,
+  runCronJobSuspend,
+  runCronJobTrigger,
+} from '@shared/actions/objectActionClient';
 import { DockablePanel, useDockablePanelContext } from '@ui/dockable';
 import { getDefaultObjectPanelPosition } from '@core/settings/appPreferences';
 import { errorHandler } from '@utils/errorHandler';
@@ -264,7 +268,11 @@ function ObjectPanel({ panelId, objectRef }: ObjectPanelProps) {
     queryNamespacePermissions(namespace, objectData?.clusterId ?? null);
   }, [objectData?.clusterId, objectData?.namespace]);
 
-  const featureSupport = useObjectPanelFeatureSupport(objectKind, RESOURCE_CAPABILITIES);
+  const featureSupport = useObjectPanelFeatureSupport(
+    objectKind,
+    RESOURCE_CAPABILITIES,
+    isHelmRelease
+  );
 
   const { capabilities, capabilityReasons, nodeLogsState, nodeLogSources } =
     useObjectPanelCapabilities({
@@ -376,6 +384,7 @@ function ObjectPanel({ panelId, objectRef }: ObjectPanelProps) {
   } = useObjectPanelActions({
     objectData,
     objectKind,
+    isHelmRelease,
     state,
     dispatch,
     close,
@@ -392,7 +401,7 @@ function ObjectPanel({ panelId, objectRef }: ObjectPanelProps) {
       if (!objectData.clusterId) {
         throw new Error(`Cannot trigger CronJob/${objectData.name}: clusterId is missing`);
       }
-      await TriggerCronJob(objectData.clusterId, objectData.namespace, objectData.name);
+      await runCronJobTrigger(buildObjectActionTarget(objectData, 'trigger'));
     } catch (err) {
       errorHandler.handle(err, { action: 'trigger', kind: 'CronJob', name: objectData.name });
     } finally {
@@ -414,10 +423,8 @@ function ObjectPanel({ panelId, objectRef }: ObjectPanelProps) {
           `Cannot ${isSuspended ? 'resume' : 'suspend'} CronJob/${objectData.name}: clusterId is missing`
         );
       }
-      await SuspendCronJob(
-        objectData.clusterId,
-        objectData.namespace,
-        objectData.name,
+      await runCronJobSuspend(
+        buildObjectActionTarget(objectData, isSuspended ? 'resume' : 'suspend'),
         !isSuspended
       );
       await fetchResourceDetails('user');

@@ -8,6 +8,7 @@
 import type { PanelObjectData } from '../types';
 import { buildClusterScope, buildObjectScope } from '@/core/refresh/clusterScope';
 import { hasCompleteObjectMapReference } from '../objectMapSupport';
+import { resolveBuiltinGroupVersion } from '@shared/constants/builtinGroupVersions';
 
 export interface UseObjectPanelKindOptions {
   clusterScope?: string;
@@ -42,6 +43,118 @@ export interface ObjectPanelKindResult {
 }
 
 const DEFAULT_CLUSTER_SCOPE = '__cluster__';
+const HELM_RELEASE_GVK = { group: 'helm.sh', version: 'v3' };
+
+const normalizeOptional = (value: string | null | undefined): string | undefined => {
+  const trimmed = value?.trim() ?? '';
+  return trimmed || undefined;
+};
+
+const resolveScopeGVK = (
+  kind: string | null | undefined,
+  group: string | null | undefined,
+  version: string | null | undefined
+): { group: string; version: string } | null => {
+  const normalizedKind = kind?.trim() ?? '';
+  if (!normalizedKind) {
+    return null;
+  }
+
+  const suppliedVersion = normalizeOptional(version);
+  const groupWasCarried = group !== undefined && group !== null;
+  const suppliedGroup = groupWasCarried ? (group ?? '').trim() : undefined;
+  const isHelmReleaseKind = normalizedKind.toLowerCase() === 'helmrelease';
+  if (isHelmReleaseKind) {
+    if (!suppliedVersion) {
+      return HELM_RELEASE_GVK;
+    }
+    if (
+      groupWasCarried &&
+      suppliedGroup === HELM_RELEASE_GVK.group &&
+      suppliedVersion === HELM_RELEASE_GVK.version
+    ) {
+      return HELM_RELEASE_GVK;
+    }
+    if (!groupWasCarried || !suppliedGroup) {
+      return null;
+    }
+    return { group: suppliedGroup, version: suppliedVersion };
+  }
+
+  const builtin = resolveBuiltinGroupVersion(normalizedKind);
+  const builtinGVK =
+    builtin.version !== undefined && builtin.group !== undefined
+      ? { group: builtin.group, version: builtin.version }
+      : null;
+
+  if (suppliedVersion) {
+    if (builtinGVK) {
+      const groupValue = groupWasCarried ? suppliedGroup! : builtinGVK.group;
+      if (groupValue !== builtinGVK.group || suppliedVersion !== builtinGVK.version) {
+        return null;
+      }
+      return builtinGVK;
+    }
+    if (!groupWasCarried || !suppliedGroup) {
+      return null;
+    }
+    return { group: suppliedGroup, version: suppliedVersion };
+  }
+
+  if (builtinGVK) {
+    return builtinGVK;
+  }
+  return null;
+};
+
+const isSyntheticHelmRelease = (
+  kind: string | null | undefined,
+  group: string | null | undefined,
+  version: string | null | undefined
+): boolean => {
+  const normalizedKind = kind?.trim().toLowerCase() ?? '';
+  if (normalizedKind !== 'helmrelease') {
+    return false;
+  }
+  const suppliedVersion = normalizeOptional(version);
+  if (!suppliedVersion) {
+    return true;
+  }
+  const groupWasCarried = group !== undefined && group !== null;
+  return (
+    groupWasCarried &&
+    (group ?? '').trim() === HELM_RELEASE_GVK.group &&
+    suppliedVersion === HELM_RELEASE_GVK.version
+  );
+};
+
+const buildRequiredObjectScope = (args: {
+  namespace: string;
+  kind: string;
+  name: string;
+  gvk: { group: string; version: string } | null;
+}): string | null => {
+  if (!args.gvk) {
+    return null;
+  }
+  return buildObjectScope({
+    namespace: args.namespace,
+    group: args.gvk.group,
+    version: args.gvk.version,
+    kind: args.kind,
+    name: args.name,
+  });
+};
+
+const buildClusterObjectScope = (
+  clusterId: string | undefined,
+  objectScope: string | null
+): string | null => {
+  if (!objectScope) {
+    return null;
+  }
+  return buildClusterScope(clusterId, objectScope);
+};
 
 export const getObjectPanelKind = (
   objectData: PanelObjectData | null,
@@ -51,6 +164,12 @@ export const getObjectPanelKind = (
   const clusterId = objectData?.clusterId ?? options.clusterId ?? undefined;
 
   const objectKind = objectData?.kind ? objectData.kind.toLowerCase() : null;
+  const scopeGVK = resolveScopeGVK(objectData?.kind, objectData?.group, objectData?.version);
+  const isHelmRelease = isSyntheticHelmRelease(
+    objectData?.kind,
+    objectData?.group,
+    objectData?.version
+  );
 
   const scopeNamespace =
     !objectData?.namespace || objectData.namespace.length === 0
@@ -60,12 +179,11 @@ export const getObjectPanelKind = (
   const detailScope =
     !objectData?.name || !objectKind
       ? null
-      : buildClusterScope(
+      : buildClusterObjectScope(
           clusterId,
-          buildObjectScope({
+          buildRequiredObjectScope({
             namespace: scopeNamespace,
-            group: objectData?.group,
-            version: objectData?.version,
+            gvk: scopeGVK,
             kind: objectKind,
             name: objectData.name,
           })
@@ -79,12 +197,11 @@ export const getObjectPanelKind = (
   const eventsScope =
     !objectData?.name || !objectData?.kind
       ? null
-      : buildClusterScope(
+      : buildClusterObjectScope(
           clusterId,
-          buildObjectScope({
+          buildRequiredObjectScope({
             namespace: scopeNamespace,
-            group: objectData?.group,
-            version: objectData?.version,
+            gvk: scopeGVK,
             kind: objectData.kind,
             name: objectData.name,
           })
@@ -97,12 +214,11 @@ export const getObjectPanelKind = (
   const containerLogsScope =
     !objectData?.name || !objectKind
       ? null
-      : buildClusterScope(
+      : buildClusterObjectScope(
           clusterId,
-          buildObjectScope({
+          buildRequiredObjectScope({
             namespace: scopeNamespace,
-            group: objectData?.group,
-            version: objectData?.version,
+            gvk: scopeGVK,
             kind: objectKind,
             name: objectData.name,
           })
@@ -113,23 +229,21 @@ export const getObjectPanelKind = (
   // object-events uses, which matches Kind verbatim against the catalog.
   const mapScope = !hasCompleteObjectMapReference(objectData)
     ? null
-    : buildClusterScope(
+    : buildClusterObjectScope(
         clusterId,
-        buildObjectScope({
+        buildRequiredObjectScope({
           namespace: scopeNamespace,
-          group: objectData?.group,
-          version: objectData?.version,
+          gvk: scopeGVK,
           kind: objectData.kind,
           name: objectData.name,
         })
       );
 
   const helmScope =
-    objectKind !== 'helmrelease' || !objectData?.name
+    !isHelmRelease || !objectData?.name
       ? null
       : buildClusterScope(clusterId, `${scopeNamespace}:${objectData.name}`);
 
-  const isHelmRelease = objectKind === 'helmrelease';
   const isEvent = objectKind === 'event';
 
   return {
