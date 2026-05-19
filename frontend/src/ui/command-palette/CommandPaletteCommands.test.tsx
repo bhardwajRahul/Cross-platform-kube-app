@@ -24,6 +24,8 @@ const { mocks } = vi.hoisted(() => ({
       selectedKubeconfig: '',
       selectedClusterId: '',
       setSelectedKubeconfigs: vi.fn(),
+      openKubeconfig: vi.fn(),
+      closeKubeconfig: vi.fn(),
       setActiveKubeconfig: vi.fn(),
       getClusterMeta: vi.fn(() => ({ id: '', name: '' })),
       loadKubeconfigs: vi.fn(),
@@ -48,9 +50,6 @@ const { mocks } = vi.hoisted(() => ({
     },
     appSettings: {
       UpdateAppPreferences: vi.fn(),
-    },
-    appLifecycle: {
-      CloseCluster: vi.fn(),
     },
     refreshOrchestrator: {
       triggerManualRefreshForContext: vi.fn(),
@@ -99,7 +98,6 @@ vi.mock('@/core/refresh', () => ({
 
 vi.mock('@wailsjs/go/backend/App', () => ({
   UpdateAppPreferences: (...args: unknown[]) => mocks.appSettings.UpdateAppPreferences(...args),
-  CloseCluster: (...args: unknown[]) => mocks.appLifecycle.CloseCluster(...args),
 }));
 
 vi.mock('@/utils/appearanceMode', () => ({
@@ -167,14 +165,16 @@ describe('CommandPaletteCommands', () => {
     mocks.kubeconfig.selectedKubeconfig = '';
     mocks.kubeconfig.setActiveKubeconfig.mockReset();
     mocks.kubeconfig.setSelectedKubeconfigs.mockReset();
+    mocks.kubeconfig.openKubeconfig.mockReset();
+    mocks.kubeconfig.openKubeconfig.mockResolvedValue(undefined);
+    mocks.kubeconfig.closeKubeconfig.mockReset();
+    mocks.kubeconfig.closeKubeconfig.mockResolvedValue(undefined);
     mocks.kubeconfig.loadKubeconfigs.mockReset();
     mocks.kubeconfig.loadKubeconfigs.mockResolvedValue(undefined);
     mocks.autoRefresh.enabled = true;
     mocks.autoRefresh.toggle.mockReset();
     mocks.appSettings.UpdateAppPreferences.mockReset();
     mocks.appSettings.UpdateAppPreferences.mockResolvedValue({ settings: {}, changedKeys: [] });
-    mocks.appLifecycle.CloseCluster.mockReset();
-    mocks.appLifecycle.CloseCluster.mockResolvedValue(undefined);
     (window as any).go = { backend: { App: {} } };
     resetAppPreferencesCacheForTesting();
   });
@@ -205,7 +205,8 @@ describe('CommandPaletteCommands', () => {
     command?.action();
 
     expect(mocks.kubeconfig.setActiveKubeconfig).not.toHaveBeenCalled();
-    expect(mocks.kubeconfig.setSelectedKubeconfigs).toHaveBeenCalledWith(['/kube/alpha:dev']);
+    expect(mocks.kubeconfig.openKubeconfig).toHaveBeenCalledWith('/kube/alpha:dev');
+    expect(mocks.kubeconfig.setSelectedKubeconfigs).not.toHaveBeenCalled();
 
     unmount();
   });
@@ -265,8 +266,8 @@ describe('CommandPaletteCommands', () => {
       await Promise.resolve();
     });
 
-    expect(mocks.appLifecycle.CloseCluster).toHaveBeenCalledWith('/kube/beta:prod');
-    expect(mocks.kubeconfig.loadKubeconfigs).toHaveBeenCalledTimes(1);
+    expect(mocks.kubeconfig.closeKubeconfig).toHaveBeenCalledWith('/kube/beta:prod');
+    expect(mocks.kubeconfig.loadKubeconfigs).not.toHaveBeenCalled();
     expect(mocks.kubeconfig.setSelectedKubeconfigs).not.toHaveBeenCalled();
     unmount();
   });

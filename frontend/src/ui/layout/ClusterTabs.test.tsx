@@ -15,15 +15,11 @@ import {
 } from '@core/persistence/clusterTabOrder';
 import { TabDragProvider } from '@shared/components/tabs/dragCoordinator';
 
-const backendMocks = vi.hoisted(() => ({
-  CloseCluster: vi.fn().mockResolvedValue(undefined),
-  ListRuntimeOperations: vi.fn().mockResolvedValue([]),
-}));
-
 type MockState = {
   selectedKubeconfigs: string[];
   selectedKubeconfig: string;
   setSelectedKubeconfigs: (next: string[]) => Promise<void>;
+  closeKubeconfig: (selectionOrClusterId: string) => Promise<void>;
   setActiveKubeconfig: (config: string) => void;
   getClusterMeta: (config: string) => { id: string; name: string };
   loadKubeconfigs: () => Promise<void>;
@@ -33,6 +29,7 @@ const mockState: MockState = {
   selectedKubeconfigs: [],
   selectedKubeconfig: '',
   setSelectedKubeconfigs: vi.fn().mockResolvedValue(undefined),
+  closeKubeconfig: vi.fn().mockResolvedValue(undefined),
   setActiveKubeconfig: vi.fn(),
   getClusterMeta: (config: string) => ({ id: config, name: config }),
   loadKubeconfigs: vi.fn().mockResolvedValue(undefined),
@@ -41,8 +38,6 @@ const mockState: MockState = {
 vi.mock('@modules/kubernetes/config/KubeconfigContext', () => ({
   useKubeconfig: () => mockState,
 }));
-
-vi.mock('@wailsjs/go/backend/App', () => backendMocks);
 
 describe('ClusterTabs', () => {
   let container: HTMLDivElement;
@@ -60,10 +55,9 @@ describe('ClusterTabs', () => {
     mockState.selectedKubeconfigs = [];
     mockState.selectedKubeconfig = '';
     mockState.setSelectedKubeconfigs = vi.fn().mockResolvedValue(undefined);
+    mockState.closeKubeconfig = vi.fn().mockResolvedValue(undefined);
     mockState.setActiveKubeconfig = vi.fn();
     mockState.loadKubeconfigs = vi.fn().mockResolvedValue(undefined);
-    backendMocks.CloseCluster.mockResolvedValue(undefined);
-    backendMocks.ListRuntimeOperations.mockResolvedValue([]);
     vi.clearAllMocks();
   });
 
@@ -134,7 +128,7 @@ describe('ClusterTabs', () => {
     expect(mockState.setActiveKubeconfig).toHaveBeenCalledWith('b');
   });
 
-  it('invokes CloseCluster when a tab is closed', async () => {
+  it('invokes closeKubeconfig when a tab is closed', async () => {
     mockState.selectedKubeconfigs = ['a', 'b'];
     mockState.selectedKubeconfig = 'a';
     await renderTabs();
@@ -150,60 +144,45 @@ describe('ClusterTabs', () => {
       closeButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    expect(backendMocks.ListRuntimeOperations).toHaveBeenCalled();
-    expect(backendMocks.CloseCluster).toHaveBeenCalledWith('b');
-    expect(mockState.loadKubeconfigs).toHaveBeenCalledTimes(1);
+    expect(mockState.closeKubeconfig).toHaveBeenCalledWith('b');
+    expect(mockState.loadKubeconfigs).not.toHaveBeenCalled();
     expect(mockState.setSelectedKubeconfigs).not.toHaveBeenCalled();
   });
 
-  it('reloads kubeconfig context after confirmed close with active operations', async () => {
-    mockState.selectedKubeconfigs = ['a', 'b'];
+  it('dispatches rapid tab closes immediately without serializing behind backend work', async () => {
+    const blockedClose = new Promise<void>(() => undefined);
+    mockState.closeKubeconfig = vi
+      .fn()
+      .mockReturnValueOnce(blockedClose)
+      .mockResolvedValue(undefined);
+    mockState.selectedKubeconfigs = ['a', 'b', 'c'];
     mockState.selectedKubeconfig = 'a';
-    backendMocks.ListRuntimeOperations.mockResolvedValue([
-      {
-        id: 'shell-b',
-        type: 'shell',
-        clusterId: 'b',
-        status: 'active',
-        startedAt: '2026-05-17T00:00:00Z',
-      },
-      {
-        id: 'drain-b',
-        type: 'drain',
-        clusterId: 'b',
-        status: 'active',
-        startedAt: '2026-05-17T00:00:01Z',
-      },
-    ]);
     await renderTabs();
 
-    const tabs = Array.from(container.querySelectorAll('[role="tab"]'));
-    const targetTab = tabs.find((tab) =>
-      tab.querySelector('.tab-item__label')?.textContent?.includes('b')
-    );
-    const closeButton = targetTab?.querySelector('.tab-item__close') as HTMLElement;
+    const closeButtonFor = (label: string) => {
+      const tabs = Array.from(container.querySelectorAll('[role="tab"]'));
+      const tab = tabs.find((node) =>
+        node.querySelector('.tab-item__label')?.textContent?.includes(label)
+      );
+      return tab?.querySelector('.tab-item__close') as HTMLElement | null;
+    };
 
-    await act(async () => {
-      closeButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    const closeB = closeButtonFor('b');
+    const closeC = closeButtonFor('c');
+    expect(closeB).toBeTruthy();
+    expect(closeC).toBeTruthy();
+
+    act(() => {
+      closeB?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      closeC?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    expect(document.body.textContent).toContain('Active Operations');
-    expect(document.body.textContent).toContain('2 active operations');
-    expect(document.body.textContent).toContain('1 shell session, 1 node drain');
-
-    const confirmButton = Array.from(document.querySelectorAll('button')).find(
-      (button) => button.textContent?.trim() === 'Stop & Close'
-    ) as HTMLElement | undefined;
-    expect(confirmButton).toBeTruthy();
-
     await act(async () => {
-      confirmButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await Promise.resolve();
     });
 
-    expect(backendMocks.CloseCluster).toHaveBeenCalledWith('b');
-    expect(mockState.loadKubeconfigs).toHaveBeenCalledTimes(1);
+    expect(mockState.closeKubeconfig).toHaveBeenNthCalledWith(1, 'b');
+    expect(mockState.closeKubeconfig).toHaveBeenNthCalledWith(2, 'c');
   });
 
   it('shows filename:context for tabs with name collisions', async () => {

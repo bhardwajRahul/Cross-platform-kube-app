@@ -51,7 +51,6 @@ import {
 import { useDimInactiveNamespaces } from '@/hooks/useDimInactiveNamespaces';
 import { useExclusiveNamespaces } from '@/hooks/useExclusiveNamespaces';
 import { useShortNames } from '@/hooks/useShortNames';
-import { CloseCluster } from '@wailsjs/go/backend/App';
 
 export interface Command {
   id: string;
@@ -73,11 +72,11 @@ export function useCommandPaletteCommands() {
     selectedKubeconfig,
     selectedClusterId,
     selectedKubeconfigs,
-    setSelectedKubeconfigs,
+    openKubeconfig,
+    closeKubeconfig,
     kubeconfigs,
     setActiveKubeconfig,
     getClusterMeta,
-    loadKubeconfigs,
   } = useKubeconfig();
   const { favorites, setPendingFavorite } = useFavorites();
   const { mode } = useAppearanceMode();
@@ -111,12 +110,10 @@ export function useCommandPaletteCommands() {
     if (!selectedKubeconfigs.includes(active)) {
       return;
     }
-    void CloseCluster(active)
-      .then(() => loadKubeconfigs())
-      .catch((err) => {
-        console.warn('Failed to close cluster:', err);
-      });
-  }, [loadKubeconfigs, selectedKubeconfig, selectedKubeconfigs]);
+    void closeKubeconfig(active).catch((err) => {
+      console.warn('Failed to close cluster:', err);
+    });
+  }, [closeKubeconfig, selectedKubeconfig, selectedKubeconfigs]);
 
   const selectNamespace = useCallback(
     (scope: string) => {
@@ -682,12 +679,12 @@ export function useCommandPaletteCommands() {
             setActiveKubeconfig(configValue);
             return;
           }
-          void setSelectedKubeconfigs([...selectedKubeconfigs, configValue]);
+          void openKubeconfig(configValue);
         },
         keywords: ['kubeconfig', 'context', config.name, config.context],
       };
     });
-  }, [kubeconfigs, selectedKubeconfigs, setActiveKubeconfig, setSelectedKubeconfigs]);
+  }, [kubeconfigs, openKubeconfig, selectedKubeconfigs, setActiveKubeconfig]);
 
   // Build commands from saved favorites so they appear as a searchable group.
   const favoriteCommands: Command[] = useMemo(
@@ -705,7 +702,7 @@ export function useCommandPaletteCommands() {
           navigateToFavorite(fav, {
             selectedKubeconfigs,
             selectedClusterId,
-            setSelectedKubeconfigs,
+            openKubeconfig,
             setActiveKubeconfig,
             getClusterMeta,
             setPendingFavorite,
@@ -717,7 +714,7 @@ export function useCommandPaletteCommands() {
       favorites,
       selectedKubeconfigs,
       selectedClusterId,
-      setSelectedKubeconfigs,
+      openKubeconfig,
       setActiveKubeconfig,
       getClusterMeta,
       setPendingFavorite,

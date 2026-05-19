@@ -74,7 +74,8 @@ type Service struct {
 	healthMu sync.RWMutex
 	health   healthStatus
 
-	syncInProgress atomic.Bool // true while sync() is running — prevents watch flush races
+	syncMu         sync.Mutex  // serializes full syncs from the run loop and watch recovery path
+	syncInProgress atomic.Bool // true while sync() is running; prevents watch flush races
 
 	startOnce sync.Once
 	doneCh    chan struct{}
@@ -176,9 +177,7 @@ func (s *Service) Run(ctx context.Context) error {
 			close(s.doneCh)
 			return
 		}
-		if s.deps.Logger != nil {
-			s.deps.Logger.Info("Object catalog service starting", componentName)
-		}
+		s.logInfo("Object catalog service starting")
 		runErr = s.runLoop(ctx)
 	})
 	return runErr

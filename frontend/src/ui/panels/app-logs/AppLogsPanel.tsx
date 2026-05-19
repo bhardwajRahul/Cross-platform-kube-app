@@ -5,7 +5,17 @@
  * Handles rendering and interactions for the shared components.
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect } from 'react';
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+  useLayoutEffect,
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent,
+} from 'react';
 import { ClearAppLogs, SetAppLogsPanelVisible } from '@wailsjs/go/backend/App';
 import { errorHandler } from '@utils/errorHandler';
 import LoadingSpinner from '@shared/components/LoadingSpinner';
@@ -38,6 +48,28 @@ const LOG_LEVEL_BASE_OPTIONS = [
 ];
 const ALL_LEVEL_VALUES = LOG_LEVEL_BASE_OPTIONS.map((option) => option.value);
 const DEFAULT_LOG_LEVELS = ALL_LEVEL_VALUES;
+const GLOBAL_LOG_SCOPE_VALUE = '__app_global__';
+const GLOBAL_LOG_SCOPE_LABEL = 'Global';
+const DEFAULT_LOG_COLUMN_WIDTHS = {
+  timestamp: 90,
+  level: 60,
+  source: 120,
+  cluster: 140,
+};
+const LOG_COLUMN_WIDTH_LIMITS = {
+  timestamp: { min: 70, max: 180 },
+  level: { min: 50, max: 120 },
+  source: { min: 80, max: 320 },
+  cluster: { min: 90, max: 420 },
+};
+
+type LogColumnKey = keyof typeof DEFAULT_LOG_COLUMN_WIDTHS;
+
+interface ResizeDragState {
+  column: LogColumnKey;
+  startX: number;
+  startWidth: number;
+}
 
 const findLatestSequence = (entries: LogEntry[], fallback = 0) =>
   entries.reduce(
@@ -46,14 +78,24 @@ const findLatestSequence = (entries: LogEntry[], fallback = 0) =>
     fallback
   );
 
+const getLogScopeValue = (log: LogEntry) => {
+  const clusterId = log.clusterId?.trim() ?? '';
+  const clusterName = log.clusterName?.trim() ?? '';
+  return clusterId || clusterName || GLOBAL_LOG_SCOPE_VALUE;
+};
+
+const getLogScopeLabel = (log: LogEntry) =>
+  log.clusterName?.trim() || log.clusterId?.trim() || GLOBAL_LOG_SCOPE_LABEL;
+
+const clampColumnWidth = (column: LogColumnKey, width: number) => {
+  const limits = LOG_COLUMN_WIDTH_LIMITS[column];
+  return Math.min(limits.max, Math.max(limits.min, Math.round(width)));
+};
+
 const buildClusterOption = (log: LogEntry) => {
   const clusterId = log.clusterId?.trim() ?? '';
   const clusterName = log.clusterName?.trim() ?? '';
-  const value = clusterId || clusterName;
-
-  if (!value) {
-    return null;
-  }
+  const value = getLogScopeValue(log);
 
   let fileName = '';
   let context = '';
@@ -79,7 +121,7 @@ const buildClusterOption = (log: LogEntry) => {
     context = clusterName || clusterId;
   }
 
-  const label = fileName && context ? `${fileName}:${context}` : context || value;
+  const label = fileName && context ? `${fileName}:${context}` : context || GLOBAL_LOG_SCOPE_LABEL;
 
   return {
     value,
@@ -106,6 +148,7 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
   const [componentFilter, setComponentFilter] = useState<string[]>([]);
   const [clusterFilter, setClusterFilter] = useState<string[]>([]);
   const [textFilter, setTextFilter] = useState<string>('');
+  const [columnWidths, setColumnWidths] = useState(DEFAULT_LOG_COLUMN_WIDTHS);
   const logsContainerRef = useRef<HTMLDivElement>(null);
   const textFilterInputRef = useRef<HTMLInputElement>(null);
   const panelScopeRef = useRef<HTMLDivElement>(null);
@@ -115,6 +158,8 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
   const offsetFromBottomRef = useRef(0);
   const latestSequenceRef = useRef(0);
   const copyFeedbackTimerRef = useRef<number | null>(null);
+  const resizeDragRef = useRef<ResizeDragState | null>(null);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
   const SCROLL_THRESHOLD = 10;
 
   // Separate ref to track auto-scroll without causing re-renders
@@ -131,6 +176,113 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
   useEffect(() => {
     isAutoScrollRef.current = isAutoScroll;
   }, [isAutoScroll]);
+
+  const finishColumnResize = useCallback(() => {
+    resizeDragRef.current = null;
+    resizeCleanupRef.current?.();
+    resizeCleanupRef.current = null;
+  }, []);
+
+  useEffect(() => () => finishColumnResize(), [finishColumnResize]);
+
+  const setColumnWidth = useCallback((column: LogColumnKey, width: number) => {
+    setColumnWidths((prev) => ({
+      ...prev,
+      [column]: clampColumnWidth(column, width),
+    }));
+  }, []);
+
+  const handleColumnResizePointerDown = useCallback(
+    (column: LogColumnKey, event: PointerEvent<HTMLSpanElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      finishColumnResize();
+
+      resizeDragRef.current = {
+        column,
+        startX: event.clientX,
+        startWidth: columnWidths[column],
+      };
+      const previousCursor = document.body.style.cursor;
+      const previousUserSelect = document.body.style.userSelect;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+
+      const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
+        const drag = resizeDragRef.current;
+        if (!drag) {
+          return;
+        }
+        setColumnWidth(drag.column, drag.startWidth + moveEvent.clientX - drag.startX);
+      };
+
+      const handlePointerUp = () => {
+        finishColumnResize();
+      };
+
+      resizeCleanupRef.current = () => {
+        window.removeEventListener('pointermove', handlePointerMove);
+        window.removeEventListener('pointerup', handlePointerUp);
+        window.removeEventListener('pointercancel', handlePointerUp);
+        document.body.style.cursor = previousCursor;
+        document.body.style.userSelect = previousUserSelect;
+      };
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+      window.addEventListener('pointercancel', handlePointerUp);
+    },
+    [columnWidths, finishColumnResize, setColumnWidth]
+  );
+
+  const handleColumnResizeKeyDown = useCallback(
+    (column: LogColumnKey, event: KeyboardEvent<HTMLSpanElement>) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
+        return;
+      }
+      event.preventDefault();
+      const direction = event.key === 'ArrowRight' ? 1 : -1;
+      const step = event.shiftKey ? 25 : 10;
+      setColumnWidth(column, columnWidths[column] + direction * step);
+    },
+    [columnWidths, setColumnWidth]
+  );
+
+  const columnWidthStyle = useMemo(
+    () =>
+      ({
+        '--app-log-timestamp-width': `${columnWidths.timestamp}px`,
+        '--app-log-level-width': `${columnWidths.level}px`,
+        '--app-log-source-width': `${columnWidths.source}px`,
+        '--app-log-cluster-width': `${columnWidths.cluster}px`,
+      }) as CSSProperties,
+    [columnWidths]
+  );
+
+  const renderHeaderCell = useCallback(
+    (column: LogColumnKey | 'message', label: string, className: string) => (
+      <span className={`app-logs-header-cell ${className}`} role="columnheader">
+        <span className="app-logs-header-label">{label}</span>
+        {column !== 'message' && (
+          <span
+            className="app-logs-column-resizer"
+            role="separator"
+            tabIndex={0}
+            aria-label={`Resize ${label} column`}
+            aria-orientation="vertical"
+            aria-valuemin={LOG_COLUMN_WIDTH_LIMITS[column].min}
+            aria-valuemax={LOG_COLUMN_WIDTH_LIMITS[column].max}
+            aria-valuenow={columnWidths[column]}
+            onPointerDown={(event) => handleColumnResizePointerDown(column, event)}
+            onKeyDown={(event) => handleColumnResizeKeyDown(column, event)}
+          />
+        )}
+      </span>
+    ),
+    [columnWidths, handleColumnResizeKeyDown, handleColumnResizePointerDown]
+  );
 
   const updatePinnedState = useCallback(() => {
     const container = logsContainerRef.current;
@@ -183,7 +335,7 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
         0
       );
     }
-  }, [logs, logLevelFilter, componentFilter, textFilter, isAutoScroll]);
+  }, [logs, logLevelFilter, componentFilter, clusterFilter, textFilter, isAutoScroll]);
 
   useEffect(() => {
     if (!isAutoScroll) {
@@ -321,16 +473,24 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
 
   const clusterOptions = useMemo(() => {
     const seen = new Set<string>();
-    const options: Array<NonNullable<ReturnType<typeof buildClusterOption>>> = [];
+    const options: Array<ReturnType<typeof buildClusterOption>> = [];
     logs.forEach((log) => {
       const option = buildClusterOption(log);
-      if (!option || seen.has(option.value)) {
+      if (seen.has(option.value)) {
         return;
       }
       seen.add(option.value);
       options.push(option);
     });
-    options.sort((left, right) => left.label.localeCompare(right.label));
+    options.sort((left, right) => {
+      if (left.value === GLOBAL_LOG_SCOPE_VALUE) {
+        return -1;
+      }
+      if (right.value === GLOBAL_LOG_SCOPE_VALUE) {
+        return 1;
+      }
+      return left.label.localeCompare(right.label);
+    });
     return options;
   }, [logs]);
 
@@ -485,7 +645,7 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
           return false;
         }
         // Filter by cluster
-        const clusterValue = log.clusterId || log.clusterName || '';
+        const clusterValue = getLogScopeValue(log);
         if (clusterFilter.length > 0 && !clusterFilter.includes(clusterValue)) {
           return false;
         }
@@ -496,7 +656,16 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
           const matchesSource = log.source?.toLowerCase().includes(searchText) || false;
           const matchesClusterId = log.clusterId?.toLowerCase().includes(searchText) || false;
           const matchesClusterName = log.clusterName?.toLowerCase().includes(searchText) || false;
-          if (!matchesMessage && !matchesSource && !matchesClusterId && !matchesClusterName) {
+          const matchesScope =
+            clusterValue === GLOBAL_LOG_SCOPE_VALUE &&
+            GLOBAL_LOG_SCOPE_LABEL.toLowerCase().includes(searchText);
+          if (
+            !matchesMessage &&
+            !matchesSource &&
+            !matchesClusterId &&
+            !matchesClusterName &&
+            !matchesScope
+          ) {
             return false;
           }
         }
@@ -574,8 +743,7 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
         const timestamp = formatTimestamp(log.timestamp);
         const level = log.level.toUpperCase().padEnd(5);
         const source = log.source ? `[${log.source}] ` : '';
-        const cluster = log.clusterName || log.clusterId;
-        const clusterPart = cluster ? `[${cluster}] ` : '';
+        const clusterPart = `[${getLogScopeLabel(log)}] `;
         return `${timestamp} ${level} ${source}${clusterPart}${log.message}`;
       })
       .join('\n');
@@ -770,9 +938,23 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
       </div>
 
       <div
+        className="app-logs-header"
+        role="row"
+        aria-label="Application log columns"
+        style={columnWidthStyle}
+      >
+        {renderHeaderCell('timestamp', 'Time', 'log-timestamp')}
+        {renderHeaderCell('level', 'Level', 'log-level')}
+        {renderHeaderCell('source', 'Source', 'log-source')}
+        {renderHeaderCell('cluster', 'Cluster', 'log-cluster')}
+        {renderHeaderCell('message', 'Message', 'log-message')}
+      </div>
+
+      <div
         ref={logsContainerRef}
         className="app-logs-container selectable"
         onScroll={handleLogsScroll}
+        style={columnWidthStyle}
         tabIndex={-1}
       >
         {isLoading ? (
@@ -786,10 +968,8 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
             <div key={index} className={`log-entry ${getLevelClass(log.level)}`}>
               <span className="log-timestamp">{formatTimestamp(log.timestamp)}</span>
               <span className={`log-level ${log.level.toUpperCase()}`}>{log.level}</span>
-              {log.source && <span className="log-source">[{log.source}]</span>}
-              {(log.clusterName || log.clusterId) && (
-                <span className="log-cluster">[{log.clusterName || log.clusterId}]</span>
-              )}
+              <span className="log-source">{log.source ? `[${log.source}]` : ''}</span>
+              <span className="log-cluster">[{getLogScopeLabel(log)}]</span>
               <span className="log-message">{log.message}</span>
             </div>
           ))

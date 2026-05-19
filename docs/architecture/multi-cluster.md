@@ -124,12 +124,46 @@ Cluster activation can come from:
 - Startup persistence (previously selected clusters)
 - Kubeconfig dropdown
 - Command palette
+- Favorites and other saved navigation
 
 Cluster deactivation can come from:
 
 - Kubeconfig dropdown
 - Cluster tab close button
 - `Ctrl+W` / `Cmd+W` keyboard shortcut
+- Command palette
+
+### Unified Selection Transitions
+
+`frontend/src/modules/kubernetes/config/KubeconfigContext.tsx` owns the
+frontend transition for opening, closing, replacing, and clearing cluster tabs.
+Every user-invoked way to open or close a cluster must enter that same context
+transition path:
+
+- Open a selected-but-inactive cluster by calling `setActiveKubeconfig`.
+- Open or activate a cluster tab from another surface by calling
+  `openKubeconfig`.
+- Close one cluster tab by calling `closeKubeconfig`.
+- Replace or clear the selected set, such as from the kubeconfig selector, by
+  calling `setSelectedKubeconfigs`.
+
+Those public context methods all delegate to the same internal selection
+transition. Consumers must not locally splice `selectedKubeconfigs`, call
+generated backend selection methods directly, or call backend `CloseCluster`
+for frontend tab UX. If a new close/open affordance is added, wire only the
+intent into the context method so next-active-tab selection, optimistic UI,
+backend persistence, refresh context updates, event emission, and rollback
+behavior stay identical across all surfaces.
+
+The backend still owns the durable selection mutation. The unified frontend
+transition persists the normalized selection through the backend selection API,
+and backend selection cleanup tears down removed-cluster clients, refresh
+subsystems, catalog state, and runtime operations.
+
+Tests for cluster-tab lifecycle changes should cover both explicit
+open/close actions and replacement/removal through the selector path. They must
+assert the user-visible behavior, not just the individual caller, because the
+invariant is that all paths share the same transition semantics.
 
 ### Selection Events
 
@@ -167,6 +201,24 @@ When no clusters are selected:
 - Each tab has its own view state, sidebar, and object panel state
 - Views only show data for the active tab cluster
 - Object panel actions must always be scoped to the originating cluster
+
+Open cluster tabs are retained workspaces, not disposable views. Switching from
+one open cluster tab to another must preserve the inactive tab's last-viewed
+navigation state and scoped refresh data so switching back can render
+immediately. Foreground activation may revalidate or reconnect after rendering
+cached state, but it must not blank the view first.
+
+Inactive open tabs are backgrounded, not disposed:
+
+- Active to background-open transitions preserve scoped state.
+- Background-open to active transitions render retained state immediately.
+- Background refresh, when enabled, updates inactive open tabs through separate
+  single-cluster scopes.
+- Disabling background refresh stops inactive-tab work but does not clear the
+  last loaded data.
+- Closing a cluster tab, removing/disconnecting a cluster, kubeconfig changes,
+  auth/runtime resets, permission invalidation, and explicit view resets are
+  disposal paths and may clear scoped state.
 
 ## Per-Cluster State Tracking
 
