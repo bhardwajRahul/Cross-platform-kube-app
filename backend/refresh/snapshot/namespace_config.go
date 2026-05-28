@@ -2,10 +2,8 @@ package snapshot
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -79,45 +77,28 @@ func RegisterNamespaceConfigDomain(
 // Build assembles ConfigMap and Secret summaries for a namespace scope.
 func (b *NamespaceConfigBuilder) Build(ctx context.Context, scope string) (*refresh.Snapshot, error) {
 	meta := ClusterMetaFromContext(ctx)
-	clusterID, trimmed := refresh.SplitClusterScope(scope)
-	trimmed = strings.TrimSpace(trimmed)
-	if trimmed == "" {
-		return nil, errors.New(errNamespaceConfigScopeRequired)
-	}
-
-	isAll := isAllNamespaceScope(trimmed)
-	var (
-		namespace  string
-		err        error
-		scopeLabel string
-	)
-	if isAll {
-		scopeLabel = refresh.JoinClusterScope(clusterID, "namespace:all")
-	} else {
-		namespace, err = parseAutoscalingNamespace(trimmed)
-		if err != nil {
-			return nil, errors.New(errNamespaceConfigScopeRequired)
-		}
-		scopeLabel = refresh.JoinClusterScope(clusterID, trimmed)
+	parsedScope, err := parseNamespaceSnapshotScope(scope, errNamespaceConfigScopeRequired)
+	if err != nil {
+		return nil, err
 	}
 
 	var configMaps []*corev1.ConfigMap
-	if b.configMaps != nil {
-		configMaps, err = b.listConfigMaps(namespace)
+	if b.configMaps != nil && runtimeResourceAllowed(ctx, namespaceConfigDomainName, "", "configmaps") {
+		configMaps, err = b.listConfigMaps(parsedScope.Namespace)
 		if err != nil {
 			return nil, fmt.Errorf("namespace config: failed to list configmaps: %w", err)
 		}
 	}
 
 	var secrets []*corev1.Secret
-	if b.secrets != nil {
-		secrets, err = b.listSecrets(namespace)
+	if b.secrets != nil && runtimeResourceAllowed(ctx, namespaceConfigDomainName, "", "secrets") {
+		secrets, err = b.listSecrets(parsedScope.Namespace)
 		if err != nil {
 			return nil, fmt.Errorf("namespace config: failed to list secrets: %w", err)
 		}
 	}
 
-	return b.buildSnapshot(meta, scopeLabel, configMaps, secrets)
+	return b.buildSnapshot(meta, parsedScope.CanonicalScope, configMaps, secrets)
 }
 
 func (b *NamespaceConfigBuilder) listConfigMaps(namespace string) ([]*corev1.ConfigMap, error) {

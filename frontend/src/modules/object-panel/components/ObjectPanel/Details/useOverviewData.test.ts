@@ -10,15 +10,30 @@
 import ReactDOM from 'react-dom/client';
 import React, { act } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { resourcemodel } from '@wailsjs/go/models';
 import { useOverviewData } from './useOverviewData';
+import type { DetailSlots } from './objectDetailModel';
 
 type Params = Parameters<typeof useOverviewData>[0];
 type Result = ReturnType<typeof useOverviewData>;
 
-// Builds a params object where every detail field is null.
-function emptyParams(objectData: Params['objectData'] = null): Params {
+function resourceRef(
+  overrides: Partial<resourcemodel.ResourceRef> = {}
+): resourcemodel.ResourceRef {
   return {
-    objectData,
+    clusterId: 'cluster-a',
+    group: 'rbac.authorization.k8s.io',
+    version: 'v1',
+    kind: 'ClusterRoleBinding',
+    resource: 'clusterrolebindings',
+    name: 'admin-binding',
+    ...overrides,
+  };
+}
+
+// Builds a params object where every detail field is null.
+function emptySlots(): DetailSlots {
+  return {
     podDetails: null,
     deploymentDetails: null,
     replicaSetDetails: null,
@@ -51,6 +66,14 @@ function emptyParams(objectData: Params['objectData'] = null): Params {
     crdDetails: null,
     mutatingWebhookDetails: null,
     validatingWebhookDetails: null,
+  };
+}
+
+// Builds a params object where every detail slot is null.
+function emptyParams(objectData: Params['objectData'] = null): Params {
+  return {
+    objectData,
+    slots: emptySlots(),
   };
 }
 
@@ -97,7 +120,7 @@ describe('useOverviewData', () => {
 
   it('maps Pod details from the workloads group', () => {
     const params = emptyParams({ kind: 'Pod', namespace: 'ns-a', name: 'web-1' });
-    params.podDetails = {
+    params.slots.podDetails = {
       name: 'web-1',
       age: '2h',
       node: 'node-1',
@@ -132,7 +155,7 @@ describe('useOverviewData', () => {
 
   it('maps Deployment details from the workloads group', () => {
     const params = emptyParams({ kind: 'Deployment', namespace: 'prod', name: 'api' });
-    params.deploymentDetails = {
+    params.slots.deploymentDetails = {
       name: 'api',
       age: '5d',
       namespace: 'prod',
@@ -159,7 +182,7 @@ describe('useOverviewData', () => {
 
   it('maps StatefulSet rollout details from the workloads group', () => {
     const params = emptyParams({ kind: 'StatefulSet', namespace: 'data', name: 'db' });
-    params.statefulSetDetails = {
+    params.slots.statefulSetDetails = {
       name: 'db',
       age: '12d',
       namespace: 'data',
@@ -187,7 +210,7 @@ describe('useOverviewData', () => {
 
   it('maps ConfigMap details from the config group', () => {
     const params = emptyParams({ kind: 'ConfigMap', namespace: 'default', name: 'app-config' });
-    params.configMapDetails = {
+    params.slots.configMapDetails = {
       name: 'app-config',
       age: '1d',
       namespace: 'default',
@@ -195,7 +218,7 @@ describe('useOverviewData', () => {
 
     const result = renderHook(params);
     expect(result!.kind).toBe('ConfigMap');
-    expect(result!.configMapDetails).toBe(params.configMapDetails);
+    expect(result!.configMapDetails).toBe(params.slots.configMapDetails);
   });
 
   // -----------------------------------------------------------------------
@@ -204,7 +227,7 @@ describe('useOverviewData', () => {
 
   it('maps Service details from the network group', () => {
     const params = emptyParams({ kind: 'Service', namespace: 'default', name: 'frontend' });
-    params.serviceDetails = {
+    params.slots.serviceDetails = {
       name: 'frontend',
       age: '3d',
       namespace: 'default',
@@ -212,7 +235,7 @@ describe('useOverviewData', () => {
 
     const result = renderHook(params);
     expect(result!.kind).toBe('Service');
-    expect(result!.serviceDetails).toBe(params.serviceDetails);
+    expect(result!.serviceDetails).toBe(params.slots.serviceDetails);
   });
 
   // -----------------------------------------------------------------------
@@ -225,7 +248,7 @@ describe('useOverviewData', () => {
       namespace: 'data',
       name: 'db-pvc',
     });
-    params.pvcDetails = {
+    params.slots.pvcDetails = {
       name: 'db-pvc',
       age: '30d',
       namespace: 'data',
@@ -235,7 +258,16 @@ describe('useOverviewData', () => {
       accessModes: ['ReadWriteOnce'],
       storageClass: 'standard',
       volumeMode: 'Filesystem',
-      mountedBy: ['db-0'],
+      mountedBy: [
+        resourceRef({
+          group: '',
+          version: 'v1',
+          kind: 'Pod',
+          resource: 'pods',
+          namespace: 'data',
+          name: 'db-0',
+        }),
+      ],
       labels: {},
       annotations: {},
     } as any;
@@ -244,7 +276,16 @@ describe('useOverviewData', () => {
     expect(result!.kind).toBe('PersistentVolumeClaim');
     expect(result!.status).toBe('Bound');
     expect(result!.volumeName).toBe('pv-123');
-    expect(result!.mountedBy).toEqual(['db-0']);
+    expect(result!.mountedBy).toEqual([
+      resourceRef({
+        group: '',
+        version: 'v1',
+        kind: 'Pod',
+        resource: 'pods',
+        namespace: 'data',
+        name: 'db-0',
+      }),
+    ]);
   });
 
   // -----------------------------------------------------------------------
@@ -253,12 +294,12 @@ describe('useOverviewData', () => {
 
   it('maps ClusterRole details from the RBAC group', () => {
     const params = emptyParams({ kind: 'ClusterRole', name: 'admin' });
-    params.clusterRoleDetails = {
+    params.slots.clusterRoleDetails = {
       name: 'admin',
       age: '90d',
       rules: [{ apiGroups: ['*'], resources: ['*'], verbs: ['*'] }],
       aggregationRule: null,
-      clusterRoleBindings: ['admin-binding'],
+      clusterRoleBindings: [resourceRef()],
       labels: {},
       annotations: {},
     } as any;
@@ -266,7 +307,7 @@ describe('useOverviewData', () => {
     const result = renderHook(params);
     expect(result!.kind).toBe('ClusterRole');
     expect(result!.policyRules).toEqual([{ apiGroups: ['*'], resources: ['*'], verbs: ['*'] }]);
-    expect(result!.clusterRoleBindings).toEqual(['admin-binding']);
+    expect(result!.clusterRoleBindings).toEqual([resourceRef()]);
   });
 
   // -----------------------------------------------------------------------
@@ -279,7 +320,7 @@ describe('useOverviewData', () => {
       namespace: 'prod',
       name: 'api-hpa',
     });
-    params.hpaDetails = {
+    params.slots.hpaDetails = {
       name: 'api-hpa',
       age: '7d',
       namespace: 'prod',
@@ -305,7 +346,7 @@ describe('useOverviewData', () => {
 
   it('maps Node details from the cluster group', () => {
     const params = emptyParams({ kind: 'Node', name: 'node-1' });
-    params.nodeDetails = {
+    params.slots.nodeDetails = {
       name: 'node-1',
       age: '60d',
       status: 'Ready',
@@ -361,7 +402,7 @@ describe('useOverviewData', () => {
   it('ignores detail objects that do not match the current kind', () => {
     // objectData says Service, but we populate podDetails — should NOT produce Pod output.
     const params = emptyParams({ kind: 'Service', namespace: 'default', name: 'svc' });
-    params.podDetails = { name: 'stale-pod', age: '1h', status: 'Running' } as any;
+    params.slots.podDetails = { name: 'stale-pod', age: '1h', status: 'Running' } as any;
 
     const result = renderHook(params);
     // Falls through to default fallback since no serviceDetails is set.

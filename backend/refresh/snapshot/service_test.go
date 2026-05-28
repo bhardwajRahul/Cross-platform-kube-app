@@ -8,6 +8,7 @@ import (
 
 	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/domain"
+	"github.com/luxury-yacht/app/backend/refresh/domainpermissions"
 	"github.com/luxury-yacht/app/backend/refresh/permissions"
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
 )
@@ -321,7 +322,7 @@ func TestServiceBuildBlocksPermissionDenied(t *testing.T) {
 	reg := domain.New()
 	called := false
 	// Use a real domain name so the default permission map is applied.
-	// namespace-config uses requireAny, so we must deny ALL resources to trigger denial.
+	// namespace-config uses ModeAny, so we must deny ALL resources to trigger denial.
 	if err := reg.Register(refresh.DomainConfig{
 		Name: namespaceConfigDomainName,
 		BuildSnapshot: func(ctx context.Context, scope string) (*refresh.Snapshot, error) {
@@ -389,7 +390,7 @@ func TestServiceBuildBlocksNamespacesWithoutListPermission(t *testing.T) {
 func TestServiceBuildAllowsPartialPermissions(t *testing.T) {
 	reg := domain.New()
 	called := false
-	// namespace-config uses requireAny — if at least one resource is allowed, the domain should load.
+	// namespace-config uses ModeAny — if at least one resource is allowed, the domain should load.
 	if err := reg.Register(refresh.DomainConfig{
 		Name: namespaceConfigDomainName,
 		BuildSnapshot: func(ctx context.Context, scope string) (*refresh.Snapshot, error) {
@@ -418,6 +419,61 @@ func TestServiceBuildAllowsPartialPermissions(t *testing.T) {
 	}
 	if !called {
 		t.Fatalf("expected snapshot builder to run with partial permissions")
+	}
+}
+
+func TestServiceBuildKeysCacheByRuntimeAllowedResources(t *testing.T) {
+	reg := domain.New()
+	buildCount := 0
+	if err := reg.Register(refresh.DomainConfig{
+		Name: namespaceConfigDomainName,
+		BuildSnapshot: func(ctx context.Context, scope string) (*refresh.Snapshot, error) {
+			buildCount++
+			allowed, ok := domainpermissions.AllowedResourcesFromContext(ctx, namespaceConfigDomainName)
+			if !ok {
+				t.Fatalf("expected runtime allowed resources in snapshot context")
+			}
+			return &refresh.Snapshot{
+				Domain: namespaceConfigDomainName,
+				Scope:  scope,
+				Payload: map[string]bool{
+					"configmaps": allowed.Allows("", "configmaps"),
+					"secrets":    allowed.Allows("", "secrets"),
+				},
+				Stats: refresh.SnapshotStats{TotalItems: 1},
+			}, nil
+		},
+	}); err != nil {
+		t.Fatalf("register failed: %v", err)
+	}
+
+	checker := permissions.NewCheckerWithReview("cluster-a", 0, func(ctx context.Context, group, resource, verb string) (bool, error) {
+		return resource == "configmaps" || resource == "secrets", nil
+	})
+	service := NewServiceWithPermissions(reg, nil, ClusterMeta{}, checker)
+
+	first, err := service.Build(context.Background(), namespaceConfigDomainName, "cluster-a|namespace:default")
+	if err != nil {
+		t.Fatalf("first build failed: %v", err)
+	}
+	firstPayload := first.Payload.(map[string]bool)
+	if !firstPayload["configmaps"] || !firstPayload["secrets"] {
+		t.Fatalf("expected first build to allow both resources, got %#v", firstPayload)
+	}
+
+	service.permissionChecker = permissions.NewCheckerWithReview("cluster-a", 0, func(ctx context.Context, group, resource, verb string) (bool, error) {
+		return resource == "secrets", nil
+	})
+	second, err := service.Build(context.Background(), namespaceConfigDomainName, "cluster-a|namespace:default")
+	if err != nil {
+		t.Fatalf("second build failed: %v", err)
+	}
+	secondPayload := second.Payload.(map[string]bool)
+	if secondPayload["configmaps"] || !secondPayload["secrets"] {
+		t.Fatalf("expected second build to reflect revoked configmap access, got %#v", secondPayload)
+	}
+	if buildCount != 2 {
+		t.Fatalf("expected permission-specific cache keys to force a rebuild, got %d builds", buildCount)
 	}
 }
 

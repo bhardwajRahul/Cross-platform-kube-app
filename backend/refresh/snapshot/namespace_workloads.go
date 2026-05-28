@@ -88,20 +88,6 @@ type WorkloadSummary struct {
 	HPAManaged *bool `json:"hpaManaged,omitempty"`
 }
 
-func parseNamespaceScope(scope string) (string, error) {
-	_, scopeValue := refresh.SplitClusterScope(scope)
-	namespace := strings.TrimSpace(scopeValue)
-	if strings.HasPrefix(namespace, "namespace:") {
-		namespace = strings.TrimPrefix(namespace, "namespace:")
-		namespace = strings.TrimLeft(namespace, ":")
-	}
-	namespace = strings.TrimSpace(namespace)
-	if namespace == "" {
-		return "", errors.New(errNamespaceScopeRequired)
-	}
-	return namespace, nil
-}
-
 // RegisterNamespaceWorkloadsDomain wires the workloads domain into the registry.
 // Only listers for permitted resources are wired; denied resources are left nil
 // so the builder skips them gracefully.
@@ -148,65 +134,49 @@ func RegisterNamespaceWorkloadsDomain(
 // Build assembles workload summaries for the requested namespace scope.
 func (b *NamespaceWorkloadsBuilder) Build(ctx context.Context, scope string) (*refresh.Snapshot, error) {
 	meta := ClusterMetaFromContext(ctx)
-	clusterID, trimmed := refresh.SplitClusterScope(scope)
-	trimmed = strings.TrimSpace(trimmed)
-	if trimmed == "" {
-		return nil, errors.New(errNamespaceScopeRequired)
+	parsedScope, err := parseNamespaceSnapshotScope(scope, errNamespaceScopeRequired)
+	if err != nil {
+		return nil, err
 	}
-
-	isAll := isAllNamespaceScope(trimmed)
-	var (
-		namespace  string
-		scopeLabel string
-		err        error
-	)
-	if isAll {
-		scopeLabel = refresh.JoinClusterScope(clusterID, "namespace:all")
-	} else {
-		namespace, err = parseNamespaceScope(trimmed)
-		if err != nil {
-			return nil, err
-		}
-		scopeLabel = refresh.JoinClusterScope(clusterID, trimmed)
-	}
+	namespace := parsedScope.Namespace
 
 	var pods []*corev1.Pod
-	if b.podLister != nil {
+	if b.podLister != nil && runtimeResourceAllowed(ctx, namespaceWorkloadsDomainName, "", "pods") {
 		pods, err = b.listPods(namespace)
 		if err != nil {
 			return nil, fmt.Errorf("namespace workloads: failed to list pods: %w", err)
 		}
 	}
 	var deployments []*appsv1.Deployment
-	if b.deploymentLister != nil {
+	if b.deploymentLister != nil && runtimeResourceAllowed(ctx, namespaceWorkloadsDomainName, "apps", "deployments") {
 		deployments, err = b.listDeployments(namespace)
 		if err != nil {
 			return nil, fmt.Errorf("namespace workloads: failed to list deployments: %w", err)
 		}
 	}
 	var statefulSets []*appsv1.StatefulSet
-	if b.statefulLister != nil {
+	if b.statefulLister != nil && runtimeResourceAllowed(ctx, namespaceWorkloadsDomainName, "apps", "statefulsets") {
 		statefulSets, err = b.listStatefulSets(namespace)
 		if err != nil {
 			return nil, fmt.Errorf("namespace workloads: failed to list statefulsets: %w", err)
 		}
 	}
 	var daemonSets []*appsv1.DaemonSet
-	if b.daemonLister != nil {
+	if b.daemonLister != nil && runtimeResourceAllowed(ctx, namespaceWorkloadsDomainName, "apps", "daemonsets") {
 		daemonSets, err = b.listDaemonSets(namespace)
 		if err != nil {
 			return nil, fmt.Errorf("namespace workloads: failed to list daemonsets: %w", err)
 		}
 	}
 	var jobs []*batchv1.Job
-	if b.jobLister != nil {
+	if b.jobLister != nil && runtimeResourceAllowed(ctx, namespaceWorkloadsDomainName, "batch", "jobs") {
 		jobs, err = b.listJobs(namespace)
 		if err != nil {
 			return nil, fmt.Errorf("namespace workloads: failed to list jobs: %w", err)
 		}
 	}
 	var cronJobs []*batchv1.CronJob
-	if b.cronJobLister != nil {
+	if b.cronJobLister != nil && runtimeResourceAllowed(ctx, namespaceWorkloadsDomainName, "batch", "cronjobs") {
 		cronJobs, err = b.listCronJobs(namespace)
 		if err != nil {
 			return nil, fmt.Errorf("namespace workloads: failed to list cronjobs: %w", err)
@@ -217,7 +187,7 @@ func (b *NamespaceWorkloadsBuilder) Build(ctx context.Context, scope string) (*r
 	// coverage is unavailable, leave ownership unknown instead of emitting false.
 	hpas, hpaErr := b.listHPAs(namespace)
 
-	return b.buildSnapshot(meta, scopeLabel, pods, deployments, statefulSets, daemonSets, jobs, cronJobs, hpas, hpaErr == nil)
+	return b.buildSnapshot(meta, parsedScope.CanonicalScope, pods, deployments, statefulSets, daemonSets, jobs, cronJobs, hpas, hpaErr == nil)
 }
 func (b *NamespaceWorkloadsBuilder) buildSnapshot(
 	meta ClusterMeta,
