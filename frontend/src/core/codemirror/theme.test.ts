@@ -69,6 +69,34 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe('code editor selection styling', () => {
+  it('styles focused and unfocused drawn selections with the shared selection token', async () => {
+    await import('./theme');
+
+    const viewSpec = themeMock.mock.calls[0][0] as Record<string, Record<string, string>>;
+    const selectionRules = Object.entries(viewSpec).filter(([selector]) =>
+      selector.includes('.cm-selectionBackground')
+    );
+
+    expect(selectionRules).not.toHaveLength(0);
+    for (const [, style] of selectionRules) {
+      expect(style.backgroundColor).toBe('var(--code-selection-bg)');
+    }
+
+    // CodeMirror's base theme targets the focused selection with a
+    // higher-specificity selector. Unless the app theme matches it, edit mode
+    // (focused) silently falls back to CodeMirror's hardcoded colors while
+    // read mode (never focusable) shows the app color.
+    expect(
+      selectionRules.some(([selector]) =>
+        selector.includes(
+          '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground'
+        )
+      )
+    ).toBe(true);
+  });
+});
+
 describe('buildCodeTheme', () => {
   it('returns the dark theme set when dark mode is enabled', async () => {
     const { buildCodeTheme } = await import('./theme');

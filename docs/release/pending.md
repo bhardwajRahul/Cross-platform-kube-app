@@ -47,6 +47,13 @@
 
 ### Fixed
 
+- Selected text in the YAML editor (and the Helm Manifest/Values tabs) now
+  uses the same highlight color whether the editor is in read or edit mode,
+  and the highlight is translucent so the syntax-colored text stays readable.
+  Previously read mode painted selections with the solid accent color while
+  edit mode silently fell back to CodeMirror's built-in colors — in dark mode
+  the edit-mode selection was nearly invisible.
+
 - Clusters now reconnect automatically after extended outages such as control-plane
   upgrades. Previously, an authentication error during an outage (for example a
   transient 401 while the API server restarted) started a recovery cycle that gave

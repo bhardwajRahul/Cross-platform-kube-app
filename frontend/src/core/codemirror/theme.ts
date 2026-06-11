@@ -57,9 +57,17 @@ const viewStyleSpec = {
   '.cm-activeLine': {
     backgroundColor: 'var(--code-active-line-bg)',
   },
-  '.cm-selectionBackground, .cm-content ::selection': {
-    backgroundColor: 'var(--color-accent)',
-  },
+  // drawSelection() hides the native ::selection and paints selections as
+  // .cm-selectionBackground rectangles instead. CodeMirror's base theme
+  // styles the focused variant with a higher-specificity selector
+  // (&light.cm-focused > .cm-scroller > ...), so this rule must match that
+  // shape or focused (edit-mode) selections fall back to CodeMirror's
+  // hardcoded colors while unfocused (read-mode) selections show the app
+  // color.
+  '.cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground':
+    {
+      backgroundColor: 'var(--code-selection-bg)',
+    },
   '.cm-selectionMatch': {
     backgroundColor: 'var(--code-selection-match-bg)',
     color: 'var(--code-selection-match-text)',
