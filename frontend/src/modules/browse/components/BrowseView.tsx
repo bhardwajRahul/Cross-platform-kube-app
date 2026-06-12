@@ -45,7 +45,7 @@ import {
 } from '@shared/utils/objectIdentity';
 import type { BrowseViewProps, BrowseScope } from './BrowseView.types';
 import { useQueryResourceGridTable } from '@modules/resource-grid/useResourceGridTable';
-import CatalogPaginationFooter from './CatalogPaginationFooter';
+import CatalogPaginationFooter, { catalogPaginationPageKeyProps } from './CatalogPaginationFooter';
 
 const VIRTUALIZATION_THRESHOLD = 80;
 
@@ -434,10 +434,8 @@ const BrowseView: React.FC<BrowseViewProps> = ({
         enableContextMenu
         getCustomContextMenuItems={getContextMenuItems}
         emptyMessage={resolvedEmptyMessage}
-        {...pagination}
         paginationControls={paginationControls}
-        showLoadMoreButton={false}
-        showPaginationStatus={false}
+        {...catalogPaginationPageKeyProps(pagination)}
       />
       {objectActions.modals}
     </>

@@ -167,18 +167,16 @@ export interface GridTableProps<T> {
   nonHideableColumns?: string[];
   enableColumnVisibilityMenu?: boolean;
   emptyMessage?: string;
-  hasMore?: boolean;
-  hasPrevious?: boolean;
-  onRequestMore?: (trigger: 'manual' | 'auto') => void;
-  onRequestPrevious?: () => void;
-  isRequestingMore?: boolean;
-  autoLoadMore?: boolean;
-  loadMoreLabel?: string;
-  previousPageLabel?: string;
-  showLoadMoreButton?: boolean;
-  showPaginationStatus?: boolean;
-  /** Replaces the default pagination footer buttons/status with custom controls. */
+  /** Rendered in the table's pagination footer (e.g. cursor pagination controls). */
   paginationControls?: React.ReactNode;
+  /** ArrowLeft pages back when the table has keyboard focus. */
+  onPagePrevious?: () => void;
+  /** ArrowRight pages forward when the table has keyboard focus. */
+  onPageNext?: () => void;
+  /** Gates ArrowLeft paging (e.g. first page, request in flight). */
+  canPagePrevious?: boolean;
+  /** Gates ArrowRight paging (e.g. last page, request in flight). */
+  canPageNext?: boolean;
   virtualization?: GridTableVirtualizationOptions;
   loadingOverlay?: {
     show: boolean;

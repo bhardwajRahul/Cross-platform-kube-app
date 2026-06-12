@@ -48,6 +48,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.logger.Info("Application startup initiated", logsources.App)
 
 	errorcapture.Init()
+	errorcapture.InstallUnhandledErrorDedup()
 	errorcapture.SetEventEmitter(func(message string) {
 		// Note: Auth state management is now per-cluster via transport wrappers.
 		// Stderr errors don't have cluster context, so we only emit to frontend
