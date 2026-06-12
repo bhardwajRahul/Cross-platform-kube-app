@@ -3,9 +3,8 @@
 Installs the NSIS toolchain used by the Windows release workflow.
 
 .DESCRIPTION
-Downloads the NSIS installer, the NSIS long string patch, and the EnvVar plugin.
-By default, the script installs NSIS, applies the patch, and expands the plugin
-into the NSIS installation directory.
+Downloads the NSIS installer and the NSIS long string patch. By default, the
+script installs NSIS and applies the patch.
 
 Run from the repository root with PowerShell 7:
 
@@ -39,8 +38,8 @@ Appends the NSIS installation directory to GITHUB_PATH when running in GitHub
 Actions.
 
 .PARAMETER DownloadOnly
-Downloads the installer, patch archive, and plugin archive, then prints their
-paths and exits without installing or expanding anything.
+Downloads the installer and patch archive, then prints their paths and exits
+without installing or expanding anything.
 #>
 [CmdletBinding()]
 param(
@@ -148,18 +147,10 @@ Write-Host "Downloading NSIS long string patch..."
 Invoke-FileDownload -Uri $patchUrl -OutFile $patchArchive -UserAgent "Wget/1.21.4"
 Assert-ZipArchive -Path $patchArchive
 
-$pluginArchive = Join-Path $TempDir "EnVar_plugin.zip"
-$pluginUrl = "https://nsis.sourceforge.io/mediawiki/images/7/7f/EnVar_plugin.zip"
-
-Write-Host "Downloading NSIS EnvVar plugin..."
-Invoke-FileDownload -Uri $pluginUrl -OutFile $pluginArchive
-Assert-ZipArchive -Path $pluginArchive
-
 if ($DownloadOnly) {
   Write-Host "Downloaded files:"
   Write-Host "  $installer"
   Write-Host "  $patchArchive"
-  Write-Host "  $pluginArchive"
   exit 0
 }
 
@@ -176,9 +167,6 @@ if (-not (Test-Path $makensis)) {
 
 Write-Host "Applying NSIS long string patch..."
 Expand-Archive $patchArchive -DestinationPath $InstallDir -Force
-
-Write-Host "Installing NSIS EnvVar plugin..."
-Expand-Archive $pluginArchive -DestinationPath $InstallDir -Force
 
 if ($AddToGitHubPath -and $env:GITHUB_PATH) {
   $InstallDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
