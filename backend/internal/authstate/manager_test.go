@@ -530,3 +530,36 @@ func TestTriggerRetryWhileRecovering(t *testing.T) {
 	state, _ = m.State()
 	require.Equal(t, StateValid, state)
 }
+
+// TestRecoveryTestRaceFreeUnderConcurrentSet guards the synchronization between
+// the recovery goroutine's probe (testRecovery) and SetRecoveryTest. The
+// recovery loop reads config.RecoveryTest while the app may swap it in once the
+// Kubernetes client is ready; both must be safe to call concurrently. This test
+// is meaningful under the race detector (mage test:race / go test -race): before
+// the fix the lock-free read in testRecovery races the locked write in
+// SetRecoveryTest.
+func TestRecoveryTestRaceFreeUnderConcurrentSet(t *testing.T) {
+	m := New(Config{RecoveryTest: func() error { return nil }})
+	defer m.Shutdown()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Reader: mirrors the recovery goroutine repeatedly probing.
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10000; i++ {
+			_ = m.testRecovery()
+		}
+	}()
+
+	// Writer: app installing the real recovery test after init.
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10000; i++ {
+			m.SetRecoveryTest(func() error { return nil })
+		}
+	}()
+
+	wg.Wait()
+}

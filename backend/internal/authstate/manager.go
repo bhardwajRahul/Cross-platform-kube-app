@@ -420,12 +420,19 @@ func (m *Manager) getBackoffDelay(attempt int) time.Duration {
 	return m.config.BackoffSchedule[attempt]
 }
 
-// testRecovery runs the recovery test function.
+// testRecovery runs the recovery test function. The function pointer is
+// snapshotted under the lock because SetRecoveryTest can swap it concurrently,
+// then invoked outside the lock: the probe does network I/O and may re-enter the
+// manager via the auth-aware transport (ReportSuccess/ReportFailure take m.mu),
+// so holding the lock across the call would self-deadlock.
 func (m *Manager) testRecovery() error {
-	if m.config.RecoveryTest == nil {
+	m.mu.RLock()
+	fn := m.config.RecoveryTest
+	m.mu.RUnlock()
+	if fn == nil {
 		return nil // No test function, assume success
 	}
-	return m.config.RecoveryTest()
+	return fn()
 }
 
 // SetRecoveryTest sets the recovery test function.
