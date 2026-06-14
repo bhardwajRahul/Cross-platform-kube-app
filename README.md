@@ -55,13 +55,6 @@ Package manager support is currently limited, but more will be added.
 brew install luxury-yacht
 ```
 
-If you previously used the custom tap, you can remove it, as Luxury Yacht is now in the public Casks repo.
-
-```sh
-untap luxury-yacht/tap
-brew update
-```
-
 ### Building from Source
 
 If you prefer to build the app from source, see the Development section.

@@ -503,11 +503,6 @@ func (Release) App() error {
 	return mage.PublishRelease(cfg)
 }
 
-// Updates the Homebrew formula for the new release.
-func (Release) Homebrew() error {
-	return mage.PublishHomebrew(cfg)
-}
-
 // Updates the version displayed on the website.
 func (Release) Site() error {
 	return mage.PublishSiteVersion(cfg)
