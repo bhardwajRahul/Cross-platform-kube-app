@@ -17,7 +17,12 @@ func (b *objectMapBuilder) newObjectMapAssembler(ctx context.Context) (*objectMa
 	meta := ClusterMetaFromContext(ctx)
 	index := newObjectMapIndex(meta)
 	index.addCatalog(b.catalog())
-	index.collectTyped(ctx, b.client)
+	index.collectTyped(objectMapTypedSource{
+		ctx:         ctx,
+		client:      b.client,
+		shared:      b.shared,
+		permissions: b.permissions,
+	})
 	index.collectGatewayTyped(ctx, b.gatewayClient, b.gatewayPresence)
 	if err := index.listError(); err != nil {
 		return nil, err

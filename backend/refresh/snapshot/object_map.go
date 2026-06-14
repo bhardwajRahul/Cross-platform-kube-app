@@ -28,7 +28,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	appslisters "k8s.io/client-go/listers/apps/v1"
+	batchlisters "k8s.io/client-go/listers/batch/v1"
+	corelisters "k8s.io/client-go/listers/core/v1"
+	discoverylisters "k8s.io/client-go/listers/discovery/v1"
+	networklisters "k8s.io/client-go/listers/networking/v1"
+	policylisters "k8s.io/client-go/listers/policy/v1"
+	rbaclisters "k8s.io/client-go/listers/rbac/v1"
+	storagelisters "k8s.io/client-go/listers/storage/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayversioned "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned"
 )
@@ -106,11 +115,39 @@ type ObjectMapSnapshotPayload struct {
 	Warnings  []string           `json:"warnings,omitempty"`
 }
 
+// objectMapPermissionChecker reports whether the current cluster credentials may
+// list+watch a resource. *informer.Factory satisfies it. object-map uses it to
+// skip resources the user cannot see (matching the old live-list Forbidden skip)
+// and to avoid lazily registering an unstarted informer for a denied
+// cluster-scoped type.
+type objectMapPermissionChecker interface {
+	CanListWatch(group, resource string) bool
+}
+
 type objectMapBuilder struct {
 	client          kubernetes.Interface
 	gatewayClient   gatewayversioned.Interface
 	gatewayPresence objectMapGatewayPresence
 	catalogService  func() *objectcatalog.Service
+	// shared supplies typed listers backed by the factory's already-synced
+	// informer caches, so the graph is assembled from memory instead of ~21 live
+	// cluster-wide LIST calls per refresh.
+	shared      informers.SharedInformerFactory
+	permissions objectMapPermissionChecker
+}
+
+// objectMapTypedSource carries everything collectTyped needs for one build: the
+// informer-backed listers, the permission gate, and (for the autoscaling/v2 HPA
+// path, which has no matching v2 informer) the live client.
+type objectMapTypedSource struct {
+	ctx         context.Context
+	client      kubernetes.Interface
+	shared      informers.SharedInformerFactory
+	permissions objectMapPermissionChecker
+}
+
+func (s objectMapTypedSource) allowed(group, resource string) bool {
+	return s.permissions == nil || s.permissions.CanListWatch(group, resource)
 }
 
 type objectMapGatewayPresence interface {
@@ -197,6 +234,8 @@ const (
 func RegisterObjectMapDomain(
 	reg *domain.Registry,
 	client kubernetes.Interface,
+	shared informers.SharedInformerFactory,
+	permissions objectMapPermissionChecker,
 	gatewayClient gatewayversioned.Interface,
 	gatewayPresence objectMapGatewayPresence,
 	catalogService func() *objectcatalog.Service,
@@ -204,11 +243,16 @@ func RegisterObjectMapDomain(
 	if client == nil {
 		return fmt.Errorf("kubernetes client is required for object map domain")
 	}
+	if shared == nil {
+		return fmt.Errorf("shared informer factory is required for object map domain")
+	}
 	builder := &objectMapBuilder{
 		client:          client,
 		gatewayClient:   gatewayClient,
 		gatewayPresence: gatewayPresence,
 		catalogService:  catalogService,
+		shared:          shared,
+		permissions:     permissions,
 	}
 	return reg.Register(refresh.DomainConfig{
 		Name:          objectMapDomain,
@@ -331,41 +375,57 @@ func (idx *objectMapIndex) addCatalog(svc *objectcatalog.Service) {
 	}
 }
 
-func (idx *objectMapIndex) collectTyped(ctx context.Context, client kubernetes.Interface) {
-	if idx == nil || client == nil {
+func (idx *objectMapIndex) collectTyped(src objectMapTypedSource) {
+	if idx == nil || src.shared == nil {
 		return
 	}
-	collectors := []func(context.Context, kubernetes.Interface){
-		idx.collectPods,
-		idx.collectServices,
-		idx.collectEndpointSlices,
-		idx.collectPVCs,
-		idx.collectPVs,
-		idx.collectStorageClasses,
-		idx.collectConfigMaps,
-		idx.collectSecrets,
-		idx.collectServiceAccounts,
-		idx.collectNodes,
-		idx.collectDeployments,
-		idx.collectReplicaSets,
-		idx.collectStatefulSets,
-		idx.collectDaemonSets,
-		idx.collectJobs,
-		idx.collectCronJobs,
-		idx.collectHPAs,
-		idx.collectPodDisruptionBudgets,
-		idx.collectNetworkPolicies,
-		idx.collectIngresses,
-		idx.collectIngressClasses,
-		idx.collectClusterRoles,
-		idx.collectClusterRoleBindings,
+	// Each collector reads from the factory's already-synced informer cache. The
+	// permission gate skips resources the user cannot list+watch — preserving the
+	// old live-list Forbidden skip and, for cluster-scoped types, avoiding a blind
+	// .Lister() that would lazily register an unstarted informer. HPA has no
+	// matching v2 informer, so it stays a live LIST via src.client.
+	collectors := []struct {
+		group, resource string
+		collect         func()
+	}{
+		{"", "pods", func() { idx.collectPods(src.shared.Core().V1().Pods().Lister()) }},
+		{"", "services", func() { idx.collectServices(src.shared.Core().V1().Services().Lister()) }},
+		{"discovery.k8s.io", "endpointslices", func() { idx.collectEndpointSlices(src.shared.Discovery().V1().EndpointSlices().Lister()) }},
+		{"", "persistentvolumeclaims", func() { idx.collectPVCs(src.shared.Core().V1().PersistentVolumeClaims().Lister()) }},
+		{"", "persistentvolumes", func() { idx.collectPVs(src.shared.Core().V1().PersistentVolumes().Lister()) }},
+		{"storage.k8s.io", "storageclasses", func() { idx.collectStorageClasses(src.shared.Storage().V1().StorageClasses().Lister()) }},
+		{"", "configmaps", func() { idx.collectConfigMaps(src.shared.Core().V1().ConfigMaps().Lister()) }},
+		{"", "secrets", func() { idx.collectSecrets(src.shared.Core().V1().Secrets().Lister()) }},
+		{"", "serviceaccounts", func() { idx.collectServiceAccounts(src.shared.Core().V1().ServiceAccounts().Lister()) }},
+		{"", "nodes", func() { idx.collectNodes(src.shared.Core().V1().Nodes().Lister()) }},
+		{"apps", "deployments", func() { idx.collectDeployments(src.shared.Apps().V1().Deployments().Lister()) }},
+		{"apps", "replicasets", func() { idx.collectReplicaSets(src.shared.Apps().V1().ReplicaSets().Lister()) }},
+		{"apps", "statefulsets", func() { idx.collectStatefulSets(src.shared.Apps().V1().StatefulSets().Lister()) }},
+		{"apps", "daemonsets", func() { idx.collectDaemonSets(src.shared.Apps().V1().DaemonSets().Lister()) }},
+		{"batch", "jobs", func() { idx.collectJobs(src.shared.Batch().V1().Jobs().Lister()) }},
+		{"batch", "cronjobs", func() { idx.collectCronJobs(src.shared.Batch().V1().CronJobs().Lister()) }},
+		{"autoscaling", "horizontalpodautoscalers", func() { idx.collectHPAs(src.ctx, src.client) }},
+		{"policy", "poddisruptionbudgets", func() { idx.collectPodDisruptionBudgets(src.shared.Policy().V1().PodDisruptionBudgets().Lister()) }},
+		{"networking.k8s.io", "networkpolicies", func() { idx.collectNetworkPolicies(src.shared.Networking().V1().NetworkPolicies().Lister()) }},
+		{"networking.k8s.io", "ingresses", func() { idx.collectIngresses(src.shared.Networking().V1().Ingresses().Lister()) }},
+		{"networking.k8s.io", "ingressclasses", func() { idx.collectIngressClasses(src.shared.Networking().V1().IngressClasses().Lister()) }},
+		{"rbac.authorization.k8s.io", "clusterroles", func() { idx.collectClusterRoles(src.shared.Rbac().V1().ClusterRoles().Lister()) }},
+		{"rbac.authorization.k8s.io", "clusterrolebindings", func() { idx.collectClusterRoleBindings(src.shared.Rbac().V1().ClusterRoleBindings().Lister()) }},
 	}
-	for _, collect := range collectors {
-		collect(ctx, client)
+	for _, c := range collectors {
+		if !src.allowed(c.group, c.resource) {
+			idx.warnSkippedPermission(c.resource)
+			continue
+		}
+		c.collect()
 		if idx.hasListError() {
 			return
 		}
 	}
+}
+
+func (idx *objectMapIndex) warnSkippedPermission(resource string) {
+	idx.warnings = append(idx.warnings, fmt.Sprintf("skipped %s: insufficient permissions", resource))
 }
 
 func (idx *objectMapIndex) collectGatewayTyped(ctx context.Context, client gatewayversioned.Interface, presence objectMapGatewayPresence) {
@@ -423,178 +483,168 @@ func gatewayKindPresent(presence objectMapGatewayPresence, kind string) bool {
 	return presence == nil || presence.Has(kind)
 }
 
-func (idx *objectMapIndex) collectPods(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectPods(lister corelisters.PodLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("pods", err) {
 		return
 	}
-	for i := range list.Items {
-		pod := list.Items[i]
+	for _, pod := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&pod.ObjectMeta, "", "v1", "Pod", "pods", pod.Namespace),
 			creationTimestamp: objectCreationTimestamp(&pod.ObjectMeta),
-			status:            objectMapPodStatus(idx.meta.ClusterID, pod),
-			actionFacts:       objectMapPortForwardFacts(hasForwardablePodPorts(&pod)),
+			status:            objectMapPodStatus(idx.meta.ClusterID, *pod),
+			actionFacts:       objectMapPortForwardFacts(hasForwardablePodPorts(pod)),
 			owners:            pod.OwnerReferences,
 			labels:            cloneStringMap(pod.Labels),
-			pod:               &pod,
+			pod:               pod,
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectServices(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.CoreV1().Services(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectServices(lister corelisters.ServiceLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("services", err) {
 		return
 	}
-	for i := range list.Items {
-		svc := list.Items[i]
+	for _, svc := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&svc.ObjectMeta, "", "v1", "Service", "services", svc.Namespace),
 			creationTimestamp: objectCreationTimestamp(&svc.ObjectMeta),
-			status:            objectMapServiceStatus(idx.meta.ClusterID, svc),
+			status:            objectMapServiceStatus(idx.meta.ClusterID, *svc),
 			actionFacts:       objectMapPortForwardFacts(serviceHasForwardablePorts(svc.Spec.Ports)),
 			owners:            svc.OwnerReferences,
 			labels:            cloneStringMap(svc.Labels),
-			service:           &svc,
+			service:           svc,
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectEndpointSlices(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.DiscoveryV1().EndpointSlices(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectEndpointSlices(lister discoverylisters.EndpointSliceLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("endpointslices", err) {
 		return
 	}
-	for i := range list.Items {
-		slice := list.Items[i]
+	for _, slice := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&slice.ObjectMeta, "discovery.k8s.io", "v1", "EndpointSlice", "endpointslices", slice.Namespace),
 			creationTimestamp: objectCreationTimestamp(&slice.ObjectMeta),
-			status:            objectMapEndpointSliceStatus(idx.meta.ClusterID, slice),
+			status:            objectMapEndpointSliceStatus(idx.meta.ClusterID, *slice),
 			owners:            slice.OwnerReferences,
 			labels:            cloneStringMap(slice.Labels),
-			slice:             &slice,
+			slice:             slice,
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectPVCs(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.CoreV1().PersistentVolumeClaims(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectPVCs(lister corelisters.PersistentVolumeClaimLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("persistentvolumeclaims", err) {
 		return
 	}
-	for i := range list.Items {
-		pvc := list.Items[i]
+	for _, pvc := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&pvc.ObjectMeta, "", "v1", "PersistentVolumeClaim", "persistentvolumeclaims", pvc.Namespace),
 			creationTimestamp: objectCreationTimestamp(&pvc.ObjectMeta),
-			status:            objectMapPVCStatus(idx.meta.ClusterID, pvc),
+			status:            objectMapPVCStatus(idx.meta.ClusterID, *pvc),
 			owners:            pvc.OwnerReferences,
 			labels:            cloneStringMap(pvc.Labels),
-			pvc:               &pvc,
+			pvc:               pvc,
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectPVs(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectPVs(lister corelisters.PersistentVolumeLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("persistentvolumes", err) {
 		return
 	}
-	for i := range list.Items {
-		pv := list.Items[i]
+	for _, pv := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&pv.ObjectMeta, "", "v1", "PersistentVolume", "persistentvolumes", ""),
 			creationTimestamp: objectCreationTimestamp(&pv.ObjectMeta),
-			status:            objectMapPVStatus(idx.meta.ClusterID, pv),
+			status:            objectMapPVStatus(idx.meta.ClusterID, *pv),
 			owners:            pv.OwnerReferences,
 			labels:            cloneStringMap(pv.Labels),
-			pv:                &pv,
+			pv:                pv,
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectStorageClasses(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectStorageClasses(lister storagelisters.StorageClassLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("storageclasses", err) {
 		return
 	}
-	for i := range list.Items {
-		sc := list.Items[i]
+	for _, sc := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&sc.ObjectMeta, "storage.k8s.io", "v1", "StorageClass", "storageclasses", ""),
 			creationTimestamp: objectCreationTimestamp(&sc.ObjectMeta),
-			status:            objectMapStorageClassStatus(idx.meta.ClusterID, sc),
+			status:            objectMapStorageClassStatus(idx.meta.ClusterID, *sc),
 			owners:            sc.OwnerReferences,
 			labels:            cloneStringMap(sc.Labels),
-			storage:           &sc,
+			storage:           sc,
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectConfigMaps(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.CoreV1().ConfigMaps(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectConfigMaps(lister corelisters.ConfigMapLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("configmaps", err) {
 		return
 	}
-	for i := range list.Items {
-		cm := list.Items[i]
+	for _, cm := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&cm.ObjectMeta, "", "v1", "ConfigMap", "configmaps", cm.Namespace),
 			creationTimestamp: objectCreationTimestamp(&cm.ObjectMeta),
-			status:            objectMapConfigMapStatus(idx.meta.ClusterID, cm),
+			status:            objectMapConfigMapStatus(idx.meta.ClusterID, *cm),
 			owners:            cm.OwnerReferences,
 			labels:            cloneStringMap(cm.Labels),
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectSecrets(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.CoreV1().Secrets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectSecrets(lister corelisters.SecretLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("secrets", err) {
 		return
 	}
-	for i := range list.Items {
-		secret := list.Items[i]
+	for _, secret := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&secret.ObjectMeta, "", "v1", "Secret", "secrets", secret.Namespace),
 			creationTimestamp: objectCreationTimestamp(&secret.ObjectMeta),
-			status:            objectMapSecretStatus(idx.meta.ClusterID, secret),
+			status:            objectMapSecretStatus(idx.meta.ClusterID, *secret),
 			owners:            secret.OwnerReferences,
 			labels:            cloneStringMap(secret.Labels),
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectServiceAccounts(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.CoreV1().ServiceAccounts(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectServiceAccounts(lister corelisters.ServiceAccountLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("serviceaccounts", err) {
 		return
 	}
-	for i := range list.Items {
-		sa := list.Items[i]
+	for _, sa := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&sa.ObjectMeta, "", "v1", "ServiceAccount", "serviceaccounts", sa.Namespace),
 			creationTimestamp: objectCreationTimestamp(&sa.ObjectMeta),
-			status:            objectMapServiceAccountStatus(idx.meta.ClusterID, sa),
+			status:            objectMapServiceAccountStatus(idx.meta.ClusterID, *sa),
 			owners:            sa.OwnerReferences,
 			labels:            cloneStringMap(sa.Labels),
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectNodes(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectNodes(lister corelisters.NodeLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("nodes", err) {
 		return
 	}
-	for i := range list.Items {
-		node := list.Items[i]
+	for _, node := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&node.ObjectMeta, "", "v1", "Node", "nodes", ""),
 			creationTimestamp: objectCreationTimestamp(&node.ObjectMeta),
-			status:            objectMapNodeStatus(idx.meta.ClusterID, node),
+			status:            objectMapNodeStatus(idx.meta.ClusterID, *node),
 			actionFacts:       objectMapNodeActionFacts(node.Spec.Unschedulable),
 			owners:            node.OwnerReferences,
 			labels:            cloneStringMap(node.Labels),
@@ -602,17 +652,16 @@ func (idx *objectMapIndex) collectNodes(ctx context.Context, client kubernetes.I
 	}
 }
 
-func (idx *objectMapIndex) collectDeployments(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.AppsV1().Deployments(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectDeployments(lister appslisters.DeploymentLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("deployments", err) {
 		return
 	}
-	for i := range list.Items {
-		deploy := list.Items[i]
+	for _, deploy := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&deploy.ObjectMeta, "apps", "v1", "Deployment", "deployments", deploy.Namespace),
 			creationTimestamp: objectCreationTimestamp(&deploy.ObjectMeta),
-			status:            objectMapDeploymentStatus(idx.meta.ClusterID, deploy),
+			status:            objectMapDeploymentStatus(idx.meta.ClusterID, *deploy),
 			actionFacts:       objectMapScalableWorkloadFacts(deploy.Spec.Replicas, hasForwardableContainerPorts(deploy.Spec.Template.Spec.Containers)),
 			owners:            deploy.OwnerReferences,
 			labels:            cloneStringMap(deploy.Labels),
@@ -621,17 +670,16 @@ func (idx *objectMapIndex) collectDeployments(ctx context.Context, client kubern
 	}
 }
 
-func (idx *objectMapIndex) collectReplicaSets(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.AppsV1().ReplicaSets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectReplicaSets(lister appslisters.ReplicaSetLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("replicasets", err) {
 		return
 	}
-	for i := range list.Items {
-		rs := list.Items[i]
+	for _, rs := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&rs.ObjectMeta, "apps", "v1", "ReplicaSet", "replicasets", rs.Namespace),
 			creationTimestamp: objectCreationTimestamp(&rs.ObjectMeta),
-			status:            objectMapReplicaSetStatus(idx.meta.ClusterID, rs),
+			status:            objectMapReplicaSetStatus(idx.meta.ClusterID, *rs),
 			actionFacts:       objectMapScalableWorkloadFacts(rs.Spec.Replicas, hasForwardableContainerPorts(rs.Spec.Template.Spec.Containers)),
 			owners:            rs.OwnerReferences,
 			labels:            cloneStringMap(rs.Labels),
@@ -640,17 +688,16 @@ func (idx *objectMapIndex) collectReplicaSets(ctx context.Context, client kubern
 	}
 }
 
-func (idx *objectMapIndex) collectStatefulSets(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.AppsV1().StatefulSets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectStatefulSets(lister appslisters.StatefulSetLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("statefulsets", err) {
 		return
 	}
-	for i := range list.Items {
-		sts := list.Items[i]
+	for _, sts := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&sts.ObjectMeta, "apps", "v1", "StatefulSet", "statefulsets", sts.Namespace),
 			creationTimestamp: objectCreationTimestamp(&sts.ObjectMeta),
-			status:            objectMapStatefulSetStatus(idx.meta.ClusterID, sts),
+			status:            objectMapStatefulSetStatus(idx.meta.ClusterID, *sts),
 			actionFacts:       objectMapScalableWorkloadFacts(sts.Spec.Replicas, hasForwardableContainerPorts(sts.Spec.Template.Spec.Containers)),
 			owners:            sts.OwnerReferences,
 			labels:            cloneStringMap(sts.Labels),
@@ -659,17 +706,16 @@ func (idx *objectMapIndex) collectStatefulSets(ctx context.Context, client kuber
 	}
 }
 
-func (idx *objectMapIndex) collectDaemonSets(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.AppsV1().DaemonSets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectDaemonSets(lister appslisters.DaemonSetLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("daemonsets", err) {
 		return
 	}
-	for i := range list.Items {
-		ds := list.Items[i]
+	for _, ds := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&ds.ObjectMeta, "apps", "v1", "DaemonSet", "daemonsets", ds.Namespace),
 			creationTimestamp: objectCreationTimestamp(&ds.ObjectMeta),
-			status:            objectMapDaemonSetStatus(idx.meta.ClusterID, ds),
+			status:            objectMapDaemonSetStatus(idx.meta.ClusterID, *ds),
 			actionFacts:       objectMapPortForwardFacts(hasForwardableContainerPorts(ds.Spec.Template.Spec.Containers)),
 			owners:            ds.OwnerReferences,
 			labels:            cloneStringMap(ds.Labels),
@@ -678,17 +724,16 @@ func (idx *objectMapIndex) collectDaemonSets(ctx context.Context, client kuberne
 	}
 }
 
-func (idx *objectMapIndex) collectJobs(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.BatchV1().Jobs(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectJobs(lister batchlisters.JobLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("jobs", err) {
 		return
 	}
-	for i := range list.Items {
-		job := list.Items[i]
+	for _, job := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&job.ObjectMeta, "batch", "v1", "Job", "jobs", job.Namespace),
 			creationTimestamp: objectCreationTimestamp(&job.ObjectMeta),
-			status:            objectMapJobStatus(idx.meta.ClusterID, job),
+			status:            objectMapJobStatus(idx.meta.ClusterID, *job),
 			actionFacts:       objectMapPortForwardFacts(hasForwardableContainerPorts(job.Spec.Template.Spec.Containers)),
 			owners:            job.OwnerReferences,
 			labels:            cloneStringMap(job.Labels),
@@ -697,18 +742,17 @@ func (idx *objectMapIndex) collectJobs(ctx context.Context, client kubernetes.In
 	}
 }
 
-func (idx *objectMapIndex) collectCronJobs(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.BatchV1().CronJobs(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectCronJobs(lister batchlisters.CronJobLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("cronjobs", err) {
 		return
 	}
-	for i := range list.Items {
-		cron := list.Items[i]
+	for _, cron := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&cron.ObjectMeta, "batch", "v1", "CronJob", "cronjobs", cron.Namespace),
 			creationTimestamp: objectCreationTimestamp(&cron.ObjectMeta),
-			status:            objectMapCronJobStatus(idx.meta.ClusterID, cron),
-			actionFacts:       objectMapCronJobActionFacts(cron),
+			status:            objectMapCronJobStatus(idx.meta.ClusterID, *cron),
+			actionFacts:       objectMapCronJobActionFacts(*cron),
 			owners:            cron.OwnerReferences,
 			labels:            cloneStringMap(cron.Labels),
 			cronJobTpl:        cron.Spec.JobTemplate.Spec.Template.DeepCopy(),
@@ -716,7 +760,13 @@ func (idx *objectMapIndex) collectCronJobs(ctx context.Context, client kubernete
 	}
 }
 
+// collectHPAs is the one typed collector that still issues a live LIST: the shared
+// factory caches autoscaling/v1, but object-map needs the v2 shape, so there is no
+// matching informer to read from.
 func (idx *objectMapIndex) collectHPAs(ctx context.Context, client kubernetes.Interface) {
+	if client == nil {
+		return
+	}
 	list, err := client.AutoscalingV2().HorizontalPodAutoscalers(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if idx.skipListError("horizontalpodautoscalers", err) {
 		return
@@ -735,110 +785,104 @@ func (idx *objectMapIndex) collectHPAs(ctx context.Context, client kubernetes.In
 	}
 }
 
-func (idx *objectMapIndex) collectPodDisruptionBudgets(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.PolicyV1().PodDisruptionBudgets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectPodDisruptionBudgets(lister policylisters.PodDisruptionBudgetLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("poddisruptionbudgets", err) {
 		return
 	}
-	for i := range list.Items {
-		pdb := list.Items[i]
+	for _, pdb := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&pdb.ObjectMeta, "policy", "v1", "PodDisruptionBudget", "poddisruptionbudgets", pdb.Namespace),
 			creationTimestamp: objectCreationTimestamp(&pdb.ObjectMeta),
-			status:            objectMapPodDisruptionBudgetStatus(idx.meta.ClusterID, pdb),
+			status:            objectMapPodDisruptionBudgetStatus(idx.meta.ClusterID, *pdb),
 			owners:            pdb.OwnerReferences,
 			labels:            cloneStringMap(pdb.Labels),
-			pdb:               &pdb,
+			pdb:               pdb,
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectNetworkPolicies(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.NetworkingV1().NetworkPolicies(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectNetworkPolicies(lister networklisters.NetworkPolicyLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("networkpolicies", err) {
 		return
 	}
-	for i := range list.Items {
-		policy := list.Items[i]
+	for _, policy := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&policy.ObjectMeta, "networking.k8s.io", "v1", "NetworkPolicy", "networkpolicies", policy.Namespace),
 			creationTimestamp: objectCreationTimestamp(&policy.ObjectMeta),
-			status:            objectMapNetworkPolicyStatus(idx.meta.ClusterID, policy),
+			status:            objectMapNetworkPolicyStatus(idx.meta.ClusterID, *policy),
 			owners:            policy.OwnerReferences,
 			labels:            cloneStringMap(policy.Labels),
-			networkPolicy:     &policy,
+			networkPolicy:     policy,
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectIngresses(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.NetworkingV1().Ingresses(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectIngresses(lister networklisters.IngressLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("ingresses", err) {
 		return
 	}
-	for i := range list.Items {
-		ing := list.Items[i]
+	for _, ing := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&ing.ObjectMeta, "networking.k8s.io", "v1", "Ingress", "ingresses", ing.Namespace),
 			creationTimestamp: objectCreationTimestamp(&ing.ObjectMeta),
-			status:            objectMapIngressStatus(idx.meta.ClusterID, ing),
+			status:            objectMapIngressStatus(idx.meta.ClusterID, *ing),
 			owners:            ing.OwnerReferences,
 			labels:            cloneStringMap(ing.Labels),
-			ingress:           &ing,
+			ingress:           ing,
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectIngressClasses(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.NetworkingV1().IngressClasses().List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectIngressClasses(lister networklisters.IngressClassLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("ingressclasses", err) {
 		return
 	}
-	for i := range list.Items {
-		ingClass := list.Items[i]
+	for _, ingClass := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&ingClass.ObjectMeta, "networking.k8s.io", "v1", "IngressClass", "ingressclasses", ""),
 			creationTimestamp: objectCreationTimestamp(&ingClass.ObjectMeta),
-			status:            objectMapIngressClassStatus(idx.meta.ClusterID, ingClass),
+			status:            objectMapIngressClassStatus(idx.meta.ClusterID, *ingClass),
 			owners:            ingClass.OwnerReferences,
 			labels:            cloneStringMap(ingClass.Labels),
-			ingClass:          &ingClass,
+			ingClass:          ingClass,
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectClusterRoles(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.RbacV1().ClusterRoles().List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectClusterRoles(lister rbaclisters.ClusterRoleLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("clusterroles", err) {
 		return
 	}
-	for i := range list.Items {
-		role := list.Items[i]
+	for _, role := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:               refFromObject(&role.ObjectMeta, "rbac.authorization.k8s.io", "v1", "ClusterRole", "clusterroles", ""),
 			creationTimestamp: objectCreationTimestamp(&role.ObjectMeta),
-			status:            objectMapClusterRoleStatus(idx.meta.ClusterID, role),
+			status:            objectMapClusterRoleStatus(idx.meta.ClusterID, *role),
 			owners:            role.OwnerReferences,
 			labels:            cloneStringMap(role.Labels),
-			clusterRole:       &role,
+			clusterRole:       role,
 		})
 	}
 }
 
-func (idx *objectMapIndex) collectClusterRoleBindings(ctx context.Context, client kubernetes.Interface) {
-	list, err := client.RbacV1().ClusterRoleBindings().List(ctx, metav1.ListOptions{})
+func (idx *objectMapIndex) collectClusterRoleBindings(lister rbaclisters.ClusterRoleBindingLister) {
+	items, err := lister.List(labels.Everything())
 	if idx.skipListError("clusterrolebindings", err) {
 		return
 	}
-	for i := range list.Items {
-		binding := list.Items[i]
+	for _, binding := range items {
 		idx.addRecord(&objectMapRecord{
 			ref:                refFromObject(&binding.ObjectMeta, "rbac.authorization.k8s.io", "v1", "ClusterRoleBinding", "clusterrolebindings", ""),
 			creationTimestamp:  objectCreationTimestamp(&binding.ObjectMeta),
-			status:             objectMapClusterRoleBindingStatus(idx.meta.ClusterID, binding),
+			status:             objectMapClusterRoleBindingStatus(idx.meta.ClusterID, *binding),
 			owners:             binding.OwnerReferences,
 			labels:             cloneStringMap(binding.Labels),
-			clusterRoleBinding: &binding,
+			clusterRoleBinding: binding,
 		})
 	}
 }
