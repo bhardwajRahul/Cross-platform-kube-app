@@ -114,7 +114,7 @@ func (a *App) startPortForwardAction(targetRef ObjectActionTargetRef, options Ob
 			TargetGroup:   target.Group,
 			TargetVersion: target.Version,
 			TargetName:    target.Name,
-			Status:        "connecting",
+			Status:        PortForwardStatusConnecting,
 			StartedAt:     time.Now().Format(time.RFC3339),
 		},
 		stopChan:  make(chan struct{}),
@@ -209,7 +209,7 @@ func (a *App) runPortForwarder(ctx context.Context, session *portForwardSessionI
 		// Check if we should reconnect.
 		if !a.shouldReconnect(session) {
 			session.mu.Lock()
-			session.Status = "error"
+			session.Status = PortForwardStatusError
 			session.StatusReason = err.Error()
 			session.mu.Unlock()
 			a.portForwardLifecycle().emitStatus(session)
@@ -220,14 +220,14 @@ func (a *App) runPortForwarder(ctx context.Context, session *portForwardSessionI
 		session.mu.Lock()
 		session.reconnectAttempt++
 		attempt := session.reconnectAttempt
-		session.Status = "reconnecting"
+		session.Status = PortForwardStatusReconnecting
 		session.StatusReason = fmt.Sprintf("attempt %d/%d: %s", attempt, config.PortForwardMaxReconnectAttempts, err.Error())
 		session.mu.Unlock()
 		a.portForwardLifecycle().emitStatus(session)
 
 		if attempt > config.PortForwardMaxReconnectAttempts {
 			session.mu.Lock()
-			session.Status = "error"
+			session.Status = PortForwardStatusError
 			session.StatusReason = "max reconnect attempts exceeded"
 			session.mu.Unlock()
 			a.portForwardLifecycle().emitStatus(session)
@@ -426,7 +426,7 @@ func runtimeOperationFromPortForward(session *portForwardSessionInternal) Runtim
 			session.Namespace,
 			session.TargetName,
 		),
-		Status:       session.Status,
+		Status:       string(session.Status),
 		StatusReason: session.StatusReason,
 		StartedAt:    session.StartedAt,
 		DisplayName:  fmt.Sprintf("Port forward %s/%s", session.Namespace, session.TargetName),

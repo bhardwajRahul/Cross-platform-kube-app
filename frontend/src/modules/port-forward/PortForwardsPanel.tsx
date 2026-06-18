@@ -15,7 +15,9 @@ import { errorHandler } from '@utils/errorHandler';
 import {
   useRuntimeOperationStatus,
   type PortForwardSession,
+  type PortForwardStatus,
 } from '@/ui/status/runtimeOperationStatus';
+import { assertNever } from '@shared/utils/assertNever';
 import './PortForwardsPanel.css';
 
 /**
@@ -97,7 +99,7 @@ function PortForwardsPanel() {
   /**
    * Render the status icon for a session.
    */
-  const renderStatusIcon = (status: string) => {
+  const renderStatusIcon = (status: PortForwardStatus) => {
     switch (status) {
       case 'active':
         return <span className="pf-status-icon pf-status-active">●</span>;
@@ -105,8 +107,13 @@ function PortForwardsPanel() {
         return <span className="pf-status-icon pf-status-reconnecting">↻</span>;
       case 'error':
         return <span className="pf-status-icon pf-status-error">✕</span>;
-      default:
+      // connecting/stopped have no dedicated glyph — show the neutral marker
+      // (the prior default rendering).
+      case 'connecting':
+      case 'stopped':
         return <span className="pf-status-icon pf-status-unknown">○</span>;
+      default:
+        return assertNever(status, 'port-forward status');
     }
   };
 

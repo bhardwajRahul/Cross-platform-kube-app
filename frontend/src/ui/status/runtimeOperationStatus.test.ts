@@ -4,6 +4,7 @@ import {
   initialRuntimeOperationStatusState,
   runtimeOperationStatusReducer,
   selectRuntimeOperationRows,
+  type PortForwardSession,
   type RuntimeOperationStatusState,
 } from './runtimeOperationStatusAdapter';
 
@@ -17,7 +18,7 @@ const shellSession = {
   startedAt: '2026-05-18T00:00:00Z',
 };
 
-const portForwardSession = {
+const portForwardSession: PortForwardSession = {
   id: 'pf-1',
   clusterId: 'cluster-a',
   clusterName: 'Cluster A',

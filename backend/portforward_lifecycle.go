@@ -44,7 +44,7 @@ func (l portForwardLifecycle) markActive(session *portForwardSessionInternal, lo
 	}
 	session.mu.Lock()
 	session.LocalPort = localPort
-	session.Status = "active"
+	session.Status = PortForwardStatusActive
 	session.StatusReason = ""
 	session.reconnectAttempt = 0
 	session.mu.Unlock()
@@ -171,7 +171,7 @@ func (l portForwardLifecycle) setStopped(session *portForwardSessionInternal, re
 		return
 	}
 	session.mu.Lock()
-	session.Status = "stopped"
+	session.Status = PortForwardStatusStopped
 	session.StatusReason = reason
 	session.mu.Unlock()
 }

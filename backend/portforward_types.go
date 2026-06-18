@@ -10,22 +10,35 @@ const (
 	portForwardListEventName   = "portforward:list"
 )
 
+// PortForwardStatus is the lifecycle status of a port-forward session. It is a
+// closed set so the compiler rejects an invalid or typo'd status at every
+// assignment site, making an unrepresentable status impossible.
+type PortForwardStatus string
+
+const (
+	PortForwardStatusConnecting   PortForwardStatus = "connecting"
+	PortForwardStatusActive       PortForwardStatus = "active"
+	PortForwardStatusReconnecting PortForwardStatus = "reconnecting"
+	PortForwardStatusError        PortForwardStatus = "error"
+	PortForwardStatusStopped      PortForwardStatus = "stopped"
+)
+
 // PortForwardSession represents an active port forwarding session.
 type PortForwardSession struct {
-	ID            string `json:"id"`
-	ClusterID     string `json:"clusterId"`
-	ClusterName   string `json:"clusterName"`
-	Namespace     string `json:"namespace"`
-	PodName       string `json:"podName"`
-	ContainerPort int    `json:"containerPort"`
-	LocalPort     int    `json:"localPort"`
-	TargetKind    string `json:"targetKind"`
-	TargetGroup   string `json:"targetGroup"`
-	TargetVersion string `json:"targetVersion"`
-	TargetName    string `json:"targetName"`
-	Status        string `json:"status"`
-	StatusReason  string `json:"statusReason,omitempty"`
-	StartedAt     string `json:"startedAt"`
+	ID            string            `json:"id"`
+	ClusterID     string            `json:"clusterId"`
+	ClusterName   string            `json:"clusterName"`
+	Namespace     string            `json:"namespace"`
+	PodName       string            `json:"podName"`
+	ContainerPort int               `json:"containerPort"`
+	LocalPort     int               `json:"localPort"`
+	TargetKind    string            `json:"targetKind"`
+	TargetGroup   string            `json:"targetGroup"`
+	TargetVersion string            `json:"targetVersion"`
+	TargetName    string            `json:"targetName"`
+	Status        PortForwardStatus `json:"status"`
+	StatusReason  string            `json:"statusReason,omitempty"`
+	StartedAt     string            `json:"startedAt"`
 }
 
 // portForwardSessionInternal holds runtime state not exposed to frontend.
@@ -55,12 +68,12 @@ func (s *portForwardSessionInternal) close() {
 
 // PortForwardStatusEvent is emitted on status changes.
 type PortForwardStatusEvent struct {
-	SessionID    string `json:"sessionId"`
-	ClusterID    string `json:"clusterId"`
-	Status       string `json:"status"`
-	StatusReason string `json:"statusReason,omitempty"`
-	LocalPort    int    `json:"localPort,omitempty"`
-	PodName      string `json:"podName,omitempty"`
+	SessionID    string            `json:"sessionId"`
+	ClusterID    string            `json:"clusterId"`
+	Status       PortForwardStatus `json:"status"`
+	StatusReason string            `json:"statusReason,omitempty"`
+	LocalPort    int               `json:"localPort,omitempty"`
+	PodName      string            `json:"podName,omitempty"`
 }
 
 // PortForwardRequest contains parameters for starting a port forward.

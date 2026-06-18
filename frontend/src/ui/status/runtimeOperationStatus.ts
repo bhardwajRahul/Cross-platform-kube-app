@@ -13,16 +13,19 @@ import {
 } from '@/core/app-state-access';
 import {
   initialRuntimeOperationStatusState,
+  normalizePortForwardSession,
+  normalizePortForwardStatusEvent,
   runtimeOperationStatusReducer,
   selectRuntimeOperationRows,
-  type PortForwardSession,
-  type PortForwardStatusEvent,
+  type RawPortForwardSession,
+  type RawPortForwardStatusEvent,
   type RuntimeOperation,
   type ShellSessionInfo,
 } from './runtimeOperationStatusAdapter';
 
 export {
   type PortForwardSession,
+  type PortForwardStatus,
   type PortForwardStatusEvent,
   type RuntimeOperation,
   type RuntimeOperationStatusState,
@@ -87,7 +90,10 @@ export function useRuntimeOperationStatus(
           read: () => readPortForwardSessions(),
         });
         if (cancelled) return;
-        dispatch({ type: 'portforward:list', sessions: portForwardList || [] });
+        dispatch({
+          type: 'portforward:list',
+          sessions: (portForwardList || []).map(normalizePortForwardSession),
+        });
       } catch (error) {
         onInitialReadError?.(error, 'port-forward-sessions');
         // Runtime events will repopulate the list if the initial read fails.
@@ -112,7 +118,7 @@ export function useRuntimeOperationStatus(
     const cancelPortForwardList = runtime.EventsOn('portforward:list', (...args: unknown[]) =>
       dispatch({
         type: 'portforward:list',
-        sessions: (args[0] as PortForwardSession[]) || [],
+        sessions: ((args[0] as RawPortForwardSession[]) || []).map(normalizePortForwardSession),
       })
     ) as unknown as (() => void) | undefined;
 
@@ -126,9 +132,9 @@ export function useRuntimeOperationStatus(
     ) as unknown as (() => void) | undefined;
 
     const cancelPortForwardStatus = runtime.EventsOn('portforward:status', (...args: unknown[]) => {
-      const event = args[0] as PortForwardStatusEvent | undefined;
-      if (!event?.sessionId) return;
-      dispatch({ type: 'portforward:status', event });
+      const raw = args[0] as RawPortForwardStatusEvent | undefined;
+      if (!raw?.sessionId) return;
+      dispatch({ type: 'portforward:status', event: normalizePortForwardStatusEvent(raw) });
     }) as unknown as (() => void) | undefined;
 
     return () => {

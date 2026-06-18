@@ -4,6 +4,50 @@
  * Reducer and selectors for shared runtime-operation status rows.
  */
 
+import { assertNever } from '@shared/utils/assertNever';
+
+/**
+ * The closed set of port-forward statuses the backend can emit (mirrors the Go
+ * `PortForwardStatus`). Typing the field as this union makes an invalid status
+ * unrepresentable downstream; raw Wails payloads are coerced into it at the
+ * ingestion boundary via {@link parsePortForwardStatus}.
+ */
+export type PortForwardStatus = 'connecting' | 'active' | 'reconnecting' | 'error' | 'stopped';
+
+const PORT_FORWARD_STATUSES: ReadonlySet<string> = new Set<PortForwardStatus>([
+  'connecting',
+  'active',
+  'reconnecting',
+  'error',
+  'stopped',
+]);
+
+// Unrecognized status falls back to the most benign transient state, which
+// renders as the neutral icon and sorts last — identical to how an unknown
+// status was handled before this domain was closed.
+const PORT_FORWARD_STATUS_FALLBACK: PortForwardStatus = 'connecting';
+
+// Log each distinct unrecognized status at most once per session (the backend
+// is the sole, now-typed producer, so this should never fire).
+const warnedUnknownStatuses = new Set<string>();
+
+/**
+ * Coerce a raw status string from the backend into the closed
+ * {@link PortForwardStatus} union, warning once on anything unexpected.
+ */
+export function parsePortForwardStatus(raw: string): PortForwardStatus {
+  if (PORT_FORWARD_STATUSES.has(raw)) {
+    return raw as PortForwardStatus;
+  }
+  if (!warnedUnknownStatuses.has(raw)) {
+    warnedUnknownStatuses.add(raw);
+    console.warn(
+      `Unrecognized port-forward status "${raw}"; treating as "${PORT_FORWARD_STATUS_FALLBACK}".`
+    );
+  }
+  return PORT_FORWARD_STATUS_FALLBACK;
+}
+
 export interface ShellSessionInfo {
   sessionId: string;
   clusterId: string;
@@ -26,17 +70,35 @@ export interface PortForwardSession {
   localPort: number;
   targetKind?: string;
   targetName?: string;
-  status: string;
+  status: PortForwardStatus;
   statusReason?: string;
   startedAt: string;
 }
 
 export interface PortForwardStatusEvent {
   sessionId: string;
-  status: string;
+  status: PortForwardStatus;
   statusReason?: string;
   localPort?: number;
   podName?: string;
+}
+
+/** Port-forward session as delivered by Wails, before status normalization. */
+export type RawPortForwardSession = Omit<PortForwardSession, 'status'> & { status: string };
+
+/** Port-forward status event as delivered by Wails, before status normalization. */
+export type RawPortForwardStatusEvent = Omit<PortForwardStatusEvent, 'status'> & { status: string };
+
+/** Convert a raw Wails port-forward session into the typed domain shape. */
+export function normalizePortForwardSession(raw: RawPortForwardSession): PortForwardSession {
+  return { ...raw, status: parsePortForwardStatus(raw.status) };
+}
+
+/** Convert a raw Wails port-forward status event into the typed domain shape. */
+export function normalizePortForwardStatusEvent(
+  raw: RawPortForwardStatusEvent
+): PortForwardStatusEvent {
+  return { ...raw, status: parsePortForwardStatus(raw.status) };
 }
 
 export type RuntimeOperationType = 'shell' | 'port-forward' | 'drain' | string;
@@ -178,7 +240,7 @@ function parseTimestamp(value?: string | { time?: string }): number {
   return 0;
 }
 
-function getPortForwardStatusPriority(status: string): number {
+function getPortForwardStatusPriority(status: PortForwardStatus): number {
   switch (status) {
     case 'active':
       return 0;
@@ -188,8 +250,10 @@ function getPortForwardStatusPriority(status: string): number {
       return 2;
     case 'stopped':
       return 3;
-    default:
+    case 'connecting':
       return 4;
+    default:
+      return assertNever(status, 'port-forward status');
   }
 }
 
