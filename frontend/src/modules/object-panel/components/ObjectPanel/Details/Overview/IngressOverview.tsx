@@ -5,6 +5,8 @@
 import React from 'react';
 import { ingress } from '@wailsjs/go/models';
 import { OverviewItem } from '@modules/object-panel/components/ObjectPanel/Details/Overview/shared/OverviewItem';
+import { ExternalHostLinks } from '@modules/object-panel/components/ObjectPanel/Details/Overview/shared/ExternalHostLinks';
+import { ingressHostSchemes } from '@modules/object-panel/components/ObjectPanel/Details/Overview/shared/hostLink';
 import { useObjectPanel } from '@modules/object-panel/hooks/useObjectPanel';
 import { ObjectPanelLink } from '@shared/components/ObjectPanelLink';
 import { ResourceHeader } from '@shared/components/kubernetes/ResourceHeader';
@@ -69,6 +71,8 @@ export const IngressOverview: React.FC<IngressOverviewProps> = ({ ingressDetails
   if (!ingressDetails) return null;
   const namespace = ingressDetails.namespace;
   const lbAddresses = ingressDetails.loadBalancerStatus ?? [];
+  // Hosts covered by TLS are served over https; everything else over http.
+  const tlsHosts = ingressDetails.tls?.flatMap((entry) => entry.hosts ?? []) ?? [];
 
   return (
     <>
@@ -120,7 +124,18 @@ export const IngressOverview: React.FC<IngressOverviewProps> = ({ ingressDetails
               {ingressDetails.rules.map((rule: ingress.IngressRuleDetails, ruleIndex: number) => (
                 <div key={`rule-${ruleIndex}-${rule.host ?? 'default'}`} className="overview-card">
                   <div className="overview-card-header">
-                    <span className="overview-card-title">{rule.host || 'Default'}</span>
+                    <span className="overview-card-title">
+                      {rule.host ? (
+                        <ExternalHostLinks
+                          host={rule.host}
+                          schemes={ingressHostSchemes(rule.host, tlsHosts).map((scheme) => ({
+                            scheme,
+                          }))}
+                        />
+                      ) : (
+                        'Default'
+                      )}
+                    </span>
                   </div>
                   {rule.paths && rule.paths.length > 0 && (
                     <div className="overview-card-rows">

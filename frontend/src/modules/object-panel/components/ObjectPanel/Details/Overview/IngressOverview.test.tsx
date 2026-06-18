@@ -129,6 +129,41 @@ describe('IngressOverview', () => {
     expect(defaultBackend?.querySelector('a')).toBeTruthy();
   });
 
+  it('renders rule hosts as browser links with the TLS-derived scheme', async () => {
+    await renderComponent({
+      ingressDetails: {
+        name: 'web-ingress',
+        namespace: 'prod',
+        age: '2d',
+        rules: [
+          { host: 'secure.example.com', paths: [] },
+          { host: 'plain.example.com', paths: [] },
+          { host: '*.wild.example.com', paths: [] },
+        ],
+        tls: [{ hosts: ['secure.example.com'], secretName: 'tls-secret' }],
+        labels: {},
+        annotations: {},
+      } as any,
+    });
+
+    const rulesValue = getValueForLabel(container, 'Rules');
+    const linkTitles = Array.from(
+      rulesValue?.querySelectorAll<HTMLButtonElement>('button.overview-scheme-link') ?? []
+    ).map((b) => b.title);
+
+    // TLS-covered host offers both https and http.
+    expect(linkTitles.some((t) => t.includes('https://secure.example.com'))).toBe(true);
+    expect(linkTitles.some((t) => t.includes('http://secure.example.com'))).toBe(true);
+    // Uncovered host offers http only — never https (no cert).
+    expect(linkTitles.some((t) => t.includes('http://plain.example.com'))).toBe(true);
+    expect(linkTitles.some((t) => t.includes('https://plain.example.com'))).toBe(false);
+
+    // Wildcard hosts aren't browsable, so they get no scheme links but still
+    // show their name.
+    expect(linkTitles.some((t) => t.includes('wild'))).toBe(false);
+    expect(rulesValue?.textContent).toContain('*.wild.example.com');
+  });
+
   it('shows a "no address" chip when the load balancer has no addresses yet', async () => {
     await renderComponent({
       ingressDetails: {

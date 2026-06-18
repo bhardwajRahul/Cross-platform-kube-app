@@ -13,6 +13,8 @@ import {
   types,
 } from '@wailsjs/go/models';
 import { OverviewItem } from '@modules/object-panel/components/ObjectPanel/Details/Overview/shared/OverviewItem';
+import { ExternalHostLinks } from '@modules/object-panel/components/ObjectPanel/Details/Overview/shared/ExternalHostLinks';
+import { listenerScheme } from '@modules/object-panel/components/ObjectPanel/Details/Overview/shared/hostLink';
 import { ObjectPanelLink } from '@shared/components/ObjectPanelLink';
 import { StatusChip, type StatusChipVariant } from '@shared/components/StatusChip';
 import { ResourceHeader } from '@shared/components/kubernetes/ResourceHeader';
@@ -143,6 +145,9 @@ const ListenerList: React.FC<{ listeners?: types.GatewayListenerDetails[] | null
     <div className="overview-card-list">
       {listeners.map((listener) => {
         const hasRows = Boolean(listener.hostname);
+        // Only HTTP/HTTPS listeners get a browsable link; other protocols
+        // (TLS/TCP/UDP) keep the hostname as plain text.
+        const hostScheme = listenerScheme(listener.protocol);
         return (
           <div
             key={`${listener.name}-${listener.port}-${listener.protocol}`}
@@ -162,7 +167,12 @@ const ListenerList: React.FC<{ listeners?: types.GatewayListenerDetails[] | null
                 {listener.hostname && (
                   <div className="overview-row">
                     <span className="overview-row-label">Hostname</span>
-                    <span className="overview-row-value">{listener.hostname}</span>
+                    <span className="overview-row-value">
+                      <ExternalHostLinks
+                        host={listener.hostname}
+                        schemes={hostScheme ? [{ scheme: hostScheme, port: listener.port }] : []}
+                      />
+                    </span>
                   </div>
                 )}
               </div>

@@ -124,6 +124,56 @@ describe('GatewayAPIOverview', () => {
     ).toBe('shared');
   });
 
+  it('renders HTTP(S) listener hostnames as browser links and leaves others as text', async () => {
+    await renderComponent({
+      gatewayDetails: {
+        kind: 'Gateway',
+        name: 'edge',
+        namespace: 'prod',
+        age: '3h',
+        listeners: [
+          {
+            name: 'https',
+            protocol: 'HTTPS',
+            port: 443,
+            hostname: 'secure.example.com',
+            attachedRoutes: 0,
+          },
+          {
+            name: 'http',
+            protocol: 'HTTP',
+            port: 8080,
+            hostname: 'plain.example.com',
+            attachedRoutes: 0,
+          },
+          {
+            name: 'passthrough',
+            protocol: 'TLS',
+            port: 8443,
+            hostname: 'tls.example.com',
+            attachedRoutes: 0,
+          },
+        ],
+        labels: {},
+        annotations: {},
+      } as any,
+    });
+
+    const listenersValue = getValueForLabel(container, 'Listeners');
+    const linkTitles = Array.from(
+      listenersValue?.querySelectorAll<HTMLButtonElement>('button.overview-scheme-link') ?? []
+    ).map((b) => b.title);
+
+    // HTTPS listener → https, default 443 omitted.
+    expect(linkTitles.some((t) => t.includes('https://secure.example.com'))).toBe(true);
+    expect(linkTitles.some((t) => t.includes(':443'))).toBe(false);
+    // HTTP listener → http with its non-default port.
+    expect(linkTitles.some((t) => t.includes('http://plain.example.com:8080'))).toBe(true);
+    // TLS listener has an ambiguous scheme, so its hostname stays plain text.
+    expect(linkTitles.some((t) => t.includes('tls.example.com'))).toBe(false);
+    expect(listenersValue?.textContent).toContain('tls.example.com');
+  });
+
   it('renders route parents, backends, rules, and hostnames', async () => {
     await renderComponent({
       routeDetails: {

@@ -1,3 +1,2 @@
 - Show time of last modified in Obj Panel Details
-- Ingress/service/gateway hostnames should be clickable links
 - Make Impossible States Impossible
