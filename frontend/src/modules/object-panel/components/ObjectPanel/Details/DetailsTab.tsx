@@ -14,8 +14,15 @@ import './DetailsTabData.css';
 
 // Import from extracted modules
 import type { DetailsTabProps } from './detailsTabTypes';
-import { useOverviewData } from './useOverviewData';
 import { useUtilizationData, useHasUtilization } from './useUtilizationData';
+
+// Action-relevant fields read off the active detail DTO for the Overview/ActionsMenu.
+interface ActionDetail {
+  status?: string;
+  ready?: string | number;
+  replicas?: string | number;
+  unschedulable?: boolean;
+}
 
 export type { DetailsTabProps } from './detailsTabTypes';
 
@@ -26,45 +33,22 @@ const DetailsTabContent: React.FC<DetailsTabProps> = ({
   detailsError,
   resourceDeleted = false,
   deletedResourceName = '',
-  canRestart,
-  canScale,
-  canDelete,
-  canTrigger,
-  canSuspend,
-  restartDisabledReason,
-  scaleDisabledReason,
-  deleteDisabledReason,
-  actionLoading,
-  actionError,
-  scaleReplicas,
-  showScaleInput,
-  onRestartClick,
-  onRollbackClick,
-  onDeleteClick,
-  onScaleClick,
-  onScaleCancel,
-  onScaleReplicasChange,
-  onShowScaleInput,
-  onTriggerClick,
-  onSuspendToggle,
+  onAfterDelete,
+  onAfterAction,
 }) => {
   const model = detailModel;
-  // Use extracted hooks for overview and utilization data
   const hasUtilization = useHasUtilization(objectData);
-
-  const overviewData = useOverviewData({
-    objectData,
-    slots: model.slots,
-  });
 
   const dataInfo = model.dataSection;
 
   const utilizationData = useUtilizationData({
     objectData,
-    slots: model.slots,
+    detail: model.activeDetail,
   });
 
   const portForwardAvailable = model.portForwardAvailable;
+  // Action-relevant fields come from the active DTO + the derived model (no per-kind flattening).
+  const detail = (model.activeDetail ?? undefined) as ActionDetail | undefined;
 
   return (
     <div className="object-panel-tab-content">
@@ -77,9 +61,6 @@ const DetailsTabContent: React.FC<DetailsTabProps> = ({
           </span>
         </div>
       )}
-
-      {/* Error Display */}
-      {actionError && <div className="action-error">Error: {actionError}</div>}
 
       {/* Details Content */}
       <div className="details-content">
@@ -97,32 +78,22 @@ const DetailsTabContent: React.FC<DetailsTabProps> = ({
 
         {detailsError && <div className="error-message">Error loading details: {detailsError}</div>}
 
-        {overviewData && (
+        {objectData && (
           <Overview
-            {...(overviewData as { kind: string; name: string })}
-            canDelete={canDelete}
-            onDelete={onDeleteClick}
-            deleteLoading={actionLoading}
-            canRestart={canRestart}
-            canScale={canScale}
-            canTrigger={canTrigger}
-            canSuspend={canSuspend}
-            deleteDisabledReason={deleteDisabledReason}
-            restartDisabledReason={restartDisabledReason}
-            scaleDisabledReason={scaleDisabledReason}
-            onRestart={onRestartClick}
-            onRollback={onRollbackClick}
-            onScale={(replicas: number) => onScaleClick(replicas)}
-            onScaleCancel={onScaleCancel}
-            onScaleReplicasChange={onScaleReplicasChange}
-            onShowScaleInput={onShowScaleInput}
-            scaleReplicas={scaleReplicas}
-            showScaleInput={showScaleInput}
-            actionLoading={actionLoading}
+            kind={objectData.kind ?? ''}
+            name={objectData.name ?? ''}
+            namespace={objectData.namespace ?? undefined}
+            activeDetail={model.activeDetail}
+            status={detail?.status}
+            ready={detail?.ready}
+            replicas={detail?.replicas}
+            unschedulable={detail?.unschedulable}
+            suspend={model.cronJobSuspended}
+            desiredReplicas={model.desiredScaleReplicas}
             objectKind={objectData?.kind}
             portForwardAvailable={portForwardAvailable}
-            onTrigger={onTriggerClick}
-            onSuspendToggle={onSuspendToggle}
+            onAfterDelete={onAfterDelete}
+            onAfterAction={onAfterAction}
           />
         )}
 

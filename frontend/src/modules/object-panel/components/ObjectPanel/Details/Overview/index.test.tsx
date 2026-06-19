@@ -18,6 +18,13 @@ vi.mock('./registry', () => ({
   getResourceCapabilities: (kind: unknown) => getResourceCapabilitiesMock(kind),
 }));
 
+// This suite verifies the Overview wrapper's content + ActionsMenu wiring, independent of which
+// kinds have migrated to descriptors. Force the legacy render path so the assertions hold for any
+// kind; the descriptor path is covered by the per-kind descriptor tests.
+vi.mock('./descriptorRegistry', () => ({
+  getOverviewDescriptor: () => undefined,
+}));
+
 const actionsMenuMock = vi.fn((props: unknown) => {
   void props;
   return <div data-testid="actions-menu" />;
@@ -123,18 +130,16 @@ describe('Overview component', () => {
     });
   });
 
-  it('passes callbacks to ActionsMenu for action handling', async () => {
-    const onRestart = vi.fn();
-    const onScale = vi.fn();
-    const onDelete = vi.fn();
+  it('passes lifecycle callbacks to ActionsMenu for the controller', async () => {
+    const onAfterDelete = vi.fn();
+    const onAfterAction = vi.fn();
 
     await renderComponent({
       kind: 'StatefulSet',
       objectKind: 'statefulset',
       name: 'stateful-1',
-      onRestart,
-      onScale,
-      onDelete,
+      onAfterDelete,
+      onAfterAction,
     });
 
     expect(actionsMenuMock).toHaveBeenCalledTimes(1);
@@ -144,15 +149,15 @@ describe('Overview component', () => {
       throw new Error('ActionsMenu was not called');
     }
     const actionMenuProps = actionMenuArgs[0];
-    // ActionsMenu receives callbacks and object data
+    // ActionsMenu receives the object data + the panel lifecycle callbacks; the
+    // shared controller owns execution and modals from here.
     expect(actionMenuProps).toMatchObject({
       object: expect.objectContaining({
         kind: 'StatefulSet',
         name: 'stateful-1',
       }),
-      onRestart,
-      onScale,
-      onDelete,
+      onAfterDelete,
+      onAfterAction,
     });
   });
 
