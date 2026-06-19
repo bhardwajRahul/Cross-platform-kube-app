@@ -139,19 +139,13 @@ const applyStreamEvent = (
   const ready = event.ready ?? event.snapshot.isFinal;
   const baseSnapshot = mergeSnapshotMeta(state.snapshot, event.snapshot);
   const isFullSnapshot = event.snapshotMode === 'full' || Boolean(event.reset);
-  let nextState = state;
-  let nextItems = state.items;
-  let nextIndex = state.indexByUid;
-
-  if (isFullSnapshot) {
-    nextState = applyFullSnapshot(state, event.snapshot);
-    nextItems = nextState.items;
-    nextIndex = nextState.indexByUid;
-  } else {
-    const partial = applyPartialSnapshot(state, event.snapshot);
-    nextItems = partial.items;
-    nextIndex = partial.indexByUid;
-  }
+  // Both helpers return { items, indexByUid }; a full snapshot rebuilds from
+  // scratch, a partial one merges onto the current state.
+  const merged = isFullSnapshot
+    ? applyFullSnapshot(state, event.snapshot)
+    : applyPartialSnapshot(state, event.snapshot);
+  const nextItems = merged.items;
+  const nextIndex = merged.indexByUid;
 
   const nextSnapshot = {
     ...baseSnapshot,

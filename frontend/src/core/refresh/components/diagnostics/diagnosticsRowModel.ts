@@ -619,7 +619,7 @@ export const buildMetricsSummary = (params: {
   const { telemetryMetrics, telemetrySummary, telemetryError } = params;
   const updatedInfo = formatLastUpdated(telemetryMetrics?.lastCollected);
   const isIdle = telemetryMetrics?.active === false;
-  let statusText = 'Loading…';
+  let statusText: string;
   let className: string | undefined;
   let title: string | undefined;
   let pollsText = '—';
