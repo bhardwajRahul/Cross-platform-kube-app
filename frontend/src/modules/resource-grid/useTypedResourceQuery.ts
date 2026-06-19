@@ -68,6 +68,13 @@ const EXPORT_PAGE_LIMIT = 1000;
 // Matches Browse: a full backend page build per keystroke is pure waste (the
 // out-of-order identity guard already prevents wrong rows).
 const SEARCH_DEBOUNCE_MS = 250;
+// A warm-up (the backend executed but its caches were not ready, so the scoped
+// state carried no payload yet) is transient. The identity-driven retry only
+// fires when `liveDataVersion` changes — which it never does for an EMPTY domain
+// (no rows ⇒ a constant data identity), so a first-view warm-up would otherwise
+// spin forever. This timer re-attempts the warm-up on its own and stops the
+// instant a payload applies (or the query errors / is disabled).
+const WARMUP_RETRY_MS = 1000;
 
 export function useTypedResourceQuery<TPayload extends TypedQueryPayload, TRow>({
   enabled,
@@ -118,6 +125,10 @@ export function useTypedResourceQuery<TPayload extends TypedQueryPayload, TRow>(
   const [isRequestingMore, setIsRequestingMore] = useState(false);
   const [filterOptions, setFilterOptions] = useState<Partial<GridTableFilterOptions>>({});
   const [dynamic, setDynamic] = useState<ResourceQueryDynamicRef | null>(null);
+  // Bumped by the warm-up retry timer to re-run the fetch effect when no other
+  // identity input (filters, sort, liveDataVersion) has changed.
+  const [warmupAttempt, setWarmupAttempt] = useState(0);
+  const warmupTimerRef = useRef<number | null>(null);
   const pendingNavigationRef = useRef<{
     direction: 'next' | 'previous';
     previousPageToken?: string | null;
@@ -291,6 +302,20 @@ export function useTypedResourceQuery<TPayload extends TypedQueryPayload, TRow>(
     }
   }, []);
 
+  // Re-attempt a transient warm-up on a timer so it self-heals without needing a
+  // live-data identity change (which never comes for an empty domain). Only ever
+  // scheduled from a warm-up branch and cleared the moment the fetch effect
+  // re-runs or unmounts, so a settled (loaded) query schedules nothing.
+  const scheduleWarmupRetry = useCallback(() => {
+    if (warmupTimerRef.current !== null) {
+      return;
+    }
+    warmupTimerRef.current = window.setTimeout(() => {
+      warmupTimerRef.current = null;
+      setWarmupAttempt((attempt) => attempt + 1);
+    }, WARMUP_RETRY_MS);
+  }, []);
+
   useEffect(() => {
     if (!enabled || !scope) {
       return;
@@ -317,10 +342,12 @@ export function useTypedResourceQuery<TPayload extends TypedQueryPayload, TRow>(
         if (result.status !== 'executed') {
           // A blocked refresh (cluster still connecting, auto-refresh paused) is a
           // warm-up condition, not a failure: stay not-loaded so the table keeps its
-          // loading (or paused) presentation, and let the next live-data identity
-          // change retry. Persistent causes surface through the refresh error
+          // loading (or paused) presentation. Schedule a self-healing retry (the
+          // next live-data identity change also retries, but never comes for an
+          // empty domain). Persistent causes surface through the refresh error
           // toasts — never as a fabricated table error.
           revertFailedNavigation();
+          scheduleWarmupRetry();
           return;
         }
         const payload = result.data?.data as TPayload | null | undefined;
@@ -328,6 +355,7 @@ export function useTypedResourceQuery<TPayload extends TypedQueryPayload, TRow>(
           // Executed but the scoped state carries no payload yet (backend caches
           // still syncing) — same warm-up treatment as a blocked request.
           revertFailedNavigation();
+          scheduleWarmupRetry();
           return;
         }
         if (payload.cursorInvalid) {
@@ -355,6 +383,10 @@ export function useTypedResourceQuery<TPayload extends TypedQueryPayload, TRow>(
 
     return () => {
       cancelled = true;
+      if (warmupTimerRef.current !== null) {
+        window.clearTimeout(warmupTimerRef.current);
+        warmupTimerRef.current = null;
+      }
     };
   }, [
     applyPayload,
@@ -364,7 +396,9 @@ export function useTypedResourceQuery<TPayload extends TypedQueryPayload, TRow>(
     queryIdentity,
     requestTokenForScope,
     revertFailedNavigation,
+    scheduleWarmupRetry,
     scope,
+    warmupAttempt,
   ]);
 
   const loadMore = useCallback(() => {

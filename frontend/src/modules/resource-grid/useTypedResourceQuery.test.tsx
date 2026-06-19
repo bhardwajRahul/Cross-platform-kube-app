@@ -319,6 +319,101 @@ describe('useTypedResourceQuery', () => {
     expect(result?.error).toBeNull();
   });
 
+  it('self-heals a warm-up result without waiting for a live-data identity change', async () => {
+    // The first request warms up (executed but no payload yet — backend caches
+    // still syncing on the very first view). For an EMPTY domain the live-data
+    // identity is a constant (no rows ⇒ version 0, checksum stable), so the
+    // identity-driven retry can never fire. The hook must retry the warm-up on
+    // its own and settle once the backend is ready, instead of spinning forever.
+    requestRefreshDomainStateMock
+      .mockResolvedValueOnce({ status: 'executed', data: { status: 'ready', data: null } })
+      .mockResolvedValue({ status: 'executed', data: { status: 'ready', data: { rows: [] } } });
+
+    const Probe: React.FC = () => {
+      result = useTypedResourceQuery<TestPayload, TestRow>({
+        enabled: true,
+        clusterId: 'cluster-a',
+        domain: 'namespace-storage',
+        label: 'Namespace Storage',
+        filters: DEFAULT_GRID_TABLE_FILTER_STATE,
+        sortConfig,
+        // Constant across the whole test — the empty-domain identity never moves.
+        liveDataVersion: '0::',
+        selectRows,
+      });
+      return null;
+    };
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        root.render(<Probe />);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Warm-up: not loaded yet, no fabricated error, still showing the spinner.
+      expect(result?.loaded).toBe(false);
+      expect(result?.error).toBeNull();
+      expect(requestRefreshDomainStateMock).toHaveBeenCalledTimes(1);
+
+      // Without any live-data identity change, the warm-up retry fires and the
+      // now-ready (empty) payload settles the table — no infinite spinner.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+
+      expect(requestRefreshDomainStateMock.mock.calls.length).toBeGreaterThan(1);
+      expect(result?.loaded).toBe(true);
+      expect(result?.rows).toEqual([]);
+      expect(result?.error).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops the warm-up retry once the query has loaded (no refetch storm)', async () => {
+    // Once a payload applies, the self-healing retry must go quiet: a loaded
+    // table must not keep re-issuing the query on a timer.
+    requestRefreshDomainStateMock.mockResolvedValue({
+      status: 'executed',
+      data: { status: 'ready', data: { rows: [{ name: 'pvc-a' }] } },
+    });
+
+    const Probe: React.FC = () => {
+      result = useTypedResourceQuery<TestPayload, TestRow>({
+        enabled: true,
+        clusterId: 'cluster-a',
+        domain: 'namespace-storage',
+        label: 'Namespace Storage',
+        filters: DEFAULT_GRID_TABLE_FILTER_STATE,
+        sortConfig,
+        liveDataVersion: 'v1',
+        selectRows,
+      });
+      return null;
+    };
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        root.render(<Probe />);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(result?.loaded).toBe(true);
+      const callsAfterLoad = requestRefreshDomainStateMock.mock.calls.length;
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+      // No additional requests fired after the load settled.
+      expect(requestRefreshDomainStateMock.mock.calls.length).toBe(callsAfterLoad);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps a thrown fetch failure as a real error', async () => {
     requestRefreshDomainStateMock.mockRejectedValueOnce(new Error('cluster gone'));
 
