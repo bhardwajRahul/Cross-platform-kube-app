@@ -59,9 +59,6 @@ func (s *Service) collectViaSharedInformer(index int, desc resourceDescriptor, n
 	plan := planCollectionSource(desc)
 	switch plan.source {
 	case collectionSourceSkip:
-		if agg != nil {
-			agg.complete(index)
-		}
 		return nil, true, nil
 	case collectionSourceAPIExtensionsInformer:
 		if s.deps.APIExtensionsInformerFactory == nil {
@@ -144,9 +141,6 @@ func (s *Service) listResource(ctx context.Context, index int, desc resourceDesc
 	if desc.Namespaced && len(namespaces) > 0 {
 		targets = uniqueNamespaces(namespaces)
 		if len(targets) == 0 {
-			if agg != nil {
-				agg.complete(index)
-			}
 			return nil, nil
 		}
 	} else if desc.Namespaced {
@@ -156,9 +150,6 @@ func (s *Service) listResource(ctx context.Context, index int, desc resourceDesc
 	}
 
 	if len(targets) == 0 {
-		if agg != nil {
-			agg.complete(index)
-		}
 		return nil, nil
 	}
 
@@ -186,9 +177,6 @@ func (s *Service) listResourceSequential(ctx context.Context, index int, namespa
 			results = append(results, items...)
 		}
 	}
-	if len(results) == 0 && agg != nil {
-		agg.complete(index)
-	}
 	return results, nil
 }
 
@@ -213,9 +201,6 @@ func (s *Service) listResourceNamespacedParallel(ctx context.Context, index int,
 	if err != nil {
 		return nil, err
 	}
-	if len(results) == 0 && agg != nil {
-		agg.complete(index)
-	}
 	return results, nil
 }
 
@@ -235,7 +220,7 @@ func (s *Service) listNamespaceItems(ctx context.Context, index int, desc resour
 
 		var list *unstructuredv1.UnstructuredList
 		var err error
-		for attempt := 0; attempt < config.ObjectCatalogListRetryMaxAttempts; attempt++ {
+		for attempt := range config.ObjectCatalogListRetryMaxAttempts {
 			list, err = resourceInterface.List(ctx, options)
 			if err == nil {
 				break
@@ -390,9 +375,6 @@ func (s *Service) collectFromInformer(index int, desc resourceDescriptor, promot
 	}
 	if agg != nil && len(results) > 0 {
 		agg.emit(index, results)
-	}
-	if agg != nil && len(results) == 0 {
-		agg.complete(index)
 	}
 	return results, nil
 }

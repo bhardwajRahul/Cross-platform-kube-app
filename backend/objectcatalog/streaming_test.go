@@ -220,11 +220,3 @@ func TestPruneMissingHonorsTTL(t *testing.T) {
 		t.Fatalf("expected recent entry b to remain")
 	}
 }
-
-func TestStreamingAggregatorCompleteIsNilSafe(t *testing.T) {
-	var agg *streamingAggregator
-	agg.complete(0)
-
-	agg = &streamingAggregator{}
-	agg.complete(1)
-}

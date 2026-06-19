@@ -72,13 +72,6 @@ func (a *streamingAggregator) emit(_ int, items []Summary) {
 	}
 }
 
-// complete marks the aggregator as complete.
-func (a *streamingAggregator) complete(_ int) {
-	if a == nil {
-		return
-	}
-}
-
 // cloneChunksLocked snapshots the aggregator's chunk list. Chunks are
 // immutable once appended (their items are never mutated after creation), so
 // only the pointer slice is copied — deep-copying every item made each emit
@@ -118,12 +111,8 @@ func (a *streamingAggregator) finalize(descriptors []Descriptor, ready bool) {
 
 // emitSummaries adds a batch of summaries to the aggregator.
 func emitSummaries(index int, agg *streamingAggregator, summaries []Summary, err error, handled bool) ([]Summary, bool, error) {
-	if handled && agg != nil && err == nil {
-		if len(summaries) > 0 {
-			agg.emit(index, summaries)
-		} else {
-			agg.complete(index)
-		}
+	if handled && agg != nil && err == nil && len(summaries) > 0 {
+		agg.emit(index, summaries)
 	}
 	return summaries, handled, err
 }
