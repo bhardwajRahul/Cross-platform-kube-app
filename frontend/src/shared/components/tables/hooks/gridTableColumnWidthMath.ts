@@ -162,7 +162,6 @@ const distributeFlexWidths = <T>({
   flexColumns,
   targetFlexWidth,
   hasMissingColumns,
-  originalWidths,
   getColumnMinWidth,
   getColumnMaxWidth,
 }: WidthBounds<T> & {
@@ -170,7 +169,6 @@ const distributeFlexWidths = <T>({
   flexColumns: GridColumnDefinition<T>[];
   targetFlexWidth: number;
   hasMissingColumns: boolean;
-  originalWidths: Record<string, number>;
 }): Record<string, number> => {
   if (targetFlexWidth <= 0 || flexColumns.length === 0) {
     return resolvedWidths;
@@ -179,8 +177,9 @@ const distributeFlexWidths = <T>({
     return resolvedWidths;
   }
 
+  // Past the `if (!hasMissingColumns) return` guard above, hasMissingColumns is
+  // always true, so every return below hands back the rebuilt `updated` map.
   const updated: Record<string, number> = { ...resolvedWidths };
-  let mutated = false;
   const currentFlexTotal = flexColumns.reduce((sum, column) => sum + (updated[column.key] ?? 0), 0);
 
   if (currentFlexTotal <= 0) {
@@ -194,11 +193,10 @@ const distributeFlexWidths = <T>({
       });
       if (updated[column.key] !== width) {
         updated[column.key] = width;
-        mutated = true;
       }
     });
 
-    return mutated || hasMissingColumns ? updated : originalWidths;
+    return updated;
   }
 
   const scale = targetFlexWidth / currentFlexTotal;
@@ -210,7 +208,6 @@ const distributeFlexWidths = <T>({
     });
     if (width !== previousWidth) {
       updated[column.key] = width;
-      mutated = true;
     }
   });
 
@@ -233,14 +230,12 @@ const distributeFlexWidths = <T>({
         if (increase > 0) {
           updated[key] = current + increase;
           delta -= increase;
-          mutated = true;
         }
       } else if (delta < 0 && current > min) {
         const decrease = Math.min(Math.abs(delta), current - min);
         if (decrease > 0) {
           updated[key] = current - decrease;
           delta += decrease;
-          mutated = true;
         }
       }
 
@@ -250,7 +245,7 @@ const distributeFlexWidths = <T>({
     }
   }
 
-  return mutated || hasMissingColumns ? updated : originalWidths;
+  return updated;
 };
 
 export const reconcileColumnWidthsToContainer = <T>({
@@ -320,7 +315,6 @@ export const reconcileColumnWidthsToContainer = <T>({
     flexColumns,
     targetFlexWidth: containerWidth - fixedWidth,
     hasMissingColumns: missingColumns.size > 0,
-    originalWidths: baseWidths,
     getColumnMinWidth,
     getColumnMaxWidth,
   });

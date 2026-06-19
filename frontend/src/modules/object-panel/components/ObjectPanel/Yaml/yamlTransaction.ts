@@ -511,7 +511,9 @@ export const useYamlTransaction = ({
       return;
     }
 
-    if (previousScope && !scope) {
+    // `scope` is falsy here (the guard above returned otherwise), so only the
+    // transition out of a previous scope matters.
+    if (previousScope) {
       setPostApplyNotice(null);
       exitEditMode();
     }

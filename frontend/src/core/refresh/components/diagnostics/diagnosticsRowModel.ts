@@ -627,7 +627,7 @@ export const buildMetricsSummary = (params: {
   if (telemetryError && !telemetrySummary) {
     statusText = 'Unavailable';
     className = 'diagnostics-summary-warning';
-    title = telemetryError ?? undefined;
+    title = telemetryError;
   } else if (!telemetryMetrics) {
     statusText = telemetrySummary ? 'No data' : 'Loading…';
   } else {
@@ -706,7 +706,7 @@ export const buildEventStreamSummary = (params: {
       primary: 'Active: — • Delivered: — • Dropped: —',
       secondary: 'Updated: — • Newest Event: —',
       className: 'diagnostics-summary-warning',
-      title: telemetryError ?? undefined,
+      title: telemetryError,
     };
   }
 
@@ -765,7 +765,7 @@ export const buildCatalogSummary = (params: {
       primary: 'Active: — • Batches: — • Dropped: —',
       secondary: 'Updated: — • Latest Batch: — • First Row: —',
       className: 'diagnostics-summary-warning',
-      title: telemetryError ?? undefined,
+      title: telemetryError,
     };
   }
 

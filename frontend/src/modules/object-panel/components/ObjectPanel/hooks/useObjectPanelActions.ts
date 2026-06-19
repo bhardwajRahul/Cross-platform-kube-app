@@ -169,9 +169,7 @@ export const useObjectPanelActions = ({
             ) {
               const workloadKind = getWorkloadKind(objectKind, objectData);
               if (!workloadKind) {
-                throw new Error(
-                  `Unsupported workload kind for restart: ${objectKind ?? 'unknown'}`
-                );
+                throw new Error(`Unsupported workload kind for restart: ${objectKind}`);
               }
               if (!objectData.version) {
                 throw new Error(
@@ -198,7 +196,7 @@ export const useObjectPanelActions = ({
               const replicas = scaleOverride ?? state.scaleReplicas;
               const workloadKind = getWorkloadKind(objectKind, objectData);
               if (!workloadKind) {
-                throw new Error(`Unsupported workload kind for scale: ${objectKind ?? 'unknown'}`);
+                throw new Error(`Unsupported workload kind for scale: ${objectKind}`);
               }
               if (!objectData.version) {
                 throw new Error(

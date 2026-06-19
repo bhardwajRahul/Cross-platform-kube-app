@@ -50,9 +50,11 @@ export function splitEventObjectTarget(value?: string | null): ParsedEventObject
     return { objectType: raw, objectName: '-', isLinkable: false };
   }
 
+  // `objectName` is guaranteed non-empty here: the `if (!objectName)` guard
+  // above returned early otherwise.
   return {
     objectType: objectType || '-',
-    objectName: objectName || '-',
+    objectName,
     isLinkable: Boolean(objectType && objectName),
   };
 }

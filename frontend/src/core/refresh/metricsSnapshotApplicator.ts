@@ -156,7 +156,7 @@ export function applyMetricsSnapshot<K extends RefreshDomain>({
       isManual,
       scope,
     }));
-    clearRefreshError(domain, scope || undefined);
+    clearRefreshError(domain, scope);
     return true;
   }
 
@@ -207,7 +207,7 @@ export function applyMetricsSnapshot<K extends RefreshDomain>({
       isManual,
       scope,
     }));
-    clearRefreshError(domain, scope || undefined);
+    clearRefreshError(domain, scope);
     return true;
   }
 
