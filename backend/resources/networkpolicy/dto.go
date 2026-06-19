@@ -11,7 +11,6 @@ type NetworkPolicyDetails struct {
 	Kind         string              `json:"kind"`
 	Name         string              `json:"name"`
 	Namespace    string              `json:"namespace"`
-	Age          string              `json:"age"`
 	Details      string              `json:"details"`
 	PodSelector  map[string]string   `json:"podSelector"`
 	PolicyTypes  []string            `json:"policyTypes"`

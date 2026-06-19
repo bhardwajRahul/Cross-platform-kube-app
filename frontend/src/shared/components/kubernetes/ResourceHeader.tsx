@@ -10,12 +10,12 @@ import { OverviewItem } from '@modules/object-panel/components/ObjectPanel/Detai
 import { ObjectPanelLink } from '@shared/components/ObjectPanelLink';
 import { useObjectPanel } from '@modules/object-panel/hooks/useObjectPanel';
 import { buildRequiredObjectReference } from '@shared/utils/objectIdentity';
+import { formatAge } from '@/utils/ageFormatter';
 
 interface ResourceHeaderProps {
   kind: string;
   name: string;
   namespace?: string;
-  age?: string;
   displayKind?: string; // Optional override for display
 }
 
@@ -23,10 +23,14 @@ export const ResourceHeader: React.FC<ResourceHeaderProps> = ({
   kind,
   name,
   namespace,
-  age,
   displayKind,
 }) => {
-  const { objectData, lastModified } = useObjectPanel();
+  const { objectData, creationTimestamp, lastModified } = useObjectPanel();
+  // Age is derived once, here, from the object's creationTimestamp delivered in
+  // the object-details envelope — the single source for every kind (built-in and
+  // custom). Formatting with formatAge keeps it byte-identical to the Browse
+  // table's Age column. formatAge('' | null | undefined) → '-'.
+  const age = creationTimestamp ? formatAge(creationTimestamp) : '';
 
   return (
     <>

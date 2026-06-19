@@ -37,7 +37,6 @@ interface CRDVersionLike {
 interface ClusterResourceOverviewProps {
   kind?: string;
   name?: string;
-  age?: string;
   status?: string;
   statusState?: string;
   statusPresentation?: string;
@@ -160,7 +159,7 @@ const renderCRDVersions = (versions: CRDVersionLike[] | undefined): React.ReactN
 };
 
 export const ClusterResourceOverview: React.FC<ClusterResourceOverviewProps> = (props) => {
-  const { kind, name, age, status, statusState, statusPresentation } = props;
+  const { kind, name, status, statusState, statusPresentation } = props;
   const normalizedKind = kind?.toLowerCase();
   const { objectData } = useObjectPanel();
   const clusterMeta = {
@@ -170,7 +169,7 @@ export const ClusterResourceOverview: React.FC<ClusterResourceOverviewProps> = (
 
   return (
     <>
-      <ResourceHeader kind={kind || ''} name={name || ''} age={age} />
+      <ResourceHeader kind={kind || ''} name={name || ''} />
       <ResourceStatus
         status={status}
         statusState={statusState}

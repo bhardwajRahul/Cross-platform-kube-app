@@ -60,7 +60,6 @@ describe('EndpointSliceOverview', () => {
       endpointSliceDetails: {
         name: 'svc-endpoint-slices',
         namespace: 'default',
-        age: '1h',
         addressType: 'IPv4',
         readyAddresses: Array.from({ length: 12 }, (_, index) => ({
           ip: `10.0.0.${index + 1}`,
@@ -98,7 +97,6 @@ describe('EndpointSliceOverview', () => {
       endpointSliceDetails: {
         name: 'healthy-slice',
         namespace: 'dev',
-        age: '5m',
         addressType: 'IPv4',
         readyAddresses: [
           { ip: '10.0.0.1', targetRef: 'pod-1', nodeName: 'node-1' },
@@ -124,7 +122,6 @@ describe('EndpointSliceOverview', () => {
       endpointSliceDetails: {
         name: 'test-slice',
         namespace: 'default',
-        age: '1h',
         addressType: 'IPv6',
         readyAddresses: [{ ip: '2001:db8::1', targetRef: 'Pod/my-pod', nodeName: 'worker-1' }],
         notReadyAddresses: [],

@@ -10,7 +10,6 @@ package admission
 import (
 	"fmt"
 
-	"github.com/luxury-yacht/app/backend/resources/common"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -58,7 +57,6 @@ func (s *Service) buildValidatingWebhookConfigurationDetails(config *admissionre
 	details := &ValidatingWebhookConfigurationDetails{
 		Kind:        "ValidatingWebhookConfiguration",
 		Name:        config.Name,
-		Age:         common.FormatAge(config.CreationTimestamp.Time),
 		Labels:      model.Metadata.Labels,
 		Annotations: model.Metadata.Annotations,
 	}

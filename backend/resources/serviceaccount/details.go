@@ -106,7 +106,6 @@ func (s *Service) buildServiceAccountDetails(sa *corev1.ServiceAccount, pods *co
 		Kind:                         "ServiceAccount",
 		Name:                         sa.Name,
 		Namespace:                    sa.Namespace,
-		Age:                          common.FormatAge(sa.CreationTimestamp.Time),
 		Details:                      detailsSummary(facts),
 		Secrets:                      restypes.ObjectRefsFromResourceLinks(facts.Secrets),
 		ImagePullSecrets:             restypes.ObjectRefsFromResourceLinks(facts.ImagePullSecrets),

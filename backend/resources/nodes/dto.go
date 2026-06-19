@@ -17,7 +17,6 @@ type NodeDetails struct {
 	restypes.StatusProjection
 	Unschedulable     bool                     `json:"unschedulable"`
 	Roles             string                   `json:"roles"`
-	Age               string                   `json:"age"`
 	InternalIP        string                   `json:"internalIP"`
 	ExternalIP        string                   `json:"externalIP,omitempty"`
 	Hostname          string                   `json:"hostname"`

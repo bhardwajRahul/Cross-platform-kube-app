@@ -194,7 +194,6 @@ interface JobOverviewProps {
   kind?: string;
   name?: string;
   namespace?: string;
-  age?: string;
 
   // Job fields
   status?: string;
@@ -242,7 +241,7 @@ interface JobOverviewProps {
 }
 
 export const JobOverview: React.FC<JobOverviewProps> = (props) => {
-  const { kind, name, namespace, age } = props;
+  const { kind, name, namespace } = props;
   const isJob = props.kind?.toLowerCase() === 'job';
   const isCronJob = props.kind?.toLowerCase() === 'cronjob';
 
@@ -273,7 +272,7 @@ export const JobOverview: React.FC<JobOverviewProps> = (props) => {
 
   return (
     <>
-      <ResourceHeader kind={kind || ''} name={name || ''} namespace={namespace} age={age} />
+      <ResourceHeader kind={kind || ''} name={name || ''} namespace={namespace} />
 
       {/* Job-specific fields */}
       {isJob && (

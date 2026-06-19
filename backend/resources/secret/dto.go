@@ -13,7 +13,6 @@ type SecretDetails struct {
 	Kind        string               `json:"kind"`
 	Name        string               `json:"name"`
 	Namespace   string               `json:"namespace"`
-	Age         string               `json:"age"`
 	Details     string               `json:"details"`
 	SecretType  string               `json:"secretType"`
 	Data        map[string]string    `json:"data,omitempty"`

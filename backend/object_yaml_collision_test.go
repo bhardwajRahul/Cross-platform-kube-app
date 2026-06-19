@@ -144,9 +144,10 @@ func newCollidingDBInstanceCluster(t *testing.T, clusterID string) *App {
 		"apiVersion": "rds.services.k8s.aws/v1alpha1",
 		"kind":       "DBInstance",
 		"metadata": map[string]any{
-			"name":            "my-db",
-			"namespace":       "default",
-			"resourceVersion": "100",
+			"name":              "my-db",
+			"namespace":         "default",
+			"resourceVersion":   "100",
+			"creationTimestamp": "2023-01-02T03:04:05Z",
 		},
 		"spec": map[string]any{
 			"source": "ack-rds",

@@ -264,6 +264,33 @@ func TestObjectDetailProviderUsesClusterContext(t *testing.T) {
 	}
 }
 
+// TestObjectDetailProviderFetchObjectHeaderMetadata proves Age works for the
+// kind that previously had none: a custom resource with no typed detail panel.
+// The provider reads the live object via the generic GVK path and returns its
+// creation timestamp in RFC3339 UTC (the same format the object catalog stores,
+// so the Details Age matches the Browse table byte-for-byte).
+func TestObjectDetailProviderFetchObjectHeaderMetadata(t *testing.T) {
+	const clusterID = "headermeta-provider"
+	app := newCollidingDBInstanceCluster(t, clusterID)
+
+	provider, ok := app.objectDetailProvider().(snapshot.ObjectHeaderMetadataProvider)
+	if !ok {
+		t.Fatal("object detail provider does not implement ObjectHeaderMetadataProvider")
+	}
+	ctx := snapshot.WithClusterMeta(context.Background(), snapshot.ClusterMeta{
+		ClusterID:   clusterID,
+		ClusterName: "ctx",
+	})
+
+	meta, err := provider.FetchObjectHeaderMetadata(ctx, ackDBInstanceGVK, "default", "my-db")
+	if err != nil {
+		t.Fatalf("FetchObjectHeaderMetadata returned error: %v", err)
+	}
+	if meta.CreationTimestamp != "2023-01-02T03:04:05Z" {
+		t.Fatalf("expected RFC3339 creation timestamp, got %q", meta.CreationTimestamp)
+	}
+}
+
 func TestObjectDetailProviderCoversAdditionalKinds(t *testing.T) {
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-deploy", Namespace: "extra"},

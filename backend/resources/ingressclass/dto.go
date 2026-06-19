@@ -11,7 +11,6 @@ type IngressClassDetails struct {
 	Kind        string                  `json:"kind"`
 	Name        string                  `json:"name"`
 	Controller  string                  `json:"controller"`
-	Age         string                  `json:"age"`
 	IsDefault   bool                    `json:"isDefault"`
 	Details     string                  `json:"details"`
 	Parameters  *IngressClassParameters `json:"parameters,omitempty"`

@@ -91,7 +91,6 @@ func (s *Service) buildServiceDetails(svc *corev1.Service, slices []*discoveryv1
 		Kind:             "Service",
 		Name:             svc.Name,
 		Namespace:        svc.Namespace,
-		Age:              common.FormatAge(svc.CreationTimestamp.Time),
 		StatusProjection: restypes.NewStatusProjection(model.Status),
 		ServiceType:      facts.Type,
 		ClusterIP:        facts.ClusterIP,

@@ -22,7 +22,6 @@ type DaemonSetDetails struct {
 	UpToDate  int32  `json:"upToDate,omitempty"`
 	Available int32  `json:"available"`
 	Updated   int32  `json:"updated,omitempty"`
-	Age       string `json:"age"`
 
 	// Average resource utilization (per pod)
 	restypes.ResourceUtilization

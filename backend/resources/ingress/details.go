@@ -59,7 +59,6 @@ func (s *Service) buildIngressDetails(ingress *networkingv1.Ingress) *IngressDet
 		Kind:             "Ingress",
 		Name:             ingress.Name,
 		Namespace:        ingress.Namespace,
-		Age:              common.FormatAge(ingress.CreationTimestamp.Time),
 		IngressClassName: ingressClassNamePointer(facts.ClassName),
 		Labels:           ingress.Labels,
 		Annotations:      ingress.Annotations,

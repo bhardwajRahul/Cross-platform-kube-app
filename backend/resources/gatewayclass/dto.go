@@ -14,7 +14,6 @@ type GatewayClassDetails struct {
 	Kind        string                  `json:"kind"`
 	Name        string                  `json:"name"`
 	Controller  string                  `json:"controller"`
-	Age         string                  `json:"age"`
 	Details     string                  `json:"details"`
 	Conditions  []types.ConditionState  `json:"conditions,omitempty"`
 	Summary     types.ConditionsSummary `json:"summary"`

@@ -52,7 +52,6 @@ func (s *Service) buildDetails(item *gatewayv1.ListenerSet) *ListenerSetDetails 
 		Kind:        "ListenerSet",
 		Name:        item.Name,
 		Namespace:   item.Namespace,
-		Age:         common.FormatAge(item.CreationTimestamp.Time),
 		Details:     fmt.Sprintf("%d listener(s)", len(facts.Listeners)),
 		ParentRef:   types.RefOrDisplayFromResourceLink(facts.ParentRef),
 		Listeners:   types.GatewayListenerDetailsFromFacts(facts.Listeners),

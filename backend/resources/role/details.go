@@ -75,7 +75,6 @@ func (s *Service) buildRoleDetails(r *rbacv1.Role, bindings *rbacv1.RoleBindingL
 		Kind:               "Role",
 		Name:               r.Name,
 		Namespace:          r.Namespace,
-		Age:                common.FormatAge(r.CreationTimestamp.Time),
 		Details:            detailsSummary(facts),
 		Rules:              restypes.PolicyRulesFromFacts(facts.Rules),
 		Labels:             r.Labels,

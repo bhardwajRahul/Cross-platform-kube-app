@@ -81,7 +81,6 @@ func (s *Service) buildDeploymentDetails(
 		UpToDate:            facts.UpdatedReplicas,
 		Available:           facts.AvailableReplicas,
 		DesiredReplicas:     facts.DesiredReplicas,
-		Age:                 common.FormatAge(deployment.CreationTimestamp.Time),
 		ResourceUtilization: workloads.WorkloadUtilization(podsList, podMetrics),
 		Strategy:            facts.Strategy,
 		MaxSurge:            facts.MaxSurge,

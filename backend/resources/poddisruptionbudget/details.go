@@ -72,7 +72,6 @@ func (s *Service) buildPodDisruptionBudgetDetails(pdb *policyv1.PodDisruptionBud
 		Kind:               "PodDisruptionBudget",
 		Name:               pdb.Name,
 		Namespace:          pdb.Namespace,
-		Age:                common.FormatAge(pdb.CreationTimestamp.Time),
 		Details:            detailsSummary(facts),
 		MinAvailable:       pdbIntOrStringValue(facts.MinAvailable),
 		MaxUnavailable:     pdbIntOrStringValue(facts.MaxUnavailable),

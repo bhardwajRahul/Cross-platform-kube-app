@@ -159,12 +159,7 @@ export const EndpointSliceOverview: React.FC<EndpointSliceOverviewProps> = ({
 
   return (
     <>
-      <ResourceHeader
-        kind="EndpointSlice"
-        name={endpointSliceDetails.name}
-        namespace={namespace}
-        age={endpointSliceDetails.age}
-      />
+      <ResourceHeader kind="EndpointSlice" name={endpointSliceDetails.name} namespace={namespace} />
 
       <OverviewItem label="Address Type" value={endpointSliceDetails.addressType || 'IPv4'} />
       <OverviewItem label="Status" value={statusValue} />

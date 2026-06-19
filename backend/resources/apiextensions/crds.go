@@ -13,7 +13,6 @@ import (
 	"github.com/luxury-yacht/app/backend/internal/applog"
 	"github.com/luxury-yacht/app/backend/internal/logsources"
 	"github.com/luxury-yacht/app/backend/resourcemodel"
-	"github.com/luxury-yacht/app/backend/resources/common"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -61,7 +60,6 @@ func (s *Service) buildCRDDetails(crd *apiextensionsv1.CustomResourceDefinition)
 	details := &CustomResourceDefinitionDetails{
 		Kind:        "CustomResourceDefinition",
 		Name:        crd.Name,
-		Age:         common.FormatAge(crd.CreationTimestamp.Time),
 		Labels:      model.Metadata.Labels,
 		Annotations: model.Metadata.Annotations,
 	}

@@ -85,7 +85,6 @@ func (s *Service) processPersistentVolumeClaimDetails(pvc *corev1.PersistentVolu
 		Kind:             "PersistentVolumeClaim",
 		Name:             pvc.Name,
 		Namespace:        pvc.Namespace,
-		Age:              common.FormatAge(pvc.CreationTimestamp.Time),
 		StatusProjection: restypes.NewStatusProjection(model.Status),
 		StorageClass:     pvc.Spec.StorageClassName,
 		VolumeName:       pvc.Spec.VolumeName,

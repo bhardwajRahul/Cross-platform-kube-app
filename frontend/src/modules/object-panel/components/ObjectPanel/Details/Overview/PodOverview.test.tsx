@@ -90,7 +90,6 @@ describe('PodOverview', () => {
     await renderComponent({
       name: 'web-1',
       namespace: 'default',
-      age: '10m',
       status: 'Running',
       statusState: 'Running',
       statusPresentation: 'warning',
@@ -123,7 +122,6 @@ describe('PodOverview', () => {
     await renderComponent({
       name: 'worker-0',
       namespace: 'cluster',
-      age: '5m',
       owner: { kind: 'StatefulSet', name: 'worker' },
     });
 
@@ -147,7 +145,6 @@ describe('PodOverview', () => {
     await renderComponent({
       name: 'cache-0',
       namespace: 'infra',
-      age: '2h',
       node: 'node-b',
       serviceAccount: 'cache-sa',
     });

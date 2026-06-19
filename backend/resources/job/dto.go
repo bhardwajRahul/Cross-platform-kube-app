@@ -19,7 +19,6 @@ type JobDetails struct {
 	Namespace string `json:"namespace"`
 	restypes.StatusProjection
 	Details string `json:"details"`
-	Age     string `json:"age,omitempty"`
 
 	// Job status
 	Completions    int32        `json:"completions,omitempty"`

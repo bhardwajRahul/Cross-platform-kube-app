@@ -340,12 +340,7 @@ const GatewayDetailsOverview: React.FC<{
 
   return (
     <>
-      <ResourceHeader
-        kind="Gateway"
-        name={details.name}
-        namespace={details.namespace}
-        age={details.age}
-      />
+      <ResourceHeader kind="Gateway" name={details.name} namespace={details.namespace} />
       <OverviewItem
         label="Gateway Class"
         value={<RefLink value={details.gatewayClassRef} clusterName={clusterName} />}
@@ -382,7 +377,7 @@ const GatewayClassOverview: React.FC<{
 
   return (
     <>
-      <ResourceHeader kind="GatewayClass" name={details.name} age={details.age} />
+      <ResourceHeader kind="GatewayClass" name={details.name} />
       <OverviewItem label="Controller" value={details.controller} fullWidth />
       <OverviewItem
         label="Parameters"
@@ -419,12 +414,7 @@ const RouteOverview: React.FC<{
 
   return (
     <>
-      <ResourceHeader
-        kind={details.kind}
-        name={details.name}
-        namespace={details.namespace}
-        age={details.age}
-      />
+      <ResourceHeader kind={details.kind} name={details.name} namespace={details.namespace} />
       <OverviewItem
         label="Hostnames"
         value={details.hostnames?.join(', ')}
@@ -469,12 +459,7 @@ const ListenerSetOverview: React.FC<{
 
   return (
     <>
-      <ResourceHeader
-        kind="ListenerSet"
-        name={details.name}
-        namespace={details.namespace}
-        age={details.age}
-      />
+      <ResourceHeader kind="ListenerSet" name={details.name} namespace={details.namespace} />
       <OverviewItem
         label="Parent Gateway"
         value={<RefLink value={details.parentRef} clusterName={clusterName} />}
@@ -504,12 +489,7 @@ const ReferenceGrantOverview: React.FC<{
 
   return (
     <>
-      <ResourceHeader
-        kind="ReferenceGrant"
-        name={details.name}
-        namespace={details.namespace}
-        age={details.age}
-      />
+      <ResourceHeader kind="ReferenceGrant" name={details.name} namespace={details.namespace} />
       {hasGrant && (
         <div className="overview-stacked">
           <div className="overview-label">Grant</div>
@@ -530,12 +510,7 @@ const BackendTLSPolicyOverview: React.FC<{
 
   return (
     <>
-      <ResourceHeader
-        kind="BackendTLSPolicy"
-        name={details.name}
-        namespace={details.namespace}
-        age={details.age}
-      />
+      <ResourceHeader kind="BackendTLSPolicy" name={details.name} namespace={details.namespace} />
       <OverviewItem
         label="Target Refs"
         value={<RefList refs={details.targetRefs} clusterName={clusterName} />}

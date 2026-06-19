@@ -12,7 +12,6 @@ import restypes "github.com/luxury-yacht/app/backend/resources/types"
 type ClusterRoleBindingDetails struct {
 	Kind        string             `json:"kind"`
 	Name        string             `json:"name"`
-	Age         string             `json:"age"`
 	Details     string             `json:"details"`
 	RoleRef     restypes.RoleRef   `json:"roleRef"`
 	Subjects    []restypes.Subject `json:"subjects"`

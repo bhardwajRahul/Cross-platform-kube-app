@@ -222,7 +222,6 @@ func (s *Service) buildPodDetailInfo(pod corev1.Pod, podMetrics map[string]*metr
 		StatusProjection: types.NewStatusProjection(model.Status),
 		Ready:            formatPodFactsReady(podFacts),
 		Restarts:         podFacts.RestartCount,
-		Age:              common.FormatAge(pod.CreationTimestamp.Time),
 		CPURequest:       common.FormatCPU(cpuRequest),
 		CPULimit:         common.FormatCPU(cpuLimit),
 		CPUUsage:         common.FormatCPU(cpuUsage),

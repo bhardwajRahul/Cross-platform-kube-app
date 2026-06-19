@@ -200,7 +200,6 @@ const createBaseProps = (overrides: DetailsTabTestOverrides = {}): DetailsTabPro
     kind: 'Pod',
     name: 'pod-1',
     namespace: 'default',
-    age: '1h',
     status: 'Running',
   };
 
@@ -249,7 +248,6 @@ const buildScenarioProps = (scenario: OverviewScenario): DetailsTabProps => {
     kind: 'Pod',
     name: 'pod-1',
     namespace: 'default',
-    age: '1h',
     status: 'Running',
     ...scenario.objectData,
   };
@@ -269,7 +267,6 @@ describe('DetailsTab', () => {
     const props = createBaseProps({
       podDetails: {
         name: 'pod-1',
-        age: '1h',
         node: 'node-a',
         nodeIP: '10.0.0.1',
         podIP: '192.168.0.10',
@@ -318,11 +315,10 @@ describe('DetailsTab', () => {
 
   it('hides utilization for inactive replicasets', async () => {
     const props = createBaseProps({
-      objectData: { kind: 'ReplicaSet', name: 'web-rs', namespace: 'default', age: '1h' },
+      objectData: { kind: 'ReplicaSet', name: 'web-rs', namespace: 'default' },
       replicaSetDetails: {
         name: 'web-rs',
         namespace: 'default',
-        age: '1h',
         replicas: '1/2',
         ready: '1/2',
         cpuUsage: '100m',
@@ -344,7 +340,6 @@ describe('DetailsTab', () => {
     const props = createBaseProps({
       podDetails: {
         name: 'pod-1',
-        age: '1h',
         node: 'node-a',
         ownerKind: 'Deployment',
         ownerName: 'web',
@@ -376,12 +371,11 @@ describe('DetailsTab', () => {
 
   it('passes port-forward availability false for services with no TCP ports', async () => {
     const props = createBaseProps({
-      objectData: { kind: 'Service', name: 'svc-1', namespace: 'default', age: '1h' },
+      objectData: { kind: 'Service', name: 'svc-1', namespace: 'default' },
       serviceDetails: {
         kind: 'Service',
         name: 'svc-1',
         namespace: 'default',
-        age: '1h',
         type: 'ClusterIP',
         clusterIP: '10.0.0.10',
         ports: [{ name: 'dns', port: 53, protocol: 'UDP' }],
@@ -400,11 +394,10 @@ describe('DetailsTab', () => {
 
   it('renders data section for config maps', async () => {
     const props = createBaseProps({
-      objectData: { kind: 'ConfigMap', name: 'cfg', namespace: 'default', age: '2d' },
+      objectData: { kind: 'ConfigMap', name: 'cfg', namespace: 'default' },
       configMapDetails: {
         name: 'cfg',
         namespace: 'default',
-        age: '2d',
         data: { key: 'value' },
         binaryData: {},
       } as any,
@@ -419,10 +412,9 @@ describe('DetailsTab', () => {
 
   it('uses node utilization metrics and omits containers when not applicable', async () => {
     const props = createBaseProps({
-      objectData: { kind: 'Node', name: 'node-a', namespace: '', age: '10d' },
+      objectData: { kind: 'Node', name: 'node-a', namespace: '' },
       nodeDetails: {
         name: 'node-a',
-        age: '10d',
         cpuUsage: '2',
         cpuCapacity: '4',
         cpuAllocatable: '3',
@@ -470,11 +462,10 @@ describe('DetailsTab', () => {
     const scenarios: OverviewScenario[] = [
       {
         name: 'Deployment overview includes rollout metadata',
-        objectData: { kind: 'Deployment', name: 'web', namespace: 'apps', age: '1h' },
+        objectData: { kind: 'Deployment', name: 'web', namespace: 'apps' },
         extraProps: {
           deploymentDetails: {
             name: 'web',
-            age: '1h',
             namespace: 'apps',
             replicas: 3,
             desiredReplicas: 3,
@@ -521,11 +512,10 @@ describe('DetailsTab', () => {
       },
       {
         name: 'DaemonSet overview maps readiness',
-        objectData: { kind: 'DaemonSet', name: 'ds', namespace: 'ops', age: '2h' },
+        objectData: { kind: 'DaemonSet', name: 'ds', namespace: 'ops' },
         extraProps: {
           daemonSetDetails: {
             name: 'ds',
-            age: '2h',
             namespace: 'ops',
             desired: 5,
             current: 4,
@@ -559,11 +549,10 @@ describe('DetailsTab', () => {
       },
       {
         name: 'StatefulSet overview surfaces pod-management policy',
-        objectData: { kind: 'StatefulSet', name: 'sts', namespace: 'data', age: '3h' },
+        objectData: { kind: 'StatefulSet', name: 'sts', namespace: 'data' },
         extraProps: {
           statefulSetDetails: {
             name: 'sts',
-            age: '3h',
             namespace: 'data',
             replicas: 6,
             desiredReplicas: 6,
@@ -597,11 +586,10 @@ describe('DetailsTab', () => {
       },
       {
         name: 'Service overview provides details payload',
-        objectData: { kind: 'Service', name: 'svc', namespace: 'net', age: '4h' },
+        objectData: { kind: 'Service', name: 'svc', namespace: 'net' },
         extraProps: {
           serviceDetails: {
             name: 'svc',
-            age: '4h',
             namespace: 'net',
             clusterIP: '10.0.0.5',
             ports: [],
@@ -617,11 +605,10 @@ describe('DetailsTab', () => {
       },
       {
         name: 'Ingress overview returns TLS data',
-        objectData: { kind: 'Ingress', name: 'ing', namespace: 'net', age: '5h' },
+        objectData: { kind: 'Ingress', name: 'ing', namespace: 'net' },
         extraProps: {
           ingressDetails: {
             name: 'ing',
-            age: '5h',
             namespace: 'net',
             rules: [],
             tls: [{ secretName: 'tls' }],
@@ -636,11 +623,10 @@ describe('DetailsTab', () => {
       },
       {
         name: 'NetworkPolicy overview relays spec',
-        objectData: { kind: 'NetworkPolicy', name: 'np', namespace: 'net', age: '6h' },
+        objectData: { kind: 'NetworkPolicy', name: 'np', namespace: 'net' },
         extraProps: {
           networkPolicyDetails: {
             name: 'np',
-            age: '6h',
             namespace: 'net',
             policyTypes: ['Ingress'],
             podSelector: {},
@@ -655,11 +641,10 @@ describe('DetailsTab', () => {
       },
       {
         name: 'EndpointSlice overview surfaces slices',
-        objectData: { kind: 'EndpointSlice', name: 'eps', namespace: 'net', age: '7h' },
+        objectData: { kind: 'EndpointSlice', name: 'eps', namespace: 'net' },
         extraProps: {
           endpointSliceDetails: {
             name: 'eps',
-            age: '7h',
             namespace: 'net',
             slices: [],
           } as any,
@@ -677,12 +662,10 @@ describe('DetailsTab', () => {
           kind: 'ServiceAccount',
           name: 'builder',
           namespace: 'ci',
-          age: '8h',
         },
         extraProps: {
           serviceAccountDetails: {
             name: 'builder',
-            age: '8h',
             namespace: 'ci',
             secrets: [
               resourceRef({
@@ -734,11 +717,10 @@ describe('DetailsTab', () => {
       },
       {
         name: 'Role overview exposes rules',
-        objectData: { kind: 'Role', name: 'role', namespace: 'ci', age: '9h' },
+        objectData: { kind: 'Role', name: 'role', namespace: 'ci' },
         extraProps: {
           roleDetails: {
             name: 'role',
-            age: '9h',
             namespace: 'ci',
             rules: [{ apiGroups: [''], resources: ['pods'], verbs: ['list'] }],
             usedByRoleBindings: [
@@ -759,11 +741,10 @@ describe('DetailsTab', () => {
       },
       {
         name: 'RoleBinding overview relays subjects',
-        objectData: { kind: 'RoleBinding', name: 'rb', namespace: 'ci', age: '10h' },
+        objectData: { kind: 'RoleBinding', name: 'rb', namespace: 'ci' },
         extraProps: {
           roleBindingDetails: {
             name: 'rb',
-            age: '10h',
             namespace: 'ci',
             roleRef: { name: 'role', kind: 'Role' },
             subjects: [{ name: 'user', kind: 'User' }],
@@ -777,11 +758,10 @@ describe('DetailsTab', () => {
       },
       {
         name: 'ClusterRole overview includes aggregation rule',
-        objectData: { kind: 'ClusterRole', name: 'cr', namespace: '', age: '11h' },
+        objectData: { kind: 'ClusterRole', name: 'cr', namespace: '' },
         extraProps: {
           clusterRoleDetails: {
             name: 'cr',
-            age: '11h',
             rules: [],
             aggregationRule: { clusterRoleSelectors: [] },
             clusterRoleBindings: [resourceRef()],
@@ -799,12 +779,10 @@ describe('DetailsTab', () => {
           kind: 'ClusterRoleBinding',
           name: 'crb',
           namespace: '',
-          age: '12h',
         },
         extraProps: {
           clusterRoleBindingDetails: {
             name: 'crb',
-            age: '12h',
             roleRef: { name: 'cr', kind: 'ClusterRole' },
             subjects: [{ name: 'group', kind: 'Group' }],
           } as any,
@@ -821,12 +799,10 @@ describe('DetailsTab', () => {
           kind: 'HorizontalPodAutoscaler',
           name: 'hpa',
           namespace: 'autoscale',
-          age: '13h',
         },
         extraProps: {
           hpaDetails: {
             name: 'hpa',
-            age: '13h',
             namespace: 'autoscale',
             scaleTargetRef: { kind: 'Deployment', name: 'web' },
             minReplicas: 1,
@@ -850,12 +826,10 @@ describe('DetailsTab', () => {
           kind: 'PodDisruptionBudget',
           name: 'pdb',
           namespace: 'autoscale',
-          age: '14h',
         },
         extraProps: {
           pdbDetails: {
             name: 'pdb',
-            age: '14h',
             namespace: 'autoscale',
             minAvailable: '1',
             maxUnavailable: '25%',
@@ -878,12 +852,10 @@ describe('DetailsTab', () => {
           kind: 'ResourceQuota',
           name: 'rq',
           namespace: 'quota',
-          age: '15h',
         },
         extraProps: {
           resourceQuotaDetails: {
             name: 'rq',
-            age: '15h',
             namespace: 'quota',
             hard: { cpu: '4' },
             used: { cpu: '2' },
@@ -903,12 +875,10 @@ describe('DetailsTab', () => {
           kind: 'LimitRange',
           name: 'lr',
           namespace: 'quota',
-          age: '16h',
         },
         extraProps: {
           limitRangeDetails: {
             name: 'lr',
-            age: '16h',
             namespace: 'quota',
             limits: [{ type: 'Container' }],
           } as any,
@@ -925,12 +895,10 @@ describe('DetailsTab', () => {
           kind: 'Namespace',
           name: 'workloads',
           namespace: '',
-          age: '17h',
         },
         extraProps: {
           namespaceDetails: {
             name: 'workloads',
-            age: '17h',
             status: 'Active',
             hasWorkloads: true,
             workloadsUnknown: false,
@@ -950,12 +918,10 @@ describe('DetailsTab', () => {
           kind: 'IngressClass',
           name: 'nginx',
           namespace: '',
-          age: '18h',
         },
         extraProps: {
           ingressClassDetails: {
             name: 'nginx',
-            age: '18h',
             controller: 'k8s.io/ingress-nginx',
             isDefault: true,
             parameters: {},
@@ -973,12 +939,10 @@ describe('DetailsTab', () => {
           kind: 'CustomResourceDefinition',
           name: 'widgets.acme.com',
           namespace: '',
-          age: '19h',
         },
         extraProps: {
           crdDetails: {
             name: 'widgets.acme.com',
-            age: '19h',
             group: 'acme.com',
             versions: [{ name: 'v1' }],
             scope: 'Namespaced',
@@ -998,12 +962,10 @@ describe('DetailsTab', () => {
           kind: 'MutatingWebhookConfiguration',
           name: 'mutate',
           namespace: '',
-          age: '20h',
         },
         extraProps: {
           mutatingWebhookDetails: {
             name: 'mutate',
-            age: '20h',
             webhooks: [{ name: 'default' }],
           } as any,
         },
@@ -1019,12 +981,10 @@ describe('DetailsTab', () => {
           kind: 'ValidatingWebhookConfiguration',
           name: 'validate',
           namespace: '',
-          age: '21h',
         },
         extraProps: {
           validatingWebhookDetails: {
             name: 'validate',
-            age: '21h',
             webhooks: [{ name: 'default' }],
           } as any,
         },
@@ -1036,11 +996,10 @@ describe('DetailsTab', () => {
       },
       {
         name: 'Job overview captures duration',
-        objectData: { kind: 'Job', name: 'job', namespace: 'batch', age: '22h' },
+        objectData: { kind: 'Job', name: 'job', namespace: 'batch' },
         extraProps: {
           jobDetails: {
             name: 'job',
-            age: '22h',
             namespace: 'batch',
             completions: 1,
             parallelism: 1,
@@ -1062,11 +1021,10 @@ describe('DetailsTab', () => {
       },
       {
         name: 'CronJob overview lists schedule',
-        objectData: { kind: 'CronJob', name: 'cron', namespace: 'batch', age: '23h' },
+        objectData: { kind: 'CronJob', name: 'cron', namespace: 'batch' },
         extraProps: {
           cronJobDetails: {
             name: 'cron',
-            age: '23h',
             namespace: 'batch',
             schedule: '* * * * *',
             suspend: false,
@@ -1089,12 +1047,10 @@ describe('DetailsTab', () => {
           kind: 'PersistentVolumeClaim',
           name: 'pvc',
           namespace: 'storage',
-          age: '24h',
         },
         extraProps: {
           pvcDetails: {
             name: 'pvc',
-            age: '24h',
             namespace: 'storage',
             status: 'Bound',
             volumeName: 'pv',
@@ -1126,12 +1082,10 @@ describe('DetailsTab', () => {
           kind: 'PersistentVolume',
           name: 'pv',
           namespace: '',
-          age: '25h',
         },
         extraProps: {
           pvDetails: {
             name: 'pv',
-            age: '25h',
             capacity: '10Gi',
             accessModes: ['ReadWriteOnce'],
             reclaimPolicy: 'Delete',
@@ -1153,12 +1107,10 @@ describe('DetailsTab', () => {
           kind: 'StorageClass',
           name: 'standard',
           namespace: '',
-          age: '26h',
         },
         extraProps: {
           storageClassDetails: {
             name: 'standard',
-            age: '26h',
             provisioner: 'kubernetes.io/aws-ebs',
             reclaimPolicy: 'Delete',
             volumeBindingMode: 'WaitForFirstConsumer',
@@ -1179,12 +1131,10 @@ describe('DetailsTab', () => {
           kind: 'HelmRelease',
           name: 'helm',
           namespace: 'apps',
-          age: '27h',
         },
         extraProps: {
           helmReleaseDetails: {
             name: 'helm',
-            age: '27h',
             namespace: 'apps',
             chart: 'chart',
             appVersion: '1.0.0',
@@ -1205,12 +1155,10 @@ describe('DetailsTab', () => {
           kind: 'Secret',
           name: 'secret',
           namespace: 'config',
-          age: '28h',
         },
         extraProps: {
           secretDetails: {
             name: 'secret',
-            age: '28h',
             namespace: 'config',
             data: { token: 'abc' },
           } as any,
@@ -1228,7 +1176,6 @@ describe('DetailsTab', () => {
           kind: 'Widget',
           name: 'gizmo',
           namespace: 'weird',
-          age: '29h',
           status: 'Ready',
           apiGroup: 'acme.com',
         },
@@ -1275,7 +1222,6 @@ describe('DetailsTab', () => {
       objectData: { kind: 'Pod', name: 'pod', namespace: 'default' },
       podDetails: {
         name: 'pod',
-        age: '1h',
         namespace: 'default',
       } as any,
     });
@@ -1317,7 +1263,6 @@ describe('DetailsTab', () => {
       objectData: { kind: 'Deployment', name: 'empty', namespace: 'apps' },
       deploymentDetails: {
         name: 'empty',
-        age: '1h',
         namespace: 'apps',
         replicas: 1,
         desiredReplicas: 1,

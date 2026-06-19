@@ -256,7 +256,6 @@ const strategyTooltip = (strategy: string, kind: StrategyKind): React.ReactNode 
 interface WorkloadOverviewProps {
   kind: string;
   name: string;
-  age: string;
   namespace?: string;
 
   // Common workload fields
@@ -340,7 +339,6 @@ interface WorkloadOverviewProps {
 export const WorkloadOverview: React.FC<WorkloadOverviewProps> = ({
   kind,
   name,
-  age,
   namespace,
   status,
   statusState,
@@ -395,7 +393,7 @@ export const WorkloadOverview: React.FC<WorkloadOverviewProps> = ({
   return (
     <>
       {/* Use composed component for header */}
-      <ResourceHeader kind={kind} name={name} namespace={namespace} age={age} />
+      <ResourceHeader kind={kind} name={name} namespace={namespace} />
       <ResourceStatus
         status={status}
         statusState={statusState}

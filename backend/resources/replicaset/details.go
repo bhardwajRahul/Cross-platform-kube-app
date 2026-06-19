@@ -75,7 +75,6 @@ func (s *Service) buildReplicaSetDetails(
 		Ready:               ready,
 		Available:           facts.AvailableReplicas,
 		DesiredReplicas:     facts.DesiredReplicas,
-		Age:                 common.FormatAge(replicaSet.CreationTimestamp.Time),
 		ResourceUtilization: workloads.WorkloadUtilization(podsList, podMetrics),
 		MinReadySeconds:     facts.MinReadySeconds,
 		Selector:            facts.Selector,

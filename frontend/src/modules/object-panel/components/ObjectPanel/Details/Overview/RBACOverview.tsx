@@ -123,7 +123,6 @@ interface RBACOverviewProps {
   kind?: string;
   name?: string;
   namespace?: string;
-  age?: string;
   // Role/ClusterRole fields
   rules?: any[];
   policyRules?: any[];
@@ -144,7 +143,7 @@ interface RBACOverviewProps {
 
 // RBAC resources Overview
 export const RBACOverview: React.FC<RBACOverviewProps> = (props) => {
-  const { kind, name, namespace, age } = props;
+  const { kind, name, namespace } = props;
   const normalizedKind = kind?.toLowerCase();
   const { objectData } = useObjectPanel();
   const clusterMeta = {
@@ -166,7 +165,7 @@ export const RBACOverview: React.FC<RBACOverviewProps> = (props) => {
 
   return (
     <>
-      <ResourceHeader kind={kind || ''} name={name || ''} namespace={namespace} age={age} />
+      <ResourceHeader kind={kind || ''} name={name || ''} namespace={namespace} />
 
       {/* Aggregation — shows the label selectors that pick which other
           ClusterRoles get folded into this one. Common for the built-in

@@ -69,7 +69,6 @@ func (s *Service) processSecretDetails(sec *corev1.Secret, relationships *resour
 		Kind:        "Secret",
 		Name:        sec.Name,
 		Namespace:   sec.Namespace,
-		Age:         common.FormatAge(sec.CreationTimestamp.Time),
 		SecretType:  facts.Type,
 		DataKeys:    facts.DataKeys,
 		DataCount:   facts.DataCount,

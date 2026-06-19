@@ -16,12 +16,18 @@ type stubDetailProvider struct {
 	err     error
 	calls   int
 	gvk     schema.GroupVersionKind
+	meta    ObjectHeaderMetadata
+	metaErr error
 }
 
 func (s *stubDetailProvider) FetchObjectDetails(_ context.Context, gvk schema.GroupVersionKind, _ string, _ string) (interface{}, string, error) {
 	s.calls++
 	s.gvk = gvk
 	return s.details, s.version, s.err
+}
+
+func (s *stubDetailProvider) FetchObjectHeaderMetadata(_ context.Context, _ schema.GroupVersionKind, _ string, _ string) (ObjectHeaderMetadata, error) {
+	return s.meta, s.metaErr
 }
 
 func TestObjectDetailsBuilderUsesProviderWhenAvailable(t *testing.T) {
@@ -102,6 +108,55 @@ func TestObjectDetailsBuilderFallsBackToGenericDetails(t *testing.T) {
 	ref := payload.ResourceModel.Ref
 	if ref.ClusterID != "cluster-a" || ref.Group != "" || ref.Version != "v1" || ref.Kind != "configmap" || ref.Namespace != "default" || ref.Name != "demo" {
 		t.Fatalf("expected full resource model ref, got %#v", ref)
+	}
+}
+
+func TestObjectDetailsBuilderIncludesCreationTimestampOnTypedPath(t *testing.T) {
+	provider := &stubDetailProvider{
+		details: map[string]string{"foo": "bar"},
+		version: "42",
+		meta:    ObjectHeaderMetadata{CreationTimestamp: "2023-01-02T03:04:05Z", LastModified: "5m"},
+	}
+
+	builder := &ObjectDetailsBuilder{provider: provider, metadataProvider: provider}
+
+	snapshot, err := builder.Build(context.Background(), "default:/v1:Pod:demo")
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	payload, ok := snapshot.Payload.(ObjectDetailsSnapshotPayload)
+	if !ok {
+		t.Fatalf("unexpected payload type: %T", snapshot.Payload)
+	}
+	if payload.CreationTimestamp != "2023-01-02T03:04:05Z" {
+		t.Fatalf("expected creation timestamp on typed path, got %q", payload.CreationTimestamp)
+	}
+	if payload.LastModified != "5m" {
+		t.Fatalf("expected last modified on typed path, got %q", payload.LastModified)
+	}
+}
+
+func TestObjectDetailsBuilderIncludesCreationTimestampOnGenericPath(t *testing.T) {
+	provider := &stubDetailProvider{
+		err:  ErrObjectDetailNotImplemented,
+		meta: ObjectHeaderMetadata{CreationTimestamp: "2023-01-02T03:04:05Z"},
+	}
+
+	builder := &ObjectDetailsBuilder{provider: provider, metadataProvider: provider}
+
+	ctx := WithClusterMeta(context.Background(), ClusterMeta{ClusterID: "cluster-a", ClusterName: "Cluster A"})
+	snapshot, err := builder.Build(ctx, "cluster-a|default:/v1:configmap:demo")
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	payload, ok := snapshot.Payload.(ObjectDetailsSnapshotPayload)
+	if !ok {
+		t.Fatalf("unexpected payload type: %T", snapshot.Payload)
+	}
+	if payload.CreationTimestamp != "2023-01-02T03:04:05Z" {
+		t.Fatalf("expected creation timestamp on generic fallback path, got %q", payload.CreationTimestamp)
 	}
 }
 

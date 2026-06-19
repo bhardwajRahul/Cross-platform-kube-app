@@ -57,7 +57,6 @@ func (s *Service) buildRoleBindingDetails(rb *rbacv1.RoleBinding) *RoleBindingDe
 		Kind:        "RoleBinding",
 		Name:        rb.Name,
 		Namespace:   rb.Namespace,
-		Age:         common.FormatAge(rb.CreationTimestamp.Time),
 		Details:     detailsSummary(facts),
 		Labels:      rb.Labels,
 		Annotations: rb.Annotations,

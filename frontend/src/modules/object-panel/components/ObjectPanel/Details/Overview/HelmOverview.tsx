@@ -20,7 +20,6 @@ interface HelmOverviewProps {
   // Fallback props for when details aren't loaded yet (from table data)
   name?: string;
   namespace?: string;
-  age?: string;
   chart?: string;
   appVersion?: string;
   status?: string;
@@ -36,7 +35,6 @@ export const HelmOverview: React.FC<HelmOverviewProps> = ({
   // Fallback props
   name,
   namespace,
-  age,
   chart,
   appVersion,
   status,
@@ -55,7 +53,6 @@ export const HelmOverview: React.FC<HelmOverviewProps> = ({
   // Use details if available, otherwise fall back to table data
   const displayName = helmReleaseDetails?.name || name || '-';
   const displayNamespace = helmReleaseDetails?.namespace || namespace || '-';
-  const displayAge = helmReleaseDetails?.age || age || '-';
   const displayChart = helmReleaseDetails?.chart || chart || '-';
   const displayAppVersion = helmReleaseDetails?.appVersion || appVersion;
   const displayStatus = helmReleaseDetails?.status || status;
@@ -67,12 +64,7 @@ export const HelmOverview: React.FC<HelmOverviewProps> = ({
 
   return (
     <>
-      <ResourceHeader
-        kind="HelmRelease"
-        name={displayName}
-        namespace={displayNamespace}
-        age={displayAge}
-      />
+      <ResourceHeader kind="HelmRelease" name={displayName} namespace={displayNamespace} />
       <ResourceStatus
         status={displayStatus}
         statusState={helmReleaseDetails?.statusState}

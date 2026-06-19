@@ -8,7 +8,6 @@ import { ResourceHeader } from '@shared/components/kubernetes/ResourceHeader';
 import { ResourceMetadata } from '@shared/components/kubernetes/ResourceMetadata';
 
 interface GenericOverviewProps {
-  age?: string;
   apiGroup?: string;
   automountServiceAccountToken?: boolean;
   clusterIP?: string;
@@ -43,7 +42,6 @@ interface GenericOverviewProps {
 // Generic overview for resources that don't have a specific component yet
 export const GenericOverview: React.FC<GenericOverviewProps> = (props) => {
   const {
-    age,
     apiGroup,
     automountServiceAccountToken,
     clusterIP,
@@ -77,7 +75,7 @@ export const GenericOverview: React.FC<GenericOverviewProps> = (props) => {
 
   return (
     <>
-      <ResourceHeader kind={kind || ''} name={name || ''} namespace={namespace} age={age} />
+      <ResourceHeader kind={kind || ''} name={name || ''} namespace={namespace} />
 
       {apiGroup && <OverviewItem label="API Group" value={apiGroup} />}
 

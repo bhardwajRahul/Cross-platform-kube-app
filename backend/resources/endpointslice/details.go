@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"time"
 
 	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/internal/logsources"
@@ -104,7 +103,6 @@ func (s *Service) buildEndpointSliceDetails(namespace, name string, slice *disco
 
 	if slice == nil {
 		details.Details = "Ready: 0, Ports: 0"
-		details.Age = common.FormatAge(time.Time{})
 		return details
 	}
 
@@ -117,7 +115,6 @@ func (s *Service) buildEndpointSliceDetails(namespace, name string, slice *disco
 	details.ReadyAddresses = ready
 	details.NotReadyAddresses = notReady
 	details.Ports = ports
-	details.Age = common.FormatAge(slice.CreationTimestamp.Time)
 	details.Labels = slice.Labels
 	details.Annotations = slice.Annotations
 

@@ -42,7 +42,6 @@ const qosTooltip = (qosClass: string): string | undefined => {
 
 interface PodOverviewProps {
   name: string;
-  age: string;
   namespace?: string;
   node?: string;
   nodeIP?: string;
@@ -67,7 +66,6 @@ interface PodOverviewProps {
 
 export const PodOverview: React.FC<PodOverviewProps> = ({
   name,
-  age,
   namespace,
   node,
   nodeIP,
@@ -116,7 +114,7 @@ export const PodOverview: React.FC<PodOverviewProps> = ({
   return (
     <>
       {/* Use composed component for header */}
-      <ResourceHeader kind="Pod" name={name} namespace={namespace} age={age} />
+      <ResourceHeader kind="Pod" name={name} namespace={namespace} />
 
       {/* Use composed component for status */}
       <ResourceStatus

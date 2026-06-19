@@ -71,7 +71,6 @@ func (s *Service) processConfigMapDetails(cm *corev1.ConfigMap, relationships *r
 		Kind:        "ConfigMap",
 		Name:        cm.Name,
 		Namespace:   cm.Namespace,
-		Age:         common.FormatAge(cm.CreationTimestamp.Time),
 		Data:        cm.Data,
 		DataCount:   facts.DataCount,
 		Labels:      cm.Labels,

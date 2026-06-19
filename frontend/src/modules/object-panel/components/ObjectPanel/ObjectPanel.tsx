@@ -197,14 +197,20 @@ function ObjectPanel({ panelId, objectRef }: ObjectPanelProps) {
     });
 
   // Only poll when this tab is active in its group (Step 8: active-tab-only polling).
-  const { detailPayload, lastModified, detailsLoading, detailsError, fetchResourceDetails } =
-    useObjectPanelRefresh({
-      detailScope,
-      objectKind,
-      objectData,
-      isOpen: isOpen && isActiveTab,
-      resourceDeleted: state.resourceDeleted,
-    });
+  const {
+    detailPayload,
+    creationTimestamp,
+    lastModified,
+    detailsLoading,
+    detailsError,
+    fetchResourceDetails,
+  } = useObjectPanelRefresh({
+    detailScope,
+    objectKind,
+    objectData,
+    isOpen: isOpen && isActiveTab,
+    resourceDeleted: state.resourceDeleted,
+  });
 
   const objectIdentityKey = useMemo(() => {
     const clusterKey = objectData?.clusterId?.trim().toLowerCase() ?? '';
@@ -431,11 +437,12 @@ function ObjectPanel({ panelId, objectRef }: ObjectPanelProps) {
   const panelScopeRef = useRef<HTMLDivElement>(null);
 
   // Memoize the per-instance context value so child components get the correct objectData.
-  // lastModified rides along so the shared ResourceHeader can render it without
-  // every per-kind overview having to thread it through.
+  // creationTimestamp (→ Age) and lastModified ride along so the shared
+  // ResourceHeader can render both for every kind without each per-kind overview
+  // having to thread them through.
   const currentObjectPanelValue = useMemo(
-    () => ({ objectData, panelId, lastModified }),
-    [objectData, panelId, lastModified]
+    () => ({ objectData, panelId, creationTimestamp, lastModified }),
+    [objectData, panelId, creationTimestamp, lastModified]
   );
 
   return (

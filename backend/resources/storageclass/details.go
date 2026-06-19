@@ -90,7 +90,6 @@ func (s *Service) processStorageClassDetails(storageClass *storagev1.StorageClas
 	details := &StorageClassDetails{
 		Kind:             "StorageClass",
 		Name:             storageClass.Name,
-		Age:              common.FormatAge(storageClass.CreationTimestamp.Time),
 		StatusProjection: restypes.NewStatusProjection(model.Status),
 		Provisioner:      storageClass.Provisioner,
 		Parameters:       storageClass.Parameters,

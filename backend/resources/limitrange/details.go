@@ -71,7 +71,6 @@ func (s *Service) buildLimitRangeDetails(lr *corev1.LimitRange) *LimitRangeDetai
 		Kind:        "LimitRange",
 		Name:        lr.Name,
 		Namespace:   lr.Namespace,
-		Age:         common.FormatAge(lr.CreationTimestamp.Time),
 		Details:     model.Status.Label,
 		Limits:      limitRangeItemsFromFacts(facts.Limits),
 		Labels:      lr.Labels,

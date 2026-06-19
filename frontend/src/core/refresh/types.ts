@@ -711,6 +711,10 @@ export interface PodSnapshotPayload extends ClusterMeta, ResourceQueryEnvelopeFi
 
 export interface ObjectDetailsSnapshotPayload extends ClusterMeta {
   details: any;
+  // Object creation time (RFC3339 UTC) for every kind; the frontend formats it
+  // into Age with the same formatter the Browse table uses. Omitted by the
+  // backend when unavailable. Mirrors snapshot.ObjectDetailsSnapshotPayload.
+  creationTimestamp?: string;
   // Relative "last modified" time (same format as Age); omitted by the backend
   // when it can't be determined. Mirrors snapshot.ObjectDetailsSnapshotPayload.
   lastModified?: string;

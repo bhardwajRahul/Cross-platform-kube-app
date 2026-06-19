@@ -13,7 +13,6 @@ type ServiceAccountDetails struct {
 	Kind                         string               `json:"kind"`
 	Name                         string               `json:"name"`
 	Namespace                    string               `json:"namespace"`
-	Age                          string               `json:"age"`
 	Details                      string               `json:"details"`
 	Secrets                      []restypes.ObjectRef `json:"secrets,omitempty"`
 	ImagePullSecrets             []restypes.ObjectRef `json:"imagePullSecrets,omitempty"`

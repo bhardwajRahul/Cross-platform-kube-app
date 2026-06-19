@@ -71,7 +71,6 @@ describe('NodeOverview', () => {
   it('renders node details including capacity, runtime, and taints', async () => {
     await renderComponent({
       name: 'node-a',
-      age: '5d',
       status: 'Ready',
       statusState: 'True',
       statusPresentation: 'ready',
@@ -120,7 +119,6 @@ describe('NodeOverview', () => {
   it('renders every condition as a status chip with the correct variant', async () => {
     await renderComponent({
       name: 'node-b',
-      age: '10d',
       conditions: [
         { kind: 'Ready', status: 'True' },
         { kind: 'MemoryPressure', status: 'False' },

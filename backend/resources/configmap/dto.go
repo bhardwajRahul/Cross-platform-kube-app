@@ -13,7 +13,6 @@ type ConfigMapDetails struct {
 	Kind        string               `json:"kind"`
 	Name        string               `json:"name"`
 	Namespace   string               `json:"namespace"`
-	Age         string               `json:"age"`
 	Details     string               `json:"details"`
 	Data        map[string]string    `json:"data,omitempty"`
 	BinaryData  map[string]string    `json:"binaryData,omitempty"`

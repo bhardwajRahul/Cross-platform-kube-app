@@ -52,7 +52,6 @@ func (s *Service) buildDetails(item *gatewayv1.BackendTLSPolicy) *BackendTLSPoli
 		Kind:        "BackendTLSPolicy",
 		Name:        item.Name,
 		Namespace:   item.Namespace,
-		Age:         common.FormatAge(item.CreationTimestamp.Time),
 		Conditions:  types.ConditionStatesFromFacts(facts.Conditions),
 		Summary:     types.ConditionsSummaryFromFacts(facts.Summary),
 		Labels:      item.Labels,

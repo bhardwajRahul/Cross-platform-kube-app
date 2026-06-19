@@ -31,7 +31,6 @@ const nodeConditionVariant = (type: string, status: string): StatusChipVariant =
 
 interface NodeOverviewProps {
   name: string;
-  age: string;
   status?: string;
   statusState?: string;
   statusPresentation?: string;
@@ -60,7 +59,6 @@ interface NodeOverviewProps {
 
 export const NodeOverview: React.FC<NodeOverviewProps> = ({
   name,
-  age,
   status,
   statusState,
   statusPresentation,
@@ -87,7 +85,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({
   return (
     <>
       {/* Use composed component for header */}
-      <ResourceHeader kind="Node" name={name} age={age} />
+      <ResourceHeader kind="Node" name={name} />
 
       {/* Use composed component for status */}
       {status && (

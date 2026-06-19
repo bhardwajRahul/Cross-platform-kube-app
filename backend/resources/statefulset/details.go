@@ -81,7 +81,6 @@ func (s *Service) buildStatefulSetDetails(
 		UpToDate:                             facts.UpdatedReplicas,
 		Available:                            facts.AvailableReplicas,
 		DesiredReplicas:                      facts.DesiredReplicas,
-		Age:                                  common.FormatAge(statefulSet.CreationTimestamp.Time),
 		ResourceUtilization:                  workloads.WorkloadUtilization(podsList, podMetrics),
 		UpdateStrategy:                       facts.UpdateStrategy,
 		Partition:                            facts.Partition,

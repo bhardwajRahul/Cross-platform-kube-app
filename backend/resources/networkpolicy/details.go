@@ -59,7 +59,6 @@ func (s *Service) buildNetworkPolicyDetails(np *networkingv1.NetworkPolicy) *Net
 		Kind:        "NetworkPolicy",
 		Name:        np.Name,
 		Namespace:   np.Namespace,
-		Age:         common.FormatAge(np.CreationTimestamp.Time),
 		PodSelector: facts.PodSelector,
 		Labels:      np.Labels,
 		Annotations: np.Annotations,

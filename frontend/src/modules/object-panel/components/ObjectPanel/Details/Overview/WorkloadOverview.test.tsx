@@ -91,7 +91,6 @@ describe('WorkloadOverview', () => {
       kind: 'Deployment',
       name: 'frontend',
       namespace: 'default',
-      age: '5m',
       ready: '1/3',
       replicas: '3/3',
       desiredReplicas: 3,
@@ -139,7 +138,6 @@ describe('WorkloadOverview', () => {
       kind: 'Deployment',
       name: 'frontend',
       namespace: 'default',
-      age: '5m',
       status: 'Updating',
       statusState: '1/3',
       statusPresentation: 'warning',
@@ -160,7 +158,6 @@ describe('WorkloadOverview', () => {
       kind: 'Deployment',
       name: 'frontend',
       namespace: 'default',
-      age: '5m',
       ready: '3/3',
       replicas: '3/3',
       desiredReplicas: 3,
@@ -178,7 +175,6 @@ describe('WorkloadOverview', () => {
     await renderComponent({
       kind: 'Deployment',
       name: 'api',
-      age: '2h',
       strategy: 'RollingUpdate',
       rolloutStatus: 'progressing',
       rolloutMessage: 'Deployment successfully progressed',
@@ -192,7 +188,6 @@ describe('WorkloadOverview', () => {
     await renderComponent({
       kind: 'DaemonSet',
       name: 'logs-agent',
-      age: '1d',
       ready: '8/9',
       desired: 10,
       current: 9,
@@ -218,7 +213,6 @@ describe('WorkloadOverview', () => {
     await renderComponent({
       kind: 'ReplicaSet',
       name: 'web-rs',
-      age: '45m',
       ready: '2/2',
       replicas: '2/3',
       desiredReplicas: 3,
@@ -239,7 +233,6 @@ describe('WorkloadOverview', () => {
       kind: 'StatefulSet',
       name: 'db',
       namespace: 'data',
-      age: '3h',
       serviceAccount: 'db-sa',
       updateStrategy: 'RollingUpdate',
       maxUnavailable: '1',
@@ -271,7 +264,6 @@ describe('WorkloadOverview', () => {
     await renderComponent({
       kind: 'Deployment',
       name: 'broken',
-      age: '1h',
       ready: '0/3',
       replicas: '0/3',
       desiredReplicas: 3,
@@ -293,7 +285,6 @@ describe('WorkloadOverview', () => {
     await renderComponent({
       kind: 'Deployment',
       name: 'ok',
-      age: '1h',
       ready: '3/3',
       replicas: '3/3',
       desiredReplicas: 3,

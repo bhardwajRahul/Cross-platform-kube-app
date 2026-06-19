@@ -56,7 +56,6 @@ describe('ServiceOverview', () => {
       serviceDetails: {
         name: 'web-lb',
         namespace: 'prod',
-        age: '4h',
         status: 'LoadBalancer active',
         statusState: 'LoadBalancer',
         statusPresentation: 'ready',
@@ -107,7 +106,6 @@ describe('ServiceOverview', () => {
       serviceDetails: {
         name: 'external-svc',
         namespace: 'default',
-        age: '1d',
         serviceType: 'ExternalName',
         clusterIP: 'None',
         sessionAffinity: 'None',

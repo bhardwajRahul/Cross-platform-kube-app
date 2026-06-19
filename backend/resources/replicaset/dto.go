@@ -20,7 +20,6 @@ type ReplicaSetDetails struct {
 	Ready           string `json:"ready"`
 	Available       int32  `json:"available"`
 	DesiredReplicas int32  `json:"desiredReplicas"`
-	Age             string `json:"age"`
 
 	// Average resource utilization (per pod)
 	restypes.ResourceUtilization

@@ -71,7 +71,6 @@ describe('IngressOverview', () => {
       ingressDetails: {
         name: 'web-ingress',
         namespace: 'prod',
-        age: '2d',
         ingressClassName: 'nginx',
         loadBalancerStatus: ['lb.example.com'],
         rules: [
@@ -134,7 +133,6 @@ describe('IngressOverview', () => {
       ingressDetails: {
         name: 'web-ingress',
         namespace: 'prod',
-        age: '2d',
         rules: [
           { host: 'secure.example.com', paths: [] },
           { host: 'plain.example.com', paths: [] },
@@ -169,7 +167,6 @@ describe('IngressOverview', () => {
       ingressDetails: {
         name: 'minimal',
         namespace: 'default',
-        age: '1h',
         rules: [],
         tls: [],
         labels: {},

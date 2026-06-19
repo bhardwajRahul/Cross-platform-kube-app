@@ -54,7 +54,6 @@ func (s *Service) buildDetails(item *gatewayv1.GatewayClass) *GatewayClassDetail
 		Kind:        "GatewayClass",
 		Name:        item.Name,
 		Controller:  facts.ControllerName,
-		Age:         common.FormatAge(item.CreationTimestamp.Time),
 		Conditions:  types.ConditionStatesFromFacts(facts.Conditions),
 		Summary:     types.ConditionsSummaryFromFacts(facts.Summary),
 		Labels:      item.Labels,

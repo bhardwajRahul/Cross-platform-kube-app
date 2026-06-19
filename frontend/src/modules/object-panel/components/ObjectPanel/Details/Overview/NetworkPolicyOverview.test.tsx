@@ -56,7 +56,6 @@ describe('NetworkPolicyOverview', () => {
       networkPolicyDetails: {
         name: 'restrictive-policy',
         namespace: 'prod',
-        age: '1d',
         podSelector: { app: 'web', tier: 'frontend' },
         policyTypes: ['Ingress', 'Egress'],
         ingressRules: [
@@ -106,7 +105,6 @@ describe('NetworkPolicyOverview', () => {
       networkPolicyDetails: {
         name: 'open-policy',
         namespace: 'default',
-        age: '3h',
         podSelector: {},
         policyTypes: [],
         labels: {},

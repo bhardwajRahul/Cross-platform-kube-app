@@ -24,7 +24,6 @@ export const ConfigMapOverview: React.FC<ConfigMapOverviewProps> = ({ configMapD
         kind="ConfigMap"
         name={configMapDetails.name}
         namespace={configMapDetails.namespace}
-        age={configMapDetails.age}
       />
 
       {/* Usage information — always rendered. The backend leaves UsedBy

@@ -28,6 +28,9 @@ interface UseObjectPanelRefreshArgs {
 
 interface ObjectPanelRefreshResult {
   detailPayload: unknown;
+  // Object creation time (RFC3339 UTC) from the details envelope; null when the
+  // backend can't determine it. The header formats it into Age for every kind.
+  creationTimestamp: string | null;
   // Relative "last modified" time from the details envelope (same format as
   // Age); null when the backend can't determine it.
   lastModified: string | null;
@@ -48,6 +51,7 @@ export const useObjectPanelRefresh = ({
   const detailSnapshot = useRefreshScopedDomain('object-details', detailScope ?? INACTIVE_SCOPE);
 
   const detailPayload = detailScope ? (detailSnapshot.data?.details ?? null) : null;
+  const creationTimestamp = detailScope ? (detailSnapshot.data?.creationTimestamp ?? null) : null;
   const lastModified = detailScope ? (detailSnapshot.data?.lastModified ?? null) : null;
   const detailStatus = detailScope ? detailSnapshot.status : 'idle';
 
@@ -135,6 +139,7 @@ export const useObjectPanelRefresh = ({
 
   return {
     detailPayload,
+    creationTimestamp,
     lastModified,
     detailsLoading,
     detailsError,

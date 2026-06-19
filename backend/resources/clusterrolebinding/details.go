@@ -56,7 +56,6 @@ func (s *Service) buildClusterRoleBindingDetails(crb *rbacv1.ClusterRoleBinding)
 	return &ClusterRoleBindingDetails{
 		Kind:        "ClusterRoleBinding",
 		Name:        crb.Name,
-		Age:         common.FormatAge(crb.CreationTimestamp.Time),
 		Details:     detailsSummary(facts),
 		Labels:      crb.Labels,
 		Annotations: crb.Annotations,

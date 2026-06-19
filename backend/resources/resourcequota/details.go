@@ -71,7 +71,6 @@ func (s *Service) buildResourceQuotaDetails(rq *corev1.ResourceQuota) *ResourceQ
 		Kind:           "ResourceQuota",
 		Name:           rq.Name,
 		Namespace:      rq.Namespace,
-		Age:            common.FormatAge(rq.CreationTimestamp.Time),
 		Details:        model.Status.Label,
 		Hard:           quantityMapStrings(facts.Hard),
 		Used:           quantityMapStrings(facts.Used),

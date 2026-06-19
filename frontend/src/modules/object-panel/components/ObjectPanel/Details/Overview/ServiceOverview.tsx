@@ -70,7 +70,6 @@ export const ServiceOverview: React.FC<ServiceOverviewProps> = ({ serviceDetails
         kind="Service"
         name={serviceDetails.name}
         namespace={serviceDetails.namespace}
-        age={serviceDetails.age}
       />
 
       <OverviewItem label="Type" value={serviceDetails.serviceType} />

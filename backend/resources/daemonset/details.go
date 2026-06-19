@@ -76,7 +76,6 @@ func (s *Service) buildDaemonSetDetails(
 		Ready:                facts.ReadyReplicas,
 		UpToDate:             facts.UpdatedReplicas,
 		Available:            facts.AvailableReplicas,
-		Age:                  common.FormatAge(daemonSet.CreationTimestamp.Time),
 		ResourceUtilization:  workloads.WorkloadUtilization(podsList, podMetrics),
 		UpdateStrategy:       facts.UpdateStrategy,
 		MaxUnavailable:       facts.MaxUnavailable,

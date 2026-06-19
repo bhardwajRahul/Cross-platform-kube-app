@@ -11,7 +11,6 @@ type ResourceQuotaDetails struct {
 	Kind           string            `json:"kind"`
 	Name           string            `json:"name"`
 	Namespace      string            `json:"namespace"`
-	Age            string            `json:"age"`
 	Details        string            `json:"details"`
 	Hard           map[string]string `json:"hard"`
 	Used           map[string]string `json:"used"`

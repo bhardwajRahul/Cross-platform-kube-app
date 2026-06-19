@@ -80,7 +80,6 @@ interface StorageOverviewProps {
   kind?: string;
   name?: string;
   namespace?: string;
-  age?: string;
   status?: string;
   statusState?: string;
   statusPresentation?: string;
@@ -115,7 +114,7 @@ interface StorageOverviewProps {
 // Storage resources Overview
 export const StorageOverview: React.FC<StorageOverviewProps> = (props) => {
   const { objectData } = useObjectPanel();
-  const { kind, name, namespace, age, status, statusState, statusPresentation } = props;
+  const { kind, name, namespace, status, statusState, statusPresentation } = props;
   const normalizedKind = kind?.toLowerCase();
   const clusterMeta = {
     clusterId: objectData?.clusterId ?? undefined,
@@ -125,7 +124,7 @@ export const StorageOverview: React.FC<StorageOverviewProps> = (props) => {
   return (
     <>
       {/* Use composed component for header */}
-      <ResourceHeader kind={kind || ''} name={name || ''} namespace={namespace} age={age || ''} />
+      <ResourceHeader kind={kind || ''} name={name || ''} namespace={namespace} />
 
       <ResourceStatus
         status={status}

@@ -58,7 +58,6 @@ func (s *Service) buildNamespaceDetails(namespace *corev1.Namespace) *NamespaceD
 	details := &NamespaceDetails{
 		Kind:             model.Ref.Kind,
 		Name:             model.Ref.Name,
-		Age:              common.FormatAge(model.Metadata.CreationTimestamp.Time),
 		StatusProjection: restypes.NewStatusProjection(model.Status),
 		Labels:           model.Metadata.Labels,
 		Annotations:      model.Metadata.Annotations,

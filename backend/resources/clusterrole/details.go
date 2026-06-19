@@ -87,7 +87,6 @@ func (s *Service) buildClusterRoleDetails(cr *rbacv1.ClusterRole, clusterRoleBin
 	details := &ClusterRoleDetails{
 		Kind:                "ClusterRole",
 		Name:                cr.Name,
-		Age:                 common.FormatAge(cr.CreationTimestamp.Time),
 		Details:             DescribeSummary(facts),
 		Rules:               restypes.PolicyRulesFromFacts(facts.Rules),
 		AggregationRule:     aggregationRuleFromFacts(facts.AggregationRule),

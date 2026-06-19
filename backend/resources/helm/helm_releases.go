@@ -57,7 +57,6 @@ func (s *Service) ReleaseDetails(namespace, name string) (*HelmReleaseDetails, e
 		Kind:             "helmrelease",
 		Name:             model.Ref.Name,
 		Namespace:        model.Ref.Namespace,
-		Age:              helmAge(model),
 		Chart:            facts.Chart,
 		Version:          facts.Version,
 		AppVersion:       facts.AppVersion,
@@ -389,13 +388,6 @@ func (s *Service) extractResourceLinksFromManifest(manifest, defaultNamespace st
 		}
 	}
 	return links
-}
-
-func helmAge(model resourcemodel.ResourceModel) string {
-	if model.Metadata.CreationTimestamp.IsZero() {
-		return ""
-	}
-	return common.FormatAge(model.Metadata.CreationTimestamp.Time)
 }
 
 func helmUpdatedAge(facts Facts) string {

@@ -171,7 +171,6 @@ export namespace admission {
 	export class MutatingWebhookConfigurationDetails {
 	    kind: string;
 	    name: string;
-	    age: string;
 	    details: string;
 	    webhooks: WebhookDetails[];
 	    labels?: Record<string, string>;
@@ -185,7 +184,6 @@ export namespace admission {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.name = source["name"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.webhooks = this.convertValues(source["webhooks"], WebhookDetails);
 	        this.labels = source["labels"];
@@ -213,7 +211,6 @@ export namespace admission {
 	export class ValidatingWebhookConfigurationDetails {
 	    kind: string;
 	    name: string;
-	    age: string;
 	    details: string;
 	    webhooks: WebhookDetails[];
 	    labels?: Record<string, string>;
@@ -227,7 +224,6 @@ export namespace admission {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.name = source["name"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.webhooks = this.convertValues(source["webhooks"], WebhookDetails);
 	        this.labels = source["labels"];
@@ -347,7 +343,6 @@ export namespace apiextensions {
 	    name: string;
 	    group: string;
 	    scope: string;
-	    age: string;
 	    details: string;
 	    versions: CRDVersion[];
 	    names: CRDNames;
@@ -366,7 +361,6 @@ export namespace apiextensions {
 	        this.name = source["name"];
 	        this.group = source["group"];
 	        this.scope = source["scope"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.versions = this.convertValues(source["versions"], CRDVersion);
 	        this.names = this.convertValues(source["names"], CRDNames);
@@ -1181,7 +1175,6 @@ export namespace backendtlspolicy {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    targetRefs?: types.RefOrDisplay[];
 	    conditions?: types.ConditionState[];
@@ -1198,7 +1191,6 @@ export namespace backendtlspolicy {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.targetRefs = this.convertValues(source["targetRefs"], types.RefOrDisplay);
 	        this.conditions = this.convertValues(source["conditions"], types.ConditionState);
@@ -1372,7 +1364,6 @@ export namespace clusterrole {
 	export class ClusterRoleDetails {
 	    kind: string;
 	    name: string;
-	    age: string;
 	    details: string;
 	    rules: types.PolicyRule[];
 	    aggregationRule?: AggregationRule;
@@ -1389,7 +1380,6 @@ export namespace clusterrole {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.name = source["name"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.rules = this.convertValues(source["rules"], types.PolicyRule);
 	        this.aggregationRule = this.convertValues(source["aggregationRule"], AggregationRule);
@@ -1425,7 +1415,6 @@ export namespace clusterrolebinding {
 	export class ClusterRoleBindingDetails {
 	    kind: string;
 	    name: string;
-	    age: string;
 	    details: string;
 	    roleRef: types.RoleRef;
 	    subjects: types.Subject[];
@@ -1440,7 +1429,6 @@ export namespace clusterrolebinding {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.name = source["name"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.roleRef = this.convertValues(source["roleRef"], types.RoleRef);
 	        this.subjects = this.convertValues(source["subjects"], types.Subject);
@@ -1475,7 +1463,6 @@ export namespace configmap {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    data?: Record<string, string>;
 	    binaryData?: Record<string, string>;
@@ -1493,7 +1480,6 @@ export namespace configmap {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.data = source["data"];
 	        this.binaryData = source["binaryData"];
@@ -1535,7 +1521,6 @@ export namespace cronjob {
 	    statusPresentation?: string;
 	    statusReason?: string;
 	    details: string;
-	    age: string;
 	    schedule: string;
 	    suspend: boolean;
 	    lastScheduleTime?: v1.Time;
@@ -1570,7 +1555,6 @@ export namespace cronjob {
 	        this.statusPresentation = source["statusPresentation"];
 	        this.statusReason = source["statusReason"];
 	        this.details = source["details"];
-	        this.age = source["age"];
 	        this.schedule = source["schedule"];
 	        this.suspend = source["suspend"];
 	        this.lastScheduleTime = this.convertValues(source["lastScheduleTime"], v1.Time);
@@ -1630,7 +1614,6 @@ export namespace daemonset {
 	    upToDate?: number;
 	    available: number;
 	    updated?: number;
-	    age: string;
 	    cpuRequest?: string;
 	    cpuLimit?: string;
 	    cpuUsage?: string;
@@ -1677,7 +1660,6 @@ export namespace daemonset {
 	        this.upToDate = source["upToDate"];
 	        this.available = source["available"];
 	        this.updated = source["updated"];
-	        this.age = source["age"];
 	        this.cpuRequest = source["cpuRequest"];
 	        this.cpuLimit = source["cpuLimit"];
 	        this.cpuUsage = source["cpuUsage"];
@@ -1743,7 +1725,6 @@ export namespace deployment {
 	    upToDate?: number;
 	    available: number;
 	    desiredReplicas: number;
-	    age: string;
 	    cpuRequest?: string;
 	    cpuLimit?: string;
 	    cpuUsage?: string;
@@ -1796,7 +1777,6 @@ export namespace deployment {
 	        this.upToDate = source["upToDate"];
 	        this.available = source["available"];
 	        this.desiredReplicas = source["desiredReplicas"];
-	        this.age = source["age"];
 	        this.cpuRequest = source["cpuRequest"];
 	        this.cpuLimit = source["cpuLimit"];
 	        this.cpuUsage = source["cpuUsage"];
@@ -1893,7 +1873,6 @@ export namespace endpointslice {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    addressType: string;
 	    readyAddresses?: EndpointSliceAddress[];
@@ -1911,7 +1890,6 @@ export namespace endpointslice {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.addressType = source["addressType"];
 	        this.readyAddresses = this.convertValues(source["readyAddresses"], EndpointSliceAddress);
@@ -1948,7 +1926,6 @@ export namespace gateway {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    gatewayClassRef: resourcemodel.ResourceRef;
 	    addresses?: string[];
@@ -1967,7 +1944,6 @@ export namespace gateway {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.gatewayClassRef = this.convertValues(source["gatewayClassRef"], resourcemodel.ResourceRef);
 	        this.addresses = source["addresses"];
@@ -2005,7 +1981,6 @@ export namespace gatewayclass {
 	    kind: string;
 	    name: string;
 	    controller: string;
-	    age: string;
 	    details: string;
 	    conditions?: types.ConditionState[];
 	    summary: types.ConditionsSummary;
@@ -2023,7 +1998,6 @@ export namespace gatewayclass {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.controller = source["controller"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.conditions = this.convertValues(source["conditions"], types.ConditionState);
 	        this.summary = this.convertValues(source["summary"], types.ConditionsSummary);
@@ -2109,7 +2083,6 @@ export namespace helm {
 	    typeAlias: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    chart: string;
 	    version: string;
 	    appVersion: string;
@@ -2137,7 +2110,6 @@ export namespace helm {
 	        this.typeAlias = source["typeAlias"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.chart = source["chart"];
 	        this.version = source["version"];
 	        this.appVersion = source["appVersion"];
@@ -2276,7 +2248,6 @@ export namespace hpa {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    scaleTargetRef: ScaleTargetReference;
 	    minReplicas?: number;
@@ -2300,7 +2271,6 @@ export namespace hpa {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.scaleTargetRef = this.convertValues(source["scaleTargetRef"], ScaleTargetReference);
 	        this.minReplicas = source["minReplicas"];
@@ -2443,7 +2413,6 @@ export namespace ingress {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    ingressClassName?: string;
 	    rules: IngressRuleDetails[];
@@ -2462,7 +2431,6 @@ export namespace ingress {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.ingressClassName = source["ingressClassName"];
 	        this.rules = this.convertValues(source["rules"], IngressRuleDetails);
@@ -2522,7 +2490,6 @@ export namespace ingressclass {
 	    kind: string;
 	    name: string;
 	    controller: string;
-	    age: string;
 	    isDefault: boolean;
 	    details: string;
 	    parameters?: IngressClassParameters;
@@ -2539,7 +2506,6 @@ export namespace ingressclass {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.controller = source["controller"];
-	        this.age = source["age"];
 	        this.isDefault = source["isDefault"];
 	        this.details = source["details"];
 	        this.parameters = this.convertValues(source["parameters"], IngressClassParameters);
@@ -2580,7 +2546,6 @@ export namespace job {
 	    statusPresentation?: string;
 	    statusReason?: string;
 	    details: string;
-	    age?: string;
 	    completions?: number;
 	    parallelism?: number;
 	    succeeded?: number;
@@ -2616,7 +2581,6 @@ export namespace job {
 	        this.statusPresentation = source["statusPresentation"];
 	        this.statusReason = source["statusReason"];
 	        this.details = source["details"];
-	        this.age = source["age"];
 	        this.completions = source["completions"];
 	        this.parallelism = source["parallelism"];
 	        this.succeeded = source["succeeded"];
@@ -2688,7 +2652,6 @@ export namespace limitrange {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    limits: LimitRangeItem[];
 	    labels?: Record<string, string>;
@@ -2703,7 +2666,6 @@ export namespace limitrange {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.limits = this.convertValues(source["limits"], LimitRangeItem);
 	        this.labels = source["labels"];
@@ -2737,7 +2699,6 @@ export namespace listenerset {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    parentRef: types.RefOrDisplay;
 	    listeners?: types.GatewayListenerDetails[];
@@ -2755,7 +2716,6 @@ export namespace listenerset {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.parentRef = this.convertValues(source["parentRef"], types.RefOrDisplay);
 	        this.listeners = this.convertValues(source["listeners"], types.GatewayListenerDetails);
@@ -2791,7 +2751,6 @@ export namespace namespaces {
 	export class NamespaceDetails {
 	    kind: string;
 	    name: string;
-	    age: string;
 	    details: string;
 	    status: string;
 	    statusState?: string;
@@ -2812,7 +2771,6 @@ export namespace namespaces {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.name = source["name"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.status = source["status"];
 	        this.statusState = source["statusState"];
@@ -2951,7 +2909,6 @@ export namespace networkpolicy {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    podSelector: Record<string, string>;
 	    policyTypes: string[];
@@ -2969,7 +2926,6 @@ export namespace networkpolicy {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.podSelector = source["podSelector"];
 	        this.policyTypes = source["policyTypes"];
@@ -3046,7 +3002,6 @@ export namespace nodes {
 	    statusReason?: string;
 	    unschedulable: boolean;
 	    roles: string;
-	    age: string;
 	    internalIP: string;
 	    externalIP?: string;
 	    hostname: string;
@@ -3094,7 +3049,6 @@ export namespace nodes {
 	        this.statusReason = source["statusReason"];
 	        this.unschedulable = source["unschedulable"];
 	        this.roles = source["roles"];
-	        this.age = source["age"];
 	        this.internalIP = source["internalIP"];
 	        this.externalIP = source["externalIP"];
 	        this.hostname = source["hostname"];
@@ -3285,7 +3239,6 @@ export namespace persistentvolume {
 	export class PersistentVolumeDetails {
 	    kind: string;
 	    name: string;
-	    age: string;
 	    details: string;
 	    status: string;
 	    statusState?: string;
@@ -3312,7 +3265,6 @@ export namespace persistentvolume {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.name = source["name"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.status = source["status"];
 	        this.statusState = source["statusState"];
@@ -3373,7 +3325,6 @@ export namespace persistentvolumeclaim {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    status: string;
 	    statusState?: string;
@@ -3400,7 +3351,6 @@ export namespace persistentvolumeclaim {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.status = source["status"];
 	        this.statusState = source["statusState"];
@@ -3446,7 +3396,6 @@ export namespace poddisruptionbudget {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    minAvailable?: string;
 	    maxUnavailable?: string;
@@ -3470,7 +3419,6 @@ export namespace poddisruptionbudget {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.minAvailable = source["minAvailable"];
 	        this.maxUnavailable = source["maxUnavailable"];
@@ -3513,7 +3461,6 @@ export namespace referencegrant {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    from?: types.ReferenceGrantFromInfo[];
 	    to?: types.RefOrDisplay[];
@@ -3529,7 +3476,6 @@ export namespace referencegrant {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.from = this.convertValues(source["from"], types.ReferenceGrantFromInfo);
 	        this.to = this.convertValues(source["to"], types.RefOrDisplay);
@@ -3573,7 +3519,6 @@ export namespace replicaset {
 	    ready: string;
 	    available: number;
 	    desiredReplicas: number;
-	    age: string;
 	    cpuRequest?: string;
 	    cpuLimit?: string;
 	    cpuUsage?: string;
@@ -3610,7 +3555,6 @@ export namespace replicaset {
 	        this.ready = source["ready"];
 	        this.available = source["available"];
 	        this.desiredReplicas = source["desiredReplicas"];
-	        this.age = source["age"];
 	        this.cpuRequest = source["cpuRequest"];
 	        this.cpuLimit = source["cpuLimit"];
 	        this.cpuUsage = source["cpuUsage"];
@@ -3798,7 +3742,6 @@ export namespace resourcequota {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    hard: Record<string, string>;
 	    used: Record<string, string>;
@@ -3817,7 +3760,6 @@ export namespace resourcequota {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.hard = source["hard"];
 	        this.used = source["used"];
@@ -3856,7 +3798,6 @@ export namespace role {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    rules: types.PolicyRule[];
 	    labels?: Record<string, string>;
@@ -3872,7 +3813,6 @@ export namespace role {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.rules = this.convertValues(source["rules"], types.PolicyRule);
 	        this.labels = source["labels"];
@@ -3907,7 +3847,6 @@ export namespace rolebinding {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    roleRef: types.RoleRef;
 	    subjects: types.Subject[];
@@ -3923,7 +3862,6 @@ export namespace rolebinding {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.roleRef = this.convertValues(source["roleRef"], types.RoleRef);
 	        this.subjects = this.convertValues(source["subjects"], types.Subject);
@@ -3958,7 +3896,6 @@ export namespace secret {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    secretType: string;
 	    data?: Record<string, string>;
@@ -3977,7 +3914,6 @@ export namespace secret {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.secretType = source["secretType"];
 	        this.data = source["data"];
@@ -4035,7 +3971,6 @@ export namespace service {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    status: string;
 	    statusState?: string;
@@ -4067,7 +4002,6 @@ export namespace service {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.status = source["status"];
 	        this.statusState = source["statusState"];
@@ -4118,7 +4052,6 @@ export namespace serviceaccount {
 	    kind: string;
 	    name: string;
 	    namespace: string;
-	    age: string;
 	    details: string;
 	    secrets?: resourcemodel.ResourceRef[];
 	    imagePullSecrets?: resourcemodel.ResourceRef[];
@@ -4138,7 +4071,6 @@ export namespace serviceaccount {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.secrets = this.convertValues(source["secrets"], resourcemodel.ResourceRef);
 	        this.imagePullSecrets = this.convertValues(source["imagePullSecrets"], resourcemodel.ResourceRef);
@@ -4346,7 +4278,6 @@ export namespace statefulset {
 	    upToDate?: number;
 	    available: number;
 	    desiredReplicas: number;
-	    age: string;
 	    cpuRequest?: string;
 	    cpuLimit?: string;
 	    cpuUsage?: string;
@@ -4399,7 +4330,6 @@ export namespace statefulset {
 	        this.upToDate = source["upToDate"];
 	        this.available = source["available"];
 	        this.desiredReplicas = source["desiredReplicas"];
-	        this.age = source["age"];
 	        this.cpuRequest = source["cpuRequest"];
 	        this.cpuLimit = source["cpuLimit"];
 	        this.cpuUsage = source["cpuUsage"];
@@ -4504,7 +4434,6 @@ export namespace storageclass {
 	export class StorageClassDetails {
 	    kind: string;
 	    name: string;
-	    age: string;
 	    details: string;
 	    status: string;
 	    statusState?: string;
@@ -4530,7 +4459,6 @@ export namespace storageclass {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
 	        this.name = source["name"];
-	        this.age = source["age"];
 	        this.details = source["details"];
 	        this.status = source["status"];
 	        this.statusState = source["statusState"];
@@ -5347,7 +5275,6 @@ export namespace types {
 	    statusReason?: string;
 	    ready: string;
 	    restarts: number;
-	    age: string;
 	    cpuRequest: string;
 	    cpuLimit: string;
 	    cpuUsage: string;
@@ -5395,7 +5322,6 @@ export namespace types {
 	        this.statusReason = source["statusReason"];
 	        this.ready = source["ready"];
 	        this.restarts = source["restarts"];
-	        this.age = source["age"];
 	        this.cpuRequest = source["cpuRequest"];
 	        this.cpuLimit = source["cpuLimit"];
 	        this.cpuUsage = source["cpuUsage"];

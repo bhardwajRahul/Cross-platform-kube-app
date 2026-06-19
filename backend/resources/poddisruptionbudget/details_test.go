@@ -87,7 +87,6 @@ func TestPodDisruptionBudgetDetailsFormatting(t *testing.T) {
 	require.Equal(t, "PodDisruptionBudget", resp.Kind)
 	require.Equal(t, "demo", resp.Name)
 	require.Equal(t, "default", resp.Namespace)
-	require.NotEmpty(t, resp.Age)
 	require.Equal(t, int32(2), resp.CurrentHealthy)
 	require.Equal(t, int32(3), resp.DesiredHealthy)
 	require.Equal(t, int32(1), resp.DisruptionsAllowed)

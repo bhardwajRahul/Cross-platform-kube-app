@@ -79,7 +79,6 @@ describe('HelmOverview', () => {
       helmReleaseDetails: {
         name: 'api-release',
         namespace: 'prod',
-        age: '1d',
         chart: 'api-chart',
         version: '1.2.3',
         appVersion: '2.0.0',

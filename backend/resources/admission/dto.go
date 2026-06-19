@@ -14,7 +14,6 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 type MutatingWebhookConfigurationDetails struct {
 	Kind        string            `json:"kind"`
 	Name        string            `json:"name"`
-	Age         string            `json:"age"`
 	Details     string            `json:"details"`
 	Webhooks    []WebhookDetails  `json:"webhooks"`
 	Labels      map[string]string `json:"labels,omitempty"`
@@ -25,7 +24,6 @@ type MutatingWebhookConfigurationDetails struct {
 type ValidatingWebhookConfigurationDetails struct {
 	Kind        string            `json:"kind"`
 	Name        string            `json:"name"`
-	Age         string            `json:"age"`
 	Details     string            `json:"details"`
 	Webhooks    []WebhookDetails  `json:"webhooks"`
 	Labels      map[string]string `json:"labels,omitempty"`

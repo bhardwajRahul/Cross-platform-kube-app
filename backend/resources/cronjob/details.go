@@ -73,7 +73,6 @@ func buildCronJobDetails(clusterID string, cronJob *batchv1.CronJob, jobs *batch
 		Name:                    cronJob.Name,
 		Namespace:               cronJob.Namespace,
 		StatusProjection:        restypes.NewStatusProjection(model.Status),
-		Age:                     common.FormatAge(cronJob.CreationTimestamp.Time),
 		Schedule:                facts.Schedule,
 		Suspend:                 facts.Suspended,
 		LastScheduleTime:        facts.LastScheduleTime,

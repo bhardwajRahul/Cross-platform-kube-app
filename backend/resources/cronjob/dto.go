@@ -20,7 +20,6 @@ type CronJobDetails struct {
 	Namespace string `json:"namespace"`
 	restypes.StatusProjection
 	Details string `json:"details"`
-	Age     string `json:"age"`
 
 	// Schedule information
 	Schedule              string       `json:"schedule"`

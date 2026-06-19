@@ -90,7 +90,6 @@ describe('SecretOverview', () => {
       secretDetails: {
         name: 'tls-secret',
         namespace: 'prod',
-        age: '1h',
         secretType: 'kubernetes.io/tls',
         dataKeys: ['tls.crt', 'tls.key'],
         usedBy: [],
@@ -112,7 +111,6 @@ describe('SecretOverview', () => {
       secretDetails: {
         name: 'service-token',
         namespace: 'team',
-        age: '3h',
         secretType: 'kubernetes.io/service-account-token',
         dataKeys: ['token'],
         usedBy: [podRef('pod-x', 'team')],
@@ -144,7 +142,6 @@ describe('SecretOverview', () => {
       secretDetails: {
         name: 'unused-secret',
         namespace: 'env',
-        age: '5m',
         secretType: 'Opaque',
         dataKeys: [],
         usedBy: [],

@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/luxury-yacht/app/backend/internal/cachekeys"
 	"github.com/luxury-yacht/app/backend/refresh/snapshot"
@@ -165,22 +166,24 @@ func (p *objectDetailProvider) FetchObjectDetails(ctx context.Context, gvk schem
 	return detail, version, err
 }
 
-// FetchObjectLastModified returns the relative "last modified" string for an
-// object — the most recent spec/metadata managedFields time, formatted like
-// Age — or "" when unavailable. It is generic across kinds: it reads the live
-// object via the shared strict GVK resolver (which retains managedFields) and
-// derives the value with common.FormatLastModified. Results are cached
-// alongside details so an open Details tab does not issue a live GET per poll.
-func (p *objectDetailProvider) FetchObjectLastModified(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) (string, error) {
+// FetchObjectHeaderMetadata returns the object panel's kind-agnostic header
+// fields: the creation timestamp (RFC3339 UTC, drives Age) and the relative
+// "last modified" string (the most recent spec/metadata managedFields time,
+// formatted like Age). Both derive from a single live-object read via the
+// shared strict GVK resolver (which retains managedFields), so Age works for
+// every kind — including custom resources that have no typed detail panel.
+// Either field is "" when unavailable. Results are cached alongside details so
+// an open Details tab does not issue a live GET per poll.
+func (p *objectDetailProvider) FetchObjectHeaderMetadata(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) (snapshot.ObjectHeaderMetadata, error) {
 	resolved := p.resolveDetailContext(ctx)
 	if !resolved.scoped {
-		return "", fmt.Errorf("cluster scope is required")
+		return snapshot.ObjectHeaderMetadata{}, fmt.Errorf("cluster scope is required")
 	}
 
-	cacheKey := objectLastModifiedCacheKey(gvk, namespace, name)
+	cacheKey := objectHeaderMetadataCacheKey(gvk, namespace, name)
 	if p != nil && p.app != nil {
 		if cached, ok := p.app.responseCacheLookup(resolved.selectionKey, cacheKey); ok {
-			if value, ok := cached.(string); ok &&
+			if value, ok := cached.(snapshot.ObjectHeaderMetadata); ok &&
 				p.app.canServeCachedResponse(ctx, resolved.deps, resolved.selectionKey, gvk, namespace, name) {
 				return value, nil
 			}
@@ -190,13 +193,18 @@ func (p *objectDetailProvider) FetchObjectLastModified(ctx context.Context, gvk 
 
 	obj, err := fetchObjectByGVK(ctx, resolved.deps, gvk, namespace, name)
 	if err != nil {
-		return "", err
+		return snapshot.ObjectHeaderMetadata{}, err
 	}
-	value := common.FormatLastModified(obj)
+	meta := snapshot.ObjectHeaderMetadata{
+		LastModified: common.FormatLastModified(obj),
+	}
+	if created := obj.GetCreationTimestamp(); !created.IsZero() {
+		meta.CreationTimestamp = created.UTC().Format(time.RFC3339)
+	}
 	if p != nil && p.app != nil {
-		p.app.responseCacheStore(resolved.selectionKey, cacheKey, value)
+		p.app.responseCacheStore(resolved.selectionKey, cacheKey, meta)
 	}
-	return value, nil
+	return meta, nil
 }
 
 // objectDetailCacheKey matches FetchNamespacedResource cache keys for detail payloads.
@@ -214,16 +222,17 @@ func objectDetailCacheKeyForGVK(gvk schema.GroupVersionKind, namespace, name str
 	return cachekeys.Build(strings.ToLower(group+"/"+version+"/"+kind)+"-detailed", namespace, name)
 }
 
-// objectLastModifiedCacheKey is distinct from the detail cache key so the
-// last-modified string and the detail payload don't overwrite each other.
-func objectLastModifiedCacheKey(gvk schema.GroupVersionKind, namespace, name string) string {
+// objectHeaderMetadataCacheKey is distinct from the detail cache key so the
+// header metadata (creation + last-modified) and the detail payload don't
+// overwrite each other.
+func objectHeaderMetadataCacheKey(gvk schema.GroupVersionKind, namespace, name string) string {
 	group := strings.TrimSpace(gvk.Group)
 	version := strings.TrimSpace(gvk.Version)
 	kind := strings.TrimSpace(gvk.Kind)
 	if version == "" {
-		return cachekeys.Build(strings.ToLower(kind)+"-lastmodified", namespace, name)
+		return cachekeys.Build(strings.ToLower(kind)+"-headermeta", namespace, name)
 	}
-	return cachekeys.Build(strings.ToLower(group+"/"+version+"/"+kind)+"-lastmodified", namespace, name)
+	return cachekeys.Build(strings.ToLower(group+"/"+version+"/"+kind)+"-headermeta", namespace, name)
 }
 
 // resolveDetailContext ensures object detail fetches use the cluster scoped to the snapshot request.

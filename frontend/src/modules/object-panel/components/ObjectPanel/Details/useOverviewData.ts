@@ -80,7 +80,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'Pod',
         name: podDetails.name,
-        age: podDetails.age,
         node: podDetails.node || undefined,
         nodeIP: podDetails.nodeIP || undefined,
         podIP: podDetails.podIP || undefined,
@@ -120,7 +119,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'Deployment',
         name: deploymentDetails.name,
-        age: deploymentDetails.age,
         namespace: deploymentDetails.namespace,
         status: deploymentDetails.status,
         statusState: deploymentDetails.statusState,
@@ -160,7 +158,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'ReplicaSet',
         name: replicaSetDetails.name,
-        age: replicaSetDetails.age,
         namespace: replicaSetDetails.namespace,
         status: replicaSetDetails.status,
         statusState: replicaSetDetails.statusState,
@@ -184,7 +181,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'DaemonSet',
         name: daemonSetDetails.name,
-        age: daemonSetDetails.age,
         namespace: daemonSetDetails.namespace,
         status: daemonSetDetails.status,
         statusState: daemonSetDetails.statusState,
@@ -215,7 +211,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'StatefulSet',
         name: statefulSetDetails.name,
-        age: statefulSetDetails.age,
         namespace: statefulSetDetails.namespace,
         status: statefulSetDetails.status,
         statusState: statefulSetDetails.statusState,
@@ -248,7 +243,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'Job',
         name: jobDetails.name,
-        age: jobDetails.age,
         namespace: jobDetails.namespace,
         status: jobDetails.status,
         statusState: jobDetails.statusState,
@@ -278,7 +272,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'CronJob',
         name: cronJobDetails.name,
-        age: cronJobDetails.age,
         namespace: cronJobDetails.namespace,
         status: cronJobDetails.status,
         statusState: cronJobDetails.statusState,
@@ -327,7 +320,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'ConfigMap',
         name: configMapDetails.name,
-        age: configMapDetails.age,
         namespace: configMapDetails.namespace,
         configMapDetails: configMapDetails,
       };
@@ -338,7 +330,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'Secret',
         name: secretDetails.name,
-        age: secretDetails.age,
         namespace: secretDetails.namespace,
         secretDetails: secretDetails,
       };
@@ -349,7 +340,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'HelmRelease',
         name: helmReleaseDetails.name,
-        age: helmReleaseDetails.age,
         namespace: helmReleaseDetails.namespace,
         chart: helmReleaseDetails.chart,
         appVersion: helmReleaseDetails.appVersion,
@@ -376,7 +366,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'Service',
         name: serviceDetails.name,
-        age: serviceDetails.age,
         namespace: serviceDetails.namespace,
         serviceDetails: serviceDetails,
       };
@@ -387,7 +376,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'Ingress',
         name: ingressDetails.name,
-        age: ingressDetails.age,
         namespace: ingressDetails.namespace,
         ingressDetails: ingressDetails,
       };
@@ -398,7 +386,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'NetworkPolicy',
         name: networkPolicyDetails.name,
-        age: networkPolicyDetails.age,
         namespace: networkPolicyDetails.namespace,
         networkPolicyDetails: networkPolicyDetails,
       };
@@ -409,7 +396,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'EndpointSlice',
         name: endpointSliceDetails.name,
-        age: endpointSliceDetails.age,
         namespace: endpointSliceDetails.namespace,
         endpointSliceDetails,
       };
@@ -457,7 +443,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'PersistentVolumeClaim',
         name: pvcDetails.name,
-        age: pvcDetails.age,
         namespace: pvcDetails.namespace,
         status: pvcDetails.status,
         statusState: pvcDetails.statusState,
@@ -481,7 +466,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'PersistentVolume',
         name: pvDetails.name,
-        age: pvDetails.age,
         capacity: pvDetails.capacity,
         accessModes: pvDetails.accessModes,
         reclaimPolicy: pvDetails.reclaimPolicy,
@@ -506,7 +490,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'StorageClass',
         name: storageClassDetails.name,
-        age: storageClassDetails.age,
         status: storageClassDetails.status,
         statusState: storageClassDetails.statusState,
         statusPresentation: storageClassDetails.statusPresentation,
@@ -540,7 +523,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'ServiceAccount',
         name: serviceAccountDetails.name,
-        age: serviceAccountDetails.age,
         namespace: serviceAccountDetails.namespace,
         secrets: serviceAccountDetails.secrets,
         imagePullSecrets: serviceAccountDetails.imagePullSecrets,
@@ -559,7 +541,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'Role',
         name: roleDetails.name,
-        age: roleDetails.age,
         namespace: roleDetails.namespace,
         policyRules: roleDetails.rules,
         usedByRoleBindings: roleDetails.usedByRoleBindings,
@@ -574,7 +555,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'RoleBinding',
         name: roleBindingDetails.name,
-        age: roleBindingDetails.age,
         namespace: roleBindingDetails.namespace,
         roleRef: roleBindingDetails.roleRef,
         subjects: roleBindingDetails.subjects,
@@ -589,7 +569,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'ClusterRole',
         name: clusterRoleDetails.name,
-        age: clusterRoleDetails.age,
         policyRules: clusterRoleDetails.rules,
         aggregationRule: clusterRoleDetails.aggregationRule,
         clusterRoleBindings: clusterRoleDetails.clusterRoleBindings,
@@ -605,7 +584,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'ClusterRoleBinding',
         name: clusterRoleBindingDetails.name,
-        age: clusterRoleBindingDetails.age,
         roleRef: clusterRoleBindingDetails.roleRef,
         subjects: clusterRoleBindingDetails.subjects,
         // Surface metadata to match the ConfigMap/Secret layout.
@@ -636,7 +614,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'HorizontalPodAutoscaler',
         name: hpaDetails.name,
-        age: hpaDetails.age,
         namespace: hpaDetails.namespace,
         scaleTargetRef: hpaDetails.scaleTargetRef,
         minReplicas: hpaDetails.minReplicas,
@@ -656,7 +633,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'PodDisruptionBudget',
         name: pdbDetails.name,
-        age: pdbDetails.age,
         namespace: pdbDetails.namespace,
         minAvailable: pdbDetails.minAvailable,
         maxUnavailable: pdbDetails.maxUnavailable,
@@ -675,7 +651,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'ResourceQuota',
         name: resourceQuotaDetails.name,
-        age: resourceQuotaDetails.age,
         namespace: resourceQuotaDetails.namespace,
         hard: resourceQuotaDetails.hard,
         used: resourceQuotaDetails.used,
@@ -689,7 +664,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'LimitRange',
         name: limitRangeDetails.name,
-        age: limitRangeDetails.age,
         namespace: limitRangeDetails.namespace,
         limits: limitRangeDetails.limits,
       };
@@ -709,7 +683,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'Node',
         name: nodeDetails.name,
-        age: nodeDetails.age,
         status: nodeDetails.status,
         statusState: nodeDetails.statusState,
         statusPresentation: nodeDetails.statusPresentation,
@@ -747,7 +720,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'Namespace',
         name: namespaceDetails.name,
-        age: namespaceDetails.age,
         status: namespaceDetails.status,
         statusState: namespaceDetails.statusState,
         statusPresentation: namespaceDetails.statusPresentation,
@@ -763,7 +735,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'IngressClass',
         name: ingressClassDetails.name,
-        age: ingressClassDetails.age,
         controller: ingressClassDetails.controller,
         isDefault: ingressClassDetails.isDefault,
         parameters: ingressClassDetails.parameters,
@@ -783,7 +754,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'CustomResourceDefinition',
         name: crdDetails.name,
-        age: crdDetails.age,
         group: crdDetails.group,
         versions: crdDetails.versions,
         scope: crdDetails.scope,
@@ -800,7 +770,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'MutatingWebhookConfiguration',
         name: mutatingWebhookDetails.name,
-        age: mutatingWebhookDetails.age,
         webhooks: mutatingWebhookDetails.webhooks,
         // Surface metadata to match the ConfigMap/Secret layout.
         labels: mutatingWebhookDetails.labels,
@@ -813,7 +782,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
       return {
         kind: 'ValidatingWebhookConfiguration',
         name: validatingWebhookDetails.name,
-        age: validatingWebhookDetails.age,
         webhooks: validatingWebhookDetails.webhooks,
         // Surface metadata to match the ConfigMap/Secret layout.
         labels: validatingWebhookDetails.labels,
@@ -842,7 +810,6 @@ export function useOverviewData(params: UseOverviewDataParams): OverviewData | n
     return {
       kind: objectData.kind || 'Unknown',
       name: objectData.name || 'Unnamed',
-      age: objectData.age || '-',
       node: objectData.node || undefined,
       owner: objectData.owner || undefined,
       namespace: objectData.namespace,

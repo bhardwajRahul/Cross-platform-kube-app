@@ -56,7 +56,6 @@ describe('GenericOverview', () => {
       kind: 'Service',
       name: 'api',
       namespace: 'default',
-      age: '3d',
       type: 'ClusterIP',
       clusterIP: '10.0.0.10',
       externalIPs: ['1.1.1.1', '2.2.2.2'],

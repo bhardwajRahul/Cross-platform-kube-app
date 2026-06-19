@@ -52,7 +52,6 @@ func (s *Service) buildDetails(item *gatewayv1.Gateway) *GatewayDetails {
 		Kind:            "Gateway",
 		Name:            item.Name,
 		Namespace:       item.Namespace,
-		Age:             common.FormatAge(item.CreationTimestamp.Time),
 		GatewayClassRef: types.ObjectRefFromResourceLink(facts.Class),
 		Addresses:       append([]string(nil), facts.Addresses...),
 		Listeners:       types.GatewayListenerDetailsFromFacts(facts.Listeners),

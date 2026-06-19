@@ -59,7 +59,6 @@ func (s *Service) buildIngressClassDetails(ic *networkingv1.IngressClass, ingres
 		Kind:        "IngressClass",
 		Name:        ic.Name,
 		Controller:  facts.Controller,
-		Age:         common.FormatAge(ic.CreationTimestamp.Time),
 		Labels:      ic.Labels,
 		Annotations: ic.Annotations,
 	}

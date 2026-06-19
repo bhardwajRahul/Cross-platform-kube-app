@@ -15,7 +15,6 @@ type CustomResourceDefinitionDetails struct {
 	Name               string            `json:"name"`
 	Group              string            `json:"group"`
 	Scope              string            `json:"scope"`
-	Age                string            `json:"age"`
 	Details            string            `json:"details"`
 	Versions           []CRDVersion      `json:"versions"`
 	Names              CRDNames          `json:"names"`

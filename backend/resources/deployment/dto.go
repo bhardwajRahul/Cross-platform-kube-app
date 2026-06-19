@@ -22,7 +22,6 @@ type DeploymentDetails struct {
 	UpToDate        int32  `json:"upToDate,omitempty"`
 	Available       int32  `json:"available"`
 	DesiredReplicas int32  `json:"desiredReplicas"`
-	Age             string `json:"age"`
 
 	// Average resource utilization (per pod)
 	restypes.ResourceUtilization

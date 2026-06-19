@@ -51,7 +51,6 @@ func (s *Service) buildHorizontalPodAutoscalerDetails(h *autoscalingv2.Horizonta
 		Kind:            "HorizontalPodAutoscaler",
 		Name:            h.Name,
 		Namespace:       h.Namespace,
-		Age:             common.FormatAge(h.CreationTimestamp.Time),
 		Details:         detailsSummary(facts),
 		MinReplicas:     facts.MinReplicas,
 		MaxReplicas:     facts.MaxReplicas,

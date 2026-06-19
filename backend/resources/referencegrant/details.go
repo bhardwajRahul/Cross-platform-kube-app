@@ -52,7 +52,6 @@ func (s *Service) buildDetails(item *gatewayv1.ReferenceGrant) *ReferenceGrantDe
 		Kind:        "ReferenceGrant",
 		Name:        item.Name,
 		Namespace:   item.Namespace,
-		Age:         common.FormatAge(item.CreationTimestamp.Time),
 		Labels:      item.Labels,
 		Annotations: item.Annotations,
 	}

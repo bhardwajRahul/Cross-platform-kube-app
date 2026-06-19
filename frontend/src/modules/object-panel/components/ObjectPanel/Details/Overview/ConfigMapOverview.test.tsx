@@ -90,7 +90,6 @@ describe('ConfigMapOverview', () => {
       configMapDetails: {
         name: 'app-config',
         namespace: 'default',
-        age: '2d',
         data: { key1: 'value', key2: 'value' },
         binaryData: { bin: 'AAAA' },
         usedBy: [podRef('pod-a', 'default'), podRef('pod-b', 'default')],
@@ -126,7 +125,6 @@ describe('ConfigMapOverview', () => {
       configMapDetails: {
         name: 'unused-config',
         namespace: 'team',
-        age: '12h',
         data: {},
         binaryData: {},
         usedBy: [],

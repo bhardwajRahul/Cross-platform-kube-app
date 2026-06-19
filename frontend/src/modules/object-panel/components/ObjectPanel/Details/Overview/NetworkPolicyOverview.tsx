@@ -113,7 +113,6 @@ export const NetworkPolicyOverview: React.FC<NetworkPolicyOverviewProps> = ({
         kind="NetworkPolicy"
         name={networkPolicyDetails.name}
         namespace={networkPolicyDetails.namespace}
-        age={networkPolicyDetails.age}
       />
 
       {hasPodSelector ? (

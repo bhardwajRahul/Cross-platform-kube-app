@@ -82,7 +82,6 @@ describe('GatewayAPIOverview', () => {
         kind: 'Gateway',
         name: 'edge',
         namespace: 'prod',
-        age: '3h',
         gatewayClassRef: {
           clusterId: 'cluster-a',
           group: 'gateway.networking.k8s.io',
@@ -130,7 +129,6 @@ describe('GatewayAPIOverview', () => {
         kind: 'Gateway',
         name: 'edge',
         namespace: 'prod',
-        age: '3h',
         listeners: [
           {
             name: 'https',
@@ -180,7 +178,6 @@ describe('GatewayAPIOverview', () => {
         kind: 'HTTPRoute',
         name: 'web',
         namespace: 'prod',
-        age: '1h',
         hostnames: ['example.com'],
         parentRefs: [
           {
@@ -244,7 +241,6 @@ describe('GatewayAPIOverview', () => {
         kind: 'ReferenceGrant',
         name: 'allow-widgets',
         namespace: 'prod',
-        age: '4h',
         from: [{ group: 'gateway.networking.k8s.io', kind: 'HTTPRoute', namespace: 'team-a' }],
         to: [
           {

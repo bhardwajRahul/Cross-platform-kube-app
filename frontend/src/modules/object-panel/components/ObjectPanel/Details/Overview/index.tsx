@@ -20,7 +20,6 @@ interface GenericOverviewProps {
   kind: string;
   name: string;
   namespace?: string;
-  age?: string;
   labels?: Record<string, string>;
   annotations?: Record<string, string>;
   onRestart?: () => void;

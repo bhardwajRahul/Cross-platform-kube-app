@@ -76,12 +76,7 @@ export const IngressOverview: React.FC<IngressOverviewProps> = ({ ingressDetails
 
   return (
     <>
-      <ResourceHeader
-        kind="Ingress"
-        name={ingressDetails.name}
-        namespace={namespace}
-        age={ingressDetails.age}
-      />
+      <ResourceHeader kind="Ingress" name={ingressDetails.name} namespace={namespace} />
 
       {/* Address — surfaced near the top because it's the most-asked
           question for an Ingress ("what URL does this expose?"). When the

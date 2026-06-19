@@ -11,7 +11,6 @@ type IngressDetails struct {
 	Kind               string                 `json:"kind"`
 	Name               string                 `json:"name"`
 	Namespace          string                 `json:"namespace"`
-	Age                string                 `json:"age"`
 	Details            string                 `json:"details"`
 	IngressClassName   *string                `json:"ingressClassName,omitempty"`
 	Rules              []IngressRuleDetails   `json:"rules"`

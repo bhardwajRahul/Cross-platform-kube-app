@@ -122,7 +122,6 @@ describe('useOverviewData', () => {
     const params = emptyParams({ kind: 'Pod', namespace: 'ns-a', name: 'web-1' });
     params.slots.podDetails = {
       name: 'web-1',
-      age: '2h',
       node: 'node-1',
       nodeIP: '10.0.0.1',
       podIP: '10.1.0.5',
@@ -157,7 +156,6 @@ describe('useOverviewData', () => {
     const params = emptyParams({ kind: 'Deployment', namespace: 'prod', name: 'api' });
     params.slots.deploymentDetails = {
       name: 'api',
-      age: '5d',
       namespace: 'prod',
       status: 'Running',
       statusState: '3/3',
@@ -184,7 +182,6 @@ describe('useOverviewData', () => {
     const params = emptyParams({ kind: 'StatefulSet', namespace: 'data', name: 'db' });
     params.slots.statefulSetDetails = {
       name: 'db',
-      age: '12d',
       namespace: 'data',
       replicas: '3/3',
       desiredReplicas: 3,
@@ -212,7 +209,6 @@ describe('useOverviewData', () => {
     const params = emptyParams({ kind: 'ConfigMap', namespace: 'default', name: 'app-config' });
     params.slots.configMapDetails = {
       name: 'app-config',
-      age: '1d',
       namespace: 'default',
     } as any;
 
@@ -229,7 +225,6 @@ describe('useOverviewData', () => {
     const params = emptyParams({ kind: 'Service', namespace: 'default', name: 'frontend' });
     params.slots.serviceDetails = {
       name: 'frontend',
-      age: '3d',
       namespace: 'default',
     } as any;
 
@@ -250,7 +245,6 @@ describe('useOverviewData', () => {
     });
     params.slots.pvcDetails = {
       name: 'db-pvc',
-      age: '30d',
       namespace: 'data',
       status: 'Bound',
       volumeName: 'pv-123',
@@ -296,7 +290,6 @@ describe('useOverviewData', () => {
     const params = emptyParams({ kind: 'ClusterRole', name: 'admin' });
     params.slots.clusterRoleDetails = {
       name: 'admin',
-      age: '90d',
       rules: [{ apiGroups: ['*'], resources: ['*'], verbs: ['*'] }],
       aggregationRule: null,
       clusterRoleBindings: [resourceRef()],
@@ -322,7 +315,6 @@ describe('useOverviewData', () => {
     });
     params.slots.hpaDetails = {
       name: 'api-hpa',
-      age: '7d',
       namespace: 'prod',
       scaleTargetRef: { kind: 'Deployment', name: 'api' },
       minReplicas: 2,
@@ -348,7 +340,6 @@ describe('useOverviewData', () => {
     const params = emptyParams({ kind: 'Node', name: 'node-1' });
     params.slots.nodeDetails = {
       name: 'node-1',
-      age: '60d',
       status: 'Ready',
       roles: ['control-plane'],
       os: 'linux',
@@ -385,7 +376,6 @@ describe('useOverviewData', () => {
       kind: 'CustomWidget',
       name: 'my-widget',
       namespace: 'tools',
-      age: '1h',
       status: 'Active',
       apiGroup: 'widgets.example.com',
       labels: { team: 'platform' },
@@ -402,7 +392,7 @@ describe('useOverviewData', () => {
   it('ignores detail objects that do not match the current kind', () => {
     // objectData says Service, but we populate podDetails — should NOT produce Pod output.
     const params = emptyParams({ kind: 'Service', namespace: 'default', name: 'svc' });
-    params.slots.podDetails = { name: 'stale-pod', age: '1h', status: 'Running' } as any;
+    params.slots.podDetails = { name: 'stale-pod', status: 'Running' } as any;
 
     const result = renderHook(params);
     // Falls through to default fallback since no serviceDetails is set.

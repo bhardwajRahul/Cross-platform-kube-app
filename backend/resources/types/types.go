@@ -523,7 +523,6 @@ type PodDetailInfo struct {
 	StatusProjection
 	Ready      string `json:"ready"`
 	Restarts   int32  `json:"restarts"`
-	Age        string `json:"age"`
 	CPURequest string `json:"cpuRequest"`
 	CPULimit   string `json:"cpuLimit"`
 	CPUUsage   string `json:"cpuUsage"`

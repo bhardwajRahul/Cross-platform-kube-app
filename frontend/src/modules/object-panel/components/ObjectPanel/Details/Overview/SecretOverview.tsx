@@ -45,12 +45,7 @@ export const SecretOverview: React.FC<SecretOverviewProps> = ({ secretDetails })
   return (
     <>
       {/* Use composed component for header */}
-      <ResourceHeader
-        kind="Secret"
-        name={secretDetails.name}
-        namespace={secretDetails.namespace}
-        age={secretDetails.age}
-      />
+      <ResourceHeader kind="Secret" name={secretDetails.name} namespace={secretDetails.namespace} />
 
       {/* Secret Type — chip with a per-type tooltip for the well-known
           kubernetes.io/* prefixes. */}

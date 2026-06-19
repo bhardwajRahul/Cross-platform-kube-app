@@ -66,7 +66,6 @@ func (s *Service) processPersistentVolumeDetails(pv *corev1.PersistentVolume) *P
 	details := &PersistentVolumeDetails{
 		Kind:             "PersistentVolume",
 		Name:             pv.Name,
-		Age:              common.FormatAge(pv.CreationTimestamp.Time),
 		StatusProjection: restypes.NewStatusProjection(model.Status),
 		StorageClass:     pv.Spec.StorageClassName,
 		ReclaimPolicy:    string(pv.Spec.PersistentVolumeReclaimPolicy),

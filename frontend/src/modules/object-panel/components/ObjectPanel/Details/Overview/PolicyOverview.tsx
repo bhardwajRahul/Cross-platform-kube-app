@@ -16,7 +16,6 @@ interface PolicyOverviewProps {
   kind?: string;
   name?: string;
   namespace?: string;
-  age?: string;
   // HPA fields
   scaleTargetRef?: hpa.ScaleTargetReference | null;
   minReplicas?: number;
@@ -45,7 +44,7 @@ interface PolicyOverviewProps {
 
 // Policy resources Overview
 export const PolicyOverview: React.FC<PolicyOverviewProps> = (props) => {
-  const { kind, name, namespace, age } = props;
+  const { kind, name, namespace } = props;
   const { objectData } = useObjectPanel();
   const clusterMeta = {
     clusterId: objectData?.clusterId ?? undefined,
@@ -302,7 +301,7 @@ export const PolicyOverview: React.FC<PolicyOverviewProps> = (props) => {
 
   return (
     <>
-      <ResourceHeader kind={kind || ''} name={name || ''} namespace={namespace} age={age} />
+      <ResourceHeader kind={kind || ''} name={name || ''} namespace={namespace} />
 
       {/* HPA-specific fields */}
       {props.kind?.toLowerCase() === 'horizontalpodautoscaler' && (

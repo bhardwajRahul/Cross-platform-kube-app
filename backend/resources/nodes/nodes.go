@@ -501,7 +501,6 @@ func (s *Service) buildNodeDetails(node *corev1.Node, pods []corev1.Pod, nodeMet
 	details := &NodeDetails{
 		Name:             node.Name,
 		StatusProjection: restypes.NewStatusProjection(model.Status),
-		Age:              common.FormatAge(node.CreationTimestamp.Time),
 		Unschedulable:    nodeFacts.Unschedulable,
 		Architecture:     node.Status.NodeInfo.Architecture,
 		OS:               node.Status.NodeInfo.OperatingSystem,

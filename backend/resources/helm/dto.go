@@ -15,7 +15,6 @@ type HelmReleaseDetails struct {
 	TypeAlias string `json:"typeAlias"`
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
-	Age       string `json:"age"`
 
 	Chart      string `json:"chart"`
 	Version    string `json:"version"`
