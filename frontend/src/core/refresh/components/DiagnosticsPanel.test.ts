@@ -1053,6 +1053,9 @@ describe('DiagnosticsPanel component', () => {
         lastFallbackAt: now - 2400,
         lastFallbackReason: 'gap detected',
       });
+    // Per-domain resync/fallback source for the Streams table. These fixtures
+    // carry no domain, so the resources row is a stream-level row (resyncs null).
+    vi.spyOn(resourceStreamManager, 'getTelemetrySummaryByClusterDomain').mockReturnValue({});
 
     fetchTelemetrySummaryMock.mockResolvedValueOnce(telemetrySummary);
     fetchSelectionDiagnosticsMock.mockResolvedValueOnce({
@@ -1158,8 +1161,14 @@ describe('DiagnosticsPanel component', () => {
       row.textContent?.includes('Resources')
     );
     const cells = resourcesRow?.querySelectorAll('td') ?? [];
-    expect(cells[6]?.textContent?.trim()).toBe('2');
-    expect(cells[7]?.textContent?.trim()).toBe('1');
+    // Domain-less fixture → a stream header row (Name | Delivered | Dropped |
+    // Errors | Resyncs | Fallbacks | Last Event | Last Error); resyncs/fallbacks
+    // are per-domain only, so the header shows '—'.
+    expect(cells[4]?.textContent?.trim()).toBe('—');
+    expect(cells[5]?.textContent?.trim()).toBe('—');
+    // The Last Error placeholder is a plain cell — no error colour for '—'.
+    expect(cells[7]?.textContent?.trim()).toBe('—');
+    expect(cells[7]?.classList.contains('diagnostics-error-warning')).toBe(false);
 
     await rendered.unmount();
     resourceStreamSpy.mockRestore();
@@ -1412,6 +1421,7 @@ describe('DiagnosticsPanel component', () => {
         lastFallbackAt: now - 400,
         lastFallbackReason: 'gap detected',
       });
+    vi.spyOn(resourceStreamManager, 'getTelemetrySummaryByClusterDomain').mockReturnValue({});
 
     const { DiagnosticsPanel } = await import('./DiagnosticsPanel');
     const rendered = await renderDiagnosticsPanel(DiagnosticsPanel, { isOpen: true });
@@ -1434,17 +1444,21 @@ describe('DiagnosticsPanel component', () => {
     expect(catalogRow).toBeDefined();
     expect(resourcesRow).toBeDefined();
 
+    // Both fixtures are domain-less stream header rows: Name | Delivered |
+    // Dropped | Errors(3) | Resyncs(4) | Fallbacks(5) | Last Event | Last Error(7).
     const catalogCells = catalogRow!.querySelectorAll('td');
-    expect(catalogCells[5]?.textContent?.trim()).toBe('1');
-    expect(catalogCells[6]?.textContent?.trim()).toBe('—');
-    expect(catalogCells[7]?.textContent?.trim()).toBe('—');
-    expect(catalogCells[10]?.textContent?.trim()).toBe('Catalog stream disconnected');
+    expect(catalogCells[3]?.textContent?.trim()).toBe('1');
+    expect(catalogCells[4]?.textContent?.trim()).toBe('—');
+    expect(catalogCells[5]?.textContent?.trim()).toBe('—');
+    expect(catalogCells[7]?.textContent?.trim()).toBe('Catalog stream disconnected');
 
     const resourceCells = resourcesRow!.querySelectorAll('td');
-    expect(resourceCells[5]?.textContent?.trim()).toBe('1');
-    expect(resourceCells[6]?.textContent?.trim()).toBe('4');
-    expect(resourceCells[7]?.textContent?.trim()).toBe('2');
-    expect(resourceCells[10]?.textContent?.trim()).toBe('Resource stream disconnected');
+    expect(resourceCells[3]?.textContent?.trim()).toBe('1');
+    expect(resourceCells[4]?.textContent?.trim()).toBe('—');
+    expect(resourceCells[5]?.textContent?.trim()).toBe('—');
+    expect(resourceCells[7]?.textContent?.trim()).toBe('Resource stream disconnected');
+    // An actual error is coloured with the warning class (not red, not the placeholder).
+    expect(resourceCells[7]?.classList.contains('diagnostics-error-warning')).toBe(true);
 
     await rendered.unmount();
     resourceStreamSpy.mockRestore();

@@ -113,7 +113,8 @@ func TestManagerPodUpdateBroadcasts(t *testing.T) {
 		require.Equal(t, "namespace:default", update.Scope)
 		require.Equal(t, "pod-1", update.Ref.Name)
 		require.Equal(t, "default", update.Ref.Namespace)
-		require.NotNil(t, update.Row)
+		// pods is notify-only: the live stream carries the change signal, not the row.
+		require.Nil(t, update.Row)
 	default:
 		t.Fatal("expected update to be delivered")
 	}
@@ -918,7 +919,7 @@ func TestManagerAutoscalingUpdateBroadcasts(t *testing.T) {
 	}
 }
 
-func TestManagerWorkloadStreamRowsIncludeHPAContext(t *testing.T) {
+func TestManagerWorkloadEventBroadcastsNotifyOnly(t *testing.T) {
 	replicas := int32(2)
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -929,23 +930,11 @@ func TestManagerWorkloadStreamRowsIncludeHPAContext(t *testing.T) {
 		},
 		Spec: appsv1.DeploymentSpec{Replicas: &replicas},
 	}
-	hpa := &autoscalingv1.HorizontalPodAutoscaler{
-		ObjectMeta: metav1.ObjectMeta{Name: "web-hpa", Namespace: "default", UID: "hpa-uid", ResourceVersion: "11"},
-		Spec: autoscalingv1.HorizontalPodAutoscalerSpec{
-			MaxReplicas: 5,
-			ScaleTargetRef: autoscalingv1.CrossVersionObjectReference{
-				APIVersion: "apps/v1",
-				Kind:       "Deployment",
-				Name:       "web",
-			},
-		},
-	}
 	manager := &Manager{
 		clusterMeta:      snapshot.ClusterMeta{ClusterID: "c1", ClusterName: "cluster"},
 		logger:           applog.Noop,
 		podLister:        testsupport.NewPodLister(t),
 		deploymentLister: testsupport.NewDeploymentLister(t, deployment),
-		hpaLister:        testsupport.NewHorizontalPodAutoscalerLister(t, hpa),
 		subscribers:      make(map[string]map[string]map[uint64]*subscription),
 	}
 	sub, err := subscribeForTest(t, manager, domainWorkloads, "namespace:default")
@@ -955,10 +944,12 @@ func TestManagerWorkloadStreamRowsIncludeHPAContext(t *testing.T) {
 
 	update := requireNextUpdate(t, sub)
 	require.Equal(t, domainWorkloads, update.Domain)
-	row, ok := update.Row.(snapshot.WorkloadSummary)
-	require.True(t, ok)
-	require.NotNil(t, row.HPAManaged)
-	require.True(t, *row.HPAManaged)
+	require.Equal(t, "namespace:default", update.Scope)
+	require.Equal(t, "web", update.Ref.Name)
+	require.Equal(t, "Deployment", update.Ref.Kind)
+	// namespace-workloads is notify-only: the live stream carries the change
+	// signal, not the row. HPA context in the row is covered in the snapshot path.
+	require.Nil(t, update.Row)
 }
 
 func TestManagerHPADeleteRefreshesTargetWorkloadRow(t *testing.T) {
@@ -983,7 +974,6 @@ func TestManagerHPADeleteRefreshesTargetWorkloadRow(t *testing.T) {
 		logger:           applog.Noop,
 		podLister:        testsupport.NewPodLister(t),
 		deploymentLister: testsupport.NewDeploymentLister(t, deployment),
-		hpaLister:        testsupport.NewHorizontalPodAutoscalerLister(t),
 		subscribers:      make(map[string]map[string]map[uint64]*subscription),
 	}
 	sub, err := subscribeForTest(t, manager, domainWorkloads, "namespace:default")
@@ -994,10 +984,7 @@ func TestManagerHPADeleteRefreshesTargetWorkloadRow(t *testing.T) {
 	update := requireNextUpdate(t, sub)
 	require.Equal(t, domainWorkloads, update.Domain)
 	require.Equal(t, "web", update.Ref.Name)
-	row, ok := update.Row.(snapshot.WorkloadSummary)
-	require.True(t, ok)
-	require.NotNil(t, row.HPAManaged)
-	require.False(t, *row.HPAManaged)
+	require.Nil(t, update.Row)
 }
 
 func TestManagerHPAUpdateRefreshesOldAndNewTargets(t *testing.T) {
@@ -1025,7 +1012,6 @@ func TestManagerHPAUpdateRefreshesOldAndNewTargets(t *testing.T) {
 		logger:           applog.Noop,
 		podLister:        testsupport.NewPodLister(t),
 		deploymentLister: testsupport.NewDeploymentLister(t, oldDeployment, newDeployment),
-		hpaLister:        testsupport.NewHorizontalPodAutoscalerLister(t, newHPA),
 		subscribers:      make(map[string]map[string]map[uint64]*subscription),
 	}
 	sub, err := subscribeForTest(t, manager, domainWorkloads, "namespace:default")
@@ -1033,17 +1019,15 @@ func TestManagerHPAUpdateRefreshesOldAndNewTargets(t *testing.T) {
 
 	manager.handleHPAEvent(oldHPA, newHPA, MessageTypeModified)
 
-	rows := map[string]snapshot.WorkloadSummary{}
+	names := map[string]bool{}
 	for i := 0; i < 2; i++ {
 		update := requireNextUpdate(t, sub)
-		row, ok := update.Row.(snapshot.WorkloadSummary)
-		require.True(t, ok)
-		rows[row.Name] = row
+		require.Equal(t, domainWorkloads, update.Domain)
+		require.Nil(t, update.Row)
+		names[update.Ref.Name] = true
 	}
-	require.NotNil(t, rows["web-new"].HPAManaged)
-	require.True(t, *rows["web-new"].HPAManaged)
-	require.NotNil(t, rows["web-old"].HPAManaged)
-	require.False(t, *rows["web-old"].HPAManaged)
+	require.True(t, names["web-new"])
+	require.True(t, names["web-old"])
 }
 
 func TestManagerPodMoveRefreshesOldAndNewNodeRows(t *testing.T) {
@@ -1106,7 +1090,7 @@ func TestManagerPodMoveDeletesOldNodePodScope(t *testing.T) {
 	newNodeUpdate := requireNextUpdate(t, newNodeSub)
 	require.Equal(t, MessageTypeModified, newNodeUpdate.Type)
 	require.Equal(t, "pod-1", newNodeUpdate.Ref.Name)
-	require.NotNil(t, newNodeUpdate.Row)
+	require.Nil(t, newNodeUpdate.Row)
 }
 
 func TestManagerEndpointSliceRetargetRefreshesOldAndNewServices(t *testing.T) {
@@ -1200,19 +1184,18 @@ func TestManagerReplicaSetUpdateRefreshesOldAndNewPodOwnerScopes(t *testing.T) {
 	require.Equal(t, MessageTypeDeleted, oldUpdate.Type)
 	require.Equal(t, "pod-1", oldUpdate.Ref.Name)
 
+	// pods is notify-only: a ReplicaSet owner change still re-notifies the affected
+	// pod on the old/new/namespace scopes (reactive wiring), but carries no row —
+	// the query-backed table refetches and rebuilds the owner columns.
 	newUpdate := requireNextUpdate(t, newSub)
 	require.Equal(t, MessageTypeModified, newUpdate.Type)
-	newRow, ok := newUpdate.Row.(snapshot.PodSummary)
-	require.True(t, ok)
-	require.Equal(t, "Deployment", newRow.OwnerKind)
-	require.Equal(t, "web-new", newRow.OwnerName)
+	require.Equal(t, "pod-1", newUpdate.Ref.Name)
+	require.Nil(t, newUpdate.Row)
 
 	namespaceUpdate := requireNextUpdate(t, namespaceSub)
 	require.Equal(t, MessageTypeModified, namespaceUpdate.Type)
-	namespaceRow, ok := namespaceUpdate.Row.(snapshot.PodSummary)
-	require.True(t, ok)
-	require.Equal(t, "Deployment", namespaceRow.OwnerKind)
-	require.Equal(t, "web-new", namespaceRow.OwnerName)
+	require.Equal(t, "pod-1", namespaceUpdate.Ref.Name)
+	require.Nil(t, namespaceUpdate.Row)
 }
 
 func TestManagerBackpressureTriggersReset(t *testing.T) {
@@ -1303,7 +1286,7 @@ func TestManagerWorkloadUpdateFromPod(t *testing.T) {
 		require.Equal(t, "namespace:default", update.Scope)
 		require.Equal(t, "web", update.Ref.Name)
 		require.Equal(t, "Deployment", update.Ref.Kind)
-		require.NotNil(t, update.Row)
+		require.Nil(t, update.Row)
 	default:
 		t.Fatal("expected workload update to be delivered")
 	}
@@ -1354,7 +1337,7 @@ func TestManagerWorkloadUpdateFromCompletedOwnedPod(t *testing.T) {
 		require.Equal(t, "namespace:default", update.Scope)
 		require.Equal(t, "web", update.Ref.Name)
 		require.Equal(t, "Deployment", update.Ref.Kind)
-		require.NotNil(t, update.Row)
+		require.Nil(t, update.Row)
 	default:
 		t.Fatal("expected completed owned pod to refresh workload row")
 	}
@@ -1435,7 +1418,8 @@ func TestManagerNodeUpdateFromPod(t *testing.T) {
 		require.Equal(t, domainNodes, update.Domain)
 		require.Equal(t, "node-a", update.Ref.Name)
 		require.Equal(t, "Node", update.Ref.Kind)
-		require.NotNil(t, update.Row)
+		// nodes is notify-only: the change signal carries no row.
+		require.Nil(t, update.Row)
 	default:
 		t.Fatal("expected node update to be delivered")
 	}
@@ -1444,13 +1428,6 @@ func TestManagerNodeUpdateFromPod(t *testing.T) {
 func podListerWith(pods ...*corev1.Pod) corelisters.PodLister {
 	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
 		cache.NamespaceIndex: cache.MetaNamespaceIndexFunc,
-		podNodeIndexName: func(obj interface{}) ([]string, error) {
-			item, ok := obj.(*corev1.Pod)
-			if !ok || item == nil || item.Spec.NodeName == "" {
-				return nil, nil
-			}
-			return []string{item.Spec.NodeName}, nil
-		},
 	})
 	for _, pod := range pods {
 		_ = indexer.Add(pod)

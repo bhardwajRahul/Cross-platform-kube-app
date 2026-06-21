@@ -56,6 +56,14 @@ type Summary struct {
 	Connection ConnectionStats  `json:"connection"`
 }
 
+// Summarizer produces a telemetry Summary. *Recorder is the single-cluster
+// implementation; the multi-cluster aggregate (backend.aggregateTelemetry)
+// merges per-cluster recorders behind the same interface so the diagnostics
+// endpoint can serve either without caring which.
+type Summarizer interface {
+	SnapshotSummary() Summary
+}
+
 // CatalogStatus captures telemetry for the object catalog service.
 type CatalogStatus struct {
 	Enabled             bool   `json:"enabled"`
@@ -378,6 +386,10 @@ func (r *Recorder) SnapshotSummary() Summary {
 	}
 	for _, value := range r.streams {
 		stream := *value
+		// Each recorder is per-cluster; tag its streams so the aggregate
+		// diagnostics view attributes counters to the right cluster.
+		stream.ClusterID = r.clusterID
+		stream.ClusterName = r.clusterName
 		out.Streams = append(out.Streams, stream)
 	}
 	return out
@@ -385,7 +397,18 @@ func (r *Recorder) SnapshotSummary() Summary {
 
 // StreamStatus captures health metrics for streaming transports (events/logs/resources).
 type StreamStatus struct {
-	Name            string `json:"name"`
+	Name string `json:"name"`
+	// Domain attributes these counters to a single resource domain (e.g. "pods")
+	// when set; empty for stream-level (socket) activity like sessions/connect.
+	// Lets diagnostics show one row per domain. Only the resources stream's
+	// deliveries are recorded per-domain (RecordStreamDeliveryForDomain).
+	Domain string `json:"domain,omitempty"`
+	// ClusterID/ClusterName identify which cluster these stream counters belong
+	// to. Stamped from the recorder's cluster at SnapshotSummary time (each
+	// recorder is per-cluster) so a multi-cluster diagnostics view shows or
+	// aggregates per-cluster instead of folding clusters under one stream name.
+	ClusterID       string `json:"clusterId,omitempty"`
+	ClusterName     string `json:"clusterName,omitempty"`
 	ActiveSessions  int    `json:"activeSessions"`
 	TotalMessages   uint64 `json:"totalMessages"`
 	DroppedMessages uint64 `json:"droppedMessages"`
@@ -394,7 +417,10 @@ type StreamStatus struct {
 	LastConnect     int64  `json:"lastConnect"`
 	LastEvent       int64  `json:"lastEvent"`
 	LastError       string `json:"lastError,omitempty"`
-	LastSkipReason  string `json:"lastSkipReason,omitempty"`
+	// LastErrorAt is when LastError occurred (unix ms), so diagnostics can show
+	// the relative age of the last error next to its message.
+	LastErrorAt    int64  `json:"lastErrorAt,omitempty"`
+	LastSkipReason string `json:"lastSkipReason,omitempty"`
 }
 
 // Stream name identifiers used across the backend/frontend telemetry contract.
@@ -427,22 +453,40 @@ func (r *Recorder) RecordStreamDelivery(name string, delivered, dropped int) {
 	if delivered <= 0 && dropped <= 0 {
 		return
 	}
-	r.updateStream(name, func(status *StreamStatus) {
+	r.updateStream(name, streamDeliveryMutator(delivered, dropped))
+}
+
+// RecordStreamDeliveryForDomain is RecordStreamDelivery scoped to one resource
+// domain, so the diagnostics view can attribute deliveries/drops to the domain
+// (used by the resources broadcast, which knows the domain).
+func (r *Recorder) RecordStreamDeliveryForDomain(name, domain string, delivered, dropped int) {
+	if delivered <= 0 && dropped <= 0 {
+		return
+	}
+	r.updateStreamKeyed(name, domain, streamDeliveryMutator(delivered, dropped))
+}
+
+// streamDeliveryMutator builds the StreamStatus update applied by both the
+// stream-level and per-domain delivery recorders, so they stay identical.
+func streamDeliveryMutator(delivered, dropped int) func(*StreamStatus) {
+	return func(status *StreamStatus) {
 		now := time.Now().UnixMilli()
 		if delivered > 0 {
 			status.TotalMessages += uint64(delivered)
 			status.LastEvent = now
 			if dropped <= 0 && status.LastError == "subscriber backlog" {
 				status.LastError = ""
+				status.LastErrorAt = 0
 			}
 		}
 		if dropped > 0 {
 			status.DroppedMessages += uint64(dropped)
 			status.ErrorCount++
 			status.LastError = "subscriber backlog"
+			status.LastErrorAt = now
 			status.LastEvent = now
 		}
-	})
+	}
 }
 
 // RecordStreamError captures an error emitted while serving a stream.
@@ -450,10 +494,23 @@ func (r *Recorder) RecordStreamError(name string, err error) {
 	if err == nil {
 		return
 	}
-	r.updateStream(name, func(status *StreamStatus) {
+	r.updateStream(name, streamErrorMutator(err))
+}
+
+// RecordStreamErrorForDomain is RecordStreamError scoped to one resource domain.
+func (r *Recorder) RecordStreamErrorForDomain(name, domain string, err error) {
+	if err == nil {
+		return
+	}
+	r.updateStreamKeyed(name, domain, streamErrorMutator(err))
+}
+
+func streamErrorMutator(err error) func(*StreamStatus) {
+	return func(status *StreamStatus) {
 		status.ErrorCount++
 		status.LastError = err.Error()
-	})
+		status.LastErrorAt = time.Now().UnixMilli()
+	}
 }
 
 // RecordStreamSkippedTargets captures targets omitted due to backend selection caps.
@@ -469,16 +526,29 @@ func (r *Recorder) RecordStreamSkippedTargets(name string, skipped int, reason s
 }
 
 func (r *Recorder) updateStream(name string, fn func(*StreamStatus)) {
+	r.updateStreamKeyed(name, "", fn)
+}
+
+// updateStreamKeyed mutates the StreamStatus for a stream, optionally scoped to a
+// resource domain. domain "" is stream-level (sessions/connect/socket activity);
+// a non-empty domain gets its own entry so per-domain counters don't fold
+// together. The map key separates the two with a NUL so a domain can never
+// collide with a stream name.
+func (r *Recorder) updateStreamKeyed(name, domain string, fn func(*StreamStatus)) {
 	if name == "" || fn == nil {
 		return
+	}
+	key := name
+	if domain != "" {
+		key = name + "\x00" + domain
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	status, ok := r.streams[name]
+	status, ok := r.streams[key]
 	if !ok {
-		status = &StreamStatus{Name: name}
-		r.streams[name] = status
+		status = &StreamStatus{Name: name, Domain: domain}
+		r.streams[key] = status
 	}
 
 	fn(status)

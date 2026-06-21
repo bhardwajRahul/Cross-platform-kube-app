@@ -354,16 +354,65 @@
   font-weight: 600;
 }
 
-.diagnostics-error {
+/*
+ * Error-message cells wrap so the full error is readable (overriding the
+ * table's default nowrap). overflow-wrap:anywhere breaks long unbreakable
+ * tokens at the column edge without the harsh mid-word breaks of
+ * word-break:break-all. Higher specificity (table td.diagnostics-error) is
+ * required to win over `.diagnostics-table td { white-space: nowrap }`.
+ */
+.diagnostics-table td.diagnostics-error,
+.diagnostics-table td.diagnostics-error-warning {
   max-width: 240px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.diagnostics-table td.diagnostics-error {
   color: var(--color-error-text, var(--color-error));
+}
+/* Streams: an actual error uses the warning colour (not red); the "—" placeholder
+   is rendered as a plain cell with no error class, so it stays the default colour. */
+.diagnostics-table td.diagnostics-error-warning {
+  color: var(--color-warning, #f59e0b);
+}
+/* The relative age of the last error, shown muted next to the message. */
+.diagnostics-error-age {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
 }
 
 .diagnostics-domain {
   font-weight: 600;
   color: var(--color-text);
+}
+
+/* Streams tree: stream header → cluster group → per-domain leaf. The
+   indentation selectors must out-specify `.diagnostics-table td` (0,1,1), which
+   sets `padding` via shorthand — a bare `.diagnostics-domain-name` (0,1,0) would
+   lose and the indent would not apply. */
+.diagnostics-stream-row td {
+  border-top: 1px solid var(--color-border, var(--color-bg-secondary));
+}
+.diagnostics-stream-name {
+  font-weight: 600;
+}
+.diagnostics-stream-socket {
+  font-weight: 400;
+  color: var(--color-text-secondary);
+}
+.diagnostics-table td.diagnostics-cluster-name {
+  padding-left: 1.6rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.diagnostics-table td.diagnostics-domain-name {
+  padding-left: 3rem;
+}
+/* Leading connector makes the child relationship explicit even at a glance. */
+.diagnostics-table td.diagnostics-domain-name::before {
+  content: "↳";
+  margin-right: 0.4rem;
+  color: var(--color-text-secondary);
 }
 
 .diagnostics-table-stack {

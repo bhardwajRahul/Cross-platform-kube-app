@@ -21,6 +21,7 @@ import {
   getResourceStreamDomainDescriptor,
   isCompleteResyncStreamDomain,
   isClusterScopedDomain,
+  isNotifyOnlyStreamDomain,
   isSupportedDomain,
   type ResourceDomain,
 } from './resourceStreamDomains';
@@ -236,12 +237,34 @@ export type ResourceStreamTelemetrySummary = {
 };
 
 type StreamTelemetry = {
+  // Cluster + resource domain this subscription's resync/fallback counters belong
+  // to, so the diagnostics Streams view can report them per cluster and per domain.
+  clusterId: string;
+  domain: string;
   resyncCount: number;
   fallbackCount: number;
   lastResyncAt?: number;
   lastResyncReason?: string;
   lastFallbackAt?: number;
   lastFallbackReason?: string;
+};
+
+// accumulateStreamTelemetry folds one subscription's stats into a running summary
+// (shared by the global and per-cluster summaries).
+const accumulateStreamTelemetry = (
+  summary: ResourceStreamTelemetrySummary,
+  stats: StreamTelemetry
+): void => {
+  summary.resyncCount += stats.resyncCount;
+  summary.fallbackCount += stats.fallbackCount;
+  if (stats.lastResyncAt && stats.lastResyncAt > (summary.lastResyncAt ?? 0)) {
+    summary.lastResyncAt = stats.lastResyncAt;
+    summary.lastResyncReason = stats.lastResyncReason;
+  }
+  if (stats.lastFallbackAt && stats.lastFallbackAt > (summary.lastFallbackAt ?? 0)) {
+    summary.lastFallbackAt = stats.lastFallbackAt;
+    summary.lastFallbackReason = stats.lastFallbackReason;
+  }
 };
 
 export class ResourceStreamManager {
@@ -284,21 +307,20 @@ export class ResourceStreamManager {
       resyncCount: 0,
       fallbackCount: 0,
     };
-
-    this.streamTelemetry.forEach((stats) => {
-      summary.resyncCount += stats.resyncCount;
-      summary.fallbackCount += stats.fallbackCount;
-      if (stats.lastResyncAt && stats.lastResyncAt > (summary.lastResyncAt ?? 0)) {
-        summary.lastResyncAt = stats.lastResyncAt;
-        summary.lastResyncReason = stats.lastResyncReason;
-      }
-      if (stats.lastFallbackAt && stats.lastFallbackAt > (summary.lastFallbackAt ?? 0)) {
-        summary.lastFallbackAt = stats.lastFallbackAt;
-        summary.lastFallbackReason = stats.lastFallbackReason;
-      }
-    });
-
+    this.streamTelemetry.forEach((stats) => accumulateStreamTelemetry(summary, stats));
     return summary;
+  }
+
+  // Per-(cluster, domain) resync/fallback summaries for the per-domain Streams
+  // rows. Keyed `${clusterId}::${domain}` (scopes of a domain are summed).
+  getTelemetrySummaryByClusterDomain(): Record<string, ResourceStreamTelemetrySummary> {
+    const byClusterDomain: Record<string, ResourceStreamTelemetrySummary> = {};
+    this.streamTelemetry.forEach((stats) => {
+      const key = `${stats.clusterId}::${stats.domain}`;
+      const summary = (byClusterDomain[key] ??= { resyncCount: 0, fallbackCount: 0 });
+      accumulateStreamTelemetry(summary, stats);
+    });
+    return byClusterDomain;
   }
 
   // Expose per-scope health so refresh gating can keep snapshots running until delivery resumes.
@@ -713,7 +735,35 @@ export class ResourceStreamManager {
 
     // Always update shadow keys so drift checks can compare snapshots to streamed changes.
     this.applyShadowUpdates(subscription, updates);
+
+    // Notify-only domains carry no row payload — the query-backed table refetches
+    // on the bare signal. Bump streamRevision (the refetch trigger) and leave the
+    // stored rows untouched; never run the retain/merge/sort row path.
+    if (isNotifyOnlyStreamDomain(subscription.domain)) {
+      this.bumpStreamRevisionOnly(subscription, now);
+      return;
+    }
+
     this.applyRowUpdates(subscription, updates, now);
+  }
+
+  // bumpStreamRevisionOnly advances the live-data identity for a notify-only
+  // domain without touching its rows. The third component of liveDomainVersion
+  // (streamRevision) changes, so the query-backed view refetches its page; the
+  // streamed deltas carried no rows to apply. Coalescing (UPDATE_COALESCE_MS)
+  // collapses a burst — e.g. an informer resync — into a single bump/refetch.
+  private bumpStreamRevisionOnly(subscription: StreamSubscription, now: number): void {
+    setScopedDomainState(subscription.domain, subscription.reportScope, (previous) => ({
+      ...previous,
+      status: 'ready',
+      streamRevision: (previous.streamRevision ?? 0) + 1,
+      lastUpdated: now,
+      lastAutoRefresh: now,
+      error: null,
+      isManual: false,
+      scope: subscription.reportScope,
+    }));
+    this.clearStreamError(subscription.clusterId);
   }
 
   private applyRowUpdates(
@@ -813,6 +863,8 @@ export class ResourceStreamManager {
       return existing;
     }
     const stats: StreamTelemetry = {
+      clusterId: subscription.clusterId,
+      domain: subscription.domain,
       resyncCount: 0,
       fallbackCount: 0,
     };
@@ -863,6 +915,19 @@ export class ResourceStreamManager {
     }
     subscription.updateQueue = [];
     subscription.lastSequence = undefined;
+
+    // Notify-only domains carry no row baseline. A resync (initial start, reset,
+    // backpressure, complete/error) just re-arms the delta stream and bumps
+    // streamRevision so the query-backed view refetches its page — no full-row
+    // snapshot is pulled over the bridge, and status→'ready' clears the query
+    // gate so the table stops waiting on a baseline before showing page 1.
+    if (isNotifyOnlyStreamDomain(subscription.domain)) {
+      this.bumpStreamRevisionOnly(subscription, now);
+      this.markResyncComplete(subscription);
+      subscription.pendingReset = false;
+      this.subscribe(subscription);
+      return;
+    }
 
     try {
       const { snapshot, notModified } = await fetchSnapshotForSubscription(subscription);

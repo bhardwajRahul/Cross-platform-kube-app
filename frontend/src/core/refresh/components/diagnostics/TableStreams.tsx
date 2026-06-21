@@ -7,6 +7,7 @@
 
 import React from 'react';
 import type { DiagnosticsStreamRow } from './diagnosticsPanelTypes';
+import { formatLastUpdated } from './diagnosticsPanelUtils';
 
 interface DiagnosticsStreamsTableProps {
   rows: DiagnosticsStreamRow[];
@@ -31,15 +32,12 @@ export const DiagnosticsStreamsTable: React.FC<DiagnosticsStreamsTableProps> = (
         <table className="diagnostics-table">
           <thead>
             <tr>
-              <th>Stream</th>
-              <th>Active Domains</th>
-              <th>Sessions</th>
+              <th>Name</th>
               <th>Delivered</th>
               <th>Dropped</th>
               <th>Errors</th>
               <th>Resyncs</th>
               <th>Fallbacks</th>
-              <th>Last Connect</th>
               <th>Last Event</th>
               <th>Last Error</th>
             </tr>
@@ -47,32 +45,98 @@ export const DiagnosticsStreamsTable: React.FC<DiagnosticsStreamsTableProps> = (
           <tbody>
             {rows.length === 0 ? (
               <tr className="diagnostics-empty">
-                <td colSpan={11}>{resolvedEmptyMessage}</td>
+                <td colSpan={8}>{resolvedEmptyMessage}</td>
               </tr>
             ) : (
-              rows.map((row) => (
-                <tr key={row.rowKey}>
-                  <td>
-                    <span className="diagnostics-domain" title={row.rowKey}>
-                      {row.label}
-                    </span>
-                  </td>
-                  <td title={row.activeDomainsTooltip ?? ''}>{row.activeDomains}</td>
-                  <td>{row.sessions}</td>
-                  <td>{row.delivered}</td>
-                  <td>{row.dropped}</td>
-                  <td>{row.errors}</td>
-                  <td title={row.resyncsTooltip ?? ''}>{row.resyncs ?? '—'}</td>
-                  <td title={row.fallbacksTooltip ?? ''}>{row.fallbacks ?? '—'}</td>
-                  <td title={row.lastConnectTooltip}>{row.lastConnect}</td>
-                  <td title={row.lastEventTooltip}>{row.lastEvent}</td>
-                  <td className="diagnostics-error">{row.lastError}</td>
-                </tr>
-              ))
+              rows.map((row) => <StreamTableRow key={row.rowKey} row={row} />)
             )}
           </tbody>
         </table>
       </div>
     </div>
+  );
+};
+
+// LastErrorCell colours an actual error with the warning colour and appends the
+// relative age of when it occurred; the "—" placeholder renders as a plain cell
+// so it keeps the default text colour and shows no age.
+const LastErrorCell: React.FC<{ value: string; at?: number }> = ({ value, at }) => {
+  const hasError = Boolean(value) && value !== '—';
+  if (!hasError) {
+    return <td>{value}</td>;
+  }
+  const age = at ? formatLastUpdated(at) : null;
+  return (
+    <td className="diagnostics-error-warning" title={age?.tooltip}>
+      {value}
+      {age ? <span className="diagnostics-error-age"> · {age.display}</span> : null}
+    </td>
+  );
+};
+
+// StreamTableRow renders one node of the streams tree: a stream header
+// (socket-level: Sessions/Last Connect live here, since one socket spans all
+// clusters), a cluster group label, or a per-domain leaf.
+const StreamTableRow: React.FC<{ row: DiagnosticsStreamRow }> = ({ row }) => {
+  if (row.kind === 'stream') {
+    return (
+      <tr className="diagnostics-stream-row">
+        <td className="diagnostics-stream-name" title={row.rowKey}>
+          <span className="diagnostics-domain">{row.label}</span>
+          <span className="diagnostics-stream-socket" title={row.lastConnectTooltip}>
+            {` · Sessions ${row.sessions} · Last Connect ${row.lastConnect}`}
+          </span>
+        </td>
+        <td>{row.delivered}</td>
+        <td>{row.dropped}</td>
+        <td>{row.errors}</td>
+        <td>—</td>
+        <td>—</td>
+        <td title={row.lastEventTooltip}>{row.lastEvent}</td>
+        <LastErrorCell value={row.lastError} at={row.lastErrorAt} />
+      </tr>
+    );
+  }
+  if (row.kind === 'cluster') {
+    // A cluster row is either a group label (domain leaves follow, no metrics) or,
+    // for cluster-leaf streams (catalog), the leaf itself carrying its metrics.
+    if (!row.leaf) {
+      return (
+        <tr className="diagnostics-cluster-row">
+          <td className="diagnostics-cluster-name">{row.cluster}</td>
+          <td />
+          <td />
+          <td />
+          <td />
+          <td />
+          <td />
+          <td />
+        </tr>
+      );
+    }
+    return (
+      <tr className="diagnostics-cluster-row">
+        <td className="diagnostics-cluster-name">{row.cluster}</td>
+        <td>{row.leaf.delivered}</td>
+        <td>{row.leaf.dropped}</td>
+        <td>{row.leaf.errors}</td>
+        <td>—</td>
+        <td>—</td>
+        <td title={row.leaf.lastEventTooltip}>{row.leaf.lastEvent}</td>
+        <LastErrorCell value={row.leaf.lastError} at={row.leaf.lastErrorAt} />
+      </tr>
+    );
+  }
+  return (
+    <tr className="diagnostics-domain-row">
+      <td className="diagnostics-domain-name">{row.domain}</td>
+      <td>{row.delivered}</td>
+      <td>{row.dropped}</td>
+      <td>{row.errors}</td>
+      <td title={row.resyncsTooltip ?? ''}>{row.resyncs ?? '—'}</td>
+      <td title={row.fallbacksTooltip ?? ''}>{row.fallbacks ?? '—'}</td>
+      <td title={row.lastEventTooltip}>{row.lastEvent}</td>
+      <LastErrorCell value={row.lastError} at={row.lastErrorAt} />
+    </tr>
   );
 };

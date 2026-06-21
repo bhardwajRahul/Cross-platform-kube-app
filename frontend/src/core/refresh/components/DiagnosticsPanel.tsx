@@ -725,6 +725,9 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
   );
 
   const resourceStreamStats = resourceStreamManager.getTelemetrySummary();
+  // Per-(cluster, domain) resync/fallback stats for the per-domain Streams rows.
+  const resourceStreamStatsByClusterDomain =
+    resourceStreamManager.getTelemetrySummaryByClusterDomain();
   const rows = useMemo<DiagnosticsRow[]>(() => {
     const prioritySet = new Set(PRIORITY_DOMAINS);
 
@@ -1586,8 +1589,13 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
   const filteredRows = useMemo(() => rows.filter((row) => row.status !== 'idle'), [rows]);
   // Build stream telemetry rows for the dedicated diagnostics section.
   const streamRows = useMemo(
-    () => buildDiagnosticsStreamRows(telemetrySummary, filteredRows, resourceStreamStats),
-    [filteredRows, resourceStreamStats, telemetrySummary]
+    () =>
+      buildDiagnosticsStreamRows(
+        telemetrySummary,
+        filteredRows,
+        resourceStreamStatsByClusterDomain
+      ),
+    [filteredRows, resourceStreamStatsByClusterDomain, telemetrySummary]
   );
 
   // Streams tab includes stream telemetry plus active scoped domains for each stream.

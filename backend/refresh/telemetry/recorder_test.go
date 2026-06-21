@@ -146,9 +146,69 @@ func TestStreamTelemetry(t *testing.T) {
 	require.Equal(t, uint64(5), s.SkippedTargets)
 	require.Equal(t, uint64(2), s.ErrorCount) // one from dropped, one from explicit error
 	require.Equal(t, "pipe closed", s.LastError)
+	require.Greater(t, s.LastErrorAt, int64(0)) // the time the last error occurred is stamped
 	require.Equal(t, "per-scope target cap", s.LastSkipReason)
 
 	rec.RecordStreamDelivery(StreamContainerLogs, 1, 0)
 	s = rec.SnapshotSummary().Streams[0]
 	require.Equal(t, "pipe closed", s.LastError) // last error persists until overwritten
+}
+
+func TestStreamBacklogStampsAndClearsLastErrorAt(t *testing.T) {
+	rec := NewRecorder()
+
+	// A dropped delivery records a "subscriber backlog" error; it must stamp
+	// LastErrorAt so the diagnostics UI can show the backlog error's age.
+	rec.RecordStreamDelivery(StreamResources, 0, 2)
+	s := rec.SnapshotSummary().Streams[0]
+	require.Equal(t, "subscriber backlog", s.LastError)
+	require.Greater(t, s.LastErrorAt, int64(0))
+
+	// A subsequent clean delivery clears the backlog error and its timestamp,
+	// rather than leaving a stale LastErrorAt behind.
+	rec.RecordStreamDelivery(StreamResources, 1, 0)
+	s = rec.SnapshotSummary().Streams[0]
+	require.Equal(t, "", s.LastError)
+	require.Equal(t, int64(0), s.LastErrorAt)
+}
+
+// TestSnapshotSummaryTagsStreamsWithClusterMeta proves stream telemetry carries
+// the recorder's cluster identity, so a multi-cluster diagnostics view can show
+// (or aggregate) per-cluster counters instead of folding clusters together.
+func TestSnapshotSummaryTagsStreamsWithClusterMeta(t *testing.T) {
+	rec := NewRecorder()
+	rec.SetClusterMeta("cluster-1", "Cluster One")
+	rec.RecordStreamDelivery(StreamResources, 5, 0)
+
+	streams := rec.SnapshotSummary().Streams
+	require.Len(t, streams, 1)
+	require.Equal(t, "cluster-1", streams[0].ClusterID)
+	require.Equal(t, "Cluster One", streams[0].ClusterName)
+}
+
+// TestRecordStreamDeliveryForDomainTracksPerDomainCounters proves the resources
+// stream's delivery/error counters can be attributed per resource domain, while
+// stream-level (domain-less) activity stays its own entry — so diagnostics can
+// show one row per domain.
+func TestRecordStreamDeliveryForDomainTracksPerDomainCounters(t *testing.T) {
+	rec := NewRecorder()
+	rec.RecordStreamConnect(StreamResources) // stream-level (socket), no domain
+	rec.RecordStreamDeliveryForDomain(StreamResources, "nodes", 5, 0)
+	rec.RecordStreamDeliveryForDomain(StreamResources, "pods", 3, 1)
+	rec.RecordStreamErrorForDomain(StreamResources, "pods", errors.New("backlog"))
+
+	byDomain := map[string]StreamStatus{}
+	for _, s := range rec.SnapshotSummary().Streams {
+		byDomain[s.Domain] = s
+	}
+
+	require.Equal(t, uint64(5), byDomain["nodes"].TotalMessages)
+	require.Equal(t, uint64(0), byDomain["nodes"].DroppedMessages)
+	require.Equal(t, uint64(3), byDomain["pods"].TotalMessages)
+	require.Equal(t, uint64(1), byDomain["pods"].DroppedMessages)
+	require.Equal(t, "backlog", byDomain["pods"].LastError)
+	// Stream-level connect stays a domain-less entry.
+	require.Equal(t, 1, byDomain[""].ActiveSessions)
+	require.Equal(t, StreamResources, byDomain[""].Name)
+	require.Equal(t, StreamResources, byDomain["nodes"].Name)
 }

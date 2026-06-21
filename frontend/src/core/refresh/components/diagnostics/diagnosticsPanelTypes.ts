@@ -61,13 +61,62 @@ export interface DiagnosticsRow {
 }
 
 // DiagnosticsStreamRow captures formatted stream telemetry for the streams table.
-export interface DiagnosticsStreamRow {
+// The Streams table is a tree: a per-stream header (socket-level: sessions/
+// connect/socket-backlog drops, since one multiplexed socket spans all clusters)
+// → a cluster group row → per-domain rows (per-domain delivery/recovery).
+export type DiagnosticsStreamRow =
+  | DiagnosticsStreamHeaderRow
+  | DiagnosticsStreamClusterRow
+  | DiagnosticsStreamDomainRow;
+
+// Stream header: socket-level metrics for one stream (Sessions/Last Connect are
+// a property of the single socket, not any cluster/domain).
+export interface DiagnosticsStreamHeaderRow {
+  kind: 'stream';
   rowKey: string;
   label: string;
-  activeDomainCount: number;
-  activeDomains: string;
-  activeDomainsTooltip?: string;
   sessions: number;
+  lastConnect: string;
+  lastConnectTooltip: string;
+  // Stream-level (socket) delivery/backlog: events/catalog deliver here; for the
+  // resources stream this is the socket-level backpressure (per-domain delivery
+  // lives on the domain rows below).
+  delivered: number;
+  dropped: number;
+  errors: number;
+  lastEvent: string;
+  lastEventTooltip: string;
+  lastError: string;
+  // When the last error occurred (unix ms), for the relative age in the column.
+  lastErrorAt?: number;
+  // Number of per-domain child rows under this stream (for the section summary).
+  activeDomainCount: number;
+}
+
+// Cluster row under a stream. Usually a group label with domain leaves below it
+// (resources/events/container-logs). For streams with no sub-cluster breakdown
+// (catalog), the cluster IS the leaf, so `leaf` carries its per-cluster metrics.
+export interface DiagnosticsStreamClusterRow {
+  kind: 'cluster';
+  rowKey: string;
+  cluster: string;
+  leaf?: {
+    delivered: number;
+    dropped: number;
+    errors: number;
+    lastEvent: string;
+    lastEventTooltip: string;
+    lastError: string;
+    lastErrorAt?: number;
+  };
+}
+
+// A single (cluster, domain) leaf with its per-domain counters.
+export interface DiagnosticsStreamDomainRow {
+  kind: 'domain';
+  rowKey: string;
+  cluster: string;
+  domain: string;
   delivered: number;
   dropped: number;
   errors: number;
@@ -75,11 +124,10 @@ export interface DiagnosticsStreamRow {
   resyncsTooltip?: string;
   fallbacks: number | null;
   fallbacksTooltip?: string;
-  lastConnect: string;
-  lastConnectTooltip: string;
   lastEvent: string;
   lastEventTooltip: string;
   lastError: string;
+  lastErrorAt?: number;
 }
 
 export interface KubernetesAPIClientRow {

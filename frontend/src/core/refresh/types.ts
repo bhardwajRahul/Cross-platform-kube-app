@@ -707,6 +707,14 @@ export interface PodMetricsInfo {
 export interface PodSnapshotPayload extends ClusterMeta, ResourceQueryEnvelopeFields {
   rows: PodSnapshotEntry[];
   metrics?: PodMetricsInfo;
+  // Scope-level counts (all pods in scope, before search/pagination) so a
+  // query-backed view shows total/unhealthy badges and can decide whether a
+  // pending health filter has matches — without retaining the live row set.
+  // healthCounts keys match the "health" filter modes ('unhealthy', 'restarts',
+  // 'not-ready'). Mirrors snapshot.PodSnapshot. See
+  // docs/architecture/notify-only-streams.md.
+  totalCount?: number;
+  healthCounts?: Record<string, number>;
 }
 
 export interface ObjectDetailsSnapshotPayload extends ClusterMeta {
@@ -1152,6 +1160,15 @@ export interface TelemetryMetricsStatus {
 
 export interface TelemetryStreamStatus {
   name: string;
+  // Resource domain these counters belong to (resources stream only); absent for
+  // stream-level/socket activity (sessions/connect) and non-per-domain streams.
+  // Lets diagnostics show one row per domain. Mirrors backend telemetry.StreamStatus.
+  domain?: string;
+  // Cluster these counters belong to. The backend emits one entry per
+  // (stream, cluster) so diagnostics stays multi-cluster aware; absent only for
+  // legacy single-recorder payloads. Mirrors backend telemetry.StreamStatus.
+  clusterId?: string;
+  clusterName?: string;
   activeSessions: number;
   totalMessages: number;
   droppedMessages: number;
@@ -1160,6 +1177,9 @@ export interface TelemetryStreamStatus {
   lastConnect: number;
   lastEvent: number;
   lastError?: string;
+  // When the last error occurred (unix ms); lets diagnostics show its relative
+  // age. Mirrors backend telemetry.StreamStatus.LastErrorAt.
+  lastErrorAt?: number;
   lastSkipReason?: string;
 }
 

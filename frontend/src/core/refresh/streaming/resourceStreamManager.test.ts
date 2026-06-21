@@ -387,7 +387,7 @@ describe('resourceStreamManager helpers', () => {
 });
 
 describe('ResourceStreamManager', () => {
-  test('applies pod updates and preserves metrics', () => {
+  test('pod delta is notify-only: bumps streamRevision and leaves rows untouched', () => {
     vi.useFakeTimers();
     (window as any).setTimeout = globalThis.setTimeout;
     (window as any).clearTimeout = globalThis.clearTimeout;
@@ -435,6 +435,8 @@ describe('ResourceStreamManager', () => {
         name: 'pod-a',
         namespace: 'default',
         ref: resourceRef({ kind: 'Pod', namespace: 'default', name: 'pod-a' }),
+        // The backend ships no row for notify-only pods; even if one slipped through
+        // the frontend must not apply it. The query-backed table refetches instead.
         row: { ...existing, status: 'Pending', cpuUsage: '5m', memUsage: '8Mi' },
       })
     );
@@ -442,9 +444,44 @@ describe('ResourceStreamManager', () => {
     vi.advanceTimersByTime(200);
 
     const state = getScopedDomainState('pods', storeScope);
+    // streamRevision bumps (refetch trigger); the seeded row is left untouched.
+    expect(state.streamRevision).toBe(1);
+    expect(state.data?.rows?.[0]?.status).toBe('Running');
     expect(state.data?.rows?.[0]?.cpuUsage).toBe('50m');
-    expect(state.data?.rows?.[0]?.memUsage).toBe('40Mi');
-    expect(state.data?.rows?.[0]?.status).toBe('Pending');
+  });
+
+  test('notify-only domain delta bumps streamRevision and never retains rows', () => {
+    vi.useFakeTimers();
+    (window as any).setTimeout = globalThis.setTimeout;
+    (window as any).clearTimeout = globalThis.clearTimeout;
+    const manager = new ResourceStreamManager();
+    const storeScope = buildClusterScope('cluster-a', 'namespace:default');
+    (
+      manager as unknown as { ensureSubscriptions: (...args: unknown[]) => void }
+    ).ensureSubscriptions('namespace-workloads', storeScope);
+
+    // namespace-workloads is notify-only: the backend ships the change signal
+    // (Ref/ResourceVersion) without a row. The frontend must bump streamRevision
+    // — so the query-backed table refetches — and leave the row list untouched.
+    manager.handleMessage(
+      'cluster-a',
+      JSON.stringify({
+        type: 'MODIFIED',
+        domain: 'namespace-workloads',
+        scope: 'namespace:default',
+        resourceVersion: '7',
+        name: 'web',
+        namespace: 'default',
+        kind: 'Deployment',
+        ref: resourceRef({ group: 'apps', kind: 'Deployment', namespace: 'default', name: 'web' }),
+      })
+    );
+
+    vi.advanceTimersByTime(200);
+
+    const state = getScopedDomainState('namespace-workloads', storeScope);
+    expect(state.streamRevision).toBe(1);
+    expect(state.data?.rows ?? []).toEqual([]);
   });
 
   test('ignores unchanged workload update messages without replacing the workload list', async () => {
@@ -1993,9 +2030,9 @@ describe('ResourceStreamManager', () => {
     const storeScope = buildClusterScope('cluster-a', '');
     (
       manager as unknown as { ensureSubscriptions: (...args: unknown[]) => void }
-    ).ensureSubscriptions('nodes', storeScope);
+    ).ensureSubscriptions('cluster-rbac', storeScope);
 
-    setScopedDomainState('nodes', storeScope, () => ({
+    setScopedDomainState('cluster-rbac', storeScope, () => ({
       status: 'ready',
       data: { rows: [], clusterId: 'test-cluster' },
       stats: null,
@@ -2008,20 +2045,20 @@ describe('ResourceStreamManager', () => {
       'cluster-a',
       JSON.stringify({
         type: 'ADDED',
-        domain: 'nodes',
+        domain: 'cluster-rbac',
         resourceVersion: '11',
-        ref: resourceRef({ kind: 'Node', name: 'node-a' }),
-        row: { name: 'node-a', status: 'Ready', clusterId: 'cluster-a' },
+        ref: resourceRef({ kind: 'ClusterRole', name: 'role-a' }),
+        row: { name: 'role-a', status: 'Ready', clusterId: 'cluster-a' },
       })
     );
 
     vi.advanceTimersByTime(200);
 
-    const state = getScopedDomainState('nodes', storeScope);
-    expect(state.data?.rows?.[0]?.name).toBe('node-a');
+    const state = getScopedDomainState('cluster-rbac', storeScope);
+    expect(state.data?.rows?.[0]?.name).toBe('role-a');
   });
 
-  test('does not create an initial empty nodes payload from pre-baseline stream updates', () => {
+  test('does not create an initial empty payload from pre-baseline stream updates', () => {
     vi.useFakeTimers();
     (window as any).setTimeout = globalThis.setTimeout;
     (window as any).clearTimeout = globalThis.clearTimeout;
@@ -2029,21 +2066,21 @@ describe('ResourceStreamManager', () => {
     const storeScope = buildClusterScope('cluster-a', '');
     (
       manager as unknown as { ensureSubscriptions: (...args: unknown[]) => void }
-    ).ensureSubscriptions('nodes', storeScope);
+    ).ensureSubscriptions('cluster-rbac', storeScope);
 
     manager.handleMessage(
       'cluster-a',
       JSON.stringify({
         type: 'DELETED',
-        domain: 'nodes',
+        domain: 'cluster-rbac',
         resourceVersion: '11',
-        ref: resourceRef({ kind: 'Node', name: 'node-a' }),
+        ref: resourceRef({ kind: 'ClusterRole', name: 'role-a' }),
       })
     );
 
     vi.advanceTimersByTime(200);
 
-    const state = getScopedDomainState('nodes', storeScope);
+    const state = getScopedDomainState('cluster-rbac', storeScope);
     expect(state.status).toBe('idle');
     expect(state.data).toBeNull();
   });
@@ -2053,22 +2090,23 @@ describe('ResourceStreamManager', () => {
     (window as any).setTimeout = globalThis.setTimeout;
     (window as any).clearTimeout = globalThis.clearTimeout;
     const manager = new ResourceStreamManager();
-    const storeScope = buildClusterScope('cluster-a', '');
+    const storeScope = buildClusterScope('cluster-a', 'namespace:default');
     (
       manager as unknown as { ensureSubscriptions: (...args: unknown[]) => void }
-    ).ensureSubscriptions('nodes', storeScope);
+    ).ensureSubscriptions('pods', storeScope);
 
     manager.handleMessage(
       'cluster-a',
       JSON.stringify({
         type: 'ADDED',
-        domain: 'nodes',
-        scope: '',
-        name: 'node-a',
+        domain: 'pods',
+        scope: 'namespace:default',
+        name: 'pod-a',
+        namespace: 'default',
         resourceVersion: '10',
         sequence: 1,
-        ref: resourceRef({ kind: 'Node', name: 'node-a' }),
-        row: { name: 'node-a', status: 'Ready', clusterId: 'cluster-a' },
+        ref: resourceRef({ kind: 'Pod', namespace: 'default', name: 'pod-a' }),
+        row: { name: 'pod-a', namespace: 'default', status: 'Ready', clusterId: 'cluster-a' },
       })
     );
     vi.advanceTimersByTime(200);
@@ -2077,21 +2115,25 @@ describe('ResourceStreamManager', () => {
       'cluster-a',
       JSON.stringify({
         type: 'MODIFIED',
-        domain: 'nodes',
-        scope: '',
-        name: 'node-a',
+        domain: 'pods',
+        scope: 'namespace:default',
+        name: 'pod-a',
+        namespace: 'default',
         resourceVersion: '5',
         sequence: 2,
-        ref: resourceRef({ kind: 'Node', name: 'node-a' }),
-        row: { name: 'node-a', status: 'NotReady', clusterId: 'cluster-a' },
+        ref: resourceRef({ kind: 'Pod', namespace: 'default', name: 'pod-a' }),
+        row: { name: 'pod-a', namespace: 'default', status: 'NotReady', clusterId: 'cluster-a' },
       })
     );
 
     vi.advanceTimersByTime(200);
 
+    // pods is notify-only: both deltas are accepted (sequence advances despite the
+    // resourceVersion regressing), so each flush bumps streamRevision — and the
+    // regression does not trigger a resync.
     expect(fetchSnapshotMock).not.toHaveBeenCalled();
-    const state = getScopedDomainState('nodes', storeScope);
-    expect(state.data?.rows?.[0]?.status).toBe('NotReady');
+    const state = getScopedDomainState('pods', storeScope);
+    expect(state.streamRevision).toBe(2);
   });
 
   test('accepts updates when snapshot version exceeds safe integer limits', async () => {
@@ -2102,12 +2144,12 @@ describe('ResourceStreamManager', () => {
     const storeScope = buildClusterScope('cluster-a', '');
     (
       manager as unknown as { ensureSubscriptions: (...args: unknown[]) => void }
-    ).ensureSubscriptions('nodes', storeScope);
+    ).ensureSubscriptions('cluster-rbac', storeScope);
 
     // Use an unsafe integer to mirror large resourceVersion values from the backend.
     fetchSnapshotMock.mockResolvedValueOnce({
       snapshot: {
-        domain: 'nodes',
+        domain: 'cluster-rbac',
         scope: '',
         version: Number.MAX_SAFE_INTEGER + 2,
         checksum: 'etag',
@@ -2119,24 +2161,24 @@ describe('ResourceStreamManager', () => {
       notModified: false,
     });
 
-    await manager.refreshOnce('nodes', storeScope);
+    await manager.refreshOnce('cluster-rbac', storeScope);
 
     manager.handleMessage(
       'cluster-a',
       JSON.stringify({
         type: 'ADDED',
-        domain: 'nodes',
+        domain: 'cluster-rbac',
         scope: '',
         resourceVersion: '1',
-        ref: resourceRef({ kind: 'Node', name: 'node-a' }),
-        row: { name: 'node-a', status: 'Ready', clusterId: 'cluster-a' },
+        ref: resourceRef({ kind: 'ClusterRole', name: 'role-a' }),
+        row: { name: 'role-a', status: 'Ready', clusterId: 'cluster-a' },
       })
     );
 
     vi.advanceTimersByTime(200);
 
-    const state = getScopedDomainState('nodes', storeScope);
-    expect(state.data?.rows?.[0]?.name).toBe('node-a');
+    const state = getScopedDomainState('cluster-rbac', storeScope);
+    expect(state.data?.rows?.[0]?.name).toBe('role-a');
   });
 
   test('resyncs on reset messages', async () => {
@@ -2144,11 +2186,11 @@ describe('ResourceStreamManager', () => {
     const storeScope = buildClusterScope('cluster-a', 'namespace:default');
     (
       manager as unknown as { ensureSubscriptions: (...args: unknown[]) => void }
-    ).ensureSubscriptions('namespace-workloads', storeScope);
+    ).ensureSubscriptions('namespace-config', storeScope);
 
     fetchSnapshotMock.mockResolvedValueOnce({
       snapshot: {
-        domain: 'namespace-workloads',
+        domain: 'namespace-config',
         scope: 'namespace:default',
         version: 9,
         checksum: 'etag',
@@ -2164,7 +2206,7 @@ describe('ResourceStreamManager', () => {
       'cluster-a',
       JSON.stringify({
         type: 'RESET',
-        domain: 'namespace-workloads',
+        domain: 'namespace-config',
         scope: 'namespace:default',
       })
     );
@@ -2179,11 +2221,11 @@ describe('ResourceStreamManager', () => {
     const storeScope = buildClusterScope('cluster-a', 'namespace:default');
     (
       manager as unknown as { ensureSubscriptions: (...args: unknown[]) => void }
-    ).ensureSubscriptions('pods', storeScope);
+    ).ensureSubscriptions('namespace-config', storeScope);
 
     fetchSnapshotMock.mockResolvedValueOnce({
       snapshot: {
-        domain: 'pods',
+        domain: 'namespace-config',
         scope: 'namespace:default',
         version: 4,
         checksum: 'etag',
@@ -2200,7 +2242,7 @@ describe('ResourceStreamManager', () => {
     await flushPromises();
 
     expect(fetchSnapshotMock).toHaveBeenCalled();
-    const state = getScopedDomainState('pods', storeScope);
+    const state = getScopedDomainState('namespace-config', storeScope);
     expect(state.status).toBe('ready');
   });
 
@@ -2209,13 +2251,13 @@ describe('ResourceStreamManager', () => {
     const storeScope = buildClusterScope('cluster-a', 'namespace:default');
     (
       manager as unknown as { ensureSubscriptions: (...args: unknown[]) => void }
-    ).ensureSubscriptions('pods', storeScope);
+    ).ensureSubscriptions('namespace-config', storeScope);
 
     manager.handleMessage(
       'cluster-a',
       JSON.stringify({
         type: 'ADDED',
-        domain: 'pods',
+        domain: 'namespace-config',
         scope: 'namespace:default',
         resourceVersion: '1',
         sequence: '1',
@@ -2246,7 +2288,7 @@ describe('ResourceStreamManager', () => {
 
     fetchSnapshotMock.mockResolvedValueOnce({
       snapshot: {
-        domain: 'pods',
+        domain: 'namespace-config',
         scope: 'namespace:default',
         version: 1,
         checksum: 'etag',
@@ -2259,7 +2301,7 @@ describe('ResourceStreamManager', () => {
     });
     fetchSnapshotMock.mockResolvedValueOnce({
       snapshot: {
-        domain: 'pods',
+        domain: 'namespace-config',
         scope: 'namespace:default',
         version: 2,
         checksum: 'etag-2',
@@ -2271,7 +2313,7 @@ describe('ResourceStreamManager', () => {
       notModified: false,
     });
 
-    await manager.start('pods', storeScope);
+    await manager.start('namespace-config', storeScope);
     await flushPromises();
 
     const firstSocket = createdSockets[0];
@@ -2304,7 +2346,7 @@ describe('ResourceStreamManager', () => {
 
     fetchSnapshotMock.mockResolvedValue({
       snapshot: {
-        domain: 'pods',
+        domain: 'namespace-config',
         scope: 'namespace:default',
         version: 1,
         checksum: 'etag',
@@ -2316,7 +2358,7 @@ describe('ResourceStreamManager', () => {
       notModified: false,
     });
 
-    await manager.start('pods', storeScope);
+    await manager.start('namespace-config', storeScope);
     await flushPromises();
 
     const firstSocket = createdSockets[0];
@@ -2324,7 +2366,7 @@ describe('ResourceStreamManager', () => {
 
     (manager as unknown as { suspendForVisibility: () => void }).suspendForVisibility();
     expect(firstSocket.close).toHaveBeenCalled();
-    expect(manager.getHealthStatus('pods', storeScope)).toBe('unhealthy');
+    expect(manager.getHealthStatus('namespace-config', storeScope)).toBe('unhealthy');
 
     vi.advanceTimersByTime(1100);
     (manager as unknown as { resumeFromVisibility: () => void }).resumeFromVisibility();
@@ -2343,7 +2385,7 @@ describe('ResourceStreamManager', () => {
 
     fetchSnapshotMock.mockResolvedValue({
       snapshot: {
-        domain: 'pods',
+        domain: 'namespace-config',
         scope: 'namespace:default',
         version: 1,
         checksum: 'etag',
@@ -2355,14 +2397,14 @@ describe('ResourceStreamManager', () => {
       notModified: false,
     });
 
-    await manager.start('pods', storeScope);
+    await manager.start('namespace-config', storeScope);
     await flushPromises();
 
     manager.handleMessage(
       'cluster-a',
       JSON.stringify({
         type: 'RESET',
-        domain: 'pods',
+        domain: 'namespace-config',
         scope: 'namespace:default',
       })
     );
@@ -2375,7 +2417,7 @@ describe('ResourceStreamManager', () => {
       'cluster-a',
       JSON.stringify({
         type: 'RESET',
-        domain: 'pods',
+        domain: 'namespace-config',
         scope: 'namespace:default',
       })
     );
@@ -2393,7 +2435,7 @@ describe('ResourceStreamManager', () => {
 
     fetchSnapshotMock.mockResolvedValue({
       snapshot: {
-        domain: 'pods',
+        domain: 'namespace-config',
         scope: 'namespace:default',
         version: 1,
         checksum: 'etag',
@@ -2405,7 +2447,7 @@ describe('ResourceStreamManager', () => {
       notModified: false,
     });
 
-    await manager.start('pods', storeScope);
+    await manager.start('namespace-config', storeScope);
     await flushPromises();
 
     vi.advanceTimersByTime(1100);
@@ -2414,7 +2456,7 @@ describe('ResourceStreamManager', () => {
       'cluster-a',
       JSON.stringify({
         type: 'COMPLETE',
-        domain: 'pods',
+        domain: 'namespace-config',
         scope: 'namespace:default',
       })
     );
@@ -2426,7 +2468,7 @@ describe('ResourceStreamManager', () => {
       'cluster-a',
       JSON.stringify({
         type: 'ERROR',
-        domain: 'pods',
+        domain: 'namespace-config',
         scope: 'namespace:default',
         error: 'watch closed',
       })
@@ -2468,41 +2510,40 @@ describe('ResourceStreamManager', () => {
     expect(manager.getTelemetrySummary()).toEqual({ resyncCount: 0, fallbackCount: 0 });
   });
 
+  test('groups resync/fallback telemetry by cluster AND domain for per-domain rows', () => {
+    const manager = new ResourceStreamManager();
+    const internal = manager as unknown as {
+      streamTelemetry: Map<string, Record<string, unknown>>;
+    };
+    internal.streamTelemetry.set('c1::nodes::path:c1|', {
+      clusterId: 'c1',
+      domain: 'nodes',
+      resyncCount: 2,
+      fallbackCount: 1,
+    });
+    internal.streamTelemetry.set('c1::pods::path:c1|', {
+      clusterId: 'c1',
+      domain: 'pods',
+      resyncCount: 4,
+      fallbackCount: 0,
+    });
+
+    const byClusterDomain = manager.getTelemetrySummaryByClusterDomain();
+    expect(byClusterDomain['c1::nodes']).toMatchObject({ resyncCount: 2, fallbackCount: 1 });
+    expect(byClusterDomain['c1::pods']).toMatchObject({ resyncCount: 4, fallbackCount: 0 });
+  });
+
   test('accepts newer updates after stale resource versions when sequences advance', async () => {
     vi.useFakeTimers();
     (window as any).setTimeout = globalThis.setTimeout;
     (window as any).clearTimeout = globalThis.clearTimeout;
     const manager = new ResourceStreamManager();
-    const storeScope = buildClusterScope('cluster-a', '');
+    const storeScope = buildClusterScope('cluster-a', 'namespace:default');
 
-    fetchSnapshotMock.mockResolvedValueOnce({
-      snapshot: {
-        domain: 'nodes',
-        scope: '',
-        version: 10,
-        checksum: 'etag',
-        generatedAt: Date.now(),
-        sequence: 1,
-        payload: { rows: [{ name: 'node-a', status: 'NotReady', clusterId: 'cluster-a' }] },
-        stats: { itemCount: 1, buildDurationMs: 0 },
-      },
-      notModified: false,
-    });
-    fetchSnapshotMock.mockResolvedValueOnce({
-      snapshot: {
-        domain: 'nodes',
-        scope: '',
-        version: 11,
-        checksum: 'etag-2',
-        generatedAt: Date.now(),
-        sequence: 2,
-        payload: { rows: [{ name: 'node-a', status: 'NotReady', clusterId: 'cluster-a' }] },
-        stats: { itemCount: 1, buildDurationMs: 0 },
-      },
-      notModified: false,
-    });
-
-    await manager.start('nodes', storeScope);
+    // pods is notify-only: starting the subscription must NOT fetch a full-row
+    // baseline (the query-backed table no longer waits on one — that's the
+    // load-time win), yet deltas must still be processed.
+    await manager.start('pods', storeScope);
     await flushPromises();
 
     vi.advanceTimersByTime(1100);
@@ -2510,13 +2551,14 @@ describe('ResourceStreamManager', () => {
       'cluster-a',
       JSON.stringify({
         type: 'MODIFIED',
-        domain: 'nodes',
-        scope: '',
+        domain: 'pods',
+        scope: 'namespace:default',
         resourceVersion: '5',
         sequence: 1,
-        name: 'node-a',
-        ref: resourceRef({ kind: 'Node', name: 'node-a' }),
-        row: { name: 'node-a', status: 'Unknown', clusterId: 'cluster-a' },
+        name: 'pod-a',
+        namespace: 'default',
+        ref: resourceRef({ kind: 'Pod', namespace: 'default', name: 'pod-a' }),
+        row: { name: 'pod-a', namespace: 'default', status: 'Unknown', clusterId: 'cluster-a' },
       })
     );
 
@@ -2526,21 +2568,24 @@ describe('ResourceStreamManager', () => {
       'cluster-a',
       JSON.stringify({
         type: 'MODIFIED',
-        domain: 'nodes',
-        scope: '',
+        domain: 'pods',
+        scope: 'namespace:default',
         resourceVersion: '12',
         sequence: 2,
-        name: 'node-a',
-        ref: resourceRef({ kind: 'Node', name: 'node-a' }),
-        row: { name: 'node-a', status: 'Ready', clusterId: 'cluster-a' },
+        name: 'pod-a',
+        namespace: 'default',
+        ref: resourceRef({ kind: 'Pod', namespace: 'default', name: 'pod-a' }),
+        row: { name: 'pod-a', namespace: 'default', status: 'Ready', clusterId: 'cluster-a' },
       })
     );
 
     vi.advanceTimersByTime(200);
 
-    const state = getScopedDomainState('nodes', storeScope);
-    expect(state.data?.rows?.[0]?.status).toBe('Ready');
-    expect(fetchSnapshotMock).toHaveBeenCalledTimes(1);
+    // The stale-then-newer deltas (sequence advancing) are accepted and bump
+    // streamRevision; a notify-only start/resync never fetches a snapshot.
+    const state = getScopedDomainState('pods', storeScope);
+    expect(state.streamRevision ?? 0).toBeGreaterThanOrEqual(1);
+    expect(fetchSnapshotMock).not.toHaveBeenCalled();
   });
 
   test('debounces unsubscribe before sending cancel', async () => {
