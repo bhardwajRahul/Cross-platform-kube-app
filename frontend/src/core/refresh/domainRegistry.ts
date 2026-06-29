@@ -23,11 +23,7 @@ export interface RefreshDomainDescriptor<D extends RefreshDomain = RefreshDomain
 }
 
 export type RefreshOrchestratorKind =
-  | 'snapshot'
-  | 'resource-stream'
-  | 'event-stream'
-  | 'catalog-stream'
-  | 'container-logs-stream';
+  'snapshot' | 'resource-stream' | 'event-stream' | 'catalog-stream' | 'container-logs-stream';
 
 export type RefreshBehaviorClass =
   | 'snapshot-table'
@@ -66,7 +62,7 @@ export type RefreshCachePolicy =
   | 'stream-only';
 
 export type RefreshStreamSemantic =
-  | 'row-update'
+  | 'change-signal'
   | 'complete-resync'
   | 'append-merge'
   | 'snapshot-replace'
@@ -75,7 +71,7 @@ export type RefreshStreamSemantic =
 
 export type RefreshCoverageContract =
   | 'snapshot-table-payload'
-  | 'resource-stream-row-parity'
+  | 'query-refetch-on-signal'
   | 'complete-resync-only'
   | 'catalog-consistency'
   | 'catalog-snapshot-query'
@@ -98,13 +94,6 @@ export interface ScopeContract {
 
 export interface DomainInventoryEntry {
   behaviorClass: RefreshBehaviorClass;
-  /**
-   * When true, the live resource stream carries only change notifications
-   * (Ref/ResourceVersion/Sequence) — no row payload. The table is query-backed,
-   * so the frontend bumps streamRevision to refetch and never retains/sorts the
-   * streamed rows. Backend parity: resourcestream.notifyOnlyStreamDomains.
-   */
-  notifyOnly?: boolean;
   scopeContract: ScopeContract;
   singleCluster: true;
   payloadOwner: string;
@@ -117,6 +106,7 @@ export interface DomainInventoryEntry {
 export interface RefreshDomainContractEntry<D extends RefreshDomain = RefreshDomain> {
   domain: D;
   category: DomainCategory;
+  sourceClocks?: RefreshSourceClock[];
   backend: {
     registration: 'direct' | 'list' | 'listWatch' | 'streamOnly';
     permission: 'runtime' | 'exempt' | 'stream-specific';
@@ -126,7 +116,6 @@ export interface RefreshDomainContractEntry<D extends RefreshDomain = RefreshDom
     refresherName: StaticRefresherName;
     orchestrator: RefreshOrchestratorKind;
     diagnosticsStream: StreamTelemetryName | null;
-    metricsInterval: boolean;
     timing: RefresherTiming;
     priority?: number;
   };
@@ -139,9 +128,13 @@ export interface StreamResourceContractRecord {
   resource: string;
 }
 
+// RefreshSourceClock mirrors the backend streammux.Source taxonomy: the clocks
+// that can advance a domain's rows. This is the authored source of metric
+// dependency and doorbell source validation.
+export type RefreshSourceClock = 'object' | 'metric' | 'event' | 'catalog';
+
 export interface StreamDomainContractEntry {
   scopeKind: 'pod' | 'namespace' | 'cluster';
-  metricsDependency: boolean;
   completeIsScopeLevel: boolean;
   rowProjection?: 'scope-level-complete-only';
   primaryResources: StreamResourceContractRecord[];
@@ -171,8 +164,8 @@ export interface RefreshDomainContract {
   domainInventory: Record<RefreshDomain, DomainInventoryEntry>;
   resourceStream: {
     updateIdentity: {
-      rowUpdates: 'ref';
-      rowDeletes: 'ref';
+      changeSignals: 'ref';
+      deleteSignals: 'ref';
       legacyFieldsDuringMigration: string[];
       completeSemantics: 'scope-level-resync';
       completeIdentity: 'diagnostic-only';
@@ -193,7 +186,10 @@ export const REFRESH_DOMAIN_DESCRIPTORS = Object.fromEntries(
       category: entry.category,
       timing: entry.frontend.timing,
     };
-    if (entry.frontend.metricsInterval) {
+    // metricsInterval derives from the domain's source clocks: a domain runs the
+    // metric refresh interval exactly when it declares the metric source clock.
+    const sourceClocks = entry.sourceClocks ?? [];
+    if (sourceClocks.includes('metric')) {
       descriptor.metricsInterval = true;
     }
     if (entry.frontend.diagnosticsStream) {

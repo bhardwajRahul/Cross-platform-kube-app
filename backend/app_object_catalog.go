@@ -11,9 +11,11 @@ import (
 
 	"github.com/luxury-yacht/app/backend/capabilities"
 	"github.com/luxury-yacht/app/backend/internal/applog"
+	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/internal/logsources"
 	"github.com/luxury-yacht/app/backend/objectcatalog"
 	refreshinformer "github.com/luxury-yacht/app/backend/refresh/informer"
+	"github.com/luxury-yacht/app/backend/refresh/resourcestream"
 	"github.com/luxury-yacht/app/backend/refresh/snapshot"
 	"github.com/luxury-yacht/app/backend/resources/customresource"
 	apiextinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
@@ -180,6 +182,7 @@ func (a *App) startObjectCatalogForTarget(target catalogTarget) error {
 		APIExtensionsInformerFactory: subsystem.InformerFactory.APIExtensionsInformerFactory(),
 		GatewayInformerFactory:       subsystem.InformerFactory.GatewayInformerFactory(),
 		PermissionChecker:            subsystem.InformerFactory,
+		IngestSource:                 subsystem.IngestManager,
 		CapabilityFactory: func() *capabilities.Service {
 			return capabilities.NewService(capabilities.Dependencies{
 				Common:             commonDeps,
@@ -196,6 +199,13 @@ func (a *App) startObjectCatalogForTarget(target catalogTarget) error {
 	svc := objectcatalog.NewService(deps, nil)
 	ctx, cancel := context.WithCancel(a.CtxOrBackground())
 	done := make(chan struct{})
+	if subsystem.ResourceStream != nil {
+		catalogUpdates, cancelCatalogUpdates := svc.SubscribeStreaming()
+		go func() {
+			defer cancelCatalogUpdates()
+			runCatalogDoorbellBridge(ctx, catalogUpdates, subsystem.ResourceStream)
+		}()
+	}
 
 	a.storeObjectCatalogEntry(target.meta.ID, &objectCatalogEntry{
 		service: svc,
@@ -226,6 +236,25 @@ func (a *App) startObjectCatalogForTarget(target catalogTarget) error {
 	return nil
 }
 
+func runCatalogDoorbellBridge(ctx context.Context, updates <-chan objectcatalog.StreamingUpdate, manager *resourcestream.Manager) {
+	if manager == nil {
+		return
+	}
+	var sequence uint64
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, ok := <-updates:
+			if !ok {
+				return
+			}
+			sequence++
+			manager.BroadcastCatalogRefresh(fmt.Sprintf("%d", sequence))
+		}
+	}
+}
+
 func (a *App) stopObjectCatalog() {
 	entries := a.clearObjectCatalogEntries()
 	for _, entry := range entries {
@@ -237,10 +266,7 @@ func (a *App) stopObjectCatalog() {
 		}
 	}
 	for _, entry := range entries {
-		if entry == nil || entry.done == nil {
-			continue
-		}
-		<-entry.done
+		a.waitForObjectCatalogDone(entry)
 	}
 
 	if a.telemetryRecorder != nil {
@@ -303,8 +329,26 @@ func (a *App) stopObjectCatalogForCluster(clusterID string) {
 	if entry.cancel != nil {
 		entry.cancel()
 	}
-	if entry.done != nil {
+	a.waitForObjectCatalogDone(entry)
+}
+
+func (a *App) waitForObjectCatalogDone(entry *objectCatalogEntry) {
+	if entry == nil || entry.done == nil {
+		return
+	}
+	timeout := config.RefreshShutdownTimeout
+	if timeout <= 0 {
 		<-entry.done
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-entry.done:
+	case <-timer.C:
+		if a != nil && a.logger != nil {
+			a.logger.Warn("Timed out waiting for object catalog shutdown", logsources.ObjectCatalog, entry.meta.ID, entry.meta.Name)
+		}
 	}
 }
 
@@ -694,8 +738,8 @@ func failedCatalogCustomHydrationSummary(meta snapshot.ClusterMeta, row snapshot
 		Kind:               row.Kind,
 		Name:               row.Name,
 		Namespace:          row.Namespace,
-		APIGroup:           row.Group,
-		APIVersion:         row.Version,
+		Group:              row.Group,
+		Version:            row.Version,
 		CRDName:            crdName,
 		Status:             "Hydration failed",
 		StatusState:        "warning",

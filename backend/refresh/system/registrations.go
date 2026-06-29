@@ -12,6 +12,7 @@ import (
 	"github.com/luxury-yacht/app/backend/refresh/domain"
 	"github.com/luxury-yacht/app/backend/refresh/domainpermissions"
 	"github.com/luxury-yacht/app/backend/refresh/informer"
+	"github.com/luxury-yacht/app/backend/refresh/ingest"
 	"github.com/luxury-yacht/app/backend/refresh/metrics"
 	"github.com/luxury-yacht/app/backend/refresh/permissions"
 	"github.com/luxury-yacht/app/backend/refresh/snapshot"
@@ -19,12 +20,13 @@ import (
 
 // registrationDeps bundles dependencies needed to register refresh domains.
 type registrationDeps struct {
-	registry        *domain.Registry  // Domain registry for managing domain lifecycles
-	informerFactory *informer.Factory // Factory for creating informers
-	metricsProvider metrics.Provider  // Provider for collecting metrics
-	cfg             Config            // Configuration settings
-	gate            *permissionGate   // Permission gate for access control
-	serverHost      string            // Hostname of the server
+	registry        *domain.Registry      // Domain registry for managing domain lifecycles
+	informerFactory *informer.Factory     // Factory for creating informers
+	ingestManager   *ingest.IngestManager // Owned-reflector ingestion for cut kinds
+	metricsProvider metrics.Provider      // Provider for collecting metrics
+	cfg             Config                // Configuration settings
+	gate            *permissionGate       // Permission gate for access control
+	serverHost      string                // Hostname of the server
 }
 
 // domainRegistration describes a single domain registration entry.
@@ -249,7 +251,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 
 	return []domainRegistration{
 		directRegistration("namespaces", func() error {
-			return snapshot.RegisterNamespaceDomain(deps.registry, deps.informerFactory.SharedInformerFactory())
+			return snapshot.RegisterNamespaceDomain(deps.registry, deps.informerFactory.SharedInformerFactory(), deps.ingestManager)
 		}),
 
 		listWatchRegistration(listWatchDomainConfig{
@@ -269,6 +271,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 					deps.cfg.KubernetesClient,
 					deps.metricsProvider,
 					deps.serverHost,
+					deps.ingestManager,
 				)
 			},
 			fallbackChecks: []listCheck{
@@ -303,7 +306,12 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 				{group: "", resource: "pods"},
 			},
 			registerInformer: func() error {
-				return snapshot.RegisterNodeDomain(deps.registry, deps.informerFactory.SharedInformerFactory(), deps.metricsProvider)
+				return snapshot.RegisterNodeDomain(
+					deps.registry,
+					deps.metricsProvider,
+					snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
+					deps.ingestManager,
+				)
 			},
 			fallbackChecks: []listCheck{
 				{group: "", resource: "nodes"},
@@ -323,6 +331,8 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 					deps.informerFactory.SharedInformerFactory(),
 					deps.informerFactory.GatewayInformerFactory(),
 					allowed,
+					snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
+					deps.ingestManager,
 				)
 			},
 		}),
@@ -334,6 +344,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 				return snapshot.RegisterClusterCRDDomain(
 					deps.registry,
 					deps.informerFactory.APIExtensionsInformerFactory(),
+					snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
 				)
 			},
 		}, crdMeta)),
@@ -351,7 +362,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 		}),
 
 		directRegistration("cluster-events", func() error {
-			return snapshot.RegisterClusterEventsDomain(deps.registry, deps.informerFactory.SharedInformerFactory())
+			return snapshot.RegisterClusterEventsDomain(deps.registry, deps.informerFactory.SharedInformerFactory(), snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName})
 		}),
 
 		accessListRegistration(runtimeAccess, listDomainConfig{
@@ -361,6 +372,8 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 					deps.registry,
 					deps.informerFactory.SharedInformerFactory(),
 					allowed,
+					snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
+					deps.ingestManager,
 				)
 			},
 		}),
@@ -377,6 +390,8 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 				return snapshot.RegisterClusterStorageDomain(
 					deps.registry,
 					deps.informerFactory.SharedInformerFactory(),
+					snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
+					deps.ingestManager,
 				)
 			},
 			deniedReason: "core/persistentvolumes",
@@ -398,6 +413,8 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 						IncludeJobs:         allowed.Allows("batch", "jobs"),
 						IncludeCronJobs:     allowed.Allows("batch", "cronjobs"),
 					},
+					snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
+					deps.ingestManager,
 				)
 			},
 		}),
@@ -405,6 +422,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			return snapshot.RegisterNamespaceAutoscalingDomain(
 				deps.registry,
 				deps.informerFactory.SharedInformerFactory(),
+				snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
 			)
 		}),
 		accessListRegistration(runtimeAccess, listDomainConfig{
@@ -414,6 +432,8 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 					deps.registry,
 					deps.informerFactory.SharedInformerFactory(),
 					allowed,
+					snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
+					deps.ingestManager,
 				)
 			},
 		}),
@@ -433,12 +453,13 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 		})),
 
 		directRegistration("namespace-events", func() error {
-			return snapshot.RegisterNamespaceEventsDomain(deps.registry, deps.informerFactory.SharedInformerFactory())
+			return snapshot.RegisterNamespaceEventsDomain(deps.registry, deps.informerFactory.SharedInformerFactory(), snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName})
 		}),
 		directRegistration("namespace-helm", func() error {
 			return snapshot.RegisterNamespaceHelmDomain(
 				deps.registry,
-				deps.informerFactory.SharedInformerFactory(),
+				deps.informerFactory.HelmStorage(),
+				snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
 			)
 		}),
 		accessListRegistration(runtimeAccess, listDomainConfig{
@@ -449,6 +470,8 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 					deps.informerFactory.SharedInformerFactory(),
 					deps.informerFactory.GatewayInformerFactory(),
 					allowed,
+					snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
+					deps.ingestManager,
 				)
 			},
 		}),
@@ -459,6 +482,8 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 					deps.registry,
 					deps.informerFactory.SharedInformerFactory(),
 					allowed,
+					snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
+					deps.ingestManager,
 				)
 			},
 		}),
@@ -470,6 +495,8 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 					deps.registry,
 					deps.informerFactory.SharedInformerFactory(),
 					allowed,
+					snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
+					deps.ingestManager,
 				)
 			},
 		}),
@@ -478,11 +505,18 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			return snapshot.RegisterNamespaceStorageDomain(
 				deps.registry,
 				deps.informerFactory.SharedInformerFactory(),
+				snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
+				deps.ingestManager,
 			)
 		}),
 
 		directRegistration("pods", func() error {
-			return snapshot.RegisterPodDomain(deps.registry, deps.informerFactory.SharedInformerFactory(), deps.metricsProvider)
+			return snapshot.RegisterPodDomain(
+				deps.registry,
+				deps.metricsProvider,
+				snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
+				deps.ingestManager,
+			)
 		}),
 
 		directRegistration("object-details", func() error {
@@ -512,6 +546,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 				deps.cfg.GatewayClient,
 				deps.cfg.GatewayAPIPresence,
 				deps.cfg.ObjectCatalogService,
+				deps.ingestManager,
 			)
 		}),
 		directRegistration("object-maintenance", func() error {

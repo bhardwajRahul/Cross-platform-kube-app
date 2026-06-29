@@ -64,6 +64,40 @@ func TestStartSettlesWhenInformerCanNeverSync(t *testing.T) {
 	}
 }
 
+func TestStartDegradesInformerThatNeverSyncsByDeadline(t *testing.T) {
+	factory := newStartedFactory(t)
+	// A short deadline so the test does not wait on the production default.
+	factory.syncDeadline = 100 * time.Millisecond
+
+	// A transient failure never goes terminal, so without the deadline it would
+	// block readiness forever (mirrors a WatchList stream whose terminal bookmark
+	// is stripped — the reflector never reports HasSynced).
+	hung := brokenInformer(errors.New("connection refused"))
+	factory.registerInformer("gateway.networking.k8s.io", "tlsroutes", hung)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go hung.Run(ctx.Done())
+
+	if err := factory.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("Start only returned because the test context expired — the hung informer was not degraded")
+	}
+	if !factory.HasSynced(context.Background()) {
+		t.Fatalf("expected the factory to reach readiness once the hung informer is degraded")
+	}
+	if !factory.ResourcesSettled([]string{"core/pods"}) {
+		t.Fatalf("expected unrelated resources to be settled")
+	}
+	// The hung resource itself is reported settled (degraded counts as settled so
+	// it stops gating readiness).
+	if !factory.ResourcesSettled([]string{"gateway.networking.k8s.io/tlsroutes"}) {
+		t.Fatalf("expected the degraded resource to be reported settled so it no longer blocks readiness")
+	}
+}
+
 func TestStartKeepsBlockingOnTransientFailures(t *testing.T) {
 	factory := newStartedFactory(t)
 
@@ -151,17 +185,117 @@ func TestResourcesSettledFalseAfterShutdown(t *testing.T) {
 	}
 }
 
-func TestNewFactoryRegistersPodNodeIndex(t *testing.T) {
+// TestNewFactoryDoesNotRegisterPodInformer is the factory-side memory proof for the pod
+// cut: pods is an owned-reflector ingest kind, so New must NOT register a typed pod
+// informer (which would otherwise be the dominant-memory typed cache). The shared
+// factory has no core/pods sync state — the pod store's readiness comes from the ingest
+// manager via the composite hub. The ReplicaSet informer stays registered (the pod
+// projector resolves owners through it), so this asserts the cut is precise.
+func TestNewFactoryDoesNotRegisterPodInformer(t *testing.T) {
 	client := fake.NewClientset()
 	checker := permissions.NewCheckerWithReview("test", time.Minute, func(_ context.Context, _, _, _ string) (bool, error) {
 		return true, nil
 	})
 	factory := New(client, nil, time.Minute, checker)
 
-	podInformer := factory.SharedInformerFactory().Core().V1().Pods().Informer()
-	indexers := podInformer.GetIndexer().GetIndexers()
-	if _, ok := indexers[podNodeIndexName]; !ok {
-		t.Fatalf("expected pod informer to register %q index", podNodeIndexName)
+	factory.syncStatesMu.Lock()
+	keys := make(map[string]struct{}, len(factory.syncStates))
+	for _, state := range factory.syncStates {
+		keys[state.key] = struct{}{}
+	}
+	factory.syncStatesMu.Unlock()
+
+	if _, ok := keys["core/pods"]; ok {
+		t.Fatal("expected no core/pods informer registered: pods is cut to the ingest path")
+	}
+	if _, ok := keys["apps/replicasets"]; !ok {
+		t.Fatal("expected apps/replicasets informer to remain registered for pod owner resolution")
+	}
+}
+
+// TestNewFactoryDoesNotRegisterWorkloadInformers is the memory proof for the workload cut:
+// Deployment/StatefulSet/DaemonSet/Job/CronJob are owned-reflector ingest kinds, so the
+// shared factory must NOT instantiate a typed informer for any of them. ReplicaSet is NOT
+// cut and its informer must remain (the pod projector resolves the Deployment owner through
+// it and the pod stream re-broadcasts pods on RS changes).
+func TestNewFactoryDoesNotRegisterWorkloadInformers(t *testing.T) {
+	client := fake.NewClientset()
+	checker := permissions.NewCheckerWithReview("test", time.Minute, func(_ context.Context, _, _, _ string) (bool, error) {
+		return true, nil
+	})
+	factory := New(client, nil, time.Minute, checker)
+
+	factory.syncStatesMu.Lock()
+	keys := make(map[string]struct{}, len(factory.syncStates))
+	for _, state := range factory.syncStates {
+		keys[state.key] = struct{}{}
+	}
+	factory.syncStatesMu.Unlock()
+
+	for _, cut := range []string{
+		"apps/deployments", "apps/statefulsets", "apps/daemonsets",
+		"batch/jobs", "batch/cronjobs",
+	} {
+		if _, ok := keys[cut]; ok {
+			t.Fatalf("expected no %s informer registered: the workload kinds are cut to the ingest path", cut)
+		}
+	}
+	if _, ok := keys["apps/replicasets"]; !ok {
+		t.Fatal("expected apps/replicasets informer to remain registered (not cut)")
+	}
+}
+
+// TestNewFactoryDoesNotRegisterNetworkInformers is the memory proof for the network cut:
+// Service, EndpointSlice, Ingress, and NetworkPolicy are owned-reflector ingest kinds, so
+// the shared factory must NOT instantiate a typed informer for any of them — their rows,
+// catalog, object-map, and notify all come from the ingest reflectors instead.
+func TestNewFactoryDoesNotRegisterNetworkInformers(t *testing.T) {
+	client := fake.NewClientset()
+	checker := permissions.NewCheckerWithReview("test", time.Minute, func(_ context.Context, _, _, _ string) (bool, error) {
+		return true, nil
+	})
+	factory := New(client, nil, time.Minute, checker)
+
+	factory.syncStatesMu.Lock()
+	keys := make(map[string]struct{}, len(factory.syncStates))
+	for _, state := range factory.syncStates {
+		keys[state.key] = struct{}{}
+	}
+	factory.syncStatesMu.Unlock()
+
+	for _, cut := range []string{
+		"core/services",
+		"discovery.k8s.io/endpointslices",
+		"networking.k8s.io/ingresses",
+		"networking.k8s.io/networkpolicies",
+	} {
+		if _, ok := keys[cut]; ok {
+			t.Fatalf("expected no %s informer registered: the network kinds are cut to the ingest path", cut)
+		}
+	}
+}
+
+// TestNewFactoryDoesNotRegisterNodeInformer is the memory proof for the node cut: Node is an
+// owned-reflector ingest kind, so the shared factory must NOT instantiate a typed node informer
+// — its OWN-rows, overview facts, catalog, object-map, and notify all come from the ingest
+// reflector instead. The win is the large .status.images list every node object carries, which
+// no consumer reads and the projection drops.
+func TestNewFactoryDoesNotRegisterNodeInformer(t *testing.T) {
+	client := fake.NewClientset()
+	checker := permissions.NewCheckerWithReview("test", time.Minute, func(_ context.Context, _, _, _ string) (bool, error) {
+		return true, nil
+	})
+	factory := New(client, nil, time.Minute, checker)
+
+	factory.syncStatesMu.Lock()
+	keys := make(map[string]struct{}, len(factory.syncStates))
+	for _, state := range factory.syncStates {
+		keys[state.key] = struct{}{}
+	}
+	factory.syncStatesMu.Unlock()
+
+	if _, ok := keys["core/nodes"]; ok {
+		t.Fatal("expected no core/nodes informer registered: nodes are cut to the ingest path")
 	}
 }
 
@@ -278,6 +412,77 @@ func TestIsTerminalWatchError(t *testing.T) {
 		if got := isTerminalWatchError(tc.err); got != tc.terminal {
 			t.Errorf("%s: isTerminalWatchError = %v, want %v", tc.name, got, tc.terminal)
 		}
+	}
+}
+
+func TestNewFactoryRegistersHelmStorageNotFullConfigInformers(t *testing.T) {
+	client := fake.NewClientset()
+	checker := permissions.NewCheckerWithReview("test", time.Minute, func(_ context.Context, _, _, _ string) (bool, error) {
+		return true, nil
+	})
+	factory := New(client, nil, time.Minute, checker)
+
+	// configmaps + secrets are cut to the ingest path: the shared factory must not
+	// register a full informer for either, but the helm-storage source DOES register
+	// a label-filtered (owner=helm) informer for each under the same readiness key.
+	helm := factory.HelmStorage()
+	if helm == nil {
+		t.Fatal("expected helm-storage source to be wired")
+	}
+	if helm.SecretInformer() == nil {
+		t.Fatal("expected helm-storage Secret informer")
+	}
+	if helm.ConfigMapInformer() == nil {
+		t.Fatal("expected helm-storage ConfigMap informer")
+	}
+	if helm.SecretLister() == nil {
+		t.Fatal("expected helm-storage Secret lister for the namespace-helm builder")
+	}
+
+	factory.syncStatesMu.Lock()
+	defer factory.syncStatesMu.Unlock()
+	secretStates := 0
+	configStates := 0
+	for _, state := range factory.syncStates {
+		switch state.key {
+		case "core/secrets":
+			secretStates++
+		case "core/configmaps":
+			configStates++
+		}
+	}
+	// Exactly one informer per kind: the helm-storage filtered informer. A second
+	// (the removed full informer) would mean the typed object is still cached.
+	if secretStates != 1 {
+		t.Fatalf("expected exactly one core/secrets informer (helm-storage filtered), got %d", secretStates)
+	}
+	if configStates != 1 {
+		t.Fatalf("expected exactly one core/configmaps informer (helm-storage filtered), got %d", configStates)
+	}
+}
+
+// TestHelmStorageSourceSkipsDeniedKinds proves the helm-storage source creates no
+// filtered informer for a kind the identity cannot list/watch — a denied secret
+// never opens a watch — and reports synced so the helm builder serves empty.
+func TestHelmStorageSourceSkipsDeniedKinds(t *testing.T) {
+	client := fake.NewClientset()
+	checker := permissions.NewCheckerWithReview("test", time.Minute, func(_ context.Context, _, resource, _ string) (bool, error) {
+		return resource != "secrets", nil
+	})
+	factory := New(client, nil, time.Minute, checker)
+
+	helm := factory.HelmStorage()
+	if helm == nil {
+		t.Fatal("expected helm-storage source to be wired")
+	}
+	if helm.SecretInformer() != nil {
+		t.Fatal("expected no helm-storage Secret informer when secrets are denied")
+	}
+	if !helm.SecretsHasSynced()() {
+		t.Fatal("expected SecretsHasSynced to report synced when no secret informer was created")
+	}
+	if helm.ConfigMapInformer() == nil {
+		t.Fatal("expected helm-storage ConfigMap informer when configmaps are allowed")
 	}
 }
 

@@ -5,6 +5,7 @@ package snapshot
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -173,13 +174,15 @@ func TestBuildWorkloadSummaryMatchesSnapshotHPAContext(t *testing.T) {
 		},
 	}
 	builder := &NamespaceWorkloadsBuilder{
-		deploymentLister: testsupport.NewDeploymentLister(t, deployment),
-		statefulLister:   testsupport.NewStatefulSetLister(t),
-		daemonLister:     testsupport.NewDaemonSetLister(t),
-		jobLister:        testsupport.NewJobLister(t),
-		cronJobLister:    testsupport.NewCronJobLister(t),
-		hpaLister:        testsupport.NewHorizontalPodAutoscalerLister(t, hpa),
+		workloadIngest:      newFakeWorkloadIngestSource(ClusterMeta{}, deployment),
+		includeDeployments:  true,
+		includeStatefulSets: true,
+		includeDaemonSets:   true,
+		includeJobs:         true,
+		includeCronJobs:     true,
+		hpaLister:           testsupport.NewHorizontalPodAutoscalerLister(t, hpa),
 	}
+	seedWorkloadsFromBuilderSource(builder, ClusterMeta{})
 
 	snap, err := builder.Build(context.Background(), "namespace:default")
 	require.NoError(t, err)
@@ -688,9 +691,30 @@ func TestBuildNamespaceCustomSummaryNilResourceIsSafe(t *testing.T) {
 	)
 	require.Equal(t, "c1", row.ClusterID)
 	require.Equal(t, "Foo", row.Kind)
-	require.Equal(t, "example.com", row.APIGroup)
-	require.Equal(t, "v1", row.APIVersion)
+	require.Equal(t, "example.com", row.Group)
+	require.Equal(t, "v1", row.Version)
 	require.Equal(t, "foos.example.com", row.CRDName)
+}
+
+func TestBuildNamespaceCustomSummaryWireIdentityUsesGroupVersion(t *testing.T) {
+	row := customresource.BuildNamespaceStreamSummary(
+		ClusterMeta{ClusterID: "c1"},
+		nil,
+		"example.com",
+		"v1",
+		"Foo",
+		"foos.example.com",
+		"fallback-ns",
+	)
+	payload, err := json.Marshal(row)
+	require.NoError(t, err)
+
+	var fields map[string]any
+	require.NoError(t, json.Unmarshal(payload, &fields))
+	require.Equal(t, "example.com", fields["group"])
+	require.Equal(t, "v1", fields["version"])
+	require.NotContains(t, fields, "apiGroup")
+	require.NotContains(t, fields, "apiVersion")
 }
 
 // TestBuildClusterCustomSummaryThreadsCRDName is the cluster-scoped
@@ -718,8 +742,8 @@ func TestBuildClusterCustomSummaryThreadsCRDName(t *testing.T) {
 	require.Equal(t, "c1", row.ClusterID)
 	require.Equal(t, "DBCluster", row.Kind)
 	require.Equal(t, "primary", row.Name)
-	require.Equal(t, "rds.services.k8s.aws", row.APIGroup)
-	require.Equal(t, "v1alpha1", row.APIVersion)
+	require.Equal(t, "rds.services.k8s.aws", row.Group)
+	require.Equal(t, "v1alpha1", row.Version)
 	require.Equal(t, "dbclusters.rds.services.k8s.aws", row.CRDName)
 	require.Equal(t, "Unknown", row.Status)
 	require.Equal(t, "unknown", row.StatusState)
@@ -739,8 +763,8 @@ func TestBuildClusterCustomSummaryNilResourceIsSafe(t *testing.T) {
 	)
 	require.Equal(t, "c1", row.ClusterID)
 	require.Equal(t, "DBCluster", row.Kind)
-	require.Equal(t, "rds.services.k8s.aws", row.APIGroup)
-	require.Equal(t, "v1alpha1", row.APIVersion)
+	require.Equal(t, "rds.services.k8s.aws", row.Group)
+	require.Equal(t, "v1alpha1", row.Version)
 	require.Equal(t, "dbclusters.rds.services.k8s.aws", row.CRDName)
 }
 
@@ -780,5 +804,12 @@ func buildPodSummaryForTest(meta ClusterMeta, pod *corev1.Pod, usage map[string]
 	if pod != nil {
 		u = usage[pod.Namespace+"/"+pod.Name]
 	}
-	return podres.BuildStreamSummary(meta, pod, u.CPUUsageMilli, u.MemoryUsageBytes, rsLister)
+	row := podres.BuildStreamSummary(meta, pod, u.CPUUsageMilli, u.MemoryUsageBytes, rsLister)
+	// Mirror the production serve-time overlay so the parity harness and the real
+	// Build path render CPU/mem identically — including the no-data marker for a
+	// pod with no valid sample (Risk #9 / §3.6). overlayPodMetrics re-derives the
+	// usage cells from the same map keyed by namespace/name.
+	rows := []PodSummary{row}
+	overlayPodMetrics(rows, usage)
+	return rows[0]
 }

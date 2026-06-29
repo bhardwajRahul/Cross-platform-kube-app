@@ -2,7 +2,8 @@ package snapshot
 
 import (
 	"context"
-	"fmt"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -13,7 +14,6 @@ import (
 
 	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/refresh/metrics"
-	"github.com/luxury-yacht/app/backend/testsupport"
 )
 
 type fakeMetricsProvider struct {
@@ -40,6 +40,28 @@ func (f fakeMetricsProvider) LatestPodUsage() map[string]metrics.PodUsage {
 
 func (f fakeMetricsProvider) Metadata() metrics.Metadata {
 	return f.metadata
+}
+
+// newNodeBuilderForTest builds a NodeBuilder wired the production way: node OWN-rows are served
+// from a maintained store fed the SAME Table-half NodeSummary rows the node reflector projects
+// (via the store's Sink, mirroring pods_store_scope_test.go), while the ingest source still
+// supplies the per-node pod aggregates + the node version watermark RV. meta stamps the store +
+// own-row cluster identity; nodeRV drives the version watermark; the typed pods (via ingest) and
+// metrics provider come from the caller.
+func newNodeBuilderForTest(meta ClusterMeta, nodeRV string, provider metrics.Provider, ingest nodeDomainIngestSource, nodes ...*corev1.Node) *NodeBuilder {
+	maintained := newTypedMaintainedStore(meta, nodesQuerypageSchema(), nodeTableQueryAdapter())
+	sink := maintained.Sink()
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		sink.Upsert(buildNodeOwnSummary(meta, node))
+	}
+	return &NodeBuilder{
+		maintained: maintained,
+		ingest:     ingest,
+		metrics:    provider,
+	}
 }
 
 func TestNodeBuilderBuild(t *testing.T) {
@@ -158,33 +180,31 @@ func TestNodeBuilderBuild(t *testing.T) {
 		},
 	}
 
-	builder := &NodeBuilder{
-		lister:    testsupport.NewNodeLister(t, node),
-		podLister: testsupport.NewPodLister(t, podA, podB, podOther),
-		metrics: fakeMetricsProvider{
-			usage: map[string]metrics.NodeUsage{
-				"node-1": {
-					CPUUsageMilli:    650,
-					MemoryUsageBytes: 512 * 1024 * 1024,
-				},
-			},
-			podUsage: map[string]metrics.PodUsage{
-				"default/pod-a": {
-					CPUUsageMilli:    125,
-					MemoryUsageBytes: 128 * 1024 * 1024,
-				},
-				"kube-system/pod-b": {
-					CPUUsageMilli:    250,
-					MemoryUsageBytes: 64 * 1024 * 1024,
-				},
-			},
-			metadata: metrics.Metadata{
-				CollectedAt:  collectedAt,
-				SuccessCount: 7,
-				FailureCount: 2,
+	provider := fakeMetricsProvider{
+		usage: map[string]metrics.NodeUsage{
+			"node-1": {
+				CPUUsageMilli:    650,
+				MemoryUsageBytes: 512 * 1024 * 1024,
 			},
 		},
+		podUsage: map[string]metrics.PodUsage{
+			"default/pod-a": {
+				CPUUsageMilli:    125,
+				MemoryUsageBytes: 128 * 1024 * 1024,
+			},
+			"kube-system/pod-b": {
+				CPUUsageMilli:    250,
+				MemoryUsageBytes: 64 * 1024 * 1024,
+			},
+		},
+		metadata: metrics.Metadata{
+			CollectedAt:  collectedAt,
+			SuccessCount: 7,
+			FailureCount: 2,
+		},
 	}
+	ingest := newFakePodAggregateSource(nil, podA, podB, podOther).withNodes(ClusterMeta{}, "42", node)
+	builder := newNodeBuilderForTest(ClusterMeta{}, "42", provider, ingest, node)
 
 	snapshot, err := builder.Build(context.Background(), "")
 	require.NoError(t, err)
@@ -258,18 +278,58 @@ func TestNodeBuilderBuild(t *testing.T) {
 	node.Annotations["example"] = "mutated"
 	require.Equal(t, "annotation", summary.Annotations["example"])
 
-	require.Equal(t, snapshotVersionWithDynamicRevision(42, fmt.Sprint(collectedAt.UnixNano())), snapshot.Version)
+	require.Equal(t, uint64(42), snapshot.Version)
+}
+
+func TestNodeBuilderMetricRefreshDoesNotChangeSnapshotVersion(t *testing.T) {
+	now := time.Unix(1000, 0)
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "node-1",
+			ResourceVersion:   "42",
+			CreationTimestamp: metav1.NewTime(now.Add(-time.Hour)),
+		},
+	}
+	ingest := newFakePodAggregateSource(nil).withNodes(ClusterMeta{}, "42", node)
+	builder := newNodeBuilderForTest(
+		ClusterMeta{},
+		"42",
+		fakeMetricsProvider{
+			usage:    map[string]metrics.NodeUsage{"node-1": {CPUUsageMilli: 650}},
+			metadata: metrics.Metadata{CollectedAt: now},
+		},
+		ingest,
+		node,
+	)
+
+	first, err := builder.Build(context.Background(), "")
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), first.Version)
+	require.Equal(t, strconv.FormatInt(now.UnixNano(), 10), first.SourceVersions["metric"])
+	require.Equal(t, "650m", first.Payload.(NodeSnapshot).Rows[0].CPUUsage)
+
+	builder.metrics = fakeMetricsProvider{
+		usage:    map[string]metrics.NodeUsage{"node-1": {CPUUsageMilli: 700}},
+		metadata: metrics.Metadata{CollectedAt: now.Add(5 * time.Second)},
+	}
+
+	second, err := builder.Build(context.Background(), "")
+	require.NoError(t, err)
+	require.Equal(t, first.Version, second.Version)
+	require.Equal(t, strconv.FormatInt(now.Add(5*time.Second).UnixNano(), 10), second.SourceVersions["metric"])
+	require.Equal(t, "700m", second.Payload.(NodeSnapshot).Rows[0].CPUUsage)
 }
 
 // A malformed query scope must be rejected like every other typed builder does
 // — silently serving default-ordered rows under the requested identity is a
 // boundary contract hole.
 func TestNodeBuilderRejectsMalformedQueryScope(t *testing.T) {
-	builder := &NodeBuilder{
-		lister:    testsupport.NewNodeLister(t),
-		podLister: testsupport.NewPodLister(t),
-		metrics:   fakeMetricsProvider{},
-	}
+	builder := newNodeBuilderForTest(
+		ClusterMeta{},
+		"",
+		fakeMetricsProvider{},
+		newFakePodAggregateSource(nil).withNodes(ClusterMeta{}, ""),
+	)
 
 	// `%zz` is an invalid percent-encoding, so the query string cannot parse.
 	_, err := builder.Build(context.Background(), "cluster-a|?limit=%zz")
@@ -299,11 +359,13 @@ func TestNodeBuilderCapsLargeSnapshots(t *testing.T) {
 		})
 	}
 
-	builder := &NodeBuilder{
-		lister:    testsupport.NewNodeLister(t, nodes...),
-		podLister: testsupport.NewPodLister(t),
-		metrics:   fakeMetricsProvider{},
-	}
+	builder := newNodeBuilderForTest(
+		ClusterMeta{},
+		"",
+		fakeMetricsProvider{},
+		newFakePodAggregateSource(nil).withNodes(ClusterMeta{}, "", nodes...),
+		nodes...,
+	)
 
 	snapshot, err := builder.Build(context.Background(), "")
 	require.NoError(t, err)
@@ -312,4 +374,83 @@ func TestNodeBuilderCapsLargeSnapshots(t *testing.T) {
 	require.True(t, snapshot.Stats.Truncated)
 	require.Equal(t, config.SnapshotClusterNodesEntryLimit+1, snapshot.Stats.TotalItems)
 	require.Contains(t, snapshot.Stats.Warnings[0], "nodes")
+}
+
+// TestNodesSortByMetricUsage pins that the nodes table sorts by LIVE metric usage numerically
+// (the metrics overlaid at serve), not lexically by the formatted string. The cpu values are
+// chosen so a lexical sort ("1000m" < "125m" < "650m") differs from the numeric one
+// (1000 > 650 > 125); likewise memory ("1 GB" sorts lexically below "128 MB"). This is the
+// stage-2.7 regression: nodes metrics are honored in the query sort schema.
+func TestNodesSortByMetricUsage(t *testing.T) {
+	ctx := WithClusterMeta(context.Background(), ClusterMeta{ClusterID: "c1", ClusterName: "cluster-one"})
+	items := []NodeSummary{
+		{Name: "alpha", CPUUsage: "1000m", MemoryUsage: "128 MB"},
+		{Name: "beta", CPUUsage: "650m", MemoryUsage: "1 GB"},
+		{Name: "gamma", CPUUsage: "125m", MemoryUsage: "512 MB"},
+	}
+
+	cpuSnap, err := finishNodeSnapshot(ctx, "c1|?sort=cpu&sortDirection=desc", items, 1, metrics.Metadata{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"alpha", "beta", "gamma"}, nodeRowNames(cpuSnap.Payload.(NodeSnapshot)),
+		"cpu sort must be numeric live usage (1000 > 650 > 125), not lexical")
+
+	memSnap, err := finishNodeSnapshot(ctx, "c1|?sort=memory&sortDirection=desc", items, 1, metrics.Metadata{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"beta", "gamma", "alpha"}, nodeRowNames(memSnap.Payload.(NodeSnapshot)),
+		"memory sort must be numeric live usage (1GB > 512MB > 128MB), not lexical")
+}
+
+func nodeRowNames(payload NodeSnapshot) []string {
+	names := make([]string, len(payload.Rows))
+	for i, r := range payload.Rows {
+		names[i] = r.Name
+	}
+	return names
+}
+
+// TestNodeMaintainedStoreSpillRestoreRoundTrip proves the nodes maintained store — the new
+// per-cluster store of node OWN-rows fed by the node reflector's Sink — spills to disk and
+// restores into a fresh store with identical rows, the warm-paint capability the governor's
+// Cold/re-warm uses. It goes through the nodes schema + adapter (nodesQuerypageSchema /
+// nodeTableQueryAdapter), so it proves the node store wiring round-trips, not just the raw
+// querypage.Store. The registry-level spill (domain/maintained_stores_test.go) covers nodes
+// generically once RegisterNodeDomain registers it; this pins the node-specific row schema.
+func TestNodeMaintainedStoreSpillRestoreRoundTrip(t *testing.T) {
+	meta := ClusterMeta{ClusterID: "c1", ClusterName: "cluster-one"}
+	available := map[string]bool{"node": true}
+
+	nodeFor := func(name string) *corev1.Node {
+		return &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: name, ResourceVersion: "1"},
+			Status: corev1.NodeStatus{
+				NodeInfo:  corev1.NodeSystemInfo{KubeletVersion: "v1.30.0"},
+				Addresses: []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "10.0.0.1"}},
+				Capacity: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("4"),
+					corev1.ResourceMemory: resource.MustParse("8Gi"),
+					corev1.ResourcePods:   resource.MustParse("110"),
+				},
+				Allocatable: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("4"),
+					corev1.ResourceMemory: resource.MustParse("8Gi"),
+					corev1.ResourcePods:   resource.MustParse("110"),
+				},
+			},
+		}
+	}
+
+	orig := newTypedMaintainedStore(meta, nodesQuerypageSchema(), nodeTableQueryAdapter())
+	sink := orig.Sink()
+	sink.Upsert(buildNodeOwnSummary(meta, nodeFor("node-a")))
+	sink.Upsert(buildNodeOwnSummary(meta, nodeFor("node-b")))
+	sink.Upsert(buildNodeOwnSummary(meta, nodeFor("node-c")))
+
+	path := filepath.Join(t.TempDir(), "nodes.spill")
+	require.NoError(t, orig.SpillTo(path))
+
+	restored := newTypedMaintainedStore(meta, nodesQuerypageSchema(), nodeTableQueryAdapter())
+	require.NoError(t, restored.RestoreFrom(path))
+
+	require.ElementsMatch(t, orig.rows("", available), restored.rows("", available),
+		"restored nodes maintained store must hold the same own-rows as the spilled one")
 }

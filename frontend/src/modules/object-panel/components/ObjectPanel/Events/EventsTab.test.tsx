@@ -176,6 +176,7 @@ describe('EventsTab', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    vi.useRealTimers();
     hoistedSnapshot.data = null;
     hoistedSnapshot.stats = null;
     hoistedSnapshot.status = 'ready';
@@ -201,12 +202,50 @@ describe('EventsTab', () => {
         <EventsTab
           objectData={parentObjectData}
           isActive={true}
-          eventsScope="parent-cluster|default:Deployment:my-deploy"
+          eventsScope="parent-cluster|default:apps/v1:Deployment:my-deploy"
         />
       );
     });
 
     expect(gridTableState.lastProps?.sortConfig).toEqual({ key: 'age', direction: 'desc' });
+  });
+
+  it('renders event Age from the live event timestamp', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:10Z'));
+    hoistedSnapshot.data = {
+      events: [makeEvent({ lastTimestamp: '2026-01-01T00:00:00Z' })],
+    };
+    hoistedSnapshot.status = 'ready';
+
+    act(() => {
+      root.render(
+        <EventsTab
+          objectData={parentObjectData}
+          isActive={true}
+          eventsScope="parent-cluster|default:apps/v1:Deployment:my-deploy"
+        />
+      );
+    });
+
+    const ageColumn = gridTableState.lastProps.columns.find((column: any) => column.key === 'age');
+    const cellContainer = document.createElement('div');
+    document.body.appendChild(cellContainer);
+    const cellRoot = ReactDOM.createRoot(cellContainer);
+    try {
+      act(() => {
+        cellRoot.render(ageColumn.render(gridTableState.lastProps.data[0]));
+      });
+      expect(cellContainer.textContent).toBe('10s');
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(cellContainer.textContent).toBe('11s');
+    } finally {
+      act(() => cellRoot.unmount());
+      cellContainer.remove();
+    }
   });
 
   it('prefers per-event clusterId over parent panel cluster when opening related objects', async () => {
@@ -221,7 +260,7 @@ describe('EventsTab', () => {
         <EventsTab
           objectData={parentObjectData}
           isActive={true}
-          eventsScope="parent-cluster|default:Deployment:my-deploy"
+          eventsScope="parent-cluster|default:apps/v1:Deployment:my-deploy"
         />
       );
     });
@@ -258,7 +297,7 @@ describe('EventsTab', () => {
         <EventsTab
           objectData={parentObjectData}
           isActive={true}
-          eventsScope="parent-cluster|default:Deployment:my-deploy"
+          eventsScope="parent-cluster|default:apps/v1:Deployment:my-deploy"
         />
       );
     });
@@ -276,7 +315,7 @@ describe('EventsTab', () => {
         <EventsTab
           objectData={parentObjectData}
           isActive={true}
-          eventsScope="parent-cluster|default:Deployment:my-deploy"
+          eventsScope="parent-cluster|default:apps/v1:Deployment:my-deploy"
         />
       );
     });
@@ -345,7 +384,7 @@ describe('EventsTab', () => {
         <EventsTab
           objectData={parentObjectData}
           isActive={true}
-          eventsScope="parent-cluster|default:Deployment:my-deploy"
+          eventsScope="parent-cluster|default:apps/v1:Deployment:my-deploy"
         />
       );
     });
@@ -367,7 +406,7 @@ describe('EventsTab', () => {
         <EventsTab
           objectData={parentObjectData}
           isActive={true}
-          eventsScope="parent-cluster|default:Deployment:my-deploy"
+          eventsScope="parent-cluster|default:apps/v1:Deployment:my-deploy"
         />
       );
     });
@@ -410,7 +449,7 @@ describe('EventsTab', () => {
         <EventsTab
           objectData={parentObjectData}
           isActive={true}
-          eventsScope="parent-cluster|default:Deployment:my-deploy"
+          eventsScope="parent-cluster|default:apps/v1:Deployment:my-deploy"
         />
       );
     });
@@ -507,7 +546,7 @@ describe('EventsTab', () => {
         <EventsTab
           objectData={parentObjectData}
           isActive={true}
-          eventsScope="parent-cluster|default:Deployment:my-deploy"
+          eventsScope="parent-cluster|default:apps/v1:Deployment:my-deploy"
         />
       );
     });
@@ -556,7 +595,7 @@ describe('EventsTab', () => {
         <EventsTab
           objectData={parentObjectData}
           isActive={true}
-          eventsScope="parent-cluster|default:Deployment:my-deploy"
+          eventsScope="parent-cluster|default:apps/v1:Deployment:my-deploy"
         />
       );
     });

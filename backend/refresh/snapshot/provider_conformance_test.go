@@ -52,11 +52,13 @@ func TestTypedProviderBuildersEmitTheEnvelope(t *testing.T) {
 				Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
 			},
 		}
-		builder := &NodeBuilder{
-			lister:    testsupport.NewNodeLister(t, node),
-			podLister: testsupport.NewPodLister(t),
-			metrics:   fakeMetricsProvider{},
-		}
+		builder := newNodeBuilderForTest(
+			ClusterMeta{ClusterID: "cluster-a"},
+			"",
+			fakeMetricsProvider{},
+			newFakePodAggregateSource(nil).withNodes(ClusterMeta{ClusterID: "cluster-a"}, "", node),
+			node,
+		)
 		snap, err := builder.Build(ctx, "")
 		require.NoError(t, err)
 		payload, ok := snap.Payload.(NodeSnapshot)
@@ -81,14 +83,17 @@ func TestTypedProviderBuildersEmitTheEnvelope(t *testing.T) {
 	t.Run("namespace-workloads", func(t *testing.T) {
 		deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"}}
 		builder := &NamespaceWorkloadsBuilder{
-			podLister:        testsupport.NewPodLister(t),
-			deploymentLister: testsupport.NewDeploymentLister(t, deployment),
-			statefulLister:   testsupport.NewStatefulSetLister(t),
-			daemonLister:     testsupport.NewDaemonSetLister(t),
-			jobLister:        testsupport.NewJobLister(t),
-			cronJobLister:    testsupport.NewCronJobLister(t),
-			metrics:          fakeMetricsProvider{},
+			podIngest:           newFakePodWorkloadsIngestSource(ClusterMeta{}, nil),
+			includePods:         true,
+			workloadIngest:      newFakeWorkloadIngestSource(ClusterMeta{}, deployment),
+			includeDeployments:  true,
+			includeStatefulSets: true,
+			includeDaemonSets:   true,
+			includeJobs:         true,
+			includeCronJobs:     true,
+			metrics:             fakeMetricsProvider{},
 		}
+		seedWorkloadsFromBuilderSource(builder, ClusterMeta{})
 		snap, err := builder.Build(ctx, "namespace:default")
 		require.NoError(t, err)
 		payload, ok := snap.Payload.(NamespaceWorkloadsSnapshot)

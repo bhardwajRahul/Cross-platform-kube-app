@@ -23,10 +23,19 @@ import (
 func (m *Manager) registerDescriptorStreams(factory *informer.Factory) {
 	shared := factory.SharedInformerFactory()
 	gatewayShared := factory.GatewayInformerFactory()
+	ingestOwned := kindregistry.IngestOwnedGVRs()
 	for _, d := range kindregistry.StreamDescriptors() {
-		// Kinds with a bespoke streaming handler (registerConfigStreams etc.) are
-		// registered there; their descriptor exists only for the snapshot side.
+		// Kinds with a bespoke streaming handler (HorizontalPodAutoscaler, via
+		// registerAutoscalingStreams) are registered there; their descriptor exists
+		// only for the snapshot side.
 		if d.CustomStreamHandler {
+			continue
+		}
+		// IngestOwned (cut) kinds have no typed informer in the factory; their
+		// signal-only change signal is driven from the ingest Catalog-half Sink
+		// (registerIngestNotifyStreams) so calling d.Informer(shared) here would
+		// re-create the very informer the cutover eliminated.
+		if _, owned := ingestOwned[d.GVR()]; owned {
 			continue
 		}
 		if !m.canListWatch(d.Group, d.Resource) {

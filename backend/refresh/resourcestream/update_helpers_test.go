@@ -40,7 +40,6 @@ func TestManagerNewObjectUpdateCopiesClusterAndObjectMetadata(t *testing.T) {
 	require.Equal(t, "", update.Ref.Group)
 	require.Equal(t, "v1", update.Ref.Version)
 	require.Equal(t, ref, *update.Ref)
-	require.Nil(t, update.Row)
 }
 
 func TestManagerResourceRefForObjectBuildsValidatedIdentity(t *testing.T) {
@@ -70,59 +69,6 @@ func TestManagerResourceRefForObjectValidationRejectsIncompleteIdentity(t *testi
 
 	require.Error(t, resourcemodel.ValidateResourceRef(manager.resourceRefForObject(configMap, "", "", "ConfigMap", "configmaps")))
 	require.Error(t, resourcemodel.ValidateResourceRef(manager.resourceRefForObject(configMap, "", "v1", "Deployment", "deployments")))
-}
-
-func TestManagerNewObjectRowUpdateOmitsRowsForDeletes(t *testing.T) {
-	manager := &Manager{
-		clusterMeta: snapshot.ClusterMeta{ClusterID: "cluster-id", ClusterName: "cluster-name"},
-	}
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            "secret",
-			Namespace:       "default",
-			UID:             "secret-uid",
-			ResourceVersion: "9",
-		},
-	}
-	row := map[string]string{"name": "secret"}
-
-	ref := manager.resourceRefForObject(secret, "", "v1", "Secret", "secrets")
-	added := manager.newObjectRowUpdate(MessageTypeAdded, domainNamespaceConfig, secret, ref, row)
-	require.Equal(t, row, added.Row)
-
-	deleted := manager.newObjectRowUpdate(MessageTypeDeleted, domainNamespaceConfig, secret, ref, row)
-	require.Nil(t, deleted.Row)
-	require.Equal(t, "secret", deleted.Ref.Name)
-	require.Equal(t, "default", deleted.Ref.Namespace)
-	require.Equal(t, ref, *deleted.Ref)
-}
-
-func TestManagerNewObjectRowUpdateOmitsRowsForNotifyOnlyDomains(t *testing.T) {
-	manager := &Manager{
-		clusterMeta: snapshot.ClusterMeta{ClusterID: "cluster-id", ClusterName: "cluster-name"},
-	}
-	object := &metav1.ObjectMeta{
-		Name:            "web",
-		Namespace:       "default",
-		UID:             "web-uid",
-		ResourceVersion: "77",
-	}
-	row := map[string]string{"name": "web"}
-	ref := manager.resourceRefForObject(object, "apps", "v1", "Deployment", "deployments")
-
-	// A notify-only domain ships change notifications without the projected row:
-	// even ADDED/MODIFIED omit Row, while identity (Ref) and ResourceVersion still
-	// travel so drift detection and the query-backed refetch trigger keep working.
-	for _, updateType := range []MessageType{MessageTypeAdded, MessageTypeModified} {
-		update := manager.newObjectRowUpdate(updateType, domainWorkloads, object, ref, row)
-		require.Nilf(t, update.Row, "notify-only domain must omit Row for %s", updateType)
-		require.Equal(t, "77", update.ResourceVersion)
-		require.Equal(t, ref, *update.Ref)
-	}
-
-	// A non-notify-only domain still carries the row on add/modify.
-	configUpdate := manager.newObjectRowUpdate(MessageTypeAdded, domainNamespaceConfig, object, ref, row)
-	require.Equal(t, row, configUpdate.Row)
 }
 
 func TestManagerNewObjectRowUpdateCarriesMetadataFromResourceRef(t *testing.T) {
@@ -175,7 +121,6 @@ func TestManagerNewObjectRowUpdateCarriesMetadataFromResourceRef(t *testing.T) {
 			require.Equal(t, tt.version, update.Ref.Version)
 			require.Equal(t, tt.resource, update.Ref.Resource)
 			require.Equal(t, ref, *update.Ref)
-			require.Equal(t, row, update.Row)
 		})
 	}
 }

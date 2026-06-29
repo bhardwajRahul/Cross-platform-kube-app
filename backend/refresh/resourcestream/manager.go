@@ -40,6 +40,7 @@ import (
 	"github.com/luxury-yacht/app/backend/internal/logsources"
 	"github.com/luxury-yacht/app/backend/refresh/containerlogsstream"
 	"github.com/luxury-yacht/app/backend/refresh/informer"
+	"github.com/luxury-yacht/app/backend/refresh/ingest"
 	"github.com/luxury-yacht/app/backend/refresh/metrics"
 	"github.com/luxury-yacht/app/backend/refresh/permissions"
 	"github.com/luxury-yacht/app/backend/refresh/ringbuffer"
@@ -47,7 +48,6 @@ import (
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
 	"github.com/luxury-yacht/app/backend/resourcemodel"
 	apiextensionspkg "github.com/luxury-yacht/app/backend/resources/apiextensions"
-	"github.com/luxury-yacht/app/backend/resources/configmap"
 	cronjobpkg "github.com/luxury-yacht/app/backend/resources/cronjob"
 	"github.com/luxury-yacht/app/backend/resources/customresource"
 	daemonsetpkg "github.com/luxury-yacht/app/backend/resources/daemonset"
@@ -57,7 +57,6 @@ import (
 	jobpkg "github.com/luxury-yacht/app/backend/resources/job"
 	podspkg "github.com/luxury-yacht/app/backend/resources/pods"
 	replicasetpkg "github.com/luxury-yacht/app/backend/resources/replicaset"
-	secretpkg "github.com/luxury-yacht/app/backend/resources/secret"
 	servicepkg "github.com/luxury-yacht/app/backend/resources/service"
 	statefulsetpkg "github.com/luxury-yacht/app/backend/resources/statefulset"
 )
@@ -74,12 +73,15 @@ const (
 	domainNamespaceQuotas      = "namespace-quotas"
 	domainNamespaceStorage     = "namespace-storage"
 	// Cluster-scoped domains stream resources without namespace scopes.
-	domainClusterRBAC    = "cluster-rbac"
-	domainClusterStorage = "cluster-storage"
-	domainClusterConfig  = "cluster-config"
-	domainClusterCRDs    = "cluster-crds"
-	domainClusterCustom  = "cluster-custom"
-	domainNodes          = "nodes"
+	domainClusterRBAC     = "cluster-rbac"
+	domainClusterStorage  = "cluster-storage"
+	domainClusterConfig   = "cluster-config"
+	domainClusterCRDs     = "cluster-crds"
+	domainClusterCustom   = "cluster-custom"
+	domainNodes           = "nodes"
+	domainCatalog         = "catalog"
+	domainClusterEvents   = "cluster-events"
+	domainNamespaceEvents = "namespace-events"
 )
 
 const (
@@ -167,7 +169,16 @@ type Manager struct {
 
 	dynamicClient dynamic.Interface
 
+	// podLister, the workload listers (deployment/stateful/daemon/job/cronJob), and nodeLister
+	// are wired only by unit tests that drive the typed handlePod*/handleWorkload/handleNode/
+	// RS/HPA paths directly. Production reads pods, the workload kinds, AND nodes from the
+	// ingest store (all cut), so those typed informers are never instantiated; podIngest /
+	// workloadIngest / nodeIngest are the production sources (lookupWorkloadRef / lookupNodeRef
+	// prefer a wired lister for tests, else ingest).
 	podLister        corelisters.PodLister
+	podIngest        podBundleSource
+	workloadIngest   workloadBundleSource
+	nodeIngest       nodeBundleSource
 	nodeLister       corelisters.NodeLister
 	serviceLister    corelisters.ServiceLister
 	sliceLister      discoverylisters.EndpointSliceLister
@@ -198,7 +209,10 @@ type Manager struct {
 	sequences   map[string]uint64
 }
 
-// NewManager wires informer handlers into a resource stream manager.
+// NewManager wires informer handlers into a resource stream manager. ingestManager,
+// when non-nil, is the owned-reflector source for the IngestOwned (cut) kinds: their
+// signal-only change signal is driven from its Catalog-half Sink instead of a typed
+// shared informer (see registerIngestNotifyStreams), so the factory never caches them.
 func NewManager(
 	factory *informer.Factory,
 	provider metrics.Provider,
@@ -206,6 +220,7 @@ func NewManager(
 	recorder *telemetry.Recorder,
 	meta snapshot.ClusterMeta,
 	dynamicClient dynamic.Interface,
+	ingestManager *ingest.IngestManager,
 ) *Manager {
 	if logger == nil {
 		logger = applog.Noop
@@ -222,6 +237,11 @@ func NewManager(
 		buffers:         make(map[string]*updateBuffer),
 		sequences:       make(map[string]uint64),
 	}
+	if ingestManager != nil {
+		mgr.podIngest = ingestManager
+		mgr.workloadIngest = ingestManager
+		mgr.nodeIngest = ingestManager
+	}
 
 	if factory == nil {
 		return mgr
@@ -232,13 +252,17 @@ func NewManager(
 		return mgr
 	}
 
-	mgr.registerPodStreams(factory)
-	mgr.registerConfigStreams(factory)
-	mgr.registerNetworkStreams(factory)
+	mgr.registerPodStreams(factory, ingestManager)
+	mgr.registerHelmStorageStreams(factory)
+	mgr.registerNetworkStreams(factory, ingestManager)
 	mgr.registerDescriptorStreams(factory)
 	mgr.registerAutoscalingStreams(factory)
-	mgr.registerNodeStreams(factory)
-	mgr.registerWorkloadStreams(factory)
+	mgr.registerNodeStreams(factory, ingestManager)
+	mgr.registerWorkloadStreams(factory, ingestManager)
+
+	// IngestOwned kinds have no typed informer in the factory; their signal-only
+	// change signal comes from the ingest reflector's Catalog-half Sink instead.
+	mgr.registerIngestNotifyStreams(ingestManager)
 
 	mgr.initCustomResourceInformers(factory)
 
@@ -602,17 +626,17 @@ func (m *Manager) ResumeSelector(selector StreamSelector, since uint64) ([]Updat
 	return m.streamHub().resume(selector, since)
 }
 
+// handleConfigMap and handleSecret fire the Helm-release refresh signal for one
+// release-storage object. ConfigMap and Secret are owned-reflector ingest kinds, so
+// the namespace-config table's live notify is driven by the generic ingest notify
+// sink (registerIngestNotifyStreams); these handlers carry ONLY the helm-release
+// side-effect, fed by the dedicated label-filtered helm-storage informers
+// (registerHelmStorageStreams) which hold the full typed release objects.
 func (m *Manager) handleConfigMap(obj interface{}, updateType MessageType) {
 	cm := configMapFromObject(obj)
 	if cm == nil {
 		return
 	}
-
-	summary := configmap.BuildStreamSummary(m.clusterMeta, cm)
-	ref := m.resourceRefForObject(cm, configmap.Identity.Group, configmap.Identity.Version, configmap.Identity.Kind, configmap.Identity.Resource)
-	update := m.newObjectRowUpdate(updateType, domainNamespaceConfig, cm, ref, summary)
-
-	m.broadcast(domainNamespaceConfig, scopesForNamespace(cm.Namespace), update)
 	m.maybeBroadcastHelmRefreshFromConfigMap(cm, updateType)
 }
 
@@ -640,12 +664,6 @@ func (m *Manager) handleSecret(obj interface{}, updateType MessageType) {
 	if secret == nil {
 		return
 	}
-
-	summary := secretpkg.BuildStreamSummary(m.clusterMeta, secret)
-	ref := m.resourceRefForObject(secret, secretpkg.Identity.Group, secretpkg.Identity.Version, secretpkg.Identity.Kind, secretpkg.Identity.Resource)
-	update := m.newObjectRowUpdate(updateType, domainNamespaceConfig, secret, ref, summary)
-
-	m.broadcast(domainNamespaceConfig, scopesForNamespace(secret.Namespace), update)
 	m.maybeBroadcastHelmRefresh(secret, updateType)
 }
 
@@ -852,7 +870,7 @@ func (m *Manager) handleWorkloadFromHPA(hpa *autoscalingv1.HorizontalPodAutoscal
 	if !ok {
 		return
 	}
-	// notify-only: signal the targeted workload so its query-backed row refetches
+	// signal-only: signal the targeted workload so its query-backed row refetches
 	// (and picks up the new/removed HPA context from the snapshot builder).
 	if kind == podspkg.Identity.Kind {
 		m.broadcastStandalonePodWorkloadRow(namespace, name, hpa.ResourceVersion)
@@ -897,6 +915,84 @@ func (m *Manager) podMetricsSnapshot() map[string]metrics.PodUsage {
 	return m.metrics.LatestPodUsage()
 }
 
+func (m *Manager) BroadcastMetricRefresh(version string) {
+	if m == nil {
+		return
+	}
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return
+	}
+	update := Update{
+		Type:    MessageTypeModified,
+		Source:  SourceMetric,
+		Signal:  SignalChanged,
+		Version: version,
+	}
+	for _, domain := range []string{domainPods, domainWorkloads, domainNodes} {
+		scopes := m.subscribedScopes(domain)
+		if len(scopes) > 0 {
+			domainUpdate := update
+			domainUpdate.ClusterID = m.clusterMeta.ClusterID
+			domainUpdate.ClusterName = m.clusterMeta.ClusterName
+			domainUpdate.Domain = domain
+			m.broadcast(domain, scopes, domainUpdate)
+		}
+	}
+}
+
+func (m *Manager) BroadcastCatalogRefresh(version string) {
+	if m == nil {
+		return
+	}
+	m.broadcastDoorbellRefresh(domainCatalog, m.subscribedScopes(domainCatalog), SourceCatalog, version)
+}
+
+func (m *Manager) BroadcastEventRefresh(domain, scope, version string) {
+	if m == nil {
+		return
+	}
+	selector, err := ParseStreamSelector(m.clusterMeta.ClusterID, domain, scope)
+	if err != nil {
+		return
+	}
+	m.broadcastDoorbellRefresh(domain, []string{selector.CanonicalScope()}, SourceEvent, version)
+}
+
+func (m *Manager) broadcastDoorbellRefresh(domain string, scopes []string, source Source, version string) {
+	if m == nil {
+		return
+	}
+	version = strings.TrimSpace(version)
+	if version == "" || len(scopes) == 0 {
+		return
+	}
+	update := Update{
+		Type:        MessageTypeModified,
+		ClusterID:   m.clusterMeta.ClusterID,
+		ClusterName: m.clusterMeta.ClusterName,
+		Domain:      domain,
+		Source:      source,
+		Signal:      SignalChanged,
+		Version:     version,
+	}
+	m.broadcast(domain, scopes, update)
+}
+
+func (m *Manager) subscribedScopes(domain string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	domainSubs := m.subscribers[domain]
+	if len(domainSubs) == 0 {
+		return nil
+	}
+	scopes := make([]string, 0, len(domainSubs))
+	for scope := range domainSubs {
+		scopes = append(scopes, scope)
+	}
+	return scopes
+}
+
 func (m *Manager) broadcast(domain string, scopes []string, update Update) {
 	m.streamHub().broadcast(domain, scopes, update)
 }
@@ -920,7 +1016,17 @@ func (m *Manager) prepareBroadcast(domain, scope string, update Update) (Update,
 	if len(scopeSubs) > 0 || bufferExists {
 		// Buffer updates only when there are active or recent subscribers for this scope.
 		sequence := m.nextSequenceLocked(domain, scope)
-		scopedUpdate.Sequence = strconv.FormatUint(sequence, 10)
+		sequenceToken := strconv.FormatUint(sequence, 10)
+		scopedUpdate.Sequence = sequenceToken
+		if scopedUpdate.Source == "" {
+			scopedUpdate.Source = SourceObject
+		}
+		if scopedUpdate.Signal == "" {
+			scopedUpdate.Signal = SignalChanged
+		}
+		if strings.TrimSpace(scopedUpdate.Version) == "" {
+			scopedUpdate.Version = sequenceToken
+		}
 		buffer := m.bufferLocked(domain, scope)
 		buffer.Add(bufferedUpdate{sequence: sequence, update: scopedUpdate})
 	}
@@ -1057,7 +1163,11 @@ func (m *Manager) listEndpointSlicesForService(namespace, service string) ([]*di
 	return m.sliceLister.EndpointSlices(namespace).List(selector)
 }
 
-func (m *Manager) lookupWorkload(kind, namespace, name string) (metav1.Object, error) {
+// lookupWorkloadObject resolves a workload object via a typed lister. Production wires no
+// workload listers (the kinds are cut to ingest), so this returns an error there and the
+// caller falls back to the ingest catalog half (see lookupWorkloadRef); only the unit tests
+// that drive the typed handlers wire these listers.
+func (m *Manager) lookupWorkloadObject(kind, namespace, name string) (metav1.Object, error) {
 	switch strings.ToLower(kind) {
 	case "deployment":
 		if m.deploymentLister == nil {
@@ -1129,11 +1239,6 @@ func customResourceFromObject(obj interface{}) *unstructured.Unstructured {
 
 func podFromObject(obj interface{}) *corev1.Pod {
 	typed, _ := objectAs[*corev1.Pod](obj)
-	return typed
-}
-
-func nodeFromObject(obj interface{}) *corev1.Node {
-	typed, _ := objectAs[*corev1.Node](obj)
 	return typed
 }
 

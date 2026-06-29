@@ -29,12 +29,14 @@ const {
       status: 'ready' as string,
       data: {},
       version: 1,
+      sourceVersion: 'source:1',
       checksum: '',
       lastUpdated: 11,
     } as {
       status?: string;
       data?: unknown;
       version?: number;
+      sourceVersion?: string;
       checksum?: string;
       lastUpdated?: number;
     },
@@ -125,8 +127,7 @@ const publishedTableState = {
 
 const paginationLoading = (
   result:
-    | ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>>
-    | undefined
+    ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>> | undefined
 ): boolean | undefined =>
   ((result?.gridTableProps as any)?.paginationControls as any)?.props?.loading;
 
@@ -142,6 +143,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
       status: 'ready',
       data: {},
       version: 1,
+      sourceVersion: 'source:1',
       checksum: '',
       lastUpdated: 11,
     };
@@ -218,7 +220,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
     expect(useTypedResourceQueryMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
         domain: 'nodes',
-        liveDataVersion: '1::',
+        liveDataVersion: 'source:1',
       })
     );
 
@@ -226,6 +228,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
       status: 'ready',
       data: {},
       version: 2,
+      sourceVersion: 'source:2',
       checksum: 'fresh',
       lastUpdated: 22,
     };
@@ -237,7 +240,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
     expect(useTypedResourceQueryMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
         domain: 'nodes',
-        liveDataVersion: '2:fresh:',
+        liveDataVersion: 'source:2',
       })
     );
   });
@@ -273,7 +276,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
     expect(useTypedResourceQueryMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
         domain: 'pods',
-        liveDataVersion: '1::',
+        liveDataVersion: 'source:1',
       })
     );
 
@@ -281,6 +284,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
       status: 'ready',
       data: {},
       version: 3,
+      sourceVersion: 'source:3',
       checksum: '',
       lastUpdated: 33,
     };
@@ -292,7 +296,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
     expect(useTypedResourceQueryMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
         domain: 'pods',
-        liveDataVersion: '3::',
+        liveDataVersion: 'source:3',
       })
     );
   });
@@ -366,8 +370,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
 
   it('keeps cluster tables in initial loading until the typed query can run', () => {
     let result:
-      | ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>>
-      | undefined;
+      ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>> | undefined;
     const Probe: React.FC = () => {
       result = useQueryBackedClusterResourceGridTable<TestPayload, TestRow>({
         clusterId: 'cluster-a',
@@ -401,8 +404,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
 
   it('keeps namespace tables in initial loading until the typed query can run', () => {
     let result:
-      | ReturnType<typeof useQueryBackedNamespaceResourceGridTable<TestPayload, TestRow>>
-      | undefined;
+      ReturnType<typeof useQueryBackedNamespaceResourceGridTable<TestPayload, TestRow>> | undefined;
     const Probe: React.FC = () => {
       result = useQueryBackedNamespaceResourceGridTable<TestPayload, TestRow>({
         clusterId: 'cluster-a',
@@ -437,8 +439,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
 
   it('does not run the first typed query while the live base domain is still initialising', async () => {
     let result:
-      | ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>>
-      | undefined;
+      ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>> | undefined;
     const Probe: React.FC = () => {
       result = useQueryBackedClusterResourceGridTable<TestPayload, TestRow>({
         clusterId: 'cluster-a',
@@ -487,6 +488,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
       status: 'ready',
       data: { resources: [] },
       version: 2,
+      sourceVersion: 'source:ready',
       checksum: 'ready',
       lastUpdated: 22,
     };
@@ -498,15 +500,14 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
     expect(useTypedResourceQueryMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
         domain: 'cluster-config',
-        liveDataVersion: '2:ready:',
+        liveDataVersion: 'source:ready',
       })
     );
   });
 
   it('allows the first cluster query when the live base domain is idle', async () => {
     let result:
-      | ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>>
-      | undefined;
+      ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>> | undefined;
     const Probe: React.FC = () => {
       result = useQueryBackedClusterResourceGridTable<TestPayload, TestRow>({
         clusterId: 'cluster-a',
@@ -572,8 +573,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
 
   it('allows the first namespace query when the live base domain is idle', async () => {
     let result:
-      | ReturnType<typeof useQueryBackedNamespaceResourceGridTable<TestPayload, TestRow>>
-      | undefined;
+      ReturnType<typeof useQueryBackedNamespaceResourceGridTable<TestPayload, TestRow>> | undefined;
     const Probe: React.FC = () => {
       result = useQueryBackedNamespaceResourceGridTable<TestPayload, TestRow>({
         clusterId: 'cluster-a',
@@ -640,8 +640,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
 
   it('does not expose table loading during a query refresh that already has rows', async () => {
     let result:
-      | ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>>
-      | undefined;
+      ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>> | undefined;
     const Probe: React.FC = () => {
       result = useQueryBackedClusterResourceGridTable<TestPayload, TestRow>({
         clusterId: 'cluster-a',
@@ -696,8 +695,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
 
   it('exposes table loading during a query load with no rows yet', async () => {
     let result:
-      | ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>>
-      | undefined;
+      ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>> | undefined;
     const Probe: React.FC = () => {
       result = useQueryBackedClusterResourceGridTable<TestPayload, TestRow>({
         clusterId: 'cluster-a',
@@ -752,8 +750,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
 
   it('uses empty query results by default when local rows exist', async () => {
     let result:
-      | ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>>
-      | undefined;
+      ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>> | undefined;
     const Probe: React.FC = () => {
       result = useQueryBackedClusterResourceGridTable<TestPayload, TestRow>({
         clusterId: 'cluster-a',
@@ -810,8 +807,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
 
   it('exposes pagination loading only while a pagination request is in flight', async () => {
     let result:
-      | ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>>
-      | undefined;
+      ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>> | undefined;
     const Probe: React.FC = () => {
       result = useQueryBackedClusterResourceGridTable<TestPayload, TestRow>({
         clusterId: 'cluster-a',
@@ -917,8 +913,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
 
   it('uses persisted rows per page for the query and saves page size changes', async () => {
     let result:
-      | ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>>
-      | undefined;
+      ReturnType<typeof useQueryBackedClusterResourceGridTable<TestPayload, TestRow>> | undefined;
     const Probe: React.FC = () => {
       result = useQueryBackedClusterResourceGridTable<TestPayload, TestRow>({
         clusterId: 'cluster-a',

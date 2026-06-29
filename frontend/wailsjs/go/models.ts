@@ -4111,8 +4111,8 @@ export namespace snapshot {
 	    kind: string;
 	    name: string;
 	    namespace?: string;
-	    apiGroup: string;
-	    apiVersion: string;
+	    group: string;
+	    version: string;
 	    crdName?: string;
 	    status?: string;
 	    statusState?: string;
@@ -4135,8 +4135,8 @@ export namespace snapshot {
 	        this.kind = source["kind"];
 	        this.name = source["name"];
 	        this.namespace = source["namespace"];
-	        this.apiGroup = source["apiGroup"];
-	        this.apiVersion = source["apiVersion"];
+	        this.group = source["group"];
+	        this.version = source["version"];
 	        this.crdName = source["crdName"];
 	        this.status = source["status"];
 	        this.statusState = source["statusState"];
@@ -4803,10 +4803,6 @@ export namespace types {
 	}
 	export class ContainerLogsFetchRequest {
 	    scope?: string;
-	    namespace: string;
-	    workloadName?: string;
-	    workloadKind?: string;
-	    podName?: string;
 	    podFilter?: string;
 	    podInclude?: string;
 	    podExclude?: string;
@@ -4828,10 +4824,6 @@ export namespace types {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.scope = source["scope"];
-	        this.namespace = source["namespace"];
-	        this.workloadName = source["workloadName"];
-	        this.workloadKind = source["workloadKind"];
-	        this.podName = source["podName"];
 	        this.podFilter = source["podFilter"];
 	        this.podInclude = source["podInclude"];
 	        this.podExclude = source["podExclude"];
@@ -5010,6 +5002,7 @@ export namespace types {
 	    duration?: string;
 	    durationSeconds?: number;
 	    age: string;
+	    ageTimestamp?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new JobSimpleInfo(source);
@@ -5033,6 +5026,7 @@ export namespace types {
 	        this.duration = source["duration"];
 	        this.durationSeconds = source["durationSeconds"];
 	        this.age = source["age"];
+	        this.ageTimestamp = source["ageTimestamp"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

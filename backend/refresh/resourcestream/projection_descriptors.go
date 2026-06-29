@@ -3,6 +3,8 @@
 package resourcestream
 
 import (
+	"slices"
+
 	"github.com/luxury-yacht/app/backend/refresh/domainpermissions"
 	"github.com/luxury-yacht/app/backend/resourcekind"
 	apiextensionspkg "github.com/luxury-yacht/app/backend/resources/apiextensions"
@@ -29,11 +31,17 @@ type ProjectionDescriptor struct {
 	UpdateIdentity       string
 	PrimaryResources     []ResourceDescriptor
 	RelatedResources     []ResourceDescriptor
-	MetricsDependency    bool
+	SourceClocks         []Source
 	Projection           string
 	AffectedRowResolver  string
 	StaleScopeResolver   string
 	CompleteIsScopeLevel bool
+}
+
+// MetricsDependency reports whether the domain's rows depend on the metric
+// clock. It derives from SourceClocks so the metric clock has one authority.
+func (d ProjectionDescriptor) MetricsDependency() bool {
+	return slices.Contains(d.SourceClocks, SourceMetric)
 }
 
 type ResourceDescriptor struct {
@@ -55,6 +63,7 @@ func ProjectionDescriptors() map[string]ProjectionDescriptor {
 	for domain, descriptor := range projectionDescriptors {
 		descriptor.PrimaryResources = append([]ResourceDescriptor(nil), descriptor.PrimaryResources...)
 		descriptor.RelatedResources = append([]ResourceDescriptor(nil), descriptor.RelatedResources...)
+		descriptor.SourceClocks = append([]Source(nil), descriptor.SourceClocks...)
 		result[domain] = descriptor
 	}
 	return result
@@ -69,7 +78,7 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 		UpdateIdentity:       "ref (full ResourceRef)",
 		PrimaryResources:     []ResourceDescriptor{fromIdentity(podspkg.Identity)},
 		RelatedResources:     []ResourceDescriptor{fromIdentity(replicasetpkg.Identity)},
-		MetricsDependency:    true,
+		SourceClocks:         []Source{SourceObject, SourceMetric},
 		Projection:           "pods.BuildStreamSummary",
 		AffectedRowResolver:  "pod event -> pod row, workload row, node row",
 		StaleScopeResolver:   "stalePodScopes",
@@ -94,7 +103,7 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 			fromIdentity(replicasetpkg.Identity),
 			fromIdentity(hpapkg.IdentityV1),
 		},
-		MetricsDependency:    true,
+		SourceClocks:         []Source{SourceObject, SourceMetric},
 		Projection:           "snapshot.BuildWorkloadSummary / snapshot.BuildStandalonePodWorkloadSummary",
 		AffectedRowResolver:  "workload, pod, HPA, ReplicaSet event resolvers",
 		StaleScopeResolver:   "ReplicaSet and pod stale owner/scope resolvers",
@@ -114,6 +123,7 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 		UpdateIdentity:       "ref (full ResourceRef)",
 		PrimaryResources:     streamResourceDescriptors(domainNamespaceNetwork),
 		RelatedResources:     []ResourceDescriptor{fromIdentity(endpointslicepkg.Identity)},
+		SourceClocks:         []Source{SourceObject},
 		Projection:           "service/ingress/networkpolicy/endpointslice/gatewayapi BuildStreamSummary",
 		AffectedRowResolver:  "network object and EndpointSlice->Service resolvers",
 		StaleScopeResolver:   "EndpointSlice old/new service resolver",
@@ -133,6 +143,7 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 		UpdateIdentity:       "ref (full ResourceRef)",
 		PrimaryResources:     []ResourceDescriptor{},
 		RelatedResources:     []ResourceDescriptor{fromIdentity(apiextensionspkg.Identity)},
+		SourceClocks:         []Source{SourceObject},
 		Projection:           "snapshot.BuildNamespaceCustomSummary",
 		AffectedRowResolver:  "dynamic custom informer and CRD signature resolver",
 		StaleScopeResolver:   "CRD custom stream signature resolver",
@@ -146,6 +157,7 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 		UpdateIdentity:       "ref (full ResourceRef)",
 		PrimaryResources:     streamResourceDescriptors(domainNamespaceHelm),
 		RelatedResources:     streamResourceDescriptors(domainNamespaceHelm),
+		SourceClocks:         []Source{SourceObject},
 		Projection:           "snapshot.mapHelmReleases",
 		AffectedRowResolver:  "Secret/ConfigMap old/new Helm release identity resolver",
 		StaleScopeResolver:   "scope-level COMPLETE for affected namespaces",
@@ -197,6 +209,7 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 		UpdateIdentity:       "ref (full ResourceRef)",
 		PrimaryResources:     []ResourceDescriptor{},
 		RelatedResources:     []ResourceDescriptor{fromIdentity(apiextensionspkg.Identity)},
+		SourceClocks:         []Source{SourceObject},
 		Projection:           "snapshot.BuildClusterCustomSummary",
 		AffectedRowResolver:  "dynamic custom informer and CRD signature resolver",
 		StaleScopeResolver:   "CRD custom stream signature resolver",
@@ -210,7 +223,7 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 		UpdateIdentity:       "ref (full ResourceRef)",
 		PrimaryResources:     []ResourceDescriptor{fromIdentity(nodespkg.Identity)},
 		RelatedResources:     []ResourceDescriptor{fromIdentity(podspkg.Identity)},
-		MetricsDependency:    true,
+		SourceClocks:         []Source{SourceObject, SourceMetric},
 		Projection:           "snapshot.BuildNodeSummary",
 		AffectedRowResolver:  "node and pod->node resolvers",
 		StaleScopeResolver:   "pod old/new node resolver",
@@ -227,6 +240,7 @@ func namespaceDescriptor(domain, projection string, primary, related []ResourceD
 		UpdateIdentity:       "ref (full ResourceRef)",
 		PrimaryResources:     primary,
 		RelatedResources:     related,
+		SourceClocks:         []Source{SourceObject},
 		Projection:           projection,
 		AffectedRowResolver:  "direct object event resolver",
 		StaleScopeResolver:   "none",
@@ -242,6 +256,7 @@ func clusterDescriptor(domain, projection string, primary []ResourceDescriptor) 
 		RowIdentity:          "clusterId + full GVK name",
 		UpdateIdentity:       "ref (full ResourceRef)",
 		PrimaryResources:     primary,
+		SourceClocks:         []Source{SourceObject},
 		Projection:           projection,
 		AffectedRowResolver:  "direct object event resolver",
 		StaleScopeResolver:   "none",

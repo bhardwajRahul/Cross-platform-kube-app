@@ -8,7 +8,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/objectcatalog"
+	"github.com/luxury-yacht/app/backend/refresh/resourcestream"
 	"github.com/luxury-yacht/app/backend/refresh/snapshot"
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
 	"github.com/stretchr/testify/require"
@@ -52,6 +54,82 @@ func TestStopObjectCatalogCancelsAndResets(t *testing.T) {
 	summary := app.telemetryRecorder.SnapshotSummary()
 	if summary.Catalog != nil && summary.Catalog.Enabled {
 		t.Fatalf("expected catalog telemetry to be disabled")
+	}
+}
+
+func TestStopObjectCatalogDoesNotBlockForeverWaitingForDone(t *testing.T) {
+	app := NewApp()
+	app.logger = NewLogger(10)
+
+	cancelCalled := make(chan struct{})
+	app.storeObjectCatalogEntry("cluster-a", &objectCatalogEntry{
+		service: &objectcatalog.Service{},
+		cancel:  func() { close(cancelCalled) },
+		done:    make(chan struct{}),
+	})
+
+	returned := make(chan struct{})
+	go func() {
+		app.stopObjectCatalog()
+		close(returned)
+	}()
+
+	select {
+	case <-cancelCalled:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected catalog stop to cancel the running catalog")
+	}
+
+	select {
+	case <-returned:
+	case <-time.After(config.RefreshShutdownTimeout + 500*time.Millisecond):
+		t.Fatal("stopObjectCatalog blocked waiting for catalog done")
+	}
+}
+
+func TestCatalogDoorbellBridgeBroadcastsCatalogSource(t *testing.T) {
+	manager := resourcestream.NewManager(
+		nil,
+		nil,
+		nil,
+		nil,
+		snapshot.ClusterMeta{ClusterID: "cluster-a", ClusterName: "Cluster A"},
+		nil,
+		nil,
+	)
+	selector, err := resourcestream.ParseStreamSelector("cluster-a", "catalog", "")
+	require.NoError(t, err)
+	sub, err := manager.SubscribeSelector(selector)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	updates := make(chan objectcatalog.StreamingUpdate, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runCatalogDoorbellBridge(ctx, updates, manager)
+	}()
+
+	updates <- objectcatalog.StreamingUpdate{Ready: true}
+
+	select {
+	case update := <-sub.Updates:
+		require.Equal(t, "catalog", update.Domain)
+		require.Equal(t, "", update.Scope)
+		require.Equal(t, resourcestream.SourceCatalog, update.Source)
+		require.Equal(t, resourcestream.SignalChanged, update.Signal)
+		require.Equal(t, "1", update.Version)
+		require.Equal(t, "cluster-a", update.ClusterID)
+	case <-time.After(time.Second):
+		t.Fatal("expected catalog doorbell update")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("catalog doorbell bridge did not stop")
 	}
 }
 
@@ -301,8 +379,8 @@ func TestHydrateCatalogCustomRowsFetchesOnlyCurrentPageRows(t *testing.T) {
 	require.Equal(t, "Cluster B", rows[0].ClusterName)
 	require.Equal(t, "Widget", rows[0].Kind)
 	require.Equal(t, "apps", rows[0].Namespace)
-	require.Equal(t, "example.com", rows[0].APIGroup)
-	require.Equal(t, "v1", rows[0].APIVersion)
+	require.Equal(t, "example.com", rows[0].Group)
+	require.Equal(t, "v1", rows[0].Version)
 	require.Equal(t, "widgets.example.com", rows[0].CRDName)
 	require.Equal(t, "Ready", rows[0].Status)
 	require.Equal(t, "ready", rows[0].StatusPresentation)

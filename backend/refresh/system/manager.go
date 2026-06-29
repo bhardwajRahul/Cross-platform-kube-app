@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
@@ -25,12 +27,14 @@ import (
 
 	"github.com/luxury-yacht/app/backend/internal/applog"
 	"github.com/luxury-yacht/app/backend/internal/config"
+	"github.com/luxury-yacht/app/backend/kind/streamrows"
 	"github.com/luxury-yacht/app/backend/objectcatalog"
 	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/containerlogsstream"
 	"github.com/luxury-yacht/app/backend/refresh/domain"
 	"github.com/luxury-yacht/app/backend/refresh/eventstream"
 	"github.com/luxury-yacht/app/backend/refresh/informer"
+	"github.com/luxury-yacht/app/backend/refresh/ingest"
 	"github.com/luxury-yacht/app/backend/refresh/metrics"
 	"github.com/luxury-yacht/app/backend/refresh/permissions"
 	"github.com/luxury-yacht/app/backend/refresh/resourcestream"
@@ -75,6 +79,7 @@ type Subsystem struct {
 	Telemetry        *telemetry.Recorder     // Telemetry recorder for capturing metrics and events.
 	PermissionIssues []PermissionIssue       // List of permission issues encountered during refresh.
 	InformerFactory  *informer.Factory       // Factory for creating informers.
+	IngestManager    *ingest.IngestManager   // Owned-reflector ingestion manager for cut kinds.
 	RuntimePerms     *permissions.Checker    // Checker for runtime permissions.
 	Registry         *domain.Registry        // Registry for managing domain information.
 	SnapshotService  refresh.SnapshotService // Service for managing snapshots.
@@ -82,6 +87,14 @@ type Subsystem struct {
 	EventStream      *eventstream.Manager    // Manager for event streams.
 	ResourceStream   *resourcestream.Manager // Manager for resource streams.
 	ClusterMeta      snapshot.ClusterMeta    // Metadata about the cluster.
+
+	// Cooled marks a subsystem in the governor's Cold-tier SERVING state: its informers,
+	// metrics poller, and permission revalidation are stopped (heap reclaimed) and its
+	// maintained stores have been swapped to off-heap mmap-backed columns, but it stays
+	// registered and serves Build queries from those stores (its SnapshotService runs a
+	// cooled, always-settled informer hub). A cooled subsystem is non-nil but NOT live:
+	// the governor re-warm path detects this and rebuilds a fresh, live subsystem.
+	Cooled bool
 }
 
 // NewSubsystem prepares the refresh manager, HTTP handler, and supporting services.
@@ -105,8 +118,63 @@ func NewSubsystem(cfg Config) (*refresh.Manager, http.Handler, *telemetry.Record
 func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 	registry := domain.New()
 	runtimePerms := permissions.NewChecker(cfg.KubernetesClient, cfg.ClusterID, 0)
+	// Decide once per process whether WatchList is usable, BEFORE the first
+	// informer factory issues a watch (client-go reads the WatchListClient gate
+	// lazily and caches it). If a bookmark-stripping proxy is in front of the
+	// apiserver this disables WatchList so informers fall back to LIST+WATCH
+	// instead of wedging. Idempotent — only the first cluster build runs the probe.
+	informer.EnsureWatchListDecision(context.Background(), cfg.KubernetesClient)
 	informerFactory := informer.New(cfg.KubernetesClient, cfg.APIExtensionsClient, cfg.ResyncInterval, runtimePerms).
 		WithGatewayFactory(cfg.GatewayInformerFactory, cfg.GatewayAPIPresence)
+
+	// Owned-reflector ingestion for cut kinds: build the manager, register each cut
+	// kind's table/catalog/object-map projectors, and let the composite hub start +
+	// sync-gate it alongside the factory. The factory no longer registers the cut
+	// kinds' informers (see informer.New), so the ingest manager is their sole source.
+	ingestManager := ingest.NewIngestManager(
+		streamrows.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName},
+		cfg.KubernetesClient,
+		cfg.APIExtensionsClient,
+		cfg.GatewayClient,
+	)
+	// Dynamic client for the on-demand dynamic (CRD-backed) reflectors the catalog promotes
+	// at runtime (objectcatalog maybePromote → RegisterDynamicCatalogReflector). Set before
+	// Start; nil leaves the on-demand path disabled and the catalog keeps listing CRs.
+	ingestManager.SetDynamicClient(cfg.DynamicClient)
+	registerIngestProjectors(ingestManager, cfg.ClusterID, cfg.ClusterName)
+	// Pods has no Stream descriptor (its table is the bespoke PodSummary), so the
+	// generic ingest loop above does not build it. Wire the pod reflector explicitly
+	// with its four-half projector, resolving the ReplicaSet->Deployment owner from
+	// the shared factory's RS lister — the RS informer stays registered (only pods is
+	// cut). Registered BEFORE the hub starts so the pod reflector launches with the
+	// rest and the initial relist is sync-gated.
+	registerPodReflector(ingestManager, informerFactory, snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName})
+	// The five workload kinds (Deployment/StatefulSet/DaemonSet/Job/CronJob) have no Stream
+	// descriptor either (their table is the bespoke cross-kind WorkloadSummary), so they too
+	// are wired with explicit bespoke projectors. ReplicaSet stays on its typed informer.
+	registerWorkloadReflectors(ingestManager, snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName})
+	// Service and EndpointSlice have no Stream descriptor either (a Service row is the bespoke
+	// Service↔EndpointSlice join), so they are wired with explicit bespoke projectors. Ingress
+	// and NetworkPolicy ARE Stream-backed and handled by the generic loop above.
+	registerNetworkReflectors(ingestManager, snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName})
+	// Node has no Stream descriptor either (its table is the bespoke NodeSummary whose row
+	// joins per-node pod aggregates + metrics), so it is wired with an explicit bespoke
+	// projector. The nodes domain re-joins pod aggregates + metrics at serve.
+	registerNodeReflector(ingestManager, snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName})
+
+	// Permission-gate the ingest reflectors the way the shared factory gates its
+	// informers: a cut kind the identity cannot list+watch is skipped at Start rather
+	// than launching a reflector that only 403-retries and waits out the sync deadline.
+	// CONSERVATIVE: skip ONLY on a confirmed denial (allowed==false, no error). On an
+	// SSAR error, run the reflector anyway — the per-kind sync-deadline degrade backstops
+	// a true failure, so a transient permission blip never wrongly excludes a kind with
+	// no retry. Permission preflight below primes the same checker before Start, and
+	// cache misses still run the normal SubjectAccessReview path.
+	ingestManager.SetPermissionFilter(ingestPermissionFilter(
+		informerFactory.CanListResource, informerFactory.CanWatchResource))
+
+	informerHub := newIngestInformerHub(informerFactory, ingestManager)
+
 	var permissionIssues []PermissionIssue
 
 	// appendIssue adds a permission issue to the list if any errors are present.
@@ -134,8 +202,11 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 	clusterMeta := snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName}
 
 	var (
-		metricsPoller   refresh.MetricsPoller
-		metricsProvider metrics.Provider
+		metricsPoller      refresh.MetricsPoller
+		metricsProvider    metrics.Provider
+		metricSignalSource interface {
+			SetSuccessObserver(func(string, metrics.Metadata))
+		}
 	)
 
 	serverHost := ""
@@ -166,6 +237,7 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 		demandPoller := metrics.NewDemandPoller(poller, poller, idleTimeout)
 		metricsPoller = demandPoller
 		metricsProvider = demandPoller
+		metricSignalSource = poller
 	} else {
 		logSkip("metrics-poller", "metrics.k8s.io", "nodes/pods")
 
@@ -192,6 +264,7 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 	deps := registrationDeps{
 		registry:        registry,
 		informerFactory: informerFactory,
+		ingestManager:   ingestManager,
 		metricsProvider: metricsProvider,
 		cfg:             cfg,
 		gate:            gate,
@@ -220,11 +293,11 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 		telemetryRecorder,
 		clusterMeta,
 		runtimePerms,
-	).WithInformerHub(informerFactory).
+	).WithInformerHub(informerHub).
 		WithDomainReadiness(domainReadinessResources(registrations))
 	queue := refresh.NewInMemoryQueue()
 
-	manager := refresh.NewManager(registry, informerFactory, snapshotService, metricsPoller, queue)
+	manager := refresh.NewManager(registry, informerHub, snapshotService, metricsPoller, queue)
 
 	// Build the core refresh routes once so all server configurations stay consistent.
 	mux := BuildRefreshMux(MuxConfig{
@@ -232,11 +305,12 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 		ManualQueue:     queue,
 		Telemetry:       telemetryRecorder,
 		Metrics:         manager,
-		HealthHub:       informerFactory,
+		HealthHub:       informerHub,
 	})
 
 	eventManager, resourceManager, err := registerStreamHandlers(mux, streamDeps{
 		informerFactory: informerFactory,
+		ingestManager:   ingestManager,
 		snapshotService: snapshotService,
 		metricsProvider: metricsProvider,
 		cfg:             cfg,
@@ -246,6 +320,14 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 	if err != nil {
 		return nil, err
 	}
+	if metricSignalSource != nil && resourceManager != nil {
+		metricSignalSource.SetSuccessObserver(func(revision string, _ metrics.Metadata) {
+			resourceManager.BroadcastMetricRefresh(revision)
+		})
+	}
+	if eventManager != nil && resourceManager != nil {
+		eventManager.SetSignalObserver(eventSignalObserver(resourceManager))
+	}
 
 	return &Subsystem{
 		Manager:          manager,
@@ -253,6 +335,7 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 		Telemetry:        telemetryRecorder,
 		PermissionIssues: permissionIssues,
 		InformerFactory:  informerFactory,
+		IngestManager:    ingestManager,
 		RuntimePerms:     runtimePerms,
 		Registry:         registry,
 		SnapshotService:  snapshotService,
@@ -261,6 +344,43 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 		ResourceStream:   resourceManager,
 		ClusterMeta:      clusterMeta,
 	}, nil
+}
+
+func eventSignalObserver(resourceManager *resourcestream.Manager) func(scope string, sequence uint64) {
+	return func(scope string, sequence uint64) {
+		if resourceManager == nil || sequence == 0 {
+			return
+		}
+		domain := "cluster-events"
+		targetScope := ""
+		trimmed := strings.TrimSpace(scope)
+		if strings.HasPrefix(trimmed, "namespace:") {
+			domain = "namespace-events"
+			targetScope = trimmed
+		} else if trimmed != "" && trimmed != "cluster" {
+			return
+		}
+		resourceManager.BroadcastEventRefresh(domain, targetScope, strconv.FormatUint(sequence, 10))
+	}
+}
+
+// ingestPermissionFilter builds the predicate the ingest manager uses to decide whether
+// to launch each cut kind's reflector. It mirrors the shared factory's permission-skip
+// but conservatively: it skips a kind ONLY on a confirmed denial (allowed==false with no
+// error). On an SSAR error it returns true so the reflector still runs — the per-kind
+// sync-deadline degrade is the backstop, so a transient permission blip never wrongly
+// excludes a kind with no retry. canList/canWatch are the factory's CanListResource/
+// CanWatchResource.
+func ingestPermissionFilter(canList, canWatch func(group, resource string) (bool, error)) func(group, resource string) bool {
+	return func(group, resource string) bool {
+		if allowed, err := canList(group, resource); err == nil && !allowed {
+			return false
+		}
+		if allowed, err := canWatch(group, resource); err == nil && !allowed {
+			return false
+		}
+		return true
+	}
 }
 
 // HealthHandler returns an HTTP handler compatible with /healthz/refresh.

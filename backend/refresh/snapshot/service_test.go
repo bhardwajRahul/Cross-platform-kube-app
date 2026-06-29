@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/domain"
@@ -70,6 +72,57 @@ func (h *fakeInformerHub) setPending(key string, pending bool) {
 	h.pending[key] = pending
 }
 
+// TestServiceSetInformerHubSwapsSyncGate proves the cool path can swap a Service's informer
+// hub at runtime: a Build gated by a NOT-yet-synced hub starts blocked, then once
+// SetInformerHub installs an always-synced hub (the cooled-cluster contract — its frozen data
+// is resident, so the sync gate must report settled immediately), the same Build proceeds.
+// The swap and the in-flight Build's hub read run concurrently, so -race proves no data race.
+func TestServiceSetInformerHubSwapsSyncGate(t *testing.T) {
+	reg := domain.New()
+	require.NoError(t, reg.Register(refresh.DomainConfig{
+		Name: "demo",
+		BuildSnapshot: func(_ context.Context, scope string) (*refresh.Snapshot, error) {
+			return &refresh.Snapshot{Domain: "demo", Scope: scope}, nil
+		},
+	}))
+
+	pending := &fakeInformerHub{} // synced == false: the sync gate stays closed
+	service := NewService(reg, telemetry.NewRecorder(), testClusterMeta()).WithInformerHub(pending)
+	service.informerSyncTimeout = time.Second
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.Build(context.Background(), "demo", "scope-a")
+		done <- err
+	}()
+
+	// The Build must still be blocked on the unsynced hub's gate.
+	select {
+	case err := <-done:
+		t.Fatalf("Build returned %v before the hub reported synced", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	// Swap in a cooled hub that always reports synced — concurrently with the in-flight Build.
+	service.SetInformerHub(alwaysSyncedHub{})
+
+	select {
+	case err := <-done:
+		require.NoError(t, err, "Build proceeds once a synced hub is installed")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Build did not proceed after SetInformerHub installed a synced hub")
+	}
+}
+
+// alwaysSyncedHub is the cooled-cluster readiness gate: frozen data is resident, so it
+// reports settled immediately and its lifecycle methods are no-ops.
+type alwaysSyncedHub struct{}
+
+func (alwaysSyncedHub) Start(context.Context) error    { return nil }
+func (alwaysSyncedHub) HasSynced(context.Context) bool { return true }
+func (alwaysSyncedHub) ResourcesSettled([]string) bool { return true }
+func (alwaysSyncedHub) Shutdown() error                { return nil }
+
 func TestServiceBuildEmitsSequenceAndChecksum(t *testing.T) {
 	reg := domain.New()
 	if err := reg.Register(refresh.DomainConfig{
@@ -101,6 +154,10 @@ func TestServiceBuildEmitsSequenceAndChecksum(t *testing.T) {
 	if snap.Checksum == "" {
 		t.Fatalf("expected checksum to be set")
 	}
+	if snap.SourceVersion == "" {
+		t.Fatalf("expected sourceVersion to be set")
+	}
+	require.Equal(t, "0", snap.SourceVersions["object"])
 
 	summary := rec.SnapshotSummary()
 	if len(summary.Snapshots) != 1 {
@@ -109,6 +166,66 @@ func TestServiceBuildEmitsSequenceAndChecksum(t *testing.T) {
 	if summary.Snapshots[0].LastStatus != "success" || summary.Snapshots[0].LastError != "" {
 		t.Fatalf("expected successful snapshot telemetry, got %+v", summary.Snapshots[0])
 	}
+}
+
+func TestServiceSourceVersionIncludesEpoch(t *testing.T) {
+	reg := domain.New()
+	require.NoError(t, reg.Register(refresh.DomainConfig{
+		Name: "demo",
+		BuildSnapshot: func(_ context.Context, scope string) (*refresh.Snapshot, error) {
+			return &refresh.Snapshot{
+				Domain:  "demo",
+				Scope:   scope,
+				Version: 3,
+				Payload: map[string]string{
+					"hello": "world",
+				},
+			}, nil
+		},
+	}))
+
+	serviceA := NewService(reg, nil, testClusterMeta())
+	serviceB := NewService(reg, nil, testClusterMeta())
+	serviceA.epoch = "epoch-a"
+	serviceB.epoch = "epoch-b"
+
+	first, err := serviceA.Build(context.Background(), "demo", "scope-a")
+	require.NoError(t, err)
+	second, err := serviceB.Build(context.Background(), "demo", "scope-a")
+	require.NoError(t, err)
+
+	require.NotEmpty(t, first.SourceVersion)
+	require.NotEmpty(t, second.SourceVersion)
+	require.NotEqual(t, first.SourceVersion, second.SourceVersion)
+	require.Equal(t, first.SourceVersions, second.SourceVersions)
+}
+
+func TestServiceDoesNotCacheMetricSourceDomains(t *testing.T) {
+	reg := domain.New()
+	builds := 0
+	require.NoError(t, reg.Register(refresh.DomainConfig{
+		Name: "pods",
+		BuildSnapshot: func(_ context.Context, scope string) (*refresh.Snapshot, error) {
+			builds++
+			return &refresh.Snapshot{
+				Domain: "pods",
+				Scope:  scope,
+				SourceVersions: map[string]string{
+					"metric": time.Unix(0, int64(builds)).Format(time.RFC3339Nano),
+				},
+				Payload: map[string]int{"builds": builds},
+			}, nil
+		},
+	}))
+
+	service := NewService(reg, nil, testClusterMeta())
+	first, err := service.Build(context.Background(), "pods", "namespace:default")
+	require.NoError(t, err)
+	second, err := service.Build(context.Background(), "pods", "namespace:default")
+	require.NoError(t, err)
+
+	require.Equal(t, 2, builds)
+	require.NotEqual(t, first.SourceVersions["metric"], second.SourceVersions["metric"])
 }
 
 func TestServiceBuildWaitsForInformerSyncBeforeBuilding(t *testing.T) {

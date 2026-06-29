@@ -6,7 +6,10 @@ user-invocable: false
 
 # Refresh Subsystem Guide
 
-This subsystem is **fragile**. Changes historically break things. Read this before touching any refresh, streaming, snapshot, or domain code.
+This subsystem is **fragile**. Changes historically break things. Read this
+before touching any refresh, streaming, snapshot, or domain code. For metric
+source clocks and utilization consumers, also read
+`docs/architecture/resource-metrics.md`.
 
 ## Architecture Overview
 
@@ -159,8 +162,8 @@ to a `*Summary` struct, add an assertion in either an existing
 `TestBuild*SummaryPopulatesAllFields` test or the parity case so a missed
 population fails CI rather than silently dropping the field on stream rows.
 
-Per-domain stream metadata (scope kind, primary/related resources, metrics
-dependency) is authored once in the `resourceStream.domains` block of
+Per-domain stream metadata (source clocks, scope kind, primary/related
+resources, metrics dependency) is authored once in
 `backend/refresh/domain/refresh-domain-contract.json`. Backend
 (`TestResourceStreamDomainsMatchProjectionDescriptors`) and frontend
 (`resource stream domain descriptors > matches the backend-authored projection
@@ -185,13 +188,13 @@ tests and parity comparisons.
 
 ## Streaming
 
-Four stream types use the refresh HTTP server, with different transports:
+Three stream routes use the refresh HTTP server. Event and catalog liveness now
+travels as source-specific doorbells on the resources WebSocket; their rows are
+still fetched through snapshot/query domains.
 
 | Stream         | Transport         | Backend                                      | Frontend                                                            |
 | -------------- | ----------------- | -------------------------------------------- | ------------------------------------------------------------------- |
-| Events         | SSE (EventSource) | `backend/refresh/eventstream/`               | `frontend/src/core/refresh/streaming/eventStreamManager.ts`         |
-| Resources      | WebSocket         | `backend/refresh/resourcestream/`            | `frontend/src/core/refresh/streaming/resourceStreamManager.ts`      |
-| Catalog        | SSE (EventSource) | `backend/refresh/snapshot/catalog_stream.go` | `frontend/src/core/refresh/streaming/catalogStreamManager.ts`       |
+| Resources, events, catalog | WebSocket         | `backend/refresh/resourcestream/` plus event/catalog producer bridges | `frontend/src/core/refresh/streaming/resourceStreamManager.ts`      |
 | Container logs | SSE (EventSource) | `backend/refresh/containerlogsstream/`       | `frontend/src/core/refresh/streaming/containerLogsStreamManager.ts` |
 
 Frontend SSE managers share `frontend/src/core/refresh/streaming/sseStreamTransport.ts`
@@ -202,18 +205,27 @@ suspend/resume lives in
 error notification and kubeconfig-change suppression live in
 `frontend/src/core/refresh/streaming/streamErrorNotifier.ts`. The resource
 WebSocket manager also uses the shared timing, visibility, and terminal-error
-notification helpers. Keep event, catalog, log, and resource reducers separate
-unless tests prove their state semantics are identical.
+notification helpers. Keep log reducers separate from doorbell reducers unless
+tests prove their state semantics are identical.
 
-**Event stream resume:** Backend buffers recent events in a circular buffer per scope. On reconnect, frontend sends `?since=<sequence>` to resume. If the buffer overflowed, resume returns empty and the client must re-snapshot. **Resume is not guaranteed.**
+**Event/catalog doorbells:** The event and catalog producers emit
+`source=event` / `source=catalog` doorbells on `/api/v2/stream/resources`.
+Missed event resume becomes a `RESET` doorbell so consumers re-snapshot rather
+than keeping stale event rows.
+
+**Source-version contract:** Resource-stream signals carry source-specific
+refetch identity. Treat `Version` as an opaque equality token for the named
+`Source`; `Sequence` is transport resume/high-water metadata only,
+`streamRevision` is diagnostic/backward-compatible frontend state only, and
+Kubernetes `resourceVersion` is reflector metadata only. Metric-only source
+changes may refresh metric-backed pages but must not bump the object source
+version.
 
 **Resource stream resume:** Resource WebSocket subscriptions are keyed by a single cluster, domain, and normalized scope. The frontend sends resume tokens per subscription; expired buffers trigger `RESET` and a snapshot resync. Multi-cluster resource stream scopes are rejected on both the frontend subscription path and backend stream mux path, matching the broader single-cluster refresh-domain contract.
 
 **Stream endpoints:**
 
-- `/api/v2/stream/events`
 - `/api/v2/stream/resources`
-- `/api/v2/stream/catalog`
 - `/api/v2/stream/container-logs`
 
 ## RefreshManager (Frontend)
@@ -285,6 +297,8 @@ against snapshot runtime permissions by
 - [ ] Confirm backend aggregate handlers still route as a mux and do not merge snapshot/manual/event/resource results across clusters
 - [ ] For streamed table rows, check descriptor parity tests for row identity, update identity, sorting, empty payloads, and drift keys
 - [ ] Check if stream resume semantics are affected
+- [ ] For metric-bearing domains, confirm metric-only changes use the metric
+      source clock and do not re-project or re-store object rows
 - [ ] Test with multiple clusters connected
 - [ ] Test with a cluster that has restricted RBAC (not cluster-admin)
 - [ ] Verify diagnostics panel still shows correct status

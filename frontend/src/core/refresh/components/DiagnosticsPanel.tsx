@@ -240,6 +240,20 @@ const parseScopeQueryParams = (scopeTail: string): URLSearchParams => {
   return new URLSearchParams(query);
 };
 
+const scopeTailHasQuery = (scopeTail: string): boolean =>
+  scopeTail.includes('?') || scopeTail.includes('=') || scopeTail.includes('&');
+
+const isTransientResourceTableQueryScope = (
+  domain: RefreshDomain,
+  scope: string | undefined
+): boolean => {
+  if (DOMAIN_STREAM_MAP[domain] !== 'resources') {
+    return false;
+  }
+  const { scope: scopeTail } = parseClusterScopeList((scope ?? '').trim());
+  return scopeTailHasQuery(scopeTail);
+};
+
 const resolveScopeRole = (
   domain: RefreshDomain,
   scope: string | undefined
@@ -247,8 +261,7 @@ const resolveScopeRole = (
   const trimmed = (scope ?? '').trim();
   const { scope: scopeTail } = parseClusterScopeList(trimmed);
   const normalizedTail = scopeTail.trim().toLowerCase();
-  const hasQueryScope =
-    scopeTail.includes('?') || scopeTail.includes('=') || scopeTail.includes('&');
+  const hasQueryScope = scopeTailHasQuery(scopeTail);
 
   if (domain === 'catalog') {
     const params = parseScopeQueryParams(scopeTail);
@@ -846,7 +859,7 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
       }
       const tooltipParts = [`State: ${refresherState.status}`];
       if (metricsOnly) {
-        tooltipParts.push('Metrics-only polling');
+        tooltipParts.push('Metrics interval polling');
       }
       return { label: 'enabled', tooltip: tooltipParts.join(' • '), enabled: true };
     };
@@ -866,8 +879,8 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
       }
       if (metricsOnly && streamHealthy) {
         return {
-          label: 'metrics-only',
-          tooltip: 'Stream healthy; polling metrics snapshots only',
+          label: 'metrics interval',
+          tooltip: 'Stream healthy; metric interval triggers snapshot refetches',
         };
       }
       if (streamMode && streamActive && streamHealthy) {
@@ -882,8 +895,9 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
       return { label: 'snapshot', tooltip: 'Snapshot fetched on demand' };
     };
 
-    const baseRows = domainScopedStates.map<DiagnosticsRow>(
-      ({ domain, state, label, hasMetrics }) => {
+    const baseRows = domainScopedStates
+      .filter(({ domain, state }) => !isTransientResourceTableQueryScope(domain, state.scope))
+      .map<DiagnosticsRow>(({ domain, state, label, hasMetrics }) => {
         const effectiveScope = state.scope;
         const hasMetricsFlag = hasMetrics;
         const telemetryInfo = telemetrySummary?.snapshots.find((entry) => entry.domain === domain);
@@ -1188,8 +1202,7 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
           pollingStatus: pollingDetails.label,
           pollingTooltip: pollingDetails.tooltip,
         };
-      }
-    );
+      });
 
     const podRows = podScopeEntries.map<DiagnosticsRow>(([scope, state]) => {
       const payload = state.data as PodSnapshotPayload | null;

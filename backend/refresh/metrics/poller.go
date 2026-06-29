@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"strconv"
 	"sync"
 	"time"
 
@@ -25,12 +26,19 @@ import (
 type NodeUsage struct {
 	CPUUsageMilli    int64
 	MemoryUsageBytes int64
+	// Timestamp is metrics-server's per-sample timestamp (the right edge of the
+	// scrape interval [Timestamp-Window, Timestamp]). The overlay drops a sample
+	// that predates a same-named object's creation, so a deleted-and-recreated
+	// node never inherits a prior incarnation's numbers.
+	Timestamp time.Time
 }
 
 // PodUsage captures usage for an individual pod (aggregated across containers).
 type PodUsage struct {
 	CPUUsageMilli    int64
 	MemoryUsageBytes int64
+	// Timestamp is metrics-server's per-sample timestamp; see NodeUsage.Timestamp.
+	Timestamp time.Time
 }
 
 // Metadata captures poller health information.
@@ -97,6 +105,9 @@ type Poller struct {
 
 	nodeLister func(context.Context, *metricsclient.Clientset) (*metricsv1beta1.NodeMetricsList, error)
 	podLister  func(context.Context, *metricsclient.Clientset) (*metricsv1beta1.PodMetricsList, error)
+
+	observerMu      sync.RWMutex
+	successObserver func(revision string, metadata Metadata)
 }
 
 // NewPoller creates a Poller with optional pre-initialised metrics client.
@@ -146,6 +157,15 @@ func (p *Poller) Metadata() Metadata {
 		SuccessCount:        p.successCount,
 		FailureCount:        p.failureCount,
 	}
+}
+
+func (p *Poller) SetSuccessObserver(observer func(revision string, metadata Metadata)) {
+	if p == nil {
+		return
+	}
+	p.observerMu.Lock()
+	defer p.observerMu.Unlock()
+	p.successObserver = observer
 }
 
 // Start polls metrics until the context is cancelled.
@@ -202,7 +222,7 @@ func (p *Poller) refresh(ctx context.Context) error {
 
 	nodeUsage := make(map[string]NodeUsage, len(nodeResp.Items))
 	for _, metric := range nodeResp.Items {
-		usage := NodeUsage{}
+		usage := NodeUsage{Timestamp: metric.Timestamp.Time}
 		for resourceName, quantity := range metric.Usage {
 			switch resourceName {
 			case corev1.ResourceCPU:
@@ -226,7 +246,7 @@ func (p *Poller) refresh(ctx context.Context) error {
 
 	podUsage := make(map[string]PodUsage, len(podResp.Items))
 	for _, metric := range podResp.Items {
-		usage := PodUsage{}
+		usage := PodUsage{Timestamp: metric.Timestamp.Time}
 		for _, container := range metric.Containers {
 			for resourceName, quantity := range container.Usage {
 				switch resourceName {
@@ -252,12 +272,23 @@ func (p *Poller) refresh(ctx context.Context) error {
 	p.successCount++
 	p.mu.Unlock()
 
+	p.notifySuccess(strconv.FormatInt(now.UnixNano(), 10), p.Metadata())
+
 	// log.Printf("[refresh:metrics] poll succeeded: nodeMetrics=%d podMetrics=%d totalSuccess=%d", len(nodeUsage), len(podUsage), p.successCount)
 	if p.telemetry != nil {
 		p.recordMetricsTelemetry(time.Since(start), now, nil, 0, true)
 	}
 
 	return nil
+}
+
+func (p *Poller) notifySuccess(revision string, metadata Metadata) {
+	p.observerMu.RLock()
+	observer := p.successObserver
+	p.observerMu.RUnlock()
+	if observer != nil {
+		observer(revision, metadata)
+	}
 }
 
 func (p *Poller) listNodeMetricsWithRetry(ctx context.Context, client *metricsclient.Clientset) (*metricsv1beta1.NodeMetricsList, error) {

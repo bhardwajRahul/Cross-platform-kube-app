@@ -246,7 +246,7 @@ vi.mock('@shared/components/Tooltip', () => ({
 
 const testClusterId = 'alpha:ctx';
 const buildContainerLogsScope = (scope: string) => buildClusterScope(testClusterId, scope);
-const defaultScope = buildContainerLogsScope('team-a:deployment:api');
+const defaultScope = buildContainerLogsScope('team-a:apps/v1:deployment:api');
 let activeScope = defaultScope;
 
 const seedLogSnapshot = (
@@ -437,7 +437,7 @@ describe('LogViewer active pod synchronisation', () => {
     shortcutMocks.useShortcut.mockClear();
     act(() => {
       resetScopedDomainState('container-logs', activeScope);
-      seedLogSnapshot([], buildContainerLogsScope('team-a:pod:api'));
+      seedLogSnapshot([], buildContainerLogsScope('team-a:/v1:pod:api'));
     });
     await renderViewer({
       resourceKind: 'pod',
@@ -461,7 +461,7 @@ describe('LogViewer active pod synchronisation', () => {
           isInit: false,
         },
       ],
-      buildContainerLogsScope('team-a:pod:api')
+      buildContainerLogsScope('team-a:/v1:pod:api')
     );
 
     await renderViewer({
@@ -545,7 +545,7 @@ describe('LogViewer active pod synchronisation', () => {
           isInit: false,
         },
       ],
-      buildContainerLogsScope('team-a:pod:api')
+      buildContainerLogsScope('team-a:/v1:pod:api')
     );
 
     await renderViewer({
@@ -616,7 +616,7 @@ describe('LogViewer active pod synchronisation', () => {
             isInit: false,
           },
         ],
-        buildContainerLogsScope('team-a:pod:api')
+        buildContainerLogsScope('team-a:/v1:pod:api')
       );
     });
     await renderViewer({
@@ -661,8 +661,7 @@ describe('LogViewer active pod synchronisation', () => {
       registerCalls.length > 0 ? registerCalls[registerCalls.length - 1] : undefined;
     expect(registerCall).toBeTruthy();
     const fallbackFetcher = registerCall?.[1] as
-      | ((isManual?: boolean) => Promise<void>)
-      | undefined;
+      ((isManual?: boolean) => Promise<void>) | undefined;
     expect(typeof fallbackFetcher).toBe('function');
 
     (FetchContainerLogs as unknown as ViMock).mockClear();
@@ -676,7 +675,6 @@ describe('LogViewer active pod synchronisation', () => {
     expect(FetchContainerLogs).toHaveBeenCalledTimes(1);
     expect((FetchContainerLogs as unknown as ViMock).mock.calls[0][1]).toMatchObject({
       scope: defaultScope,
-      workloadKind: 'deployment',
     });
     expect(mockModules.orchestrator.restartStreamingDomain).not.toHaveBeenCalled();
   });
@@ -715,8 +713,7 @@ describe('LogViewer active pod synchronisation', () => {
 
     const registerCalls = mockModules.fallbackManager.register.mock.calls;
     const fallbackFetcher = registerCalls[registerCalls.length - 1]?.[1] as
-      | ((isManual?: boolean) => Promise<void>)
-      | undefined;
+      ((isManual?: boolean) => Promise<void>) | undefined;
 
     await act(async () => {
       await fallbackFetcher?.(true);
@@ -1021,7 +1018,7 @@ describe('LogViewer active pod synchronisation', () => {
           isInit: false,
         },
       ],
-      buildContainerLogsScope('team-a:pod:api-pod-0')
+      buildContainerLogsScope('team-a:/v1:pod:api-pod-0')
     );
 
     await renderViewer({ resourceKind: 'pod', resourceName: 'api-pod-0' });
@@ -1439,7 +1436,7 @@ describe('LogViewer active pod synchronisation', () => {
           isInit: false,
         },
       ],
-      buildContainerLogsScope('team-a:pod:api')
+      buildContainerLogsScope('team-a:/v1:pod:api')
     );
 
     await renderViewer({
@@ -1542,7 +1539,7 @@ describe('LogViewer active pod synchronisation', () => {
           isInit: false,
         },
       ],
-      buildContainerLogsScope('team-a:pod:api')
+      buildContainerLogsScope('team-a:/v1:pod:api')
     );
 
     await renderViewer({
@@ -1589,7 +1586,7 @@ describe('LogViewer active pod synchronisation', () => {
           isInit: false,
         },
       ],
-      buildContainerLogsScope('team-a:pod:api')
+      buildContainerLogsScope('team-a:/v1:pod:api')
     );
 
     await renderViewer({
@@ -1618,7 +1615,7 @@ describe('LogViewer active pod synchronisation', () => {
           isInit: false,
         },
       ],
-      buildContainerLogsScope('team-a:pod:api')
+      buildContainerLogsScope('team-a:/v1:pod:api')
     );
 
     await renderViewer({
@@ -1657,7 +1654,7 @@ describe('LogViewer active pod synchronisation', () => {
           isInit: false,
         },
       ],
-      buildContainerLogsScope('team-a:pod:api')
+      buildContainerLogsScope('team-a:/v1:pod:api')
     );
 
     await renderViewer({
@@ -1687,7 +1684,7 @@ describe('LogViewer active pod synchronisation', () => {
           isInit: false,
         },
       ],
-      buildContainerLogsScope('team-a:pod:api')
+      buildContainerLogsScope('team-a:/v1:pod:api')
     );
 
     await renderViewer({
@@ -1727,7 +1724,7 @@ describe('LogViewer active pod synchronisation', () => {
           isInit: true,
         },
       ],
-      buildContainerLogsScope('team-a:pod:api')
+      buildContainerLogsScope('team-a:/v1:pod:api')
     );
 
     await renderViewer({
@@ -1739,13 +1736,13 @@ describe('LogViewer active pod synchronisation', () => {
     await waitForMockCalls(GetContainerLogsScopeContainers as unknown as ViMock, 1);
     await flushAsync();
     expect(
-      getContainerLogsStreamScopeParams(buildContainerLogsScope('team-a:pod:api'))
+      getContainerLogsStreamScopeParams(buildContainerLogsScope('team-a:/v1:pod:api'))
     ).toBeUndefined();
     expect(mockModules.orchestrator.restartStreamingDomain).not.toHaveBeenCalled();
 
     expect((GetContainerLogsScopeContainers as unknown as ViMock).mock.calls[0]).toEqual([
       'alpha:ctx',
-      buildContainerLogsScope('team-a:pod:api'),
+      buildContainerLogsScope('team-a:/v1:pod:api'),
     ]);
 
     const containerSelect = container.querySelector<HTMLSelectElement>(
@@ -1776,12 +1773,14 @@ describe('LogViewer active pod synchronisation', () => {
     expect(filteredLines[0]).toContain('[2024-05-01T12:00:01Z]');
     expect(filteredLines[0]).not.toContain('[sidecar:init]');
     expect(filteredLines[0]).toContain('init complete');
-    expect(getContainerLogsStreamScopeParams(buildContainerLogsScope('team-a:pod:api'))).toEqual({
+    expect(
+      getContainerLogsStreamScopeParams(buildContainerLogsScope('team-a:/v1:pod:api'))
+    ).toEqual({
       selectedFilters: ['init:sidecar'],
     });
     expect(mockModules.orchestrator.restartStreamingDomain).toHaveBeenCalledWith(
       'container-logs',
-      buildContainerLogsScope('team-a:pod:api')
+      buildContainerLogsScope('team-a:/v1:pod:api')
     );
   });
 
@@ -1954,7 +1953,7 @@ describe('LogViewer active pod synchronisation', () => {
           isInit: false,
         },
       ],
-      buildContainerLogsScope('team-a:pod:api')
+      buildContainerLogsScope('team-a:/v1:pod:api')
     );
 
     await renderViewer({
@@ -2003,7 +2002,7 @@ describe('LogViewer active pod synchronisation', () => {
           isInit: false,
         },
       ],
-      buildContainerLogsScope('team-a:pod:api')
+      buildContainerLogsScope('team-a:/v1:pod:api')
     );
 
     await renderViewer({
@@ -2041,7 +2040,7 @@ describe('LogViewer active pod synchronisation', () => {
           isInit: false,
         },
       ],
-      buildContainerLogsScope('kube-system:daemonset:aws-node')
+      buildContainerLogsScope('kube-system:apps/v1:daemonset:aws-node')
     );
 
     await renderViewer({
@@ -2049,7 +2048,7 @@ describe('LogViewer active pod synchronisation', () => {
       resourceName: 'aws-node',
       resourceKind: 'daemonset',
       activePodNames: ['aws-node-a', 'aws-node-b'],
-      containerLogsScope: buildContainerLogsScope('kube-system:daemonset:aws-node'),
+      containerLogsScope: buildContainerLogsScope('kube-system:apps/v1:daemonset:aws-node'),
     });
 
     await waitForMockCalls(GetContainerLogsScopeContainers as unknown as ViMock, 1);
@@ -2359,7 +2358,7 @@ describe('LogViewer active pod synchronisation', () => {
   });
 
   it('shows previous log message when toggled with no data', async () => {
-    seedLogSnapshot([], buildContainerLogsScope('team-a:pod:api'));
+    seedLogSnapshot([], buildContainerLogsScope('team-a:/v1:pod:api'));
     (FetchContainerLogs as unknown as ViMock).mockResolvedValue({ entries: [] });
 
     await renderViewer({
@@ -2808,7 +2807,7 @@ describe('LogViewer active pod synchronisation', () => {
       resourceKind: 'Pod',
       resourceName: 'api',
       activePodNames: ['api'],
-      containerLogsScope: buildContainerLogsScope('team-a:pod:api'),
+      containerLogsScope: buildContainerLogsScope('team-a:/v1:pod:api'),
     });
 
     const chipStrip = container.querySelector('[aria-label="Active log filters"]');
@@ -2855,7 +2854,7 @@ describe('LogViewer active pod synchronisation', () => {
       resourceKind: 'Pod',
       resourceName: 'api',
       activePodNames: ['api'],
-      containerLogsScope: buildContainerLogsScope('team-a:pod:api'),
+      containerLogsScope: buildContainerLogsScope('team-a:/v1:pod:api'),
     });
 
     const removeTextFilterButton = container.querySelector<HTMLButtonElement>(

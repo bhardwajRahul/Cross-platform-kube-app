@@ -153,10 +153,6 @@ type ContainerLogsEntry struct {
 // ContainerLogsFetchRequest represents parameters for fetching logs
 type ContainerLogsFetchRequest struct {
 	Scope            string   `json:"scope,omitempty"`
-	Namespace        string   `json:"namespace"`
-	WorkloadName     string   `json:"workloadName,omitempty"`
-	WorkloadKind     string   `json:"workloadKind,omitempty"` // deployment, daemonset, etc.
-	PodName          string   `json:"podName,omitempty"`
 	PodFilter        string   `json:"podFilter,omitempty"`
 	PodInclude       string   `json:"podInclude,omitempty"`
 	PodExclude       string   `json:"podExclude,omitempty"`
@@ -470,15 +466,6 @@ type NsQuotaInfo struct {
 	Age       string `json:"age"`
 }
 
-// CustomResourceInfo represents a custom resource instance in a namespace
-type NsCustomResourceInfo struct {
-	Kind      string `json:"kind"` // The CRD kind (e.g., "VirtualService", "ServiceMonitor")
-	Name      string `json:"name"`
-	APIGroup  string `json:"apiGroup"` // The API group (e.g., "networking.istio.io")
-	Namespace string `json:"namespace"`
-	Age       string `json:"age"`
-}
-
 // NsHelmInfo represents basic Helm chart information in a namespace
 type NsHelmInfo struct {
 	Kind       string `json:"kind"`      // always "helmrelease"
@@ -728,6 +715,7 @@ type JobSimpleInfo struct {
 	Duration        string       `json:"duration,omitempty"`
 	DurationSeconds int64        `json:"durationSeconds,omitempty"`
 	Age             string       `json:"age"`
+	AgeTimestamp    int64        `json:"ageTimestamp,omitempty"`
 }
 type JobTemplateDetails struct {
 	Completions             *int32                   `json:"completions,omitempty"`

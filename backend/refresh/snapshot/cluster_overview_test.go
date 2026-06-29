@@ -170,8 +170,7 @@ func TestClusterOverviewBuilder(t *testing.T) {
 	}
 	builder := &ClusterOverviewBuilder{
 		client:          nil,
-		nodeLister:      testsupport.NewNodeLister(t, nodeFargate, nodeEC2),
-		podLister:       testsupport.NewPodLister(t, podRunning, podPending, podCompleted),
+		ingest:          newFakePodAggregateSource(nil, podRunning, podPending, podCompleted).withNodes(ClusterMeta{}, "", nodeFargate, nodeEC2),
 		namespaceLister: testsupport.NewNamespaceLister(t, nsA, nsB),
 		metrics: fakeClusterMetrics{
 			pods: map[string]metrics.PodUsage{
@@ -244,8 +243,7 @@ func TestClusterOverviewBuilderPreservesScopeAndClusterMeta(t *testing.T) {
 		ClusterName: "prod",
 	})
 	builder := &ClusterOverviewBuilder{
-		nodeLister:      testsupport.NewNodeLister(t),
-		podLister:       testsupport.NewPodLister(t),
+		ingest:          newFakePodAggregateSource(nil).withNodes(ClusterMeta{}, ""),
 		namespaceLister: testsupport.NewNamespaceLister(t),
 		metrics:         fakeClusterMetrics{},
 	}
@@ -330,15 +328,10 @@ func TestClusterOverviewBuilderAggregatesWorkloadResourceUsage(t *testing.T) {
 	}
 
 	builder := &ClusterOverviewBuilder{
-		nodeLister:       testsupport.NewNodeLister(t),
-		podLister:        testsupport.NewPodLister(t, pods...),
-		namespaceLister:  testsupport.NewNamespaceLister(t),
-		replicaSetLister: testsupport.NewReplicaSetLister(t, replicaSet),
-		cachedVersion:    "v1.30.0",
-		versionFetched:   now,
-		replicaSetHasSynced: func() bool {
-			return true
-		},
+		ingest:          newFakePodAggregateSource(testsupport.NewReplicaSetLister(t, replicaSet), pods...),
+		namespaceLister: testsupport.NewNamespaceLister(t),
+		cachedVersion:   "v1.30.0",
+		versionFetched:  now,
 		metrics: fakeClusterMetrics{
 			pods: map[string]metrics.PodUsage{
 				"default/api-7c8d9-a": {
@@ -432,8 +425,7 @@ func TestClusterOverviewBuilderUsesCatalog(t *testing.T) {
 	}
 
 	builder := &ClusterOverviewBuilder{
-		nodeLister:      testsupport.NewNodeLister(t, nodes...),
-		podLister:       testsupport.NewPodLister(t, pods...),
+		ingest:          newFakePodAggregateSource(nil, pods...).withNodes(ClusterMeta{}, "", nodes...),
 		namespaceLister: testsupport.NewNamespaceLister(t, namespaces...),
 		metrics: fakeClusterMetrics{
 			pods: map[string]metrics.PodUsage{
@@ -468,8 +460,7 @@ func TestClusterOverviewBuilderSkipsOptionalCachesUntilSynced(t *testing.T) {
 	now := time.Now()
 
 	builder := &ClusterOverviewBuilder{
-		nodeLister:      testsupport.NewNodeLister(t, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}),
-		podLister:       testsupport.NewPodLister(t),
+		ingest:          newFakePodAggregateSource(nil).withNodes(ClusterMeta{}, "", &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}),
 		namespaceLister: testsupport.NewNamespaceLister(t),
 		eventLister: testsupport.NewEventLister(t, &corev1.Event{
 			ObjectMeta: metav1.ObjectMeta{Name: "warn-a", Namespace: "default", UID: "event-1"},
@@ -485,22 +476,14 @@ func TestClusterOverviewBuilderSkipsOptionalCachesUntilSynced(t *testing.T) {
 				UID:        "pod-uid-1",
 			},
 		}),
-		deploymentLister:  testsupport.NewDeploymentLister(t, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "deploy-a", Namespace: "default"}}),
-		statefulSetLister: testsupport.NewStatefulSetLister(t, &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "stateful-a", Namespace: "default"}}),
-		daemonSetLister:   testsupport.NewDaemonSetLister(t, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "daemon-a", Namespace: "default"}}),
-		cronJobLister:     testsupport.NewCronJobLister(t, &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Name: "cron-a", Namespace: "default"}}),
 		hasSyncedFns: []cache.InformerSynced{
 			func() bool { return true },
 			func() bool { return true },
 			func() bool { return true },
 		},
-		eventHasSynced:       func() bool { return false },
-		deploymentHasSynced:  func() bool { return false },
-		statefulSetHasSynced: func() bool { return false },
-		daemonSetHasSynced:   func() bool { return false },
-		cronJobHasSynced:     func() bool { return false },
-		cachedVersion:        "v1.29.0",
-		versionFetched:       now,
+		eventHasSynced: func() bool { return false },
+		cachedVersion:  "v1.29.0",
+		versionFetched: now,
 	}
 
 	snapshot, err := builder.Build(context.Background(), "")
@@ -508,11 +491,50 @@ func TestClusterOverviewBuilderSkipsOptionalCachesUntilSynced(t *testing.T) {
 
 	payload, ok := snapshot.Payload.(ClusterOverviewSnapshot)
 	require.True(t, ok)
+	// The cut workload kinds' ingest stores are not synced in the fake source (default
+	// false), so the workload counts are zero — the ingest equivalent of the prior
+	// informer-not-synced gate.
 	require.Zero(t, payload.Overview.TotalDeployments)
 	require.Zero(t, payload.Overview.TotalStatefulSets)
 	require.Zero(t, payload.Overview.TotalDaemonSets)
 	require.Zero(t, payload.Overview.TotalCronJobs)
 	require.Empty(t, payload.Overview.RecentEvents)
+}
+
+func TestClusterOverviewBuilderWaitsForRequiredIngestStores(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-a", Namespace: "default", ResourceVersion: "20"}}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", ResourceVersion: "10"}}
+	source := newFakePodAggregateSource(nil, pod).withNodes(ClusterMeta{}, "", node).withPodSynced(false)
+
+	builder := &ClusterOverviewBuilder{
+		ingest:             source,
+		namespaceLister:    testsupport.NewNamespaceLister(t),
+		requiredIngestGVRs: []schema.GroupVersionResource{PodGVR, NodeGVR},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := builder.Build(ctx, "")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestClusterOverviewBuilderProceedsWhenRequiredIngestStoresSynced(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-a", Namespace: "default", ResourceVersion: "20"}}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", ResourceVersion: "10"}}
+
+	builder := &ClusterOverviewBuilder{
+		ingest:             newFakePodAggregateSource(nil, pod).withNodes(ClusterMeta{}, "", node),
+		namespaceLister:    testsupport.NewNamespaceLister(t),
+		requiredIngestGVRs: []schema.GroupVersionResource{PodGVR, NodeGVR},
+	}
+
+	snapshot, err := builder.Build(context.Background(), "")
+	require.NoError(t, err)
+
+	payload, ok := snapshot.Payload.(ClusterOverviewSnapshot)
+	require.True(t, ok)
+	require.Equal(t, 1, payload.Overview.TotalNodes)
+	require.Equal(t, 1, payload.Overview.TotalPods)
 }
 
 func TestClusterOverviewListBuilderIncludesOptionalCountsAndRecentEvents(t *testing.T) {
@@ -719,8 +741,7 @@ func TestClusterOverviewAKSVirtualNodes(t *testing.T) {
 	}
 
 	builder := &ClusterOverviewBuilder{
-		nodeLister:      testsupport.NewNodeLister(t, nodeVM, nodeVirtual),
-		podLister:       testsupport.NewPodLister(t),
+		ingest:          newFakePodAggregateSource(nil).withNodes(ClusterMeta{}, "", nodeVM, nodeVirtual),
 		namespaceLister: testsupport.NewNamespaceLister(t),
 		metrics:         fakeClusterMetrics{},
 		cachedVersion:   "v1.29.0",
@@ -765,8 +786,7 @@ func TestClusterOverviewGKEShowsOnlyTotal(t *testing.T) {
 	}
 
 	builder := &ClusterOverviewBuilder{
-		nodeLister:      testsupport.NewNodeLister(t, node),
-		podLister:       testsupport.NewPodLister(t),
+		ingest:          newFakePodAggregateSource(nil).withNodes(ClusterMeta{}, "", node),
 		namespaceLister: testsupport.NewNamespaceLister(t),
 		metrics:         fakeClusterMetrics{},
 		cachedVersion:   "v1.29.0-gke.1234",
@@ -793,8 +813,7 @@ func TestClusterOverviewGKEShowsOnlyTotal(t *testing.T) {
 
 func TestClusterOverviewSuppressesInitialMetricsErrors(t *testing.T) {
 	builder := &ClusterOverviewBuilder{
-		nodeLister:      testsupport.NewNodeLister(t),
-		podLister:       testsupport.NewPodLister(t),
+		ingest:          newFakePodAggregateSource(nil).withNodes(ClusterMeta{}, ""),
 		namespaceLister: testsupport.NewNamespaceLister(t),
 		metrics: fakeClusterMetrics{
 			meta: metrics.Metadata{
@@ -819,8 +838,7 @@ func TestClusterOverviewSuppressesInitialMetricsErrors(t *testing.T) {
 
 func TestClusterOverviewSurfacesRepeatedMetricsErrors(t *testing.T) {
 	builder := &ClusterOverviewBuilder{
-		nodeLister:      testsupport.NewNodeLister(t),
-		podLister:       testsupport.NewPodLister(t),
+		ingest:          newFakePodAggregateSource(nil).withNodes(ClusterMeta{}, ""),
 		namespaceLister: testsupport.NewNamespaceLister(t),
 		metrics: fakeClusterMetrics{
 			meta: metrics.Metadata{

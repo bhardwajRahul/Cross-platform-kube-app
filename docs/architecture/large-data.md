@@ -197,13 +197,13 @@ object-panel table becomes namespace or cluster scale.
 A query-backed table renders one-shot query pages, so its liveness comes from
 refetching — never from mutating displayed rows in place. The contract:
 
-- The typed query refetches exactly when the scoped live domain's **data
-  identity** changes: `liveDomainVersion = version:checksum:streamRevision`
-  (`useQueryBackedResourceGridTable.ts`). `version`/`checksum` come from window
-  snapshots (polls, resyncs); `streamRevision` is bumped by the resource-stream
-  and events-stream managers when a streamed delivery actually changes rows.
-  Refresh timestamps are deliberately excluded — identical data must never
-  trigger a refetch (the anti-churn invariant).
+- The typed query refetches exactly when the scoped live domain's **source
+  identity** changes: `liveDomainVersion = sourceVersion`
+  (`useQueryBackedResourceGridTable.ts`). `sourceVersion` comes from snapshot
+  responses and resource WebSocket doorbells; the HTTP snapshot endpoint uses the
+  same token for `ETag` / `304`. Refresh timestamps are deliberately excluded —
+  identical source identity must never trigger a refetch (the anti-churn
+  invariant).
 - **Update latency**: for streamed domains, a cluster change is visible within
   one stream coalescing window (200ms flush in the stream managers) plus one
   query round-trip (an in-memory backend page build — tens of milliseconds at
@@ -230,18 +230,19 @@ Pods: `backend/refresh/snapshot/pods.go` feeds namespace and all-namespaces pod
 tables. It carries pod identity, status, restart, readiness, node, owner, and
 metrics projection state. All-namespaces Pods are `Query Backed Dynamic`:
 search, namespace filters, health predicates, pagination, and CPU/memory sort
-are backend-owned for the current metrics snapshot. The current implementation
-still scans the informer-backed object set for each query page, but it no
-longer retains the full projected pod row universe before sorting and slicing;
-matching rows feed a bounded keyset candidate buffer plus exact facet/total
-accounting.
+are backend-owned for the current metrics snapshot. Pod rows are served from a
+maintained `querypage` store fed by the owned-reflector ingest path (a keyset
+range scan with exact facet/total counters; metrics are overlaid at serve, never
+stored) — see [data-layer.md](./data-layer.md).
 
 Workloads: `backend/refresh/snapshot/namespace_workloads.go` feeds namespace
 workload tables. Both single-namespace and all-namespaces workload tables are
 `Query Backed Dynamic` (single-namespace runs a namespace-scoped query page):
 kind and namespace filters, search, pagination, and CPU/memory aggregate sorts
-are backend-owned for the current metrics snapshot. Like Pods, this is a bounded
-projected-row query path, not a persistent secondary index for workload summaries.
+are backend-owned for the current metrics snapshot. Like Pods, workload rows
+serve from a maintained `querypage` store fed by the workload GVRs' ingest
+reflectors, with the pod-aggregate / HPA / metrics join applied at serve — see
+[data-layer.md](./data-layer.md).
 
 Custom resources: cluster and namespace custom table row universes come from
 the object catalog query path with `customOnly=true`. Search, kind filters,
@@ -273,11 +274,9 @@ so pagination and table semantics match every other scope.
 
 ## App-Wide Table State
 
-The app-wide hardening pass is complete as of
-[`docs/plans/app-wide-table-hardening.md`](../plans/app-wide-table-hardening.md):
-every production resource table is query-backed, proven owner/scope bounded, or
-visibly Local Partial with matching action limits. Completion does not mean
-every table is globally query-backed; it means no production table may present a
+Every production resource table is query-backed, proven owner/scope bounded, or
+visibly Local Partial with matching action limits. This does not mean every
+table is globally query-backed; it means no production table may present a
 capped, recent, buffered, degraded, or page-limited row set as complete global
 data.
 

@@ -9,6 +9,7 @@ import { useSyncExternalStore } from 'react';
 
 import type { DomainPayloadMap, RefreshDomain } from './types';
 import type { SnapshotStats } from './client';
+import type { RefreshSourceClock } from './domainRegistry';
 
 export type DomainStatus = 'idle' | 'loading' | 'initialising' | 'updating' | 'ready' | 'error';
 
@@ -17,14 +18,12 @@ export interface DomainSnapshotState<TPayload> {
   data: TPayload | null;
   stats: SnapshotStats | null;
   version?: number;
+  sourceVersion?: string;
+  sourceVersions?: Partial<Record<RefreshSourceClock, string>>;
   checksum?: string;
   etag?: string;
-  /**
-   * Monotonic counter bumped by the resource stream manager whenever streamed
-   * row updates change the data WITHOUT a new backend snapshot version. Part of
-   * the live-data identity (see liveDomainVersion) so typed queries refetch on
-   * streamed changes.
-   */
+  // Retained for stream diagnostics/backward-compatible tests only. Query-backed
+  // table identity no longer reads it; sourceVersion is the live-data token.
   streamRevision?: number;
   lastUpdated?: number;
   lastManualRefresh?: number;
@@ -143,8 +142,7 @@ export const getScopedDomainState = <K extends RefreshDomain>(
   scope: string
 ): DomainSnapshotState<DomainPayloadMap[K]> => {
   const domainMap = state.scopedDomains[domain] as
-    | Record<string, DomainSnapshotState<DomainPayloadMap[K]>>
-    | undefined;
+    Record<string, DomainSnapshotState<DomainPayloadMap[K]>> | undefined;
   if (!domainMap) {
     return EMPTY_SCOPED_STATE as DomainSnapshotState<DomainPayloadMap[K]>;
   }
@@ -155,8 +153,7 @@ export const getScopedDomainStates = <K extends RefreshDomain>(
   domain: K
 ): Record<string, DomainSnapshotState<DomainPayloadMap[K]>> => {
   const domainMap = state.scopedDomains[domain] as
-    | Record<string, DomainSnapshotState<DomainPayloadMap[K]>>
-    | undefined;
+    Record<string, DomainSnapshotState<DomainPayloadMap[K]>> | undefined;
   return domainMap
     ? domainMap
     : (EMPTY_SCOPED_MAP as unknown as Record<string, DomainSnapshotState<DomainPayloadMap[K]>>);
@@ -166,8 +163,7 @@ export const getScopedDomainEntries = <K extends RefreshDomain>(
   domain: K
 ): Array<[string, DomainSnapshotState<DomainPayloadMap[K]>]> => {
   const entries = state.scopedDomainEntries[domain] as
-    | Array<[string, DomainSnapshotState<DomainPayloadMap[K]>]>
-    | undefined;
+    Array<[string, DomainSnapshotState<DomainPayloadMap[K]>]> | undefined;
   return entries
     ? entries
     : (EMPTY_SCOPED_ENTRIES as unknown as Array<
@@ -212,8 +208,7 @@ export const setScopedDomainState = <K extends RefreshDomain>(
   ) => DomainSnapshotState<DomainPayloadMap[K]>
 ): void => {
   const currentMap = state.scopedDomains[domain] as
-    | Record<string, DomainSnapshotState<DomainPayloadMap[K]>>
-    | undefined;
+    Record<string, DomainSnapshotState<DomainPayloadMap[K]>> | undefined;
   const previousState = (currentMap?.[scope] ?? EMPTY_SCOPED_STATE) as DomainSnapshotState<
     DomainPayloadMap[K]
   >;
@@ -243,8 +238,7 @@ export const setScopedDomainState = <K extends RefreshDomain>(
 
 export const resetScopedDomainState = <K extends RefreshDomain>(domain: K, scope: string): void => {
   const currentMap = state.scopedDomains[domain] as
-    | Record<string, DomainSnapshotState<DomainPayloadMap[K]>>
-    | undefined;
+    Record<string, DomainSnapshotState<DomainPayloadMap[K]>> | undefined;
 
   if (!currentMap || !(scope in currentMap)) {
     return;

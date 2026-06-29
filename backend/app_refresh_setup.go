@@ -12,6 +12,7 @@ import (
 	"github.com/luxury-yacht/app/backend/objectcatalog"
 	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/containerlogsstream"
+	"github.com/luxury-yacht/app/backend/refresh/domain"
 	"github.com/luxury-yacht/app/backend/refresh/system"
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
 )
@@ -62,7 +63,18 @@ func (a *App) setupRefreshSubsystem() error {
 	}
 	a.refreshAggregates = aggregates
 
-	return a.startRefreshHTTPServer(mux, subsystems)
+	if err := a.startRefreshHTTPServer(mux, subsystems); err != nil {
+		return err
+	}
+
+	// The subsystems above are all started Foreground. Settle them to the
+	// governor's tiers (visible Foreground, warm set Background with metrics
+	// paused, the rest Cold) and start the memory-pressure loop, which stops
+	// when the refresh context is cancelled.
+	a.seedGovernorFromOpenClusters()
+	go a.startGovernorPressureLoop(ctx)
+
+	return nil
 }
 
 // buildRefreshSubsystems creates refresh subsystems for the active cluster selections.
@@ -181,6 +193,16 @@ func (a *App) buildRefreshSubsystemForSelection(
 
 	// Watch informer updates to invalidate cached detail/YAML/helm responses.
 	a.registerResponseCacheInvalidation(subsystem, clusterMeta.ID)
+
+	// Warm-paint the freshly-built maintained stores from this cluster's last spill BEFORE
+	// the manager starts feeding (cross-restart cold-start, Tier 2.5 stage 2). Shared by every
+	// build path — initial start, selection update, and auth/governor re-warm. Restored rows
+	// may be stale; they are reconciled once the subsystem syncs (the start paths call
+	// ReconcileMaintainedStores after Manager.Start returns).
+	a.restoreClusterStores(clusterMeta.ID, subsystem.Registry)
+	// Restore the ingest stores full + RV-stamped too, so each reflector resumes its watch
+	// from the persisted resourceVersion (a delta) instead of a full re-LIST when it starts.
+	a.restoreClusterIngestStores(clusterMeta.ID, subsystem.IngestManager)
 	return subsystem, nil
 }
 
@@ -192,11 +214,20 @@ func (a *App) startRefreshSubsystems(ctx context.Context, subsystems map[string]
 			continue
 		}
 		clusterName := a.clusterNameForID(clusterID)
-		go func(mgr *refresh.Manager, clusterID, clusterName string) {
+		registry := subsystem.Registry
+		go func(mgr *refresh.Manager, registry *domain.Registry, clusterID, clusterName string) {
 			if err := mgr.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				a.logger.Warn(fmt.Sprintf("refresh manager stopped: %v", err), logsources.Refresh, clusterID, clusterName)
+				return
 			}
-		}(manager, clusterID, clusterName)
+			// Start blocks until the factory-backed informer caches have synced. Reconcile
+			// away any row warm-painted from a stale spill whose object was deleted while the
+			// app was closed; ingest-fed stores either have no reconcile source or reconcile
+			// through their reflector's initial Replace.
+			if registry != nil {
+				registry.ReconcileMaintainedStores()
+			}
+		}(manager, registry, clusterID, clusterName)
 		// Keep permission grants fresh; revoke access stops refresh informers/streams.
 		permCtx, cancel := context.WithCancel(ctx)
 		a.storeRefreshPermissionCancel(clusterID, cancel)
@@ -271,16 +302,7 @@ func (a *App) buildRefreshMux(
 		}
 	}
 	aggregateQueue := newAggregateManualQueue(clusterOrder, subsystems)
-	aggregateEvents := newAggregateEventStreamHandler(
-		aggregateService,
-		collectEventManagers(subsystems),
-		collectClusterMeta(subsystems),
-		clusterOrder,
-		sharedTelemetry,
-		a.logger,
-	)
 	aggregateContainerLogs := newAggregateContainerLogsStreamHandler(subsystems)
-	aggregateCatalog := newAggregateCatalogStreamHandler(subsystems)
 	aggregateResources, err := newAggregateResourceStreamHandler(subsystems, a.logger, sharedTelemetry)
 	if err != nil {
 		return nil, nil, err
@@ -300,9 +322,7 @@ func (a *App) buildRefreshMux(
 	})
 	// withStreamCORS guarantees CORS headers on every stream response,
 	// including error responses written before the handlers' own header setup.
-	mux.Handle("/api/v2/stream/events", withStreamCORS(aggregateEvents))
 	mux.Handle("/api/v2/stream/container-logs", withStreamCORS(aggregateContainerLogs))
-	mux.Handle("/api/v2/stream/catalog", withStreamCORS(aggregateCatalog))
 	mux.Handle("/api/v2/stream/resources", withStreamCORS(aggregateResources))
 	// NOTE: Do NOT mount "/" to any single subsystem's handler.
 	// Requests to "/" should return 404, not route to one cluster.
@@ -310,9 +330,7 @@ func (a *App) buildRefreshMux(
 	aggregates := &refreshAggregateHandlers{
 		snapshot:      aggregateService,
 		manual:        aggregateQueue,
-		events:        aggregateEvents,
 		containerLogs: aggregateContainerLogs,
-		catalog:       aggregateCatalog,
 		resources:     aggregateResources,
 		telemetry:     aggregateTelemetryHandler,
 	}
@@ -323,9 +341,7 @@ func (a *App) buildRefreshMux(
 type refreshAggregateHandlers struct {
 	snapshot      *aggregateSnapshotService
 	manual        *aggregateManualQueue
-	events        *aggregateEventStreamHandler
 	containerLogs *aggregateContainerLogsStreamHandler
-	catalog       *aggregateCatalogStreamHandler
 	resources     *aggregateResourceStreamHandler
 	telemetry     *aggregateTelemetry
 }
@@ -351,19 +367,8 @@ func (h *refreshAggregateHandlers) Update(clusterOrder []string, subsystems map[
 	if h.manual != nil {
 		h.manual.UpdateConfig(clusterOrder, subsystems)
 	}
-	if h.events != nil {
-		h.events.UpdateConfig(
-			h.snapshot,
-			collectEventManagers(subsystems),
-			collectClusterMeta(subsystems),
-			clusterOrder,
-		)
-	}
 	if h.containerLogs != nil {
 		h.containerLogs.Update(subsystems)
-	}
-	if h.catalog != nil {
-		h.catalog.Update(subsystems)
 	}
 	return nil
 }

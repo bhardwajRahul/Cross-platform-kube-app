@@ -286,17 +286,26 @@ func makeHandler(gr schema.GroupResource, notifier *watchNotifier, svc *Service)
 	}
 }
 
-// registerWatchHandlers attaches event handlers to shared informers.
+// registerWatchHandlers attaches event handlers to shared informers, and registers
+// an ingest Catalog-half sink for each ingest-owned (cut) kind instead — those kinds
+// are no longer cached by the shared factory, so their incremental catalog updates
+// flow from the ingest reflector rather than a factory informer handler.
 func registerWatchHandlers(
 	factory informers.SharedInformerFactory,
 	apiextFactory apiextinformers.SharedInformerFactory,
 	notifier *watchNotifier,
 	svc *Service,
 ) {
+	svc.registerIngestCatalogSinks()
 	if factory == nil {
 		return
 	}
 	for gr, gvr := range watchInformerGroupResources {
+		if isIngestOwned(gr) {
+			// Cut kind: its incremental updates come from the ingest sink registered
+			// above, not from a shared-informer handler (the factory no longer caches it).
+			continue
+		}
 		generic, err := factory.ForResource(gvr)
 		if err != nil {
 			continue
@@ -306,7 +315,57 @@ func registerWatchHandlers(
 	if apiextFactory != nil {
 		crdInformer := apiextFactory.Apiextensions().V1().CustomResourceDefinitions().Informer()
 		gr := schema.GroupResource{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}
-		crdInformer.AddEventHandler(makeHandler(gr, notifier, svc))
+		// Wrap the CRD handler so a CRD add/delete also marks discovery stale: the next
+		// discover invalidates the disk-cached discovery document, so a newly-created CRD's
+		// kind is discovered promptly rather than waiting out the cache TTL.
+		crdInformer.AddEventHandler(svc.crdWatchHandler(makeHandler(gr, notifier, svc)))
+	}
+}
+
+// markDiscoveryStale latches that the discovery document changed (a CRD was added or
+// removed), so the next discoverResources invalidates the disk-cached discovery before
+// re-discovering.
+func (s *Service) markDiscoveryStale() {
+	s.discoveryStale.Store(true)
+}
+
+// crdWatchHandler wraps the CRD informer's catalog handler so a CRD add/update/delete marks
+// discovery stale (forcing a cache invalidation on the next discover) before delegating to
+// the base handler — keeping newly-created CRDs from being hidden by a cached discovery doc.
+func (s *Service) crdWatchHandler(base cache.ResourceEventHandlerFuncs) cache.ResourceEventHandlerFuncs {
+	return cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			s.markDiscoveryStale()
+			if base.AddFunc != nil {
+				base.AddFunc(obj)
+			}
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			s.markDiscoveryStale()
+			if base.UpdateFunc != nil {
+				base.UpdateFunc(oldObj, newObj)
+			}
+		},
+		DeleteFunc: func(obj interface{}) {
+			s.markDiscoveryStale()
+			if base.DeleteFunc != nil {
+				base.DeleteFunc(obj)
+			}
+		},
+	}
+}
+
+// registerIngestCatalogSinks registers a Catalog-half sink with the ingest manager
+// for every ingest-owned (cut) kind, so the live catalog index stays current between
+// full collects without reading the shared informer. It is a no-op when no ingest
+// source is configured (the uncut configuration).
+func (s *Service) registerIngestCatalogSinks() {
+	source := s.deps.IngestSource
+	if source == nil {
+		return
+	}
+	for gvr := range catalogIngestOwnedGVRs {
+		source.AddCatalogSink(gvr, ingestCatalogSink{service: s, gvr: gvr})
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/luxury-yacht/app/backend/capabilities"
 	"github.com/luxury-yacht/app/backend/internal/applog"
+	"github.com/luxury-yacht/app/backend/refresh/ingest"
 	"github.com/luxury-yacht/app/backend/refresh/permissions"
 	"github.com/luxury-yacht/app/backend/resources/common"
 	apiextinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
@@ -125,8 +126,33 @@ type Dependencies struct {
 	APIExtensionsInformerFactory apiextinformers.SharedInformerFactory  // Kubernetes API extensions informer factory
 	GatewayInformerFactory       gatewayinformers.SharedInformerFactory // Gateway API informer factory
 	PermissionChecker            permissions.ListWatchChecker           // optional; if nil, assumes all permissions granted
+	IngestSource                 IngestSource                           // optional; supplies catalog rows for ingest-owned kinds
 	ClusterID                    string                                 // stable identifier for the source cluster
 	ClusterName                  string                                 // display name for the source cluster
+}
+
+// IngestSource supplies the object-catalog Summaries for ingest-owned (cut) kinds,
+// whose objects are no longer cached by the shared informer factory. The catalog
+// reads cut kinds' rows from CatalogRows on a full collect, and stays current
+// between collects via the Catalog-half sink registered through AddCatalogSink.
+// *ingest.IngestManager satisfies it. Reads return Summaries the catalog's own
+// projector built at intake (see SummaryProjector), so they are byte-equivalent to
+// the shared-informer collect path.
+type IngestSource interface {
+	CatalogRows(gvr schema.GroupVersionResource) []interface{}
+	AddCatalogSink(gvr schema.GroupVersionResource, sink ingest.Sink) bool
+	// RegisterDynamicCatalogReflector starts an on-demand reflector for a dynamic
+	// (CRD-backed) kind, projecting each object to its catalog Summary via project. The
+	// catalog calls it when a CR kind crosses its promotion threshold (maybePromote),
+	// consolidating the former catalog-owned dynamic informer onto the ingest path.
+	RegisterDynamicCatalogReflector(gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, project ingest.CatalogProjector) bool
+	// StopReflectorFor stops and evicts the on-demand reflector for gvr, the teardown half
+	// of the dynamic path (stopDynamicReflectors).
+	StopReflectorFor(gvr schema.GroupVersionResource)
+	// HasSyncedFor reports whether gvr's store has synced, so the catalog serves a promoted
+	// dynamic kind from CatalogRows only once its reflector's initial relist has landed
+	// (else it keeps listing — no empty flash).
+	HasSyncedFor(gvr schema.GroupVersionResource) bool
 }
 
 // Logger is the minimal logging contract required by the catalog, aliased to

@@ -337,15 +337,9 @@ const formatSelectedFilterLabel = (
 };
 
 type LogEmptyState =
-  | 'none'
-  | 'no_logs_yet'
-  | 'no_previous_logs'
-  | 'no_filter_matches'
-  | 'unavailable';
+  'none' | 'no_logs_yet' | 'no_previous_logs' | 'no_filter_matches' | 'unavailable';
 
 const LogViewerInner: React.FC<LogViewerProps> = ({
-  namespace,
-  resourceName,
   resourceKind: resourceKind,
   containerLogsScope,
   isActive = false,
@@ -458,7 +452,6 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
   const resourceKindKey = resourceKind?.toLowerCase() ?? '';
   const isWorkload = resourceKindKey !== 'pod';
   const supportsPreviousContainerLogs = resourceKindKey === 'pod';
-  const podName = !isWorkload ? resourceName : '';
   const selectedInitContainers = useMemo(
     () =>
       new Set(
@@ -719,10 +712,6 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
         // the user gets exactly as much history as their buffer can hold.
         const request: types.ContainerLogsFetchRequest = {
           scope: containerLogsScope,
-          namespace,
-          workloadName: isWorkload ? resourceName : '',
-          workloadKind: isWorkload ? resourceKindKey : '',
-          podName: isWorkload ? '' : podName,
           selectedFilters: backendLogSelection.selectedFilters,
           container: backendLogSelection.container,
           includeInit: backendLogSelection.includeInit,
@@ -784,13 +773,8 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       }
     },
     [
-      isWorkload,
       containerLogsScope,
       mapEntriesToSnapshot,
-      namespace,
-      podName,
-      resourceName,
-      resourceKindKey,
       backendLogSelection.container,
       backendLogSelection.includeEphemeral,
       backendLogSelection.includeInit,

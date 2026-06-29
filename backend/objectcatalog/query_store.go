@@ -20,21 +20,10 @@ func (store inMemoryCatalogQueryStore) QueryCatalog(opts QueryOptions) (QueryRes
 	if store.service == nil {
 		return QueryResult{}, false
 	}
-	kindMatcher := newKindMatcher(opts.Kinds)
-	namespaceMatcher := newNamespaceMatcher(opts.Namespaces)
-	searchMatcher := newSearchMatcher(opts.Search)
-
-	// Write lock: the first query after a publish builds the memoized query
-	// index (publishes only invalidate it; see ensureQueryIndex).
-	store.service.mu.Lock()
-	store.service.catalogIndex.ensureQueryIndex()
-	cachedState := store.service.catalogIndex.cachedQueryState()
-	store.service.mu.Unlock()
-
-	if len(cachedState.chunks) == 0 {
-		return QueryResult{}, false
-	}
-
-	executor := store.service.newCatalogQueryExecutor(opts, cachedState, kindMatcher, namespaceMatcher, searchMatcher)
-	return executor.executeCached(), true
+	// Serve through the shared querypage engine (queryViaEngine). It reads the
+	// maintained store that publishStreamingState keeps equal to the published
+	// summaries; when no summaries have been published it serves the items-map
+	// snapshot on the same engine. Either way it returns a result (ok=true), so
+	// the catalog has one query implementation.
+	return store.service.queryViaEngine(opts)
 }

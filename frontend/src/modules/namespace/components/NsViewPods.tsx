@@ -44,6 +44,7 @@ import {
 import { backendStatusTextClass } from '@shared/utils/backendStatusPresentation';
 import { parseCpuToMillicores, parseMemToMB } from '@utils/resourceCalculations';
 import { WarningTriangleIcon } from '@shared/components/icons/SharedIcons';
+import { podRowCpuValue, podRowMemoryValue } from '@/core/resource-metrics';
 import type { PodSnapshotPayload } from '@/core/refresh/types';
 
 interface PodsViewProps {
@@ -382,9 +383,9 @@ const NsViewPods: React.FC<PodsViewProps> = React.memo(
           header: 'CPU',
           key: 'cpu',
           type: 'cpu',
-          getUsage: (pod) => pod.cpuUsage,
-          getRequest: (pod) => pod.cpuRequest,
-          getLimit: (pod) => pod.cpuLimit,
+          getUsage: (pod) => podRowCpuValue(pod, 'usage'),
+          getRequest: (pod) => podRowCpuValue(pod, 'request'),
+          getLimit: (pod) => podRowCpuValue(pod, 'limit'),
           getMetricsStale: () => metricsStateRef.current.stale,
           getMetricsError: () => metricsStateRef.current.lastError,
           getMetricsLastUpdated: () => metricsStateRef.current.lastUpdated,
@@ -396,9 +397,9 @@ const NsViewPods: React.FC<PodsViewProps> = React.memo(
           header: 'Memory',
           key: 'memory',
           type: 'memory',
-          getUsage: (pod) => pod.memUsage,
-          getRequest: (pod) => pod.memRequest,
-          getLimit: (pod) => pod.memLimit,
+          getUsage: (pod) => podRowMemoryValue(pod, 'usage'),
+          getRequest: (pod) => podRowMemoryValue(pod, 'request'),
+          getLimit: (pod) => podRowMemoryValue(pod, 'limit'),
           getMetricsStale: () => metricsStateRef.current.stale,
           getMetricsError: () => metricsStateRef.current.lastError,
           getMetricsLastUpdated: () => metricsStateRef.current.lastUpdated,
@@ -474,7 +475,7 @@ const NsViewPods: React.FC<PodsViewProps> = React.memo(
 
     // Scope counts come from the query payload (backend, scope-level), mirrored
     // into state below once the query page lands, so they stay correct for a
-    // query-backed/notify-only view without retaining the live row set.
+    // query-backed signal-only view without retaining the live row set.
     const unhealthyCount = scopeCounts.unhealthy;
     const scopeTotalCount = scopeCounts.total;
 
@@ -550,8 +551,7 @@ const NsViewPods: React.FC<PodsViewProps> = React.memo(
     }, [payloadTotalCount, payloadUnhealthyCount]);
 
     // The pending-filter guard (single namespace) reads the per-mode scope counts
-    // from the latest query payload, not the live row set (pods is notify-only, so
-    // live rows are static at baseline). A ref keeps the guard effect from
+    // from the latest query payload, not the live row set. A ref keeps the guard effect from
     // re-running on every count change.
     const healthCountsRef = useRef<Record<string, number>>({});
     healthCountsRef.current = queryPayload?.healthCounts ?? {};

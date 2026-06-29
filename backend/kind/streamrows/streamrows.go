@@ -44,6 +44,83 @@ func (m ClusterMeta) Validate() error {
 	return nil
 }
 
+// PodAggregate is a projected per-pod aggregation row: the small set of scalar
+// aggregates the cluster-overview, namespace-workloads, and node domains compute
+// from a typed Pod, reduced once so those domains never touch raw Pod spec/status
+// arrays. It carries AGGREGATES (counts/sums/scalars), never raw container or
+// status arrays. The projector that fills it from a *corev1.Pod lives in the
+// snapshot package (snapshot.projectPodAggregate); keeping the type in this leaf
+// lets a later ingest step feed these rows without importing snapshot.
+//
+// Regular-container and init-container resource sums are kept SEPARATE because
+// the consumers differ: overview and nodes add regular+init together, while
+// namespace-workloads sums regular containers only. Likewise two restart totals
+// are carried: RestartCountFacts mirrors pods.BuildFacts (container + init +
+// ephemeral statuses) used by workloads/overview, and RestartCountContainersInit
+// mirrors the node/overview-hasRestarts sum (container + init statuses only).
+type PodAggregate struct {
+	Namespace string
+	Name      string
+	NodeName  string
+	Phase     string
+
+	ContainerCount     int
+	InitContainerCount int
+
+	// Regular-container resource sums (cpu in milli, memory in bytes).
+	CPURequestMilli int64
+	CPULimitMilli   int64
+	MemRequestBytes int64
+	MemLimitBytes   int64
+
+	// Init-container resource sums, kept separate from the regular sums above.
+	InitCPURequestMilli int64
+	InitCPULimitMilli   int64
+	InitMemRequestBytes int64
+	InitMemLimitBytes   int64
+
+	// Readiness facts (pods.BuildFacts): ready/total container counts.
+	ReadyContainers int32
+	TotalContainers int32
+
+	// RestartCountFacts mirrors pods.BuildFacts (container + init + ephemeral).
+	RestartCountFacts int32
+	// RestartCountContainersInit sums container + init restart statuses only.
+	RestartCountContainersInit int32
+
+	// StatusPresentation is the resource-model status presentation string
+	// (e.g. "ready"/"warning"/"error"/"terminating"), derived once from the Pod.
+	StatusPresentation string
+
+	// OwnerKey is the namespace-workloads owner grouping key with the
+	// ReplicaSet->Deployment string-suffix collapse applied; empty when the pod
+	// has no controlling owner.
+	OwnerKey string
+
+	// WorkloadKind is the cluster-overview metrics-bucketing workload kind for
+	// this pod: the controlling owner's kind (Deployment/DaemonSet/StatefulSet/
+	// Job), with a ReplicaSet owner resolved to Deployment via the ACTUAL
+	// ReplicaSet's owner reference (not the string-suffix collapse OwnerKey uses).
+	// Empty when the pod has no controlling owner, the owner is an unbucketed
+	// kind, or a ReplicaSet owner could not be resolved to a Deployment. This is
+	// the field cluster-overview's buildWorkloadResourceUsage buckets metrics by.
+	WorkloadKind string
+}
+
+// EndpointSliceServiceFact is a projected per-EndpointSlice join fact: the small reduced
+// row the namespace-network domain reads (the bundle Aggregate half) to re-join endpoint
+// counts onto Service rows without the typed EndpointSlice. It carries the owning Service's
+// name (from the kubernetes.io/service-name label) and this slice's ready endpoint-address
+// count, computed by the SAME aggregation service.BuildFacts uses. Summing ReadyEndpointCount
+// across a Service's slices reproduces service.ReadyEndpointCount over all of them, because
+// the per-slice aggregation is independent and additive. ServiceName is empty for an
+// orphan slice (no service-name label), which contributes to no Service row.
+type EndpointSliceServiceFact struct {
+	Namespace          string
+	ServiceName        string
+	ReadyEndpointCount int
+}
+
 // ConfigSummary describes a ConfigMap or Secret row (the namespace-config domain).
 type ConfigSummary struct {
 	ClusterMeta
@@ -236,8 +313,8 @@ type NamespaceCustomSummary struct {
 	ClusterMeta
 	Kind               string                         `json:"kind"`
 	Name               string                         `json:"name"`
-	APIGroup           string                         `json:"apiGroup"`
-	APIVersion         string                         `json:"apiVersion"`
+	Group              string                         `json:"group"`
+	Version            string                         `json:"version"`
 	CRDName            string                         `json:"crdName,omitempty"`
 	Namespace          string                         `json:"namespace"`
 	Status             string                         `json:"status,omitempty"`
@@ -256,8 +333,8 @@ type ClusterCustomSummary struct {
 	ClusterMeta
 	Kind               string                         `json:"kind"`
 	Name               string                         `json:"name"`
-	APIGroup           string                         `json:"apiGroup"`
-	APIVersion         string                         `json:"apiVersion"`
+	Group              string                         `json:"group"`
+	Version            string                         `json:"version"`
 	CRDName            string                         `json:"crdName,omitempty"`
 	Status             string                         `json:"status,omitempty"`
 	StatusState        string                         `json:"statusState,omitempty"`
@@ -399,6 +476,15 @@ type NodePodMetric struct {
 	CPUUsage    string `json:"cpuUsage"`
 	MemoryUsage string `json:"memoryUsage"`
 }
+
+// MetricsNoData is the marker rendered for a CPU/memory usage cell that has no
+// valid sample (no metrics-server sample for the object, or a sample that belongs
+// to a prior incarnation of a same-named object). It is the ASCII hyphen because
+// that is the no-data sentinel the frontend resource-bar parsers already
+// recognise (parseCpuToMillicores/parseMemToMB, ResourceBar.parseResource,
+// formatResourceForExport). Rendering this — never "0m"/"0Mi" — distinguishes
+// "metrics unknown" from a real zero (v2 architecture Risk #9 / §3.6).
+const MetricsNoData = "-"
 
 // FormatCPUMilli renders CPU millicores as the streaming rows display them.
 func FormatCPUMilli(value int64) string {

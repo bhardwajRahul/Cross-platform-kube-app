@@ -399,10 +399,10 @@ export interface ClusterCRDSnapshotPayload extends ClusterMeta, ResourceQueryEnv
 export interface ClusterCustomEntry extends ClusterMeta {
   kind: string;
   name: string;
-  apiGroup: string;
-  /** API version paired with apiGroup for GVK-aware resolution of the
+  group: string;
+  /** Version paired with group for GVK-aware resolution of the
    * owning CRD. */
-  apiVersion: string;
+  version: string;
   /**
    * Canonical Kubernetes name of the CustomResourceDefinition that
    * defines this resource's Kind, in the form `<plural>.<group>` (e.g.
@@ -712,7 +712,7 @@ export interface PodSnapshotPayload extends ClusterMeta, ResourceQueryEnvelopeFi
   // pending health filter has matches — without retaining the live row set.
   // healthCounts keys match the "health" filter modes ('unhealthy', 'restarts',
   // 'not-ready'). Mirrors snapshot.PodSnapshot. See
-  // docs/architecture/notify-only-streams.md.
+  // docs/architecture/resource-stream-signals.md.
   totalCount?: number;
   healthCounts?: Record<string, number>;
 }
@@ -999,10 +999,10 @@ export interface NamespaceEventsSnapshotPayload extends ClusterMeta, ResourceQue
 export interface NamespaceCustomSummary extends ClusterMeta {
   kind: string;
   name: string;
-  apiGroup: string;
-  /** API version paired with apiGroup for GVK-aware resolution of the
+  group: string;
+  /** Version paired with group for GVK-aware resolution of the
    * owning CRD. */
-  apiVersion: string;
+  version: string;
   /**
    * Canonical Kubernetes name of the CustomResourceDefinition that
    * defines this resource's Kind, in the form `<plural>.<group>` (e.g.
