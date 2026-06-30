@@ -12,7 +12,6 @@ import (
 
 type stubDetailProvider struct {
 	details interface{}
-	version string
 	err     error
 	calls   int
 	gvk     schema.GroupVersionKind
@@ -20,10 +19,10 @@ type stubDetailProvider struct {
 	metaErr error
 }
 
-func (s *stubDetailProvider) FetchObjectDetails(_ context.Context, gvk schema.GroupVersionKind, _ string, _ string) (interface{}, string, error) {
+func (s *stubDetailProvider) FetchObjectDetails(_ context.Context, gvk schema.GroupVersionKind, _ string, _ string) (interface{}, error) {
 	s.calls++
 	s.gvk = gvk
-	return s.details, s.version, s.err
+	return s.details, s.err
 }
 
 func (s *stubDetailProvider) FetchObjectHeaderMetadata(_ context.Context, _ schema.GroupVersionKind, _ string, _ string) (ObjectHeaderMetadata, error) {
@@ -33,11 +32,14 @@ func (s *stubDetailProvider) FetchObjectHeaderMetadata(_ context.Context, _ sche
 func TestObjectDetailsBuilderUsesProviderWhenAvailable(t *testing.T) {
 	provider := &stubDetailProvider{
 		details: map[string]string{"foo": "bar"},
-		version: "42",
+		// The object's source version (snapshot Version) comes from the header
+		// metadata read, not the per-kind detail fetcher.
+		meta: ObjectHeaderMetadata{ResourceVersion: "42"},
 	}
 
 	builder := &ObjectDetailsBuilder{
-		provider: provider,
+		provider:         provider,
+		metadataProvider: provider,
 	}
 
 	snapshot, err := builder.Build(context.Background(), "default:/v1:Pod:demo")
@@ -114,7 +116,6 @@ func TestObjectDetailsBuilderFallsBackToGenericDetails(t *testing.T) {
 func TestObjectDetailsBuilderIncludesCreationTimestampOnTypedPath(t *testing.T) {
 	provider := &stubDetailProvider{
 		details: map[string]string{"foo": "bar"},
-		version: "42",
 		meta:    ObjectHeaderMetadata{CreationTimestamp: "2023-01-02T03:04:05Z", LastModified: "5m"},
 	}
 
@@ -291,7 +292,7 @@ func TestRegisterObjectDetailsDomainRequiresProvider(t *testing.T) {
 
 func TestRegisterObjectDetailsDomainRegistersBuilder(t *testing.T) {
 	reg := domain.New()
-	provider := &stubDetailProvider{details: map[string]string{"ok": "true"}, version: "7"}
+	provider := &stubDetailProvider{details: map[string]string{"ok": "true"}}
 
 	if err := RegisterObjectDetailsDomain(reg, provider); err != nil {
 		t.Fatalf("RegisterObjectDetailsDomain returned error: %v", err)

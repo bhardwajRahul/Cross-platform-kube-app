@@ -27,7 +27,7 @@ var ErrObjectDetailNotImplemented = errors.New("object detail provider not imple
 
 // ObjectDetailProvider resolves rich object payloads for the object panel.
 type ObjectDetailProvider interface {
-	FetchObjectDetails(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) (interface{}, string, error)
+	FetchObjectDetails(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) (interface{}, error)
 }
 
 // ObjectHeaderMetadata carries the kind-agnostic header fields the object panel
@@ -43,6 +43,12 @@ type ObjectHeaderMetadata struct {
 	// LastModified is the relative time of the object's most recent spec/metadata
 	// change (already formatted), or "" when unavailable.
 	LastModified string
+	// ResourceVersion is the live object's metadata.resourceVersion, or "" when
+	// unavailable. It is the object's source clock: the object-details snapshot's
+	// Version (and thus the source-version ETag) is derived from it, so the panel
+	// re-renders whenever the object changes (e.g. a Deployment's image tag). Read
+	// from the same single live-object read as the other header fields.
+	ResourceVersion string
 }
 
 // ObjectHeaderMetadataProvider optionally resolves the header metadata for an
@@ -105,9 +111,9 @@ func (b *ObjectDetailsBuilder) Build(ctx context.Context, scope string) (*refres
 	name := identity.Name
 
 	if b.provider != nil {
-		if details, resourceVersion, err := b.provider.FetchObjectDetails(ctx, gvk, namespace, name); err == nil {
+		if details, err := b.provider.FetchObjectDetails(ctx, gvk, namespace, name); err == nil {
 			meta := b.fetchHeaderMetadata(ctx, gvk, namespace, name)
-			return b.buildSnapshot(ctx, scope, details, resourceVersion, meta), nil
+			return b.buildSnapshot(ctx, scope, details, meta), nil
 		} else if !errors.Is(err, ErrObjectDetailNotImplemented) {
 			return nil, err
 		}
@@ -133,7 +139,7 @@ func (b *ObjectDetailsBuilder) Build(ctx context.Context, scope string) (*refres
 	}
 	meta := b.fetchHeaderMetadata(ctx, gvk, namespace, name)
 	resourceModel := genericObjectResourceModel(ClusterMetaFromContext(ctx), gvk, namespace, name)
-	return b.buildSnapshotWithModel(ctx, scope, details, "", meta, &resourceModel), nil
+	return b.buildSnapshotWithModel(ctx, scope, details, meta, &resourceModel), nil
 }
 
 // fetchHeaderMetadata resolves the object's header metadata (creation +
@@ -150,12 +156,15 @@ func (b *ObjectDetailsBuilder) fetchHeaderMetadata(ctx context.Context, gvk sche
 	return value
 }
 
-func (b *ObjectDetailsBuilder) buildSnapshot(ctx context.Context, scope string, details interface{}, resourceVersion string, meta ObjectHeaderMetadata) *refresh.Snapshot {
-	return b.buildSnapshotWithModel(ctx, scope, details, resourceVersion, meta, nil)
+func (b *ObjectDetailsBuilder) buildSnapshot(ctx context.Context, scope string, details interface{}, meta ObjectHeaderMetadata) *refresh.Snapshot {
+	return b.buildSnapshotWithModel(ctx, scope, details, meta, nil)
 }
 
-func (b *ObjectDetailsBuilder) buildSnapshotWithModel(ctx context.Context, scope string, details interface{}, resourceVersion string, meta ObjectHeaderMetadata, resourceModel *resourcemodel.ResourceModel) *refresh.Snapshot {
-	version := parseVersion(resourceVersion)
+func (b *ObjectDetailsBuilder) buildSnapshotWithModel(ctx context.Context, scope string, details interface{}, meta ObjectHeaderMetadata, resourceModel *resourcemodel.ResourceModel) *refresh.Snapshot {
+	// The object's resourceVersion is the source clock: a change to the object
+	// (new image tag → new resourceVersion) changes the snapshot Version and thus
+	// the source-version ETag, so the panel refreshes instead of getting a 304.
+	version := parseVersion(meta.ResourceVersion)
 
 	return &refresh.Snapshot{
 		Domain:  objectDetailsDomain,

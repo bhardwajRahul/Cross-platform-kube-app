@@ -37,6 +37,34 @@ func TestInvalidateResponseCacheForObjectEvictsDetailAndYAML(t *testing.T) {
 	}
 }
 
+// TestInvalidateResponseCacheEvictsHeaderMetadata proves an object change drops
+// the cached header metadata too, not just the detail. The header metadata
+// carries the object's resourceVersion (the object-details source clock); if it
+// survived the change, the stale resourceVersion would re-pin the source-version
+// ETag and the Details panel would keep serving a 304 with stale content.
+func TestInvalidateResponseCacheEvictsHeaderMetadata(t *testing.T) {
+	app := NewApp()
+	app.responseCache = newResponseCache(time.Minute, 10)
+	selectionKey := "cluster-a"
+
+	gvk := schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
+	detailKey := objectDetailCacheKeyForGVK(gvk, "default", "demo")
+	headerKey := objectHeaderMetadataCacheKey(gvk, "default", "demo")
+
+	app.responseCacheStore(selectionKey, detailKey, "detail")
+	app.responseCacheStore(selectionKey, headerKey, "header")
+
+	// The ingest Catalog sink evicts by kind/namespace/name on every object change.
+	app.invalidateResponseCacheForResource(selectionKey, "Deployment", "default", "demo")
+
+	if _, ok := app.responseCacheLookup(selectionKey, detailKey); ok {
+		t.Fatalf("expected detail cache entry to be evicted")
+	}
+	if _, ok := app.responseCacheLookup(selectionKey, headerKey); ok {
+		t.Fatalf("expected header-metadata cache entry to be evicted")
+	}
+}
+
 func TestInvalidateResponseCacheForObjectEvictsHelmCaches(t *testing.T) {
 	app := NewApp()
 	app.responseCache = newResponseCache(time.Minute, 10)

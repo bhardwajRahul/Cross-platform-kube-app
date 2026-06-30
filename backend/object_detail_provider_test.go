@@ -72,7 +72,7 @@ func TestObjectDetailProviderFetchesKnownKinds(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		detail, _, err := provider.FetchObjectDetails(ctx, tt.gvk, tt.namespace, tt.name)
+		detail, err := provider.FetchObjectDetails(ctx, tt.gvk, tt.namespace, tt.name)
 		if err != nil {
 			t.Fatalf("FetchObjectDetails(%s) returned error: %v", tt.gvk.Kind, err)
 		}
@@ -86,7 +86,7 @@ func TestObjectDetailProviderUnknownKind(t *testing.T) {
 	app := NewApp()
 	provider := app.objectDetailProvider()
 
-	_, _, err := provider.FetchObjectDetails(context.Background(), schema.GroupVersionKind{Kind: "unknown-kind"}, "ns", "name")
+	_, err := provider.FetchObjectDetails(context.Background(), schema.GroupVersionKind{Kind: "unknown-kind"}, "ns", "name")
 	if err == nil {
 		t.Fatalf("expected error for unknown kind")
 	}
@@ -99,7 +99,7 @@ func TestObjectDetailProviderRejectsKnownKindWithoutGVK(t *testing.T) {
 	app := NewApp()
 	provider := app.objectDetailProvider()
 
-	_, _, err := provider.FetchObjectDetails(context.Background(), schema.GroupVersionKind{Kind: "Pod"}, "default", "api")
+	_, err := provider.FetchObjectDetails(context.Background(), schema.GroupVersionKind{Kind: "Pod"}, "default", "api")
 	if err != snapshot.ErrObjectDetailNotImplemented {
 		t.Fatalf("expected kind-only known resource to be rejected as not implemented, got %v", err)
 	}
@@ -137,7 +137,7 @@ func TestObjectDetailProviderRejectsKnownKindWithWrongGVK(t *testing.T) {
 		ClusterName: "ctx",
 	})
 
-	_, _, err := provider.FetchObjectDetails(ctx, schema.GroupVersionKind{
+	_, err := provider.FetchObjectDetails(ctx, schema.GroupVersionKind{
 		Group: "example.com", Version: "v1", Kind: "ConfigMap",
 	}, "default", "demo")
 	if err != snapshot.ErrObjectDetailNotImplemented {
@@ -251,7 +251,7 @@ func TestObjectDetailProviderUsesClusterContext(t *testing.T) {
 		ClusterName: "ctx-b",
 	})
 
-	detail, _, err := provider.FetchObjectDetails(ctx, schema.GroupVersionKind{Version: "v1", Kind: "Node"}, "", "node-b")
+	detail, err := provider.FetchObjectDetails(ctx, schema.GroupVersionKind{Version: "v1", Kind: "Node"}, "", "node-b")
 	if err != nil {
 		t.Fatalf("FetchObjectDetails returned error: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestObjectDetailProviderUsesClusterContext(t *testing.T) {
 		t.Fatal("FetchObjectDetails returned nil detail")
 	}
 
-	if _, _, err := provider.FetchObjectDetails(ctx, schema.GroupVersionKind{Version: "v1", Kind: "Node"}, "", "node-a"); err == nil {
+	if _, err := provider.FetchObjectDetails(ctx, schema.GroupVersionKind{Version: "v1", Kind: "Node"}, "", "node-a"); err == nil {
 		t.Fatal("expected error when fetching node from another cluster")
 	}
 }
@@ -288,6 +288,11 @@ func TestObjectDetailProviderFetchObjectHeaderMetadata(t *testing.T) {
 	}
 	if meta.CreationTimestamp != "2023-01-02T03:04:05Z" {
 		t.Fatalf("expected RFC3339 creation timestamp, got %q", meta.CreationTimestamp)
+	}
+	// The header metadata carries the object's resourceVersion so the
+	// object-details snapshot has a real source clock (drives the ETag).
+	if meta.ResourceVersion != "100" {
+		t.Fatalf("expected resourceVersion %q, got %q", "100", meta.ResourceVersion)
 	}
 }
 
@@ -417,7 +422,7 @@ func TestObjectDetailProviderCoversAdditionalKinds(t *testing.T) {
 	}
 
 	for _, tt := range kinds {
-		_, _, err := provider.FetchObjectDetails(ctx, testObjectDetailGVK(tt.kind), tt.ns, tt.name)
+		_, err := provider.FetchObjectDetails(ctx, testObjectDetailGVK(tt.kind), tt.ns, tt.name)
 		if err != nil {
 			t.Fatalf("FetchObjectDetails(%s) returned error: %v", tt.kind, err)
 		}

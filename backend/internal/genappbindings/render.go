@@ -208,9 +208,9 @@ func RenderDetailFetchers() ([]byte, error) {
 	b.WriteString("var objectDetailFetchers = map[string]objectDetailFetcher{\n")
 	for _, r := range rows {
 		fmt.Fprintf(&b, "\t%q: {\n", r.detailKey())
-		b.WriteString("\t\twithDeps: func(deps common.Dependencies, namespace, name string) (interface{}, string, error) {\n")
+		b.WriteString("\t\twithDeps: func(deps common.Dependencies, namespace, name string) (interface{}, error) {\n")
 		fmt.Fprintf(&b, "\t\t\tdetail, err := %s\n", r.fetchExpr())
-		b.WriteString("\t\t\treturn detail, \"\", err\n")
+		b.WriteString("\t\t\treturn detail, err\n")
 		b.WriteString("\t\t},\n")
 		b.WriteString("\t},\n")
 	}

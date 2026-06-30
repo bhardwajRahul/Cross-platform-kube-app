@@ -38,7 +38,7 @@ type resolvedObjectDetailContext struct {
 
 // objectDetailFetcher maps a kind to dependency-based detail retrievals.
 type objectDetailFetcher struct {
-	withDeps func(deps common.Dependencies, namespace, name string) (interface{}, string, error)
+	withDeps func(deps common.Dependencies, namespace, name string) (interface{}, error)
 }
 
 // objectDetailFetchers is generated from the genappbindings binding descriptor
@@ -133,20 +133,20 @@ func isHelmReleaseGVK(gvk schema.GroupVersionKind) bool {
 }
 
 // FetchObjectDetails retrieves the details of a Kubernetes object.
-func (p *objectDetailProvider) FetchObjectDetails(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) (interface{}, string, error) {
+func (p *objectDetailProvider) FetchObjectDetails(ctx context.Context, gvk schema.GroupVersionKind, namespace, name string) (interface{}, error) {
 	resolved := p.resolveDetailContext(ctx)
 	if _, ok := objectDetailFetchers[strings.ToLower(strings.TrimSpace(gvk.Kind))]; !ok {
-		return nil, "", snapshot.ErrObjectDetailNotImplemented
+		return nil, snapshot.ErrObjectDetailNotImplemented
 	}
 	if !isHelmReleaseGVK(gvk) && strings.TrimSpace(gvk.Version) == "" {
-		return nil, "", snapshot.ErrObjectDetailNotImplemented
+		return nil, snapshot.ErrObjectDetailNotImplemented
 	}
 	if !resolved.scoped {
-		return nil, "", fmt.Errorf("cluster scope is required")
+		return nil, fmt.Errorf("cluster scope is required")
 	}
 	fetcher, ok := lookupObjectDetailFetcher(gvk)
 	if !ok {
-		return nil, "", snapshot.ErrObjectDetailNotImplemented
+		return nil, snapshot.ErrObjectDetailNotImplemented
 	}
 
 	cacheKey := objectDetailCacheKeyForGVK(gvk, namespace, name)
@@ -154,16 +154,16 @@ func (p *objectDetailProvider) FetchObjectDetails(ctx context.Context, gvk schem
 		if cached, ok := p.app.responseCacheLookup(resolved.selectionKey, cacheKey); ok {
 			// Avoid serving cached details when permission checks deny access.
 			if p.app.canServeCachedResponse(ctx, resolved.deps, resolved.selectionKey, gvk, namespace, name) {
-				return cached, "", nil
+				return cached, nil
 			}
 			p.app.responseCacheDelete(resolved.selectionKey, cacheKey)
 		}
 	}
-	detail, version, err := fetcher.withDeps(resolved.deps, namespace, name)
+	detail, err := fetcher.withDeps(resolved.deps, namespace, name)
 	if err == nil && p != nil && p.app != nil {
 		p.app.responseCacheStore(resolved.selectionKey, cacheKey, detail)
 	}
-	return detail, version, err
+	return detail, err
 }
 
 // FetchObjectHeaderMetadata returns the object panel's kind-agnostic header
@@ -196,7 +196,8 @@ func (p *objectDetailProvider) FetchObjectHeaderMetadata(ctx context.Context, gv
 		return snapshot.ObjectHeaderMetadata{}, err
 	}
 	meta := snapshot.ObjectHeaderMetadata{
-		LastModified: common.FormatLastModified(obj),
+		LastModified:    common.FormatLastModified(obj),
+		ResourceVersion: obj.GetResourceVersion(),
 	}
 	if created := obj.GetCreationTimestamp(); !created.IsZero() {
 		meta.CreationTimestamp = created.UTC().Format(time.RFC3339)

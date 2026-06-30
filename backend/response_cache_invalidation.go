@@ -290,13 +290,19 @@ func (a *App) invalidateResponseCacheForGVK(selectionKey string, gvk schema.Grou
 	a.responseCacheDelete(selectionKey, objectDetailCacheKey(gvk.Kind, namespace, name))
 }
 
-// invalidateResponseCache drops the cached detail entry for the resource.
+// invalidateResponseCache drops the cached detail entry for the resource, plus
+// the header-metadata entry keyed by the same GVK. The header metadata carries
+// the object's resourceVersion (the object-details source clock) and its
+// last-modified time; if it outlived the detail, the stale resourceVersion would
+// re-pin the source-version ETag and the Details panel would keep serving 304s
+// with stale content.
 // (The legacy YAML response-cache entry was retired with App.GetObjectYAML —
 // the GVK-aware fetch path doesn't write to the response cache.)
 func (a *App) invalidateResponseCache(selectionKey, kind, namespace, name string) {
 	a.responseCacheDelete(selectionKey, objectDetailCacheKey(kind, namespace, name))
 	if gvk, ok := objectDetailFetcherGVKs[strings.ToLower(strings.TrimSpace(kind))]; ok {
 		a.responseCacheDelete(selectionKey, objectDetailCacheKeyForGVK(gvk, namespace, name))
+		a.responseCacheDelete(selectionKey, objectHeaderMetadataCacheKey(gvk, namespace, name))
 	}
 }
 

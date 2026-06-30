@@ -771,8 +771,8 @@ func (streamHandlerSnapshotService) Build(context.Context, string, string) (*ref
 	return &refresh.Snapshot{}, nil
 }
 
-func (fullObjectDetailProvider) FetchObjectDetails(context.Context, schema.GroupVersionKind, string, string) (interface{}, string, error) {
-	return nil, "", nil
+func (fullObjectDetailProvider) FetchObjectDetails(context.Context, schema.GroupVersionKind, string, string) (interface{}, error) {
+	return nil, nil
 }
 
 func (fullObjectDetailProvider) FetchObjectYAML(context.Context, schema.GroupVersionKind, string, string) (string, error) {

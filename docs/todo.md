@@ -1,4 +1,7 @@
-- Obj Panel -> Details -> Containers section tags not live-updating when deployment is modified. Even closing and reopening the panel does not update.
+- Delete namespace does not remove it from browse view
+- Remove dependency on binaries for auth
+- Pagination broken?
+- Search and filters broken on Cluster Custom
 
 - Build a plugin architecture
   - AI
