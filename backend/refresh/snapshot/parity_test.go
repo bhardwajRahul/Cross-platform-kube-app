@@ -224,21 +224,6 @@ func toAnySlice[T any](rows []T) []any {
 	return out
 }
 
-// staticPodMetrics implements metrics.Provider for parity tests that need
-// a deterministic metrics snapshot. The snapshot builder reads
-// LatestPodUsage() directly; the per-row projectors take the same map as
-// a parameter — staticPodMetrics ensures both paths see identical data.
-type staticPodMetrics struct {
-	pods map[string]metrics.PodUsage
-	meta metrics.Metadata
-}
-
-func (s *staticPodMetrics) LatestPodUsage() map[string]metrics.PodUsage { return s.pods }
-func (s *staticPodMetrics) LatestNodeUsage() map[string]metrics.NodeUsage {
-	return map[string]metrics.NodeUsage{}
-}
-func (s *staticPodMetrics) Metadata() metrics.Metadata { return s.meta }
-
 // ---------- Pods ----------
 
 func parityPodsCase(meta ClusterMeta, withMetrics bool) parityCase {
@@ -287,26 +272,18 @@ func parityPodsCase(meta ClusterMeta, withMetrics bool) parityCase {
 			rsLister := testsupport.NewReplicaSetLister(t, rs)
 			podLister := testsupport.NewPodLister(t, podA, podB)
 
-			usage := map[string]metrics.PodUsage{}
-			if withMetrics {
-				usage = map[string]metrics.PodUsage{
-					"default/web-abc-1": {CPUUsageMilli: 250, MemoryUsageBytes: 64 * 1024 * 1024},
-				}
-			}
-			provider := &staticPodMetrics{pods: usage}
-
 			builder := &PodBuilder{
 				podLister: podLister,
 				rsLister:  rsLister,
-				metrics:   provider,
 			}
 			snap, err := builder.Build(WithClusterMeta(context.Background(), meta), "namespace:default")
 			require.NoError(t, err)
 			payload := snap.Payload.(PodSnapshot)
 
+			expectedUsage := map[string]metrics.PodUsage{}
 			expected := []PodSummary{
-				buildPodSummaryForTest(meta, podA, usage, rsLister),
-				buildPodSummaryForTest(meta, podB, usage, rsLister),
+				buildPodSummaryForTest(meta, podA, expectedUsage, rsLister),
+				buildPodSummaryForTest(meta, podB, expectedUsage, rsLister),
 			}
 			requireRowParity(t, toAnySlice(payload.Rows), toAnySlice(expected), func(r any) string {
 				row := r.(PodSummary)
@@ -954,18 +931,8 @@ func parityNodesCase(meta ClusterMeta, withMetrics bool) parityCase {
 				Status:     corev1.PodStatus{Phase: corev1.PodRunning},
 			}
 
-			usage := map[string]metrics.PodUsage{}
-			if withMetrics {
-				usage = map[string]metrics.PodUsage{
-					"default/p1": {CPUUsageMilli: 100, MemoryUsageBytes: 32 * 1024 * 1024},
-				}
-			}
-			provider := &staticPodMetrics{pods: usage}
-
 			builder := newNodeBuilderForTest(
 				meta,
-				node.ResourceVersion,
-				provider,
 				newFakePodAggregateSource(nil, pod).withNodes(meta, node.ResourceVersion, node),
 				node,
 			)
@@ -973,7 +940,7 @@ func parityNodesCase(meta ClusterMeta, withMetrics bool) parityCase {
 			require.NoError(t, err)
 			payload := snap.Payload.(NodeSnapshot)
 
-			expectedRow, err := BuildNodeSummary(meta, node, []*corev1.Pod{pod}, provider.LatestNodeUsage(), provider.LatestPodUsage())
+			expectedRow, err := BuildNodeSummary(meta, node, []*corev1.Pod{pod}, map[string]metrics.NodeUsage{}, map[string]metrics.PodUsage{})
 			require.NoError(t, err)
 			expected := []NodeSummary{expectedRow}
 			requireRowParity(t, toAnySlice(payload.Rows), toAnySlice(expected), func(r any) string {

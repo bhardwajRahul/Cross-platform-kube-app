@@ -8,8 +8,8 @@
  * projects each reflector-decoded Pod into a four-half ingest.Bundle so one intake
  * feeds every pod consumer, and the typed Pod is then dropped:
  *
- *   - Table     = the zeroed-metrics PodSummary (pods.BuildStreamSummary; the metrics
- *                 overlay happens at serve in collectSummaries, exactly as before);
+ *   - Table     = the no-data-metrics PodSummary (pods.BuildStreamSummary plus
+ *                 podSummaryWithoutMetrics);
  *   - Aggregate = the PodAggregate the cluster-overview/nodes/namespace-workloads
  *                 domains read (projectPodAggregate);
  *   - Catalog   = the object-catalog Summary (objectcatalog.SummaryProjector);
@@ -26,6 +26,7 @@ package snapshot
 
 import (
 	"github.com/luxury-yacht/app/backend/kind/objectmapnode"
+	"github.com/luxury-yacht/app/backend/kind/streamrows"
 	"github.com/luxury-yacht/app/backend/objectcatalog"
 	"github.com/luxury-yacht/app/backend/refresh/ingest"
 	podres "github.com/luxury-yacht/app/backend/resources/pods"
@@ -48,8 +49,7 @@ var (
 // PodSummary's cluster identity and the catalog Summary / object-map node cluster id;
 // rsLister resolves the ReplicaSet->Deployment owner for the Table half's OwnerKind
 // and the Aggregate half's WorkloadKind (the metrics-bucketing kind). The Table half
-// carries ZEROED metrics — the serve-time LatestPodUsage overlay is unchanged —
-// exactly as the maintained-store handler projected before the cutover.
+// carries no-data metrics so base pod rows do not depend on the metrics provider.
 func NewPodIngestProjector(meta ClusterMeta, rsLister appslisters.ReplicaSetLister) ingest.ProjectFunc {
 	// ClusterMeta is a type alias of streamrows.ClusterMeta, so meta is the stream meta.
 	streamMeta := meta
@@ -65,13 +65,23 @@ func NewPodIngestProjector(meta ClusterMeta, rsLister appslisters.ReplicaSetList
 			return nil, errNotPodObject
 		}
 		var metaObj metav1.Object = pod
+		table := podSummaryWithoutMetrics(podres.BuildStreamSummary(streamMeta, pod, 0, 0, rsLister))
+		aggregate := projectPodAggregate(pod, rsLister)
 		return ingest.Bundle{
-			Table:     podres.BuildStreamSummary(streamMeta, pod, 0, 0, rsLister),
-			Aggregate: projectPodAggregate(pod, rsLister),
+			Table:     table,
+			Aggregate: aggregate,
 			Catalog:   catalogProject(metaObj),
 			ObjectMap: nodeProject(meta.ClusterID, metaObj),
+			Indexes:   podAggregateBundleIndexes(aggregate),
 		}, nil
 	}
+}
+
+func podAggregateBundleIndexes(aggregate streamrows.PodAggregate) map[string][]string {
+	if aggregate.OwnerKey == "" {
+		return nil
+	}
+	return map[string][]string{podOwnerKeyIndexName: []string{aggregate.OwnerKey}}
 }
 
 // errNotPodObject is returned when the reflector decodes a non-Pod into the pod store;

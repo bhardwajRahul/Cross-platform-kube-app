@@ -404,6 +404,7 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
   const namespaceScopeEntries = useRefreshScopedDomainEntries('namespaces');
   const clusterOverviewScopeEntries = useRefreshScopedDomainEntries('cluster-overview');
   const nodeScopeEntries = useRefreshScopedDomainEntries('nodes');
+  const nodeMetricsScopeEntries = useRefreshScopedDomainEntries('nodes-metrics');
   const clusterConfigScopeEntries = useRefreshScopedDomainEntries('cluster-config');
   const clusterCRDScopeEntries = useRefreshScopedDomainEntries('cluster-crds');
   const clusterCustomScopeEntries = useRefreshScopedDomainEntries('cluster-custom');
@@ -413,6 +414,9 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
   const catalogScopeEntries = useRefreshScopedDomainEntries('catalog');
   const catalogDiffScopeEntries = useRefreshScopedDomainEntries('catalog-diff');
   const namespaceWorkloadsScopeEntries = useRefreshScopedDomainEntries('namespace-workloads');
+  const namespaceWorkloadsMetricsScopeEntries = useRefreshScopedDomainEntries(
+    'namespace-workloads-metrics'
+  );
   const namespaceAutoscalingScopeEntries = useRefreshScopedDomainEntries('namespace-autoscaling');
   const namespaceConfigScopeEntries = useRefreshScopedDomainEntries('namespace-config');
   const namespaceCustomScopeEntries = useRefreshScopedDomainEntries('namespace-custom');
@@ -423,6 +427,7 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
   const namespaceRBACScopeEntries = useRefreshScopedDomainEntries('namespace-rbac');
   const namespaceStorageScopeEntries = useRefreshScopedDomainEntries('namespace-storage');
   const podScopeEntries = useRefreshScopedDomainEntries('pods');
+  const podMetricsScopeEntries = useRefreshScopedDomainEntries('pods-metrics');
   const containerLogsScopeEntries = useRefreshScopedDomainEntries('container-logs');
   // Object panel scoped domains – visible only while the object panel is open.
   const objectDetailsScopeEntries = useRefreshScopedDomainEntries('object-details');
@@ -602,8 +607,14 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
         {
           domain: 'nodes' as RefreshDomain,
           label: 'Nodes',
-          hasMetrics: true,
+          hasMetrics: false,
           entries: nodeScopeEntries,
+        },
+        {
+          domain: 'nodes-metrics' as RefreshDomain,
+          label: 'Node Metrics',
+          hasMetrics: true,
+          entries: nodeMetricsScopeEntries,
         },
         {
           domain: 'cluster-config' as RefreshDomain,
@@ -656,6 +667,12 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
           entries: namespaceWorkloadsScopeEntries,
         },
         {
+          domain: 'namespace-workloads-metrics' as RefreshDomain,
+          label: 'Workload Metrics',
+          hasMetrics: true,
+          entries: namespaceWorkloadsMetricsScopeEntries,
+        },
+        {
           domain: 'namespace-autoscaling' as RefreshDomain,
           label: 'NS Autoscaling',
           entries: namespaceAutoscalingScopeEntries,
@@ -700,6 +717,12 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
           label: 'NS Storage',
           entries: namespaceStorageScopeEntries,
         },
+        {
+          domain: 'pods-metrics' as RefreshDomain,
+          label: 'Pod Metrics',
+          hasMetrics: true,
+          entries: podMetricsScopeEntries,
+        },
       ].flatMap(({ domain, label, hasMetrics, entries }) =>
         entries.map(([scopeKey, state]) => {
           const resolvedScope = state.scope?.trim() ? state.scope : scopeKey;
@@ -716,6 +739,7 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
       namespaceScopeEntries,
       clusterOverviewScopeEntries,
       nodeScopeEntries,
+      nodeMetricsScopeEntries,
       clusterConfigScopeEntries,
       clusterCRDScopeEntries,
       clusterCustomScopeEntries,
@@ -725,6 +749,7 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
       catalogScopeEntries,
       catalogDiffScopeEntries,
       namespaceWorkloadsScopeEntries,
+      namespaceWorkloadsMetricsScopeEntries,
       namespaceAutoscalingScopeEntries,
       namespaceConfigScopeEntries,
       namespaceEventsScopeEntries,
@@ -734,6 +759,7 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
       namespaceQuotasScopeEntries,
       namespaceRBACScopeEntries,
       namespaceStorageScopeEntries,
+      podMetricsScopeEntries,
     ]
   );
 
@@ -1206,7 +1232,6 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
 
     const podRows = podScopeEntries.map<DiagnosticsRow>(([scope, state]) => {
       const payload = state.data as PodSnapshotPayload | null;
-      const metricsInfo = payload?.metrics;
       const lastUpdated = state.lastUpdated ?? state.lastAutoRefresh ?? state.lastManualRefresh;
       const isStale = lastUpdated ? Date.now() - lastUpdated > STALE_THRESHOLD_MS : false;
       const lastUpdatedInfo = formatLastUpdated(lastUpdated);
@@ -1227,27 +1252,6 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
         truncated && totalItems !== undefined ? `${count} / ${totalItems}` : String(count);
       const countTooltip = warnings.length > 0 ? warnings.join('\n') : undefined;
       const countClassName = warnings.length > 0 ? 'diagnostics-count-warning' : undefined;
-      const successCount = metricsInfo?.successCount ?? 0;
-      const failureCount = metricsInfo?.failureCount ?? 0;
-      const metricsStatus = metricsInfo
-        ? metricsInfo.lastError
-          ? `Error (${failureCount} fails)`
-          : metricsInfo.stale
-            ? `Unavailable (${failureCount} fails)`
-            : `OK (${successCount} polls)`
-        : 'N/A';
-      const metricsTooltipLines: string[] = [];
-      if (metricsInfo) {
-        metricsTooltipLines.push(`Successful polls: ${successCount}`);
-        metricsTooltipLines.push(`Failed polls: ${failureCount}`);
-        if (metricsInfo.lastError) {
-          metricsTooltipLines.push(`Last error: ${metricsInfo.lastError}`);
-        } else if (metricsInfo.stale) {
-          metricsTooltipLines.push('Metrics API unavailable (pods.metrics.k8s.io)');
-        } else if (metricsInfo.collectedAt) {
-          metricsTooltipLines.push('Metrics are up to date');
-        }
-      }
       const version = state.version != null ? String(state.version) : '—';
       const streamHealth = toStreamHealthSummary(
         resourceStreamManager.getHealthSnapshot('pods', scope)
@@ -1260,7 +1264,7 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
         refresherName: DOMAIN_REFRESHER_MAP.pods,
         streamActive,
         streamHealthy,
-        metricsOnly: true,
+        metricsOnly: false,
       });
       const modeDetails = resolveModeDetails({
         domain: 'pods',
@@ -1268,7 +1272,7 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
         streamActive,
         streamHealthy,
         pollingEnabled: pollingDetails.enabled,
-        metricsOnly: true,
+        metricsOnly: false,
       });
       const healthDetails = resolveHealthDetails({
         domain: 'pods',
@@ -1332,15 +1336,9 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
         error: state.error ?? '—',
         telemetryStatus,
         telemetryTooltip,
-        metricsStatus,
-        metricsTooltip:
-          metricsTooltipLines.length > 0 ? metricsTooltipLines.join('\n') : 'No metrics available',
-        metricsStale: Boolean(metricsInfo?.stale),
-        metricsSuccess: successCount,
-        metricsFailure: failureCount,
-        telemetrySuccess: successCount,
-        telemetryFailure: failureCount,
-        hasMetrics: true,
+        metricsStatus: 'N/A',
+        metricsTooltip: 'Pod metrics are reported by the pods-metrics domain',
+        hasMetrics: false,
         count,
         countDisplay,
         countTooltip,

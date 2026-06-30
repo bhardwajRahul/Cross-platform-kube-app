@@ -49,7 +49,6 @@ import type {
   ClusterEventEntry,
   DomainPayloadMap,
   RefreshDomain,
-  NodePodMetric,
 } from '@/core/refresh/types';
 import type { ClusterViewType } from '@/types/navigation/views';
 import { useUserPermission } from '@/core/capabilities';
@@ -440,16 +439,6 @@ export const ClusterResourcesProvider: React.FC<ClusterResourcesProviderProps> =
   ]);
 
   const nodeSnapshot = nodeDomain.data;
-  const nodeMetricsInfo = useMemo(() => {
-    if (!nodeSnapshot) {
-      return undefined;
-    }
-    const metricsByCluster = nodeSnapshot.metricsByCluster;
-    if (metricsByCluster) {
-      return selectedClusterId ? (metricsByCluster[selectedClusterId] ?? undefined) : undefined;
-    }
-    return nodeSnapshot.metrics;
-  }, [nodeSnapshot, selectedClusterId]);
   const nodeStatus = nodeDomain.status;
   const nodeError = nodeDomain.error;
   const nodeLastUpdated = nodeDomain.lastUpdated;
@@ -484,34 +473,11 @@ export const ClusterResourcesProvider: React.FC<ClusterResourcesProviderProps> =
 
   const nodes: ResourceDataReturn<ClusterNodeRow[]> = useMemo(() => {
     const data = nodeSnapshot ? filterByClusterId(nodeSnapshot.rows, selectedClusterId) : null;
-    const lastUpdated = nodeMetricsInfo?.collectedAt
-      ? new Date(nodeMetricsInfo.collectedAt * 1000)
-      : nodeLastUpdated
-        ? new Date(nodeLastUpdated)
-        : null;
-    const stale = Boolean(nodeMetricsInfo?.stale);
-    const effectiveError =
-      nodeStatus === 'error' && nodeError ? nodeError : nodeMetricsInfo?.lastError || null;
+    const lastUpdated = nodeLastUpdated ? new Date(nodeLastUpdated) : null;
+    const effectiveError = nodeStatus === 'error' && nodeError ? nodeError : null;
     const loading = nodeStatus === 'loading' && !nodeSnapshot;
     const refreshing = nodeStatus === 'updating';
     const error = effectiveError ? new Error(effectiveError) : null;
-    const podMetricsByNode: Record<string, Record<string, NodePodMetric>> = {};
-    const podMetricsByPod: Record<string, NodePodMetric> = {};
-    data?.forEach((node) => {
-      if (!node.podMetrics || node.podMetrics.length === 0) {
-        return;
-      }
-      podMetricsByNode[node.name] = node.podMetrics.reduce<Record<string, NodePodMetric>>(
-        (acc, metric) => {
-          const key = `${metric.namespace}/${metric.name}`;
-          acc[key] = metric;
-          podMetricsByPod[key] = metric;
-          return acc;
-        },
-        {}
-      );
-    });
-
     const isInitialising =
       nodeStatus === 'idle' || nodeStatus === 'initialising' || nodeStatus === 'loading';
     const passiveLoading = applyPassiveLoadingPolicy({
@@ -532,16 +498,6 @@ export const ClusterResourcesProvider: React.FC<ClusterResourcesProviderProps> =
       cancel: cancelNodes,
       lastFetchTime: lastUpdated,
       hasLoaded: passiveLoading.hasLoaded,
-      meta: {
-        metricsStale: stale,
-        metricsLastUpdated: lastUpdated || undefined,
-        metricsError: nodeMetricsInfo?.lastError || undefined,
-        metricsConsecutiveFailures: nodeMetricsInfo?.consecutiveFailures || 0,
-        metricsSuccessCount: nodeMetricsInfo?.successCount ?? 0,
-        metricsFailureCount: nodeMetricsInfo?.failureCount ?? 0,
-        podMetricsByNode,
-        podMetricsByPod,
-      },
     };
   }, [
     cancelNodes,
@@ -550,12 +506,6 @@ export const ClusterResourcesProvider: React.FC<ClusterResourcesProviderProps> =
     nodeLastUpdated,
     nodeSnapshot,
     nodeStatus,
-    nodeMetricsInfo?.collectedAt,
-    nodeMetricsInfo?.stale,
-    nodeMetricsInfo?.lastError,
-    nodeMetricsInfo?.consecutiveFailures,
-    nodeMetricsInfo?.successCount,
-    nodeMetricsInfo?.failureCount,
     isManualRefreshActive,
     isPaused,
     refreshNodes,

@@ -1,4 +1,4 @@
-I asked for metrics to be a separate fetch path so they could be updated on a different frequency from the main table data. All of the tables that carry metrics data (nodes, workloads, pods) should be instantly updated via stream whenever the status changes, but metrics data should update on a timer. They have different requirements and therefore should have different update mechanisms. Why didn't you do this?
+- Obj Panel -> Details -> Containers section tags not live-updating when deployment is modified. Even closing and reopening the panel does not update.
 
 - Build a plugin architecture
   - AI

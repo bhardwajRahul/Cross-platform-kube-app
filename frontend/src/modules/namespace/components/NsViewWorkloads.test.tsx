@@ -287,7 +287,9 @@ describe('NsViewWorkloads', () => {
       await Promise.resolve();
     });
 
-    expect(gridTablePropsRef.current?.data).toEqual([workload]);
+    expect(gridTablePropsRef.current?.data).toEqual([
+      { ...workload, cpuUsage: '-', memUsage: '-' },
+    ]);
     expect(requestRefreshDomainStateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         domain: 'namespace-workloads',
@@ -343,7 +345,9 @@ describe('NsViewWorkloads', () => {
       await Promise.resolve();
     });
 
-    expect(gridTablePropsRef.current?.data).toEqual([queryWorkload]);
+    expect(gridTablePropsRef.current?.data).toEqual([
+      { ...queryWorkload, cpuUsage: '-', memUsage: '-' },
+    ]);
     expect(gridTablePropsRef.current?.paginationControls?.props).toMatchObject({
       pageIndex: 1,
       pageSize: 50,
@@ -356,6 +360,86 @@ describe('NsViewWorkloads', () => {
       expect.objectContaining({
         domain: 'namespace-workloads',
         scope: 'path:context|namespace:all?limit=50&sort=name&sortDirection=asc',
+      })
+    );
+  });
+
+  it('overlays all-namespaces workload rows with namespace-workloads-metrics rows', async () => {
+    const queryWorkload = {
+      kind: 'Deployment',
+      name: 'api',
+      namespace: 'team-b',
+      status: 'Running',
+      ready: '1/1',
+      restarts: 0,
+      age: '5m',
+      clusterId: 'path:context',
+      clusterName: 'ctx',
+    };
+    requestRefreshDomainStateMock.mockImplementation(({ domain }: { domain: string }) =>
+      Promise.resolve({
+        status: 'executed',
+        data: {
+          status: 'ready',
+          data:
+            domain === 'namespace-workloads-metrics'
+              ? {
+                  rows: [
+                    {
+                      rowKey: 'deployment/team-b/api',
+                      kind: 'Deployment',
+                      namespace: 'team-b',
+                      name: 'api',
+                      ready: '1/1',
+                      cpuUsage: '250m',
+                      memUsage: '128Mi',
+                    },
+                  ],
+                  total: 1,
+                  totalIsExact: true,
+                  namespaces: ['team-b'],
+                  kinds: ['Deployment'],
+                  facetsExact: true,
+                  metrics: { stale: false, collectedAt: 1_700_000_000 },
+                }
+              : {
+                  rows: [queryWorkload],
+                  total: 1,
+                  totalIsExact: true,
+                  namespaces: ['team-b'],
+                  kinds: ['Deployment'],
+                  facetsExact: true,
+                },
+        },
+      })
+    );
+
+    await act(async () => {
+      root.render(
+        <NsViewWorkloads
+          namespace={ALL_NAMESPACES_SCOPE}
+          showNamespaceColumn={true}
+          metrics={null}
+        />
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(gridTablePropsRef.current?.data).toEqual([
+      { ...queryWorkload, ready: '1/1', cpuUsage: '250m', memUsage: '128Mi' },
+    ]);
+    expect(requestRefreshDomainStateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        domain: 'namespace-workloads-metrics',
+        scope: expect.stringContaining('namespace:all?'),
+      })
+    );
+    expect(requestRefreshDomainStateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        domain: 'namespace-workloads-metrics',
+        scope: expect.stringContaining('predicate.rowKeys=deployment%2Fteam-b%2Fapi'),
       })
     );
   });
@@ -471,16 +555,19 @@ describe('NsViewWorkloads', () => {
     expect(gridTablePropsRef.current?.data).toEqual([]);
   });
 
-  it('resolves node metrics from the active cluster scope only', async () => {
+  it('resolves workload metrics from the active namespace cluster scope only', async () => {
     await act(async () => {
       root.render(<NsViewWorkloads namespace="team-a" metrics={null} />);
       await Promise.resolve();
     });
 
-    expect(scopedDomainCallsRef.current).toContainEqual(['nodes', 'path:context|']);
+    expect(scopedDomainCallsRef.current).toContainEqual([
+      'namespace-workloads-metrics',
+      'path:context|namespace:team-a',
+    ]);
     expect(scopedDomainCallsRef.current).not.toContainEqual([
-      'nodes',
-      'clusters=path:context,other:context|',
+      'namespace-workloads-metrics',
+      'clusters=path:context,other:context|namespace:team-a',
     ]);
   });
 

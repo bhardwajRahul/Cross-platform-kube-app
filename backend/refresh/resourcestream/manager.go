@@ -915,32 +915,6 @@ func (m *Manager) podMetricsSnapshot() map[string]metrics.PodUsage {
 	return m.metrics.LatestPodUsage()
 }
 
-func (m *Manager) BroadcastMetricRefresh(version string) {
-	if m == nil {
-		return
-	}
-	version = strings.TrimSpace(version)
-	if version == "" {
-		return
-	}
-	update := Update{
-		Type:    MessageTypeModified,
-		Source:  SourceMetric,
-		Signal:  SignalChanged,
-		Version: version,
-	}
-	for _, domain := range []string{domainPods, domainWorkloads, domainNodes} {
-		scopes := m.subscribedScopes(domain)
-		if len(scopes) > 0 {
-			domainUpdate := update
-			domainUpdate.ClusterID = m.clusterMeta.ClusterID
-			domainUpdate.ClusterName = m.clusterMeta.ClusterName
-			domainUpdate.Domain = domain
-			m.broadcast(domain, scopes, domainUpdate)
-		}
-	}
-}
-
 func (m *Manager) BroadcastCatalogRefresh(version string) {
 	if m == nil {
 		return
