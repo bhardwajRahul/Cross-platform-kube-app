@@ -30,10 +30,16 @@ var podGVR = schema.GroupVersionResource{Group: podres.Identity.Group, Version: 
 
 // podBundleSource supplies the cut pod kind's projected bundles for the manager's
 // by-key lookups (the HPA->standalone-pod workload signal needs a specific pod's UID/RV
-// + namespace/name, which the projected bundle carries). *ingest.IngestManager satisfies
-// it.
+// + namespace/name, which the projected bundle carries) and the owner-heal rewrite
+// (healPodsForReplicaSet). *ingest.IngestManager satisfies it.
 type podBundleSource interface {
 	Rows(gvr schema.GroupVersionResource) []interface{}
+	RewriteBundlesByIndex(
+		gvr schema.GroupVersionResource,
+		indexName string,
+		values []string,
+		rewrite func(ingest.Bundle) (ingest.Bundle, bool),
+	) []ingest.Bundle
 }
 
 // lookupPodBundle returns the projected bundle for the pod namespace/name, or false when

@@ -18,6 +18,7 @@ import (
 
 	podres "github.com/luxury-yacht/app/backend/resources/pods"
 
+	"github.com/luxury-yacht/app/backend/refresh/ingest"
 	"github.com/luxury-yacht/app/backend/refresh/metrics"
 	"github.com/luxury-yacht/app/backend/refresh/snapshot"
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
@@ -26,7 +27,6 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 )
 
 func (m *Manager) handlePod(obj interface{}, updateType MessageType) {
@@ -91,60 +91,43 @@ func (m *Manager) handlePodEvent(oldObj interface{}, newObj interface{}, updateT
 
 func (m *Manager) handleReplicaSetEvent(oldObj interface{}, newObj interface{}, updateType MessageType) {
 	switch updateType {
-	case MessageTypeAdded:
-		newRS := replicaSetFromObject(newObj)
-		m.refreshPodsForReplicaSet(newRS, replicaSetStaleWorkloadScopes(nil, newRS))
+	case MessageTypeAdded, MessageTypeModified:
+		m.healPodsForReplicaSet(replicaSetFromObject(newObj))
 	case MessageTypeDeleted:
-		oldRS := replicaSetFromObject(oldObj)
-		m.refreshPodsForReplicaSet(oldRS, replicaSetStaleWorkloadScopes(oldRS, nil))
-	case MessageTypeModified:
-		oldRS := replicaSetFromObject(oldObj)
-		newRS := replicaSetFromObject(newObj)
-		staleScopes := replicaSetStaleWorkloadScopes(oldRS, newRS)
-		seen := make(map[string]struct{})
-		m.refreshPodsForReplicaSetOnce(oldRS, staleScopes, seen)
-		m.refreshPodsForReplicaSetOnce(newRS, staleScopes, seen)
+		// Nothing to heal: a deleted RS cascades to its pods, whose own delete
+		// events clean every scope; an orphaned pod's owner-ref removal arrives
+		// as a pod update and re-projects its row.
 	}
 }
 
-func (m *Manager) refreshPodsForReplicaSet(rs *appsv1.ReplicaSet, staleScopes []string) {
-	m.refreshPodsForReplicaSetOnce(rs, staleScopes, make(map[string]struct{}))
-}
-
-func (m *Manager) refreshPodsForReplicaSetOnce(
-	rs *appsv1.ReplicaSet,
-	staleScopes []string,
-	seen map[string]struct{},
-) {
-	// Pods is cut: production wires no podLister here, so this re-broadcast is a no-op in
-	// production. It is unnecessary there because the pod bundle sink already broadcasts
-	// on every real pod lifecycle change (an RS scale/rollout creates or deletes pods,
-	// each firing the sink). The only case it covered uniquely — an RS whose controller
-	// Deployment owner changes in place without any pod change — does not occur. The
-	// typed path remains for the unit tests that exercise it with an injected podLister.
-	if rs == nil || m.podLister == nil {
+// healPodsForReplicaSet re-resolves stored pod bundles whose ReplicaSet->
+// Deployment owner could not be resolved when they were projected. The pod
+// projector reads the shared factory's RS lister, but the owned pod reflector
+// starts BEFORE the factory (ingest_hub.go), so pods projected in that window
+// carry the unresolved ReplicaSet as their collapsed owner — the Deployment's
+// workload-scoped pods query then serves nothing and its doorbell never rings,
+// and owned reflectors never resync to repair it. Healing on the RS informer's
+// events closes the race: the rewrite fans through the store's sinks like a
+// reflector update, and the pod notify sink signals every scope the healed row
+// belongs to — namespace, node, the NEW Deployment scope, and the ReplicaSet
+// scope, which the row still occupies through its direct owner.
+func (m *Manager) healPodsForReplicaSet(rs *appsv1.ReplicaSet) {
+	if rs == nil || m.podIngest == nil {
 		return
 	}
-	pods, err := m.podLister.Pods(rs.Namespace).List(labels.Everything())
-	if err != nil {
-		m.logWarn(fmt.Sprintf("resource stream: list pods for replicaset %s/%s failed: %v", rs.Namespace, rs.Name, err))
+	deployment := replicaSetDeploymentOwnerName(rs)
+	if deployment == "" {
+		// A standalone RS's pods correctly keep the ReplicaSet owner.
 		return
 	}
-	podUsage := m.podMetricsSnapshot()
-	for _, pod := range pods {
-		if !podOwnedByReplicaSet(pod, rs) {
-			continue
-		}
-		key := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		if len(staleScopes) > 0 {
-			m.broadcastPodRow(pod, MessageTypeDeleted, staleScopes, podUsage)
-		}
-		m.broadcastPodRow(pod, MessageTypeModified, nil, podUsage)
-	}
+	m.podIngest.RewriteBundlesByIndex(
+		podGVR,
+		snapshot.PodOwnerKeyIndexName,
+		snapshot.PodOwnerHealIndexValues(rs.Namespace, rs.Name, deployment),
+		func(bundle ingest.Bundle) (ingest.Bundle, bool) {
+			return snapshot.HealPodBundleReplicaSetOwner(bundle, rs.Namespace, rs.Name, deployment)
+		},
+	)
 }
 
 // broadcastNodeNotification emits a row-less node change notification on the

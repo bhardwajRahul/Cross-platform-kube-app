@@ -56,7 +56,6 @@ import (
 	hpapkg "github.com/luxury-yacht/app/backend/resources/hpa"
 	jobpkg "github.com/luxury-yacht/app/backend/resources/job"
 	podspkg "github.com/luxury-yacht/app/backend/resources/pods"
-	replicasetpkg "github.com/luxury-yacht/app/backend/resources/replicaset"
 	servicepkg "github.com/luxury-yacht/app/backend/resources/service"
 	statefulsetpkg "github.com/luxury-yacht/app/backend/resources/statefulset"
 )
@@ -188,13 +187,12 @@ type Manager struct {
 
 	dynamicClient dynamic.Interface
 
-	// podLister, the workload listers (deployment/stateful/daemon/job/cronJob), and nodeLister
+	// The workload listers (deployment/stateful/daemon/job/cronJob) and nodeLister
 	// are wired only by unit tests that drive the typed handlePod*/handleWorkload/handleNode/
-	// RS/HPA paths directly. Production reads pods, the workload kinds, AND nodes from the
+	// HPA paths directly. Production reads pods, the workload kinds, AND nodes from the
 	// ingest store (all cut), so those typed informers are never instantiated; podIngest /
 	// workloadIngest / nodeIngest are the production sources (lookupWorkloadRef / lookupNodeRef
 	// prefer a wired lister for tests, else ingest).
-	podLister        corelisters.PodLister
 	podIngest        podBundleSource
 	workloadIngest   workloadBundleSource
 	nodeIngest       nodeBundleSource
@@ -1363,50 +1361,6 @@ func parseWorkloadOwnerKey(key string) (namespace, kind, name string, ok bool) {
 	return namespace, kind, name, true
 }
 
-func podOwnedByReplicaSet(pod *corev1.Pod, rs *appsv1.ReplicaSet) bool {
-	if pod == nil || rs == nil || pod.Namespace != rs.Namespace || rs.Name == "" {
-		return false
-	}
-	for _, owner := range pod.OwnerReferences {
-		if owner.Controller != nil && *owner.Controller && owner.Kind == replicasetpkg.Identity.Kind && owner.Name == rs.Name {
-			return true
-		}
-	}
-	return false
-}
-
-func replicaSetStaleWorkloadScopes(oldRS *appsv1.ReplicaSet, newRS *appsv1.ReplicaSet) []string {
-	oldScope := replicaSetWorkloadScope(oldRS)
-	newScope := replicaSetWorkloadScope(newRS)
-	if oldRS == nil && newRS != nil {
-		oldScope = replicaSetFallbackWorkloadScope(newRS)
-	}
-	if oldRS != nil && newRS == nil {
-		newScope = replicaSetFallbackWorkloadScope(oldRS)
-	}
-	if oldScope == "" || oldScope == newScope {
-		return nil
-	}
-	return uniqueScopes([]string{oldScope})
-}
-
-func replicaSetWorkloadScope(rs *appsv1.ReplicaSet) string {
-	if rs == nil {
-		return ""
-	}
-	if ownerName := replicaSetDeploymentOwnerName(rs); ownerName != "" {
-		return fmt.Sprintf("workload:%s:apps:v1:Deployment:%s", rs.Namespace, ownerName)
-	}
-	return replicaSetFallbackWorkloadScope(rs)
-}
-
-func replicaSetFallbackWorkloadScope(rs *appsv1.ReplicaSet) string {
-	if rs == nil || rs.Name == "" {
-		return ""
-	}
-	return fmt.Sprintf("workload:%s:apps:v1:ReplicaSet:%s", rs.Namespace, rs.Name)
-}
-
 func replicaSetDeploymentOwnerName(rs *appsv1.ReplicaSet) string {
 	if rs == nil {
 		return ""
@@ -1420,7 +1374,7 @@ func replicaSetDeploymentOwnerName(rs *appsv1.ReplicaSet) string {
 }
 
 func scopesForPod(summary snapshot.PodSummary) []string {
-	scopes := make([]string, 0, 4)
+	scopes := make([]string, 0, 5)
 	if summary.Namespace != "" {
 		scopes = append(scopes, fmt.Sprintf("namespace:%s", summary.Namespace), "namespace:all")
 	}
@@ -1432,7 +1386,16 @@ func scopesForPod(summary snapshot.PodSummary) []string {
 			scopes = append(scopes, scope)
 		}
 	}
-	return scopes
+	// The DIRECT owner's window (a ReplicaSet-scoped Pods tab) subscribes to a
+	// scope the collapsed owner no longer names; ring it too. Equal to the
+	// collapsed scope for non-collapsed pods — uniqueScopes in the broadcast
+	// path deduplicates.
+	if summary.DirectOwnerKind != "" && summary.DirectOwnerName != "" {
+		if scope := workloadScopeForOwner(summary.Namespace, summary.DirectOwnerAPIVersion, summary.DirectOwnerKind, summary.DirectOwnerName); scope != "" {
+			scopes = append(scopes, scope)
+		}
+	}
+	return uniqueScopes(scopes)
 }
 
 func workloadScopeForOwner(namespace, apiVersion, kind, name string) string {
