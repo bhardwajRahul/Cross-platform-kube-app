@@ -490,7 +490,6 @@ export const KubeconfigProvider: React.FC<KubeconfigProviderProps> = ({ children
     [applySelectionTransition]
   );
 
-
   const openKubeconfig = useCallback(
     async (selection: string) => {
       const target = selection.trim();
