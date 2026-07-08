@@ -1,6 +1,7 @@
 package snapshot
 
 import (
+	"fmt"
 	"net/url"
 	"sort"
 	"strconv"
@@ -58,27 +59,92 @@ type ResourceQueryRequest struct {
 	SortDirection   string                   `json:"sortDirection,omitempty"`
 	Limit           int                      `json:"limit,omitempty"`
 	Continue        string                   `json:"continue,omitempty"`
+	// Anchor asks for the page CONTAINING this object under the request's
+	// sort+filters instead of a cursor-addressed page. Mutually exclusive with
+	// Continue and StartRank (validate); the response mints ordinary keyset
+	// cursors, so pagination after a jump is indistinguishable from arriving by
+	// clicking.
+	Anchor *ResourceQueryAnchor `json:"anchor,omitempty"`
+	// StartRank asks for the page starting at this 0-based rank among matching
+	// rows — the bounded offset contract behind numbered page jumps (offered by
+	// the UI only while totals are exact). Mutually exclusive with Continue and
+	// Anchor; the engine clamps past-the-end starts to the last aligned page.
+	StartRank *int `json:"startRank,omitempty"`
+}
+
+// ResourceQueryAnchor is the full object reference of an anchor jump target.
+// ClusterID must equal the request's cluster (cross-cluster anchors are a
+// validation error — navigate first, then anchor). UID, when present, is an
+// identity cross-check applied only where the resolved row carries a UID (the
+// catalog); it is never a lookup key — engine row keys are name-shaped.
+type ResourceQueryAnchor struct {
+	ClusterID string `json:"clusterId"`
+	Group     string `json:"group"`
+	Version   string `json:"version"`
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+	UID       string `json:"uid,omitempty"`
+}
+
+// ResourceQueryAnchorResult reports how the serve resolved the request's
+// anchor. A missing anchor (found=false) still serves the FIRST page — one
+// round trip, sane landing — with Reason saying why: "filtered" (the object
+// exists but the request's filters/search exclude it) or "not-found" (deleted,
+// or identity mismatch). Rank is the anchor row's 0-based position among the
+// matching rows under THIS request's sort+filters (-1 when not found).
+type ResourceQueryAnchorResult struct {
+	Found  bool   `json:"found"`
+	Rank   int    `json:"rank"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// validate enforces the request's page-address contract: continue, anchor,
+// and startRank are three mutually exclusive ways to address a page, and each
+// carries its own field rules.
+func (r ResourceQueryRequest) validate() error {
+	if r.StartRank != nil {
+		if r.Continue != "" || r.Anchor != nil {
+			return fmt.Errorf("resource query: startRank, anchor, and continue are mutually exclusive")
+		}
+		if *r.StartRank < 0 {
+			return fmt.Errorf("resource query: startRank must be non-negative")
+		}
+	}
+	return r.validateAnchor()
+}
+
+// validateAnchor enforces the anchor contract: a full object reference
+// (clusterId, version, kind, name; group may be empty for the core group) on
+// the SAME cluster as the request, mutually exclusive with a continue token.
+func (r ResourceQueryRequest) validateAnchor() error {
+	if r.Anchor == nil {
+		return nil
+	}
+	if r.Continue != "" {
+		return fmt.Errorf("resource query: anchor and continue are mutually exclusive")
+	}
+	a := r.Anchor
+	switch {
+	case a.ClusterID == "":
+		return fmt.Errorf("resource query anchor: clusterId is required")
+	case a.Version == "":
+		return fmt.Errorf("resource query anchor: version is required")
+	case a.Kind == "":
+		return fmt.Errorf("resource query anchor: kind is required")
+	case a.Name == "":
+		return fmt.Errorf("resource query anchor: name is required")
+	}
+	if a.ClusterID != r.ClusterID {
+		return fmt.Errorf("resource query anchor: cluster %q does not match request cluster %q", a.ClusterID, r.ClusterID)
+	}
+	return nil
 }
 
 type ResourceQueryPredicate struct {
 	Field string `json:"field"`
 	Op    string `json:"op"`
 	Value string `json:"value,omitempty"`
-}
-
-type ResourceQueryResult struct {
-	Rows          []ResourceQueryRow `json:"rows"`
-	Continue      string             `json:"continue,omitempty"`
-	CursorInvalid bool               `json:"cursorInvalid,omitempty"`
-	Total         int                `json:"total"`
-	// UnfilteredTotal is the in-scope item count before the request's filters, for the
-	// "showing {Total} of {UnfilteredTotal} items due to filters" banner.
-	UnfilteredTotal int                      `json:"unfilteredTotal"`
-	TotalIsExact    bool                     `json:"totalIsExact"`
-	Facets          ResourceQueryFacets      `json:"facets"`
-	FacetsExact     bool                     `json:"facetsExact"`
-	Partial         []ResourceQueryIssue     `json:"partial,omitempty"`
-	Dynamic         *ResourceQueryDynamicRef `json:"dynamic,omitempty"`
 }
 
 type ResourceQueryRow struct {
@@ -120,13 +186,6 @@ type ResourceQueryRow struct {
 
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
-}
-
-type ResourceQueryFacets struct {
-	Kinds      []string `json:"kinds,omitempty"`
-	Namespaces []string `json:"namespaces,omitempty"`
-	Statuses   []string `json:"statuses,omitempty"`
-	Nodes      []string `json:"nodes,omitempty"`
 }
 
 type ResourceQueryIssue struct {
@@ -172,8 +231,20 @@ type ResourceQueryEnvelope struct {
 	QueryIdentity string                `json:"queryIdentity,omitempty"`
 	Continue      string                `json:"continue,omitempty"`
 	Previous      string                `json:"previous,omitempty"`
-	CursorInvalid bool                  `json:"cursorInvalid,omitempty"`
-	Total         int                   `json:"total"`
+	// Self addresses the served page itself — present on counted serves
+	// (anchor/offset landings, which have no request token of their own) so a
+	// live refetch can reproduce the page instead of re-anchoring or resetting.
+	Self          string `json:"self,omitempty"`
+	CursorInvalid bool   `json:"cursorInvalid,omitempty"`
+	// Anchor is present iff the request carried one (see ResourceQueryAnchorResult).
+	Anchor *ResourceQueryAnchorResult `json:"anchor,omitempty"`
+	// PageStartRank is the 0-based rank of the served page's first row among the
+	// matching rows — serve-time position honesty for the footer. A POINTER so
+	// rank 0 (page 1) stays distinguishable from "not computed" under omitempty:
+	// absent means the serve did not pay the counted walk (plain cursor pages
+	// until P9's benchmark gate), never "first page".
+	PageStartRank *int `json:"pageStartRank,omitempty"`
+	Total         int  `json:"total"`
 	// UnfilteredTotal is the in-scope item count before the request's filters, so the
 	// frontend can render "showing {Total} of {UnfilteredTotal} items due to filters".
 	UnfilteredTotal int                       `json:"unfilteredTotal"`
@@ -240,7 +311,34 @@ func resourceQueryRequestFromValues(clusterID, table string, values url.Values, 
 		predicates[field] = strings.TrimSpace(valuesForKey[0])
 	}
 	request.Predicates = resourceQueryPredicateMapToList(predicates)
+	request.Anchor = resourceQueryAnchorFromValues(values)
+	if raw := strings.TrimSpace(values.Get("startRank")); raw != "" {
+		if rank, err := strconv.Atoi(raw); err == nil {
+			request.StartRank = &rank
+		}
+	}
 	return request
+}
+
+// resourceQueryAnchorFromValues builds the anchor object reference from the
+// anchor.* query params — the same scope-string channel the continue token
+// rides. Returns nil when no anchor.name/anchor.kind param is present;
+// validateAnchor enforces field completeness afterward.
+func resourceQueryAnchorFromValues(values url.Values) *ResourceQueryAnchor {
+	name := strings.TrimSpace(values.Get("anchor.name"))
+	kind := strings.TrimSpace(values.Get("anchor.kind"))
+	if name == "" && kind == "" {
+		return nil
+	}
+	return &ResourceQueryAnchor{
+		ClusterID: strings.TrimSpace(values.Get("anchor.clusterId")),
+		Group:     strings.TrimSpace(values.Get("anchor.group")),
+		Version:   strings.TrimSpace(values.Get("anchor.version")),
+		Kind:      kind,
+		Namespace: strings.TrimSpace(values.Get("anchor.namespace")),
+		Name:      name,
+		UID:       strings.TrimSpace(values.Get("anchor.uid")),
+	}
 }
 
 func resourceQueryListValues(values url.Values, pluralKey, singularKey string) []string {

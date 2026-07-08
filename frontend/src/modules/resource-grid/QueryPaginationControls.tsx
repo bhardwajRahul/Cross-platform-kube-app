@@ -23,6 +23,11 @@ interface QueryPaginationControlsProps {
   onPrevious: () => void;
   onNext: () => void;
   onPageSizeChange: (value: number) => void;
+  /**
+   * Numbered page jump (1-based). Rendered only while the total is exact —
+   * approximate totals keep first/prev/next only (large-data.md contract).
+   */
+  onPageJump?: (page: number) => void;
 }
 
 const formatCount = (value: number): string => Math.max(0, value).toLocaleString();
@@ -58,6 +63,7 @@ const QueryPaginationControls: React.FC<QueryPaginationControlsProps> = ({
   onPrevious,
   onNext,
   onPageSizeChange,
+  onPageJump,
 }) => {
   const pageOptions = useMemo<DropdownOption[]>(
     () =>
@@ -81,6 +87,26 @@ const QueryPaginationControls: React.FC<QueryPaginationControlsProps> = ({
       ? `${formatCount(rangeStart)}-${formatCount(rangeEnd)}`
       : '0';
   const totalLabel = totalIsExact ? formatCount(totalCount) : `${formatCount(totalCount)}+`;
+  const totalPages =
+    totalIsExact && pageSize > 0 ? Math.max(1, Math.ceil(totalCount / pageSize)) : 0;
+  // Numbered jumps need an exact page count; approximate totals keep
+  // first/prev/next only (large-data.md contract).
+  const showPageJump = Boolean(onPageJump) && totalIsExact && totalPages > 1;
+
+  // Commit the page-jump field: parse, clamp to [1, totalPages], and jump only
+  // when the target differs from the current page. Both Enter and blur (tab-out)
+  // call this, so they can't drift. On an empty/invalid/same-page value it
+  // restores the field to the current page rather than leaving a stale number.
+  const commitPageJump = (input: HTMLInputElement) => {
+    const value = Number(input.value);
+    const target =
+      Number.isFinite(value) && value >= 1 ? Math.min(Math.floor(value), totalPages) : null;
+    if (target === null || target === pageIndex) {
+      input.value = String(pageIndex);
+      return;
+    }
+    onPageJump?.(target);
+  };
 
   return (
     <div className="query-pagination-controls" aria-label="Table pagination">
@@ -117,6 +143,9 @@ const QueryPaginationControls: React.FC<QueryPaginationControlsProps> = ({
           aria-hidden={loading ? undefined : true}
         />
       </div>
+      {/* One navigation cluster: ◀ [page]/total ▶. The editable page number
+          lives between the arrows because it IS navigation — keeping it out of
+          the status text leaves exactly one "X of Y" fact on the footer. */}
       <div className="query-pagination-buttons">
         <button
           type="button"
@@ -128,6 +157,28 @@ const QueryPaginationControls: React.FC<QueryPaginationControlsProps> = ({
         >
           <PaginationArrowIcon direction="previous" />
         </button>
+        {showPageJump ? (
+          <span className="query-pagination-page-jump">
+            <input
+              key={pageIndex}
+              type="number"
+              className="query-pagination-page-jump-input"
+              defaultValue={pageIndex}
+              min={1}
+              max={totalPages}
+              disabled={loading}
+              aria-label={`Page ${pageIndex} of ${totalPages} — edit to jump`}
+              title={`Go to page (1 to ${formatCount(totalPages)})`}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  commitPageJump(event.currentTarget);
+                }
+              }}
+              onBlur={(event) => commitPageJump(event.currentTarget)}
+            />
+            <span className="query-pagination-page-jump-total">/ {formatCount(totalPages)}</span>
+          </span>
+        ) : null}
         <button
           type="button"
           className="query-pagination-button"

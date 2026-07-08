@@ -49,10 +49,20 @@ the completed `v2` rewrite plan.
   `querypage/store.go`, `columnar.go`.
 - **Keyset indexes, per direction.** One asc + one desc `google/btree` per sortable key,
   tie-broken to reproduce the live total order exactly. Pagination is a bounded keyset
-  range scan — **O(log N + page), depth-independent**; facets/totals are O(1) counter
-  reads (exact at any N, no cliff). Cursor = `(sortValue, uid)` + signature
-  (`querypage/cursor.go`). There is **no** order-statistics (Rank/At) augmentation — it
-  was only needed by the unbuilt delta layer.
+  range scan — **O(log N + page) when the walked entries match** (unfiltered, or dense
+  filters); a sparse filter/search walks past non-matching entries to fill the page and
+  degrades toward O(N) worst case (`store.go` `collect`; the trigram index narrows
+  search candidates but membership is still verified per entry). Cost honesty on
+  counts: the **unfiltered** total is O(1) (`rows.len()`) and the facet counters
+  returned with every page are maintained-counter reads — but a **filtered/searched**
+  query pays a full O(N) match-value scan for its exact `Total`
+  (`store.go:524-532`), and `Scope` (filtered facet counts + totals for the
+  maintained-direct path) is the same O(N) column scan. These are cheap
+  no-reconstruction column reads — measured 4–18 ms per page at 100k–250k rows
+  (see `large-data.md` "Current Browse Budget") — linear, not O(1). Cursor =
+  `(sortValue, uid)` + signature (`querypage/cursor.go`). There is **no**
+  order-statistics (Rank/At) augmentation — it was only needed by the unbuilt delta
+  layer.
 - **On-disk format = the same SoA, mmap'd.** `querypage/columnfile.go` +
   `columnstore_mmap.go` (zero-copy `unsafe.Slice`/`unsafe.String` over `syscall.Mmap`,
   portable heap fallback). This is what spill and Cold-serving use.
@@ -162,8 +172,12 @@ Validated/decided during the rewrite; reasons in git history + the memory record
   (pages are small), **gorilla→coder/websocket** (gorilla is maintained again).
 - **A single per-cluster LSN clock** as a from-scratch rewrite (Phase 2 dropped) and
   **SSAR→SSRR** for the remaining callers (legitimately not SSRR-expressible).
-- **Order-statistics Rank/At index** and a **`metricsRevision` metric index** — only the
-  unbuilt delta layer / profiled metric-sorted views would need them.
+- **Order-statistics Rank/At index** and a **`metricsRevision` metric index**. The
+  anchor-jump / numbered-page feature that needs a per-row rank uses a counted
+  `QueryAround`/`QueryAt` walk instead — measured within the page-serve budget class for a
+  one-shot jump (`large-data.md` "Current Browse Budget"), so order statistics stay parked
+  behind a measured regression. The metric index would still only serve the unbuilt delta
+  layer / profiled metric-sorted views.
 
 ## Provenance
 

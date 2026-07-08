@@ -14,6 +14,7 @@ import {
 } from '@/core/data-access';
 import { useCatalogDiagnostics } from '@/core/refresh/diagnostics/useCatalogDiagnostics';
 import { walkQueryCursorPages } from '@modules/resource-grid/cursorPageWalk';
+import { errorHandler } from '@utils/errorHandler';
 import { useAutoRefreshLoadingState } from '@/core/refresh/hooks/useAutoRefreshLoadingState';
 import { applyPassiveLoadingPolicy } from '@/core/refresh/loadingPolicy';
 import type { CatalogItem, CatalogSnapshotPayload } from '@/core/refresh/types';
@@ -108,6 +109,8 @@ export interface BrowseCatalogPagination {
   isRequestingMore: boolean;
   onRequestMore: () => void;
   onRequestPrevious: () => void;
+  /** Numbered page jump (1-based); no-ops while totals are approximate. */
+  onJumpToPage: (page: number) => void;
 }
 
 /**
@@ -222,6 +225,14 @@ export function useBrowseCatalog({
   const pageIndexRef = useRef(1);
   const currentPageTokenRef = useRef<string | null>(null);
   pageIndexRef.current = pageIndex;
+  // Page-request coordination (see requestPage): a SYNC in-flight gate (state
+  // is async and can double-fire), a user-only gate (quiet doorbell refetches
+  // must not block user clicks), and a sequence so a user request supersedes
+  // an in-flight quiet refetch — the superseded response neither applies nor
+  // clears its successor's flags.
+  const pageRequestInFlightRef = useRef(false);
+  const userPageRequestInFlightRef = useRef(false);
+  const pageRequestSeqRef = useRef(0);
 
   useEffect(() => {
     const nextSearch = filters.search ?? '';
@@ -421,14 +432,34 @@ export function useBrowseCatalog({
 
   const requestPage = useCallback(
     (
-      token: string | null,
-      direction: 'next' | 'previous' | 'current',
+      // A page address: a keyset token (next/previous/current) or a 0-based
+      // startRank (numbered 'jump' — served by the bounded offset contract).
+      address: { token?: string | null; startRank?: number },
+      direction: 'next' | 'previous' | 'current' | 'jump',
       reason: DataRequestReason = 'user'
     ) => {
-      if (!token || isRequestingMore) {
+      const token = address.token ?? null;
+      const hasStartRank = typeof address.startRank === 'number';
+      if (!token && !hasStartRank) {
         return;
       }
-      setIsRequestingMore(true);
+      // Doorbell-driven current-page refetches are QUIET: they must not flip
+      // the user-facing busy flag (which disables prev/next and spins the
+      // footer) — on a churning cluster doorbells ring continuously, and a
+      // busy window per ring means a permanently dead footer. Quiet requests
+      // coalesce (skip while ANY page request is in flight); user requests
+      // wait only on other USER requests and SUPERSEDE an in-flight quiet
+      // refetch via the sequence guard below.
+      const quiet = reason === 'stream-signal';
+      if (quiet ? pageRequestInFlightRef.current : userPageRequestInFlightRef.current) {
+        return;
+      }
+      const seq = ++pageRequestSeqRef.current;
+      pageRequestInFlightRef.current = true;
+      if (!quiet) {
+        userPageRequestInFlightRef.current = true;
+        setIsRequestingMore(true);
+      }
 
       const normalizedScope = buildBrowseCatalogPageScope(
         plan,
@@ -440,7 +471,8 @@ export function useBrowseCatalog({
           pinnedNamespaces,
           customOnly,
         },
-        token
+        token ?? '',
+        address.startRank
       );
       const baseScopeAtRequest = catalogScopeRef.current;
       void (async () => {
@@ -450,7 +482,11 @@ export function useBrowseCatalog({
             scope: normalizedScope,
             reason,
           });
-          if (result.status !== 'executed' || catalogScopeRef.current !== baseScopeAtRequest) {
+          if (
+            pageRequestSeqRef.current !== seq ||
+            result.status !== 'executed' ||
+            catalogScopeRef.current !== baseScopeAtRequest
+          ) {
             return;
           }
 
@@ -483,14 +519,26 @@ export function useBrowseCatalog({
           setTotalCount(next.totalCount);
           setUnfilteredTotal(next.unfilteredTotal);
           setTotalIsExact(next.totalIsExact);
-          const nextPageIndex =
-            direction === 'next'
-              ? pageIndexRef.current + 1
-              : direction === 'previous'
-                ? Math.max(1, pageIndexRef.current - 1)
-                : pageIndexRef.current;
+          let nextPageIndex: number;
+          if (direction === 'jump') {
+            // Serve-time position honesty: the landing carries its exact rank,
+            // and the self cursor becomes the current page's token so live
+            // refetches reproduce THIS page.
+            nextPageIndex =
+              typeof payload.pageStartRank === 'number'
+                ? Math.floor(payload.pageStartRank / pageLimit) + 1
+                : 1;
+            currentPageTokenRef.current = payload.self || null;
+          } else {
+            nextPageIndex =
+              direction === 'next'
+                ? pageIndexRef.current + 1
+                : direction === 'previous'
+                  ? Math.max(1, pageIndexRef.current - 1)
+                  : pageIndexRef.current;
+            currentPageTokenRef.current = nextPageIndex > 1 ? token : null;
+          }
           pageIndexRef.current = nextPageIndex;
-          currentPageTokenRef.current = nextPageIndex > 1 ? token : null;
           setPageIndex(nextPageIndex);
           if (!hasLoadedOnceRef.current) {
             hasLoadedOnceRef.current = true;
@@ -502,14 +550,18 @@ export function useBrowseCatalog({
             setPageError(error instanceof Error ? error.message : String(error));
           }
         } finally {
-          if (catalogScopeRef.current === baseScopeAtRequest) {
-            setIsRequestingMore(false);
+          // A superseded request must not clear its successor's gates.
+          if (pageRequestSeqRef.current === seq) {
+            pageRequestInFlightRef.current = false;
+            if (!quiet) {
+              userPageRequestInFlightRef.current = false;
+              setIsRequestingMore(false);
+            }
           }
         }
       })();
     },
     [
-      isRequestingMore,
       pageLimit,
       queryFilters,
       sort,
@@ -551,7 +603,7 @@ export function useBrowseCatalog({
     // swallows. With 'background' the refetch was skipped for a loaded scope
     // while the stream was healthy — the doorbell silently did nothing.
     if (currentPageToken) {
-      requestPage(currentPageToken, 'current', 'stream-signal');
+      requestPage({ token: currentPageToken }, 'current', 'stream-signal');
     } else {
       void refreshCatalogScope('stream-signal');
     }
@@ -568,17 +620,31 @@ export function useBrowseCatalog({
   ]);
 
   const handleLoadMore = useCallback(() => {
-    requestPage(continueToken, 'next');
+    requestPage({ token: continueToken }, 'next');
   }, [continueToken, requestPage]);
 
   const handleLoadPrevious = useCallback(() => {
-    requestPage(previousToken, 'previous');
+    requestPage({ token: previousToken }, 'previous');
   }, [previousToken, requestPage]);
+
+  const handleJumpToPage = useCallback(
+    (page: number) => {
+      // Numbered jumps are exact-total territory (approximate totals keep
+      // first/prev/next only, per large-data.md); the footer control also
+      // hides itself, this guard covers keyboard/programmatic calls.
+      if (!totalIsExact) {
+        return;
+      }
+      const target = Math.max(1, Math.floor(page));
+      requestPage({ startRank: (target - 1) * pageLimit }, 'jump');
+    },
+    [pageLimit, requestPage, totalIsExact]
+  );
 
   const refreshCurrentQuery = useCallback(() => {
     const currentPageToken = currentPageTokenRef.current;
     if (currentPageToken) {
-      requestPage(currentPageToken, 'current');
+      requestPage({ token: currentPageToken }, 'current');
       return;
     }
     void refreshCatalogScope('user');
@@ -657,7 +723,7 @@ export function useBrowseCatalog({
     // catalog query for the current filters/sort; the shared walk owns the
     // loop, page guard, and failure semantics (failed/empty pages REJECT).
     const exportPageLimit = 10000;
-    const collected = await walkQueryCursorPages<CatalogItem>('Catalog', async (cursor, page) => {
+    const walk = await walkQueryCursorPages<CatalogItem>('Catalog', async (cursor, page) => {
       const scope = buildBrowseCatalogPageScope(
         plan,
         {
@@ -679,9 +745,22 @@ export function useBrowseCatalog({
         throw new Error(`Catalog export failed: page ${page + 1} returned no data`);
       }
       const applied = applyCatalogPage(emptyBrowseCatalogCollection(), payload);
-      return { items: applied.items, continueToken: applied.continueToken || null };
+      // The RAW per-source clock, never the scope-folded token (differs per
+      // export page by construction) — see the walk's drift guard.
+      const sourceVersion =
+        (result.data as { sourceVersions?: Partial<Record<string, string>> } | undefined)
+          ?.sourceVersions?.object ?? null;
+      return { items: applied.items, continueToken: applied.continueToken || null, sourceVersion };
     });
-    return filterBrowseCatalogItems(collected, clusterScopedOnly);
+    if (walk.dataChangedDuringWalk) {
+      // Loud, not fatal (plan P7/F2): deliver the export but say what happened.
+      // A WARNING advisory (amber, auto-dismissing), not an error.
+      errorHandler.warn(
+        'Some rows changed while the export was being gathered, so the result reflects a mix of before and after states.',
+        { title: 'Export', context: { source: 'resource-export', domain: 'catalog' } }
+      );
+    }
+    return filterBrowseCatalogItems(walk.items, clusterScopedOnly);
   }, [
     clusterId,
     clusterScopedOnly,
@@ -709,11 +788,13 @@ export function useBrowseCatalog({
       isRequestingMore,
       onRequestMore: handleLoadMore,
       onRequestPrevious: handleLoadPrevious,
+      onJumpToPage: handleJumpToPage,
     }),
     [
       continueToken,
       handleLoadMore,
       handleLoadPrevious,
+      handleJumpToPage,
       isRequestingMore,
       pageIndex,
       pageLimit,
