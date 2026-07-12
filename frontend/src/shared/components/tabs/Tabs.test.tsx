@@ -3,8 +3,9 @@
  */
 
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createTestId } from '@/test-utils/createTestId';
 import { requireValue } from '@/test-utils/requireValue';
 import { installWindowProperty } from '@/test-utils/windowProperty';
 
@@ -18,9 +19,15 @@ const installResizeObserver = (observers: Array<() => void>) =>
         observers.push(() => callback([], this));
       }
 
-      observe() {}
-      unobserve() {}
-      disconnect() {}
+      observe() {
+        return undefined;
+      }
+      unobserve() {
+        return undefined;
+      }
+      disconnect() {
+        return undefined;
+      }
     }
   );
 
@@ -43,7 +50,9 @@ describe('Tabs', () => {
 
   it('renders an empty tablist with the required aria-label', () => {
     act(() => {
-      root.render(<Tabs tabs={[]} activeId={null} onActivate={() => {}} aria-label="Test Tabs" />);
+      root.render(
+        <Tabs tabs={[]} activeId={null} onActivate={() => undefined} aria-label="Test Tabs" />
+      );
     });
 
     const tablist = container.querySelector('[role="tablist"]');
@@ -62,7 +71,7 @@ describe('Tabs', () => {
             { id: 'c', label: 'Gamma' },
           ]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -84,7 +93,7 @@ describe('Tabs', () => {
             { id: 'b', label: 'Beta' },
           ]}
           activeId="b"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -157,7 +166,7 @@ describe('Tabs', () => {
             { id: 'c', label: 'Gamma' },
           ]}
           activeId="b"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -231,7 +240,7 @@ describe('Tabs', () => {
             { id: 'c', label: 'Gamma' },
           ]}
           activeId="b"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -263,7 +272,7 @@ describe('Tabs', () => {
             { id: 'c', label: 'Gamma' },
           ]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -339,7 +348,7 @@ describe('Tabs', () => {
             { id: 'b', label: <svg />, ariaLabel: 'Icon-only tab' },
           ]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -356,7 +365,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={[{ id: 'a', label: 'Alpha' }]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
           textTransform="uppercase"
         />
@@ -373,7 +382,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={[{ id: 'a', label: 'Alpha' }]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -384,15 +393,16 @@ describe('Tabs', () => {
   });
 
   it('merges a consumer className onto the root and applies an id', () => {
+    const tabListId = createTestId('custom-id');
     act(() => {
       root.render(
         <Tabs
           tabs={[{ id: 'a', label: 'Alpha' }]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
           className="custom-class"
-          id="custom-id"
+          id={tabListId}
         />
       );
     });
@@ -400,7 +410,7 @@ describe('Tabs', () => {
     const tablist = container.querySelector('[role="tablist"]');
     expect(tablist?.classList.contains('tab-strip')).toBe(true);
     expect(tablist?.classList.contains('custom-class')).toBe(true);
-    expect(tablist?.id).toBe('custom-id');
+    expect(tablist?.id).toBe(tabListId);
   });
 
   it('adds the fit sizing modifier class by default', () => {
@@ -409,7 +419,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={[{ id: 'a', label: 'Alpha' }]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -426,7 +436,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={[{ id: 'a', label: 'Alpha' }]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
           tabSizing="equal"
         />
@@ -444,7 +454,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={[{ id: 'a', label: 'Alpha' }]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
           minTabWidth={100}
           maxTabWidth={300}
@@ -463,7 +473,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={[{ id: 'a', label: 'Alpha' }]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -484,7 +494,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={[{ id: 'a', label: 'Alpha' }]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
           tabSizing="equal"
         />
@@ -508,7 +518,7 @@ describe('Tabs', () => {
             { id: 'b', label: 'Beta' },
           ]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -554,7 +564,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={[{ id: 'a', label: 'Alpha', onClose }]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -579,7 +589,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={[{ id: 'a', label: 'Alpha', onClose }]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -603,7 +613,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={[{ id: 'a', label: 'Alpha' }]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -637,7 +647,7 @@ describe('Tabs', () => {
             },
           ]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -649,7 +659,7 @@ describe('Tabs', () => {
   });
 
   it('warns in dev mode when extraProps overrides a reserved key', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     act(() => {
       root.render(
@@ -662,7 +672,7 @@ describe('Tabs', () => {
             },
           ]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -690,7 +700,7 @@ describe('Tabs', () => {
             },
           ]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -710,7 +720,9 @@ describe('Tabs', () => {
 
   it('renders an empty tablist without crashing when tabs array is empty', () => {
     act(() => {
-      root.render(<Tabs tabs={[]} activeId={null} onActivate={() => {}} aria-label="Test Tabs" />);
+      root.render(
+        <Tabs tabs={[]} activeId={null} onActivate={() => undefined} aria-label="Test Tabs" />
+      );
     });
 
     const tablist = container.querySelector('[role="tablist"]');
@@ -727,7 +739,9 @@ describe('Tabs', () => {
         observe() {
           observeCount += 1;
         }
-        unobserve() {}
+        unobserve() {
+          return undefined;
+        }
         disconnect() {
           disconnectCount += 1;
         }
@@ -738,7 +752,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={tabs}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
           overflow="scroll"
         />
@@ -762,9 +776,15 @@ describe('Tabs', () => {
     const restoreResizeObserver = installWindowProperty(
       'ResizeObserver',
       class implements ResizeObserver {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
+        observe() {
+          return undefined;
+        }
+        unobserve() {
+          return undefined;
+        }
+        disconnect() {
+          return undefined;
+        }
       }
     );
     const render = (tabs: Array<{ id: string; label: string }>) => {
@@ -772,7 +792,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={tabs}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
           overflow="scroll"
         />
@@ -810,7 +830,7 @@ describe('Tabs', () => {
             { id: 'b', label: 'Beta' },
           ]}
           activeId="nonexistent"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -837,7 +857,7 @@ describe('Tabs', () => {
             { id: 'c', label: 'Gamma' },
           ]}
           activeId={null}
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -864,7 +884,7 @@ describe('Tabs', () => {
             { id: 'c', label: 'Gamma' },
           ]}
           activeId="b"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
           disableRovingTabIndex
         />
@@ -890,7 +910,7 @@ describe('Tabs', () => {
             { id: 'b', label: 'Beta' },
           ]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -909,7 +929,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={Array.from({ length: 10 }, (_, i) => ({ id: `t${i}`, label: `Tab ${i}` }))}
           activeId="t0"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
           overflow="scroll"
         />
@@ -940,7 +960,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={Array.from({ length: 10 }, (_, i) => ({ id: `t${i}`, label: `Tab ${i}` }))}
           activeId="t0"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
           overflow="none"
         />
@@ -967,7 +987,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={Array.from({ length: 10 }, (_, i) => ({ id: `t${i}`, label: `Tab ${i}` }))}
           activeId="t0"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -1049,7 +1069,7 @@ describe('Tabs', () => {
             { id: 'b', label: 'Beta' },
           ]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
           overflow="scroll"
         />
@@ -1066,7 +1086,7 @@ describe('Tabs', () => {
             { id: 'b', label: 'Beta' },
           ]}
           activeId="b"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
           overflow="scroll"
         />
@@ -1086,9 +1106,9 @@ describe('Tabs', () => {
     act(() => {
       root.render(
         <Tabs
-          tabs={[{ id: 'a', label: 'Alpha', onClose: () => {}, closeIcon: customIcon }]}
+          tabs={[{ id: 'a', label: 'Alpha', onClose: () => undefined, closeIcon: customIcon }]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -1104,11 +1124,16 @@ describe('Tabs', () => {
       root.render(
         <Tabs
           tabs={[
-            { id: 'a', label: 'Alpha', onClose: () => {}, closeAriaLabel: 'Close Alpha tab' },
-            { id: 'b', label: 'Beta', onClose: () => {} },
+            {
+              id: 'a',
+              label: 'Alpha',
+              onClose: () => undefined,
+              closeAriaLabel: 'Close Alpha tab',
+            },
+            { id: 'b', label: 'Beta', onClose: () => undefined },
           ]}
           activeId="a"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );
@@ -1127,7 +1152,7 @@ describe('Tabs', () => {
         <Tabs
           tabs={Array.from({ length: 5 }, (_, i) => ({ id: `t${i}`, label: `Tab ${i}` }))}
           activeId="t0"
-          onActivate={() => {}}
+          onActivate={() => undefined}
           aria-label="Test Tabs"
         />
       );

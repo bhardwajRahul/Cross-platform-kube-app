@@ -89,7 +89,7 @@ const meta: Meta<typeof FavSaveModal> = {
   decorators: [SidebarProvidersDecorator],
   args: {
     isOpen: true,
-    onClose: () => {},
+    onClose: () => undefined,
     existingFavorite: null,
     defaultName: 'prod-cluster / default / Pods',
     kubeconfigSelection: '/Users/john/.kube/config:prod-cluster',
@@ -99,8 +99,8 @@ const meta: Meta<typeof FavSaveModal> = {
     filters: mockFilters,
     tableState: mockTableState,
     includeMetadata: false,
-    onSave: (fav: Favorite) => console.log('onSave', fav),
-    onDelete: (id: string) => console.log('onDelete', id),
+    onSave: (fav: Favorite) => console.info('onSave', fav),
+    onDelete: (id: string) => console.info('onDelete', id),
   },
 };
 

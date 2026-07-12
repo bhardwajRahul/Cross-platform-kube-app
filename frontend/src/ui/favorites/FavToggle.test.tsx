@@ -7,7 +7,7 @@
 
 import type React from 'react';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Favorite } from '@/core/persistence/favorites';
 import { requireValue } from '@/test-utils/requireValue';
@@ -105,7 +105,9 @@ vi.mock('@modules/namespace/contexts/NamespaceContext', () => ({
 
 vi.mock('./FavSaveModal', () => ({
   default: ({ isOpen, onClose, onSave, onDelete, existingFavorite }: FavSaveModalProps) => {
-    if (!isOpen) return null;
+    if (!isOpen) {
+      return null;
+    }
     return (
       <div data-testid="fav-save-modal">
         <button

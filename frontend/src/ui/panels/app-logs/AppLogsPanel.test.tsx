@@ -7,7 +7,7 @@
 
 import type { DropdownOption } from '@shared/components/dropdowns/Dropdown';
 import { act, type ReactNode, type Ref } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
@@ -241,9 +241,7 @@ describe('AppLogsPanel', () => {
     expect(header).not.toBeNull();
     expect(
       Array.from(
-        requireValue(header, 'expected test value in AppLogsPanel.test.tsx').querySelectorAll(
-          '[role="columnheader"]'
-        )
+        requireValue(header, 'expected test value in AppLogsPanel.test.tsx').querySelectorAll('th')
       ).map((cell) => cell.textContent)
     ).toEqual(['Time', 'Level', 'Source', 'Cluster', 'Message']);
 
@@ -666,7 +664,7 @@ describe('AppLogsPanel', () => {
       }
       await Promise.resolve();
     });
-    await act(async () => {});
+    await act(async () => undefined);
 
     const emptyMessage = container.querySelector('.app-logs-empty');
     const remainingEntries = container.querySelectorAll('.log-entry');

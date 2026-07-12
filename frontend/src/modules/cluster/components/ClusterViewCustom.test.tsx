@@ -14,7 +14,7 @@ import { resetResourceInventoryRowCache } from '@modules/resource-grid/useResour
 import type ConfirmationModal from '@shared/components/modals/ConfirmationModal';
 import type { GridTableProps } from '@shared/components/tables/GridTable';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CatalogItem } from '@/core/refresh/types';
 import { requireReactElement } from '@/test-utils/requireReactElement';
@@ -47,7 +47,7 @@ vi.mock('@ui/favorites/FavToggle', () => ({
     id: 'favorite',
     icon: null,
     active: false,
-    onClick: () => {},
+    onClick: () => undefined,
     title: 'Save as favorite',
   }),
 }));
@@ -208,7 +208,7 @@ const browseCatalogResult = (items: CatalogItem[] = []) => ({
     pageIndex: 1,
     pageLimit: 50,
     pageLimitOptions: [25, 50, 100, 250, 500, 1000],
-    setPageLimit: () => {},
+    setPageLimit: () => undefined,
     totalCount: items.length,
     totalIsExact: true,
     previousToken: null,
@@ -217,8 +217,8 @@ const browseCatalogResult = (items: CatalogItem[] = []) => ({
     hasMore: false,
     hasPrevious: false,
     isRequestingMore: false,
-    onRequestMore: () => {},
-    onRequestPrevious: () => {},
+    onRequestMore: () => undefined,
+    onRequestPrevious: () => undefined,
   },
 });
 
@@ -672,8 +672,8 @@ describe('ClusterViewCustom', () => {
         title?: string;
       }>(crdCol.render(resourceWithCRD), 'expected the cluster CRD link element');
 
-      expect(rendered.type).toBe('span');
-      expect(rendered.props.role).toBe('button');
+      expect(rendered.type).toBe('button');
+      expect(rendered.props.role).toBeUndefined();
       expect(rendered.props.children).toBe('dbclusters.postgresql.cnpg.io');
       expect(rendered.props.title).toBe('Open dbclusters.postgresql.cnpg.io');
     });
@@ -696,7 +696,7 @@ describe('ClusterViewCustom', () => {
         rendered.props.onClick,
         'expected the cluster CRD click handler'
       );
-      onClick({ altKey: false, preventDefault: () => {}, stopPropagation: () => {} });
+      onClick({ altKey: false, preventDefault: () => undefined, stopPropagation: () => undefined });
 
       expect(openWithObjectMock).toHaveBeenCalledTimes(1);
       const callArg = openWithObjectMock.mock.calls[0][0] as Record<string, unknown>;

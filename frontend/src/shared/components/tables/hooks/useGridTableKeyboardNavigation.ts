@@ -1,5 +1,5 @@
 import { findGridTableRowByKey } from '@shared/components/tables/GridTable.utils';
-import { useEffectWithInvalidation } from '@shared/hooks/useHookLifetimes';
+
 import type { RefObject } from 'react';
 import { useCallback, useEffect, useRef } from 'react';
 
@@ -46,7 +46,12 @@ export function useGridTableKeyboardNavigation({
         return false;
       }
       lastNavigationMethodRef.current = 'keyboard';
-      const base = focusedRowIndex == null ? (delta > 0 ? -1 : tableDataLength) : focusedRowIndex;
+      const base =
+        focusedRowIndex === null || focusedRowIndex === undefined
+          ? delta > 0
+            ? -1
+            : tableDataLength
+          : focusedRowIndex;
       const next = Math.min(Math.max(base + delta, 0), tableDataLength - 1);
       focusByIndex(next);
       return true;
@@ -67,46 +72,43 @@ export function useGridTableKeyboardNavigation({
     [focusByIndex, lastNavigationMethodRef, tableDataLength]
   );
 
-  useEffectWithInvalidation(
-    () => {
-      const wrapper = wrapperRef.current;
-      if (!wrapper) {
+  useEffect(() => {
+    void tableDataLength;
+    const wrapper = wrapperRef.current;
+    if (!wrapper) {
+      getPageSizeRef.current = 1;
+      return;
+    }
+
+    const computePageSize = () => {
+      const height = wrapper.clientHeight || 1;
+      if (height <= 0) {
         getPageSizeRef.current = 1;
         return;
       }
 
-      const computePageSize = () => {
-        const height = wrapper.clientHeight || 1;
-        if (height <= 0) {
-          getPageSizeRef.current = 1;
-          return;
-        }
-
-        if (shouldVirtualize && virtualRowHeight > 0) {
-          getPageSizeRef.current = Math.max(1, Math.round(height / virtualRowHeight));
-          return;
-        }
-
-        const firstRow = wrapper.querySelector<HTMLElement>('.gridtable-row');
-        const rowHeight = firstRow?.getBoundingClientRect().height || 44;
-        getPageSizeRef.current = Math.max(1, Math.round(height / Math.max(rowHeight, 1)));
-      };
-
-      computePageSize();
-
-      const observer =
-        typeof ResizeObserver !== 'undefined' ? new ResizeObserver(computePageSize) : null;
-      if (observer) {
-        observer.observe(wrapper);
+      if (shouldVirtualize && virtualRowHeight > 0) {
+        getPageSizeRef.current = Math.max(1, Math.round(height / virtualRowHeight));
+        return;
       }
 
-      return () => {
-        observer?.disconnect();
-      };
-    },
-    [shouldVirtualize, virtualRowHeight, wrapperRef],
-    [tableDataLength]
-  );
+      const firstRow = wrapper.querySelector<HTMLElement>('.gridtable-row');
+      const rowHeight = firstRow?.getBoundingClientRect().height || 44;
+      getPageSizeRef.current = Math.max(1, Math.round(height / Math.max(rowHeight, 1)));
+    };
+
+    computePageSize();
+
+    const observer =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(computePageSize) : null;
+    if (observer) {
+      observer.observe(wrapper);
+    }
+
+    return () => {
+      observer?.disconnect();
+    };
+  }, [shouldVirtualize, virtualRowHeight, wrapperRef, tableDataLength]);
 
   useEffect(() => {
     if (!shortcutsActive || !focusedRowKey) {
@@ -129,7 +131,8 @@ export function useGridTableKeyboardNavigation({
       allowAutoScroll &&
       shouldVirtualize &&
       virtualRowHeight > 0 &&
-      focusedRowIndex != null &&
+      focusedRowIndex !== null &&
+      focusedRowIndex !== undefined &&
       focusedRowIndex >= 0
     ) {
       const rowTop = getRowTop(focusedRowIndex);

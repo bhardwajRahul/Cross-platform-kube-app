@@ -8,7 +8,7 @@
 import type { GridColumnDefinition } from '@shared/components/tables/GridTable.types';
 import { useGridTableCellCache } from '@shared/components/tables/hooks/useGridTableCellCache';
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 
 type SampleRow = { id: string; kind?: string };
@@ -46,7 +46,9 @@ const renderHarness = async (renderedColumns: GridColumnDefinition<SampleRow>[])
       renderedColumns,
       isKindColumnKey: (key) => key === 'kind',
       getTextContent: (node) => {
-        if (typeof node === 'string') return node;
+        if (typeof node === 'string') {
+          return node;
+        }
         if (Array.isArray(node)) {
           return node.map((item) => (typeof item === 'string' ? item : '')).join('');
         }

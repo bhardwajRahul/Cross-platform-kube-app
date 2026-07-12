@@ -18,7 +18,6 @@ import {
   ALL_NAMESPACES_SCOPE,
   isAllNamespaces,
 } from '@modules/namespace/constants';
-import { useMountEffect } from '@shared/hooks/useHookLifetimes';
 import { formatAge } from '@utils/ageFormatter';
 import { errorHandler } from '@utils/errorHandler';
 import type React from 'react';
@@ -28,6 +27,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -259,7 +259,9 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
     async (_showSpinner: boolean = true) => {
       const scopes =
         namespaceScopes.length > 0 ? namespaceScopes : namespacesScope ? [namespacesScope] : [];
-      if (scopes.length === 0) return;
+      if (scopes.length === 0) {
+        return;
+      }
       await Promise.all(
         scopes.map((scope) =>
           requestRefreshDomain({
@@ -372,7 +374,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
   // Unmount-only teardown: release whatever scopes are currently held. Kept
   // separate from the reconciliation effect above so re-runs never release
   // still-active scopes.
-  useMountEffect(() => () => {
+  const releaseNamespaceScopes = useEffectEvent(() => () => {
     namespaceScopesRef.current.forEach((scope) => {
       setRefreshDomainEnabled({
         domain: 'namespaces',
@@ -382,6 +384,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
       });
     });
   });
+  useEffect(() => releaseNamespaceScopes(), []);
 
   useEffect(() => {
     const activeNamespaces = namespacesRef.current.length > 0 ? namespacesRef.current : namespaces;

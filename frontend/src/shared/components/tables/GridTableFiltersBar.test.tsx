@@ -8,7 +8,7 @@
 import { ZoomProvider } from '@core/contexts/ZoomContext';
 import GridTableFiltersBar from '@shared/components/tables/GridTableFiltersBar';
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 
@@ -245,10 +245,10 @@ describe('GridTableFiltersBar', () => {
   });
 
   it('keeps search input focused across controlled filter updates', async () => {
-    const setInputValue = (input: HTMLInputElement, value: string) => {
+    const setInputValue = (inputElement: HTMLInputElement, value: string) => {
       const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-      descriptor?.set?.call(input, value);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
+      descriptor?.set?.call(inputElement, value);
+      inputElement.dispatchEvent(new Event('input', { bubbles: true }));
     };
 
     const Harness = () => {
@@ -530,6 +530,7 @@ describe('GridTableFiltersBar', () => {
 
     const dropdown = container.querySelector('[data-testid="columns"]') as HTMLSelectElement;
     expect(dropdown).toBeTruthy();
+    expect(dropdown.dataset.bulkActions).toBe('true');
 
     await act(async () => {
       dropdown.value = 'age';

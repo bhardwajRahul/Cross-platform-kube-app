@@ -9,7 +9,7 @@ import { OBJECT_ACTION_IDS, objectActionLabel } from '@shared/actions/objectActi
 import type { GridTableProps } from '@shared/components/tables/GridTable';
 import { withStableListKeys } from '@shared/utils/stableListKeys';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SortConfig, UseTableSortOptions } from '@/hooks/useTableSort';
 import { requireReactElement } from '@/test-utils/requireReactElement';
@@ -83,7 +83,7 @@ vi.mock('@ui/favorites/FavToggle', () => ({
     id: 'favorite',
     icon: null,
     active: false,
-    onClick: () => {},
+    onClick: () => undefined,
     title: 'Save as favorite',
   }),
 }));
@@ -366,7 +366,7 @@ describe('NsViewEvents', () => {
     }>(objectNameColumn.render(event), 'expected the event object-name cell element');
 
     await act(async () => {
-      cell.props.onClick({ stopPropagation: () => {} });
+      cell.props.onClick({ stopPropagation: () => undefined });
       await Promise.resolve();
     });
 
@@ -409,7 +409,7 @@ describe('NsViewEvents', () => {
     }>(objectNameColumn.render(event), 'expected the event object-name cell element');
 
     await act(async () => {
-      cell.props.onClick({ stopPropagation: () => {} });
+      cell.props.onClick({ stopPropagation: () => undefined });
       await Promise.resolve();
     });
 

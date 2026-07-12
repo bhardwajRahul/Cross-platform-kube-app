@@ -25,6 +25,7 @@ import { requestRefreshDomain, setRefreshDomainEnabled } from '@/core/data-acces
 import { buildClusterScope } from '@/core/refresh/clusterScope';
 import { type DomainSnapshotState, useRefreshScopedDomainEntries } from '@/core/refresh/store';
 import type { NodeMaintenanceDrainJob, NodeMaintenanceSnapshotPayload } from '@/core/refresh/types';
+import { compareUtf16Strings } from '@/shared/utils/sort';
 import { errorHandler } from '@/utils/errorHandler';
 
 export interface NodeActionTarget {
@@ -43,11 +44,13 @@ const normalizeWatchClusterIds = (clusterIds: string[] | undefined): string[] =>
   const result: string[] = [];
   for (const clusterId of clusterIds ?? []) {
     const trimmed = clusterId.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
     seen.add(trimmed);
     result.push(trimmed);
   }
-  return result.sort();
+  return result.sort(compareUtf16Strings);
 };
 
 export const buildNodeMaintenanceAggregateScope = (clusterId: string): string =>
@@ -57,7 +60,9 @@ export const collectNodeMaintenanceDrains = (
   entries: Array<[string, NodeMaintenanceSnapshotState]>,
   scopes: string[]
 ): NodeMaintenanceDrainJob[] => {
-  if (scopes.length === 0) return [];
+  if (scopes.length === 0) {
+    return [];
+  }
   const watched = new Set(scopes);
   return entries.flatMap(([scope, state]) =>
     watched.has(scope) ? (state.data?.drains ?? []) : []
@@ -99,7 +104,9 @@ export const useNodeMaintenanceActions = ({
   >;
 
   useEffect(() => {
-    if (watchedAggregateScopes.length === 0) return;
+    if (watchedAggregateScopes.length === 0) {
+      return;
+    }
     watchedAggregateScopes.forEach((scope) => {
       setRefreshDomainEnabled({ domain: 'object-maintenance', scope, enabled: true });
       void requestRefreshDomain({
@@ -122,7 +129,9 @@ export const useNodeMaintenanceActions = ({
 
   const activeDrainFor = useCallback(
     (clusterId: string, nodeName: string): NodeMaintenanceDrainJob | null => {
-      if (!clusterId || !nodeName) return null;
+      if (!clusterId || !nodeName) {
+        return null;
+      }
       const cid = clusterId.trim();
       const name = nodeName.trim().toLowerCase();
       return (
@@ -167,7 +176,9 @@ export const useNodeMaintenanceActions = ({
 
   const confirmCordon = useCallback(async () => {
     const target = cordonTarget;
-    if (!target || cordonPending) return;
+    if (!target || cordonPending) {
+      return;
+    }
     setCordonPending(true);
     const action: 'cordon' | 'uncordon' = target.unschedulable ? 'uncordon' : 'cordon';
     try {
@@ -190,7 +201,9 @@ export const useNodeMaintenanceActions = ({
   }, [cordonPending, cordonTarget, onAfterAction]);
 
   const cordonConfirmation = useMemo(() => {
-    if (!cordonTarget) return null;
+    if (!cordonTarget) {
+      return null;
+    }
     if (cordonTarget.unschedulable) {
       return {
         title: 'Uncordon Node',

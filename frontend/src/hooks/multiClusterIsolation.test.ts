@@ -8,7 +8,7 @@
 
 import { getPodsUnhealthyStorageKey } from '@modules/namespace/components/podsFilterSignals';
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AuthErrorProvider,
@@ -530,7 +530,7 @@ describe('Cluster Health Listener Isolation', () => {
   });
 
   it('does not log raw health payloads when clusterId is missing', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const { getResult, unmount } = await renderHealthHook();
 
     await act(async () => {

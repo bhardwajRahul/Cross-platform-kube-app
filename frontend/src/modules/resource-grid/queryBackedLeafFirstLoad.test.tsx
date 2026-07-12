@@ -1,6 +1,6 @@
 import { ALL_NAMESPACES_SCOPE } from '@modules/namespace/constants';
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SortConfig, SortDirection, UseTableSortOptions } from '@/hooks/useTableSort';
 import { requireValue } from '@/test-utils/requireValue';
@@ -34,7 +34,7 @@ vi.mock('@ui/favorites/FavToggle', () => ({
     id: 'favorite',
     icon: null,
     active: false,
-    onClick: () => {},
+    onClick: () => undefined,
     title: 'Save as favorite',
   }),
 }));

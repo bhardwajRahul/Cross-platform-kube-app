@@ -20,14 +20,14 @@ import {
   useGridTableColumnVirtualization,
 } from '@shared/components/tables/hooks/useGridTableColumnVirtualization';
 import { useGridTableColumnWidths } from '@shared/components/tables/hooks/useGridTableColumnWidths';
-import { useEffectWithInvalidation } from '@shared/hooks/useHookLifetimes';
+
 import type React from 'react';
 import type { RefObject } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 const getColumnMinWidth = <T>(column: GridColumnDefinition<T>) => {
   const parsed = parseWidthInputToNumber(column.minWidth);
-  if (parsed != null) {
+  if (parsed !== null && parsed !== undefined) {
     return parsed;
   }
   return DEFAULT_COLUMN_MIN_WIDTH;
@@ -35,7 +35,7 @@ const getColumnMinWidth = <T>(column: GridColumnDefinition<T>) => {
 
 const getColumnMaxWidth = <T>(column: GridColumnDefinition<T>) => {
   const parsed = parseWidthInputToNumber(column.maxWidth);
-  if (parsed != null) {
+  if (parsed !== null && parsed !== undefined) {
     return parsed;
   }
   return Number.POSITIVE_INFINITY;
@@ -134,6 +134,9 @@ interface GridTableColumnLayout<T> {
   tableContentWidth: number;
   tableViewportWidth: number;
   handleResizeStart: (event: React.MouseEvent, leftKey: string, rightKey: string) => void;
+  handleResizeKeyDown: (event: React.KeyboardEvent, columnKey: string) => void;
+  getColumnMinWidth: (column: GridColumnDefinition<T>) => number;
+  getColumnMaxWidth: (column: GridColumnDefinition<T>) => number;
   autoSizeColumn: (columnKey: string) => void;
   markVisibleAutoColumnsDirty: () => void;
 }
@@ -215,13 +218,11 @@ export function useGridTableColumnLayout<T>({
     return Number.isFinite(lastModel.end) ? lastModel.end : 0;
   }, [columnRenderModelsWithOffsets]);
 
-  useEffectWithInvalidation(
-    () => {
-      markAllAutoColumnsDirty();
-    },
-    [markAllAutoColumnsDirty],
-    [columnVirtualizationConfig.enabled, allowHorizontalOverflow]
-  );
+  useEffect(() => {
+    void columnVirtualizationConfig.enabled;
+    void allowHorizontalOverflow;
+    markAllAutoColumnsDirty();
+  }, [markAllAutoColumnsDirty, columnVirtualizationConfig.enabled, allowHorizontalOverflow]);
 
   const visibleAutoColumnKeys = useMemo(
     () =>
@@ -278,19 +279,20 @@ export function useGridTableColumnLayout<T>({
     tableDataLength: tableData.length,
   });
 
-  const { handleResizeStart, autoSizeColumn, resetManualResizes } = useColumnResizeController<T>({
-    columns,
-    renderedColumns,
-    columnWidths,
-    setColumnWidths,
-    manuallyResizedColumnsRef,
-    getColumnMinWidth,
-    getColumnMaxWidth,
-    measureColumnWidth,
-    enableColumnResizing,
-    isFixedColumnKey,
-    onManualResize: handleManualResizeEvent,
-  });
+  const { handleResizeStart, handleResizeKeyDown, autoSizeColumn, resetManualResizes } =
+    useColumnResizeController<T>({
+      columns,
+      renderedColumns,
+      columnWidths,
+      setColumnWidths,
+      manuallyResizedColumnsRef,
+      getColumnMinWidth,
+      getColumnMaxWidth,
+      measureColumnWidth,
+      enableColumnResizing,
+      isFixedColumnKey,
+      onManualResize: handleManualResizeEvent,
+    });
 
   useEffect(() => {
     if (!enableColumnResizing) {
@@ -307,6 +309,9 @@ export function useGridTableColumnLayout<T>({
     tableContentWidth,
     tableViewportWidth,
     handleResizeStart,
+    handleResizeKeyDown,
+    getColumnMinWidth,
+    getColumnMaxWidth,
     autoSizeColumn,
     markVisibleAutoColumnsDirty,
   };

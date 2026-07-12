@@ -6,10 +6,11 @@
  */
 
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eventBus } from '@/core/events';
 import type { CatalogItem } from '@/core/refresh/types';
+import { compareUtf16Strings } from '@/shared/utils/sort';
 import { requireValue } from '@/test-utils/requireValue';
 import { buildCatalogDisplayEntries, CommandPalette, parseQueryTokens } from './CommandPalette';
 import type { Command } from './CommandPaletteCommands';
@@ -494,6 +495,38 @@ describe('CommandPalette component behaviour', () => {
     expect(firstAction).not.toHaveBeenCalled();
   });
 
+  it('exposes search results as an accessible combobox with active option state', async () => {
+    const commands: Command[] = [
+      { id: 'first', label: 'First command', category: 'Application', action: vi.fn() },
+      { id: 'second', label: 'Second command', category: 'Application', action: vi.fn() },
+    ];
+
+    await renderPalette(commands);
+    await openPalette();
+
+    const input = queryInput();
+    const listbox = requireValue(
+      container.querySelector<HTMLElement>('[role="listbox"]'),
+      'expected command-palette listbox'
+    );
+    const options = Array.from(listbox.querySelectorAll<HTMLElement>('[role="option"]'));
+
+    expect(input.getAttribute('role')).toBe('combobox');
+    expect(input.getAttribute('aria-expanded')).toBe('true');
+    expect(input.getAttribute('aria-controls')).toBe(listbox.id);
+    expect(input.getAttribute('aria-autocomplete')).toBe('list');
+    expect(input.getAttribute('aria-activedescendant')).toBe(options[0]?.id);
+    expect(options).toHaveLength(2);
+    expect(options[0]?.getAttribute('aria-selected')).toBe('true');
+    expect(options[1]?.getAttribute('aria-selected')).toBe('false');
+
+    await triggerShortcut('ArrowDown');
+
+    expect(input.getAttribute('aria-activedescendant')).toBe(options[1]?.id);
+    expect(options[0]?.getAttribute('aria-selected')).toBe('false');
+    expect(options[1]?.getAttribute('aria-selected')).toBe('true');
+  });
+
   it('keeps the first item selected until the mouse actually moves', async () => {
     const commands: Command[] = [
       { id: 'first', label: 'First', category: 'Application', action: vi.fn() },
@@ -525,7 +558,7 @@ describe('CommandPalette component behaviour', () => {
     expect(palette?.classList.contains('mouse-selection-armed')).toBe(false);
 
     await act(async () => {
-      items[2].dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+      items[2].dispatchEvent(new Event('pointermove', { bubbles: true }));
       await Promise.resolve();
     });
 
@@ -819,7 +852,7 @@ describe('CommandPalette component behaviour', () => {
 
     const paletteContainer = container.querySelector('.command-palette') as HTMLElement;
     await act(async () => {
-      paletteContainer.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+      paletteContainer.dispatchEvent(new Event('pointermove', { bubbles: true }));
       await Promise.resolve();
     });
     expect(container.querySelector('.command-palette')?.classList.contains('hide-cursor')).toBe(
@@ -839,7 +872,7 @@ describe('CommandPalette component behaviour', () => {
   });
 
   it('selects all text via Ctrl+A and keeps catalog loading state consistent on errors', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     fetchSnapshotMock.mockRejectedValueOnce(new Error('network down'));
 
     await renderPalette([]);
@@ -912,7 +945,7 @@ describe('buildCatalogDisplayEntries', () => {
 
   it('returns pods when only a kind is provided', () => {
     const entries = evaluate('pod');
-    expect(entries.map((entry) => entry.displayName).sort()).toEqual([
+    expect(entries.map((entry) => entry.displayName).sort(compareUtf16Strings)).toEqual([
       'default/frontend-123',
       'kube-system/aws-node-abc123',
     ]);
@@ -920,7 +953,7 @@ describe('buildCatalogDisplayEntries', () => {
 
   it('returns deployments for partial kind searches', () => {
     const entries = evaluate('depl');
-    expect(entries.map((entry) => entry.displayName).sort()).toEqual([
+    expect(entries.map((entry) => entry.displayName).sort(compareUtf16Strings)).toEqual([
       'default/frontend',
       'kube-system/metrics-server',
       'test-namespace/gateway',

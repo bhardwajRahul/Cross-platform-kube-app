@@ -8,7 +8,7 @@
  */
 
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { NodeMaintenanceDrainJob } from '@/core/refresh/types';
@@ -73,7 +73,7 @@ describe('DrainProgressCard status pill', () => {
   it('throws on a status outside the union instead of rendering success', () => {
     // Guards the assertNever boundary: a future backend status that reaches
     // the card unhandled must fail loudly, not render as a green "Completed".
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     expect(() => {
       act(() => {
         root.render(<DrainProgressCard job={buildJob('paused' as never)} isActive={false} />);

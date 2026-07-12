@@ -5,14 +5,19 @@
  * Covers key behaviors and edge cases for GridTableBody.
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import GridTableBody from '@shared/components/tables/GridTableBody';
 import type { RenderRowContentFn } from '@shared/components/tables/hooks/useGridTableRowRenderer';
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 
 afterEach(() => {
+  document.head.querySelectorAll('style[data-gridtable-body-contract]').forEach((style) => {
+    style.remove();
+  });
   document.body.innerHTML = '';
   vi.restoreAllMocks();
 });
@@ -26,21 +31,25 @@ describe('GridTableBody', () => {
     document.body.appendChild(container);
     const wrapper = document.createElement('div');
     wrapper.className = 'gridtable-wrapper';
-    const table = document.createElement('div');
-    wrapper.appendChild(table);
+    const grid = document.createElement('table');
+    const table = document.createElement('tbody');
+    grid.appendChild(table);
+    wrapper.appendChild(grid);
     container.appendChild(wrapper);
 
     const wrapperRef = { current: wrapper };
+    const gridRef = { current: grid };
     const tableRef = { current: table };
 
     const defaultRenderRowContent: RenderRowContentFn<TestRow> = (item, index) => (
-      <div key={item.id} data-index={index}>
-        Row {item.id}
-      </div>
+      <tr key={item.id} data-index={index}>
+        <td>Row {item.id}</td>
+      </tr>
     );
 
     const defaultProps: BodyProps = {
       wrapperRef,
+      gridRef,
       tableRef,
       tableClassName: '',
       useShortNames: false,
@@ -53,7 +62,7 @@ describe('GridTableBody', () => {
       virtualRows: [],
       virtualRangeStart: 0,
       totalVirtualHeight: 0,
-      virtualOffset: 0,
+      getRowTop: (index) => index * 44,
       renderRowContent: defaultRenderRowContent,
       onWrapperFocus: vi.fn(),
       onWrapperBlur: vi.fn(),
@@ -61,7 +70,6 @@ describe('GridTableBody', () => {
       allowHorizontalOverflow: false,
       viewportWidth: 0,
       loading: false,
-      focusedRowKey: null,
       hasActiveFilters: false,
       onClearFilters: vi.fn(),
     };
@@ -90,9 +98,9 @@ describe('GridTableBody', () => {
 
   it('renders virtualization body when enabled', async () => {
     const renderRowContent: RenderRowContentFn<TestRow> = (item, _index, _attach, key) => (
-      <div key={key} data-slot={key}>
-        Virtual {item.id}
-      </div>
+      <tr key={key} data-slot={key}>
+        <td>Virtual {item.id}</td>
+      </tr>
     );
 
     const { container } = await renderTableBody({
@@ -101,10 +109,10 @@ describe('GridTableBody', () => {
       renderRowContent: renderRowContent as RenderRowContentFn<unknown>,
     });
 
-    const virtualInner = container.querySelector('.gridtable-virtual-inner');
-    expect(virtualInner).not.toBeNull();
+    const virtualBody = container.querySelector('.gridtable-virtual-body');
+    expect(virtualBody).not.toBeNull();
     expect(
-      requireValue(virtualInner, 'expected test value in GridTableBody.test.tsx').textContent
+      requireValue(virtualBody, 'expected test value in GridTableBody.test.tsx').textContent
     ).toContain('Virtual A');
   });
 
@@ -161,6 +169,31 @@ describe('GridTableBody', () => {
 
     const empty = container.querySelector('.gridtable-empty');
     expect(empty?.textContent).toBe('No rows');
+  });
+
+  it('centers the semantic empty row horizontally without changing its vertical position', async () => {
+    const style = document.createElement('style');
+    style.dataset.gridtableBodyContract = 'empty-centering';
+    style.textContent = readFileSync(
+      resolve(process.cwd(), 'styles/components/gridtables.css'),
+      'utf8'
+    );
+    document.head.appendChild(style);
+
+    const { container } = await renderTableBody({
+      tableData: [],
+      virtualRows: [],
+      shouldVirtualize: false,
+    });
+
+    const body = container.querySelector<HTMLTableSectionElement>('tbody');
+    const row = container.querySelector<HTMLTableRowElement>('tr');
+    const cell = container.querySelector<HTMLTableCellElement>('td');
+    expect(window.getComputedStyle(body as HTMLTableSectionElement).flexGrow).toBe('0');
+    expect(window.getComputedStyle(body as HTMLTableSectionElement).alignItems).toBe('center');
+    expect(window.getComputedStyle(body as HTMLTableSectionElement).justifyContent).toBe('normal');
+    expect(window.getComputedStyle(row as HTMLTableRowElement).display).toBe('table-row');
+    expect(window.getComputedStyle(cell as HTMLTableCellElement).display).toBe('table-cell');
   });
 
   it('shows a filtered-empty message and clear-filters affordance when filters are active', async () => {

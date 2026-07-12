@@ -3,7 +3,7 @@
  */
 
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type SnapshotStatus = 'idle' | 'loading' | 'ready' | 'updating' | 'initialising' | 'error';
@@ -23,6 +23,7 @@ interface CapturedCodeMirrorProps {
   extensions: unknown[];
   onChange: (value: string) => void;
   onCreateEditor?: (view: unknown) => void;
+  ref?: React.Ref<unknown>;
 }
 
 interface MockEditorView {
@@ -85,7 +86,7 @@ const codeMirrorState: CodeMirrorHarness = {
   selectionText: '',
 };
 
-const CodeMirrorMock = React.forwardRef((props: CapturedCodeMirrorProps, ref) => {
+const CodeMirrorMock = ({ ref, ...props }: CapturedCodeMirrorProps) => {
   const { onCreateEditor } = props;
   codeMirrorState.value = props.value;
   codeMirrorState.latestProps.current = props;
@@ -102,7 +103,7 @@ const CodeMirrorMock = React.forwardRef((props: CapturedCodeMirrorProps, ref) =>
       {props.value}
     </div>
   );
-});
+};
 CodeMirrorMock.displayName = 'CodeMirrorMock';
 
 const yamlErrorsMocks = vi.hoisted(() => ({
@@ -199,26 +200,22 @@ vi.mock('@codemirror/view', () => ({
     }),
     set: (ranges: unknown[]) => ranges,
   },
-  // biome-ignore lint/complexity/noStaticOnlyClass: CodeMirror exposes EditorView as a constructable class with static extension facets.
-  EditorView: class {
-    static decorations = {
+  EditorView: Object.assign(class EditorViewMock {}, {
+    decorations: {
       of: (decorations: unknown) => decorations,
       compute: (_dependencies: unknown, compute: unknown) => ({
         type: 'computedDecorations',
         compute,
       }),
-    };
-
-    static contentAttributes = {
+    },
+    contentAttributes: {
       of: (attrs: unknown) => ({ type: 'contentAttributes', attrs }),
-    };
-
-    static domEventHandlers(handlers: unknown) {
+    },
+    domEventHandlers(handlers: unknown) {
       return handlers;
-    }
-
-    static lineWrapping = 'lineWrapping';
-  },
+    },
+    lineWrapping: 'lineWrapping',
+  }),
   keymap: {
     of: (bindings: unknown) => bindings,
   },
@@ -550,6 +547,29 @@ describe('YamlTab', () => {
 
     expect(codeMirrorState.value).toContain('managedFields');
 
+    await unmount();
+  });
+
+  it('shows a default-on wrap toggle immediately after managed fields', async () => {
+    const { container, unmount } = await renderYamlTab();
+    const toolbarButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('.yaml-editor-toolbar .icon-bar-button')
+    );
+    const managedFieldsIndex = toolbarButtons.findIndex(
+      (button) => button.getAttribute('aria-label') === 'Show managedFields'
+    );
+    const wrapButton = getIconButton(container, 'Wrap YAML lines');
+
+    expect(wrapButton).toBe(toolbarButtons[managedFieldsIndex + 1]);
+    expect(wrapButton?.getAttribute('aria-pressed')).toBe('true');
+    expect(codeMirrorState.latestProps.current.extensions).toContain('lineWrapping');
+
+    await act(async () => {
+      wrapButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(wrapButton?.getAttribute('aria-pressed')).toBe('false');
+    expect(codeMirrorState.latestProps.current.extensions).not.toContain('lineWrapping');
     await unmount();
   });
 

@@ -9,7 +9,7 @@
 
 import type React from 'react';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 
@@ -87,7 +87,7 @@ function createDataTransfer(): DataTransfer {
     clearData: () => {
       store.clear();
     },
-    setDragImage: () => {},
+    setDragImage: () => undefined,
   } as unknown as DataTransfer;
 }
 
@@ -150,7 +150,7 @@ describe('DockableTabBar drag-and-drop (provider mode)', () => {
         <DockableTabBar
           tabs={rightTabs}
           activeTab={ctx.tabGroups.right.activeTab}
-          onTabClick={() => {}}
+          onTabClick={() => undefined}
           groupKey="right"
         />
       );
@@ -203,7 +203,7 @@ describe('DockableTabBar drag-and-drop (provider mode)', () => {
         <DockableTabBar
           tabs={bottomTabs}
           activeTab={ctx.tabGroups.bottom.activeTab}
-          onTabClick={() => {}}
+          onTabClick={() => undefined}
           groupKey="bottom"
         />
       );
@@ -278,13 +278,13 @@ describe('DockableTabBar drag-and-drop (provider mode)', () => {
           <DockableTabBar
             tabs={bottomTabs}
             activeTab={ctx.tabGroups.bottom.activeTab}
-            onTabClick={() => {}}
+            onTabClick={() => undefined}
             groupKey="bottom"
           />
           <DockableTabBar
             tabs={rightTabs}
             activeTab={ctx.tabGroups.right.activeTab}
-            onTabClick={() => {}}
+            onTabClick={() => undefined}
             groupKey="right"
           />
         </>

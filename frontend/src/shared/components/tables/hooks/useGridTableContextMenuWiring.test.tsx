@@ -9,7 +9,7 @@ import type { GridColumnDefinition } from '@shared/components/tables/GridTable.t
 import { useGridTableContextMenuWiring } from '@shared/components/tables/hooks/useGridTableContextMenuWiring';
 import type React from 'react';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 
@@ -29,7 +29,7 @@ const mockCloseContextMenu = vi.fn();
 let mockContextMenuState: unknown = null;
 
 vi.mock('@shared/components/tables/hooks/useGridTableContextMenuItems', () => ({
-  useGridTableContextMenuItems: () => vi.fn(() => [{ label: 'Test', action: () => {} }]),
+  useGridTableContextMenuItems: () => vi.fn(() => [{ label: 'Test', action: () => undefined }]),
 }));
 
 vi.mock('@shared/components/tables/hooks/useGridTableContextMenu', () => ({
@@ -101,6 +101,7 @@ describe('useGridTableContextMenuWiring', () => {
     ];
     const renderedColumnKey = opts.renderedColumnKey ?? 'name';
     const wrapperRef = { current: null as HTMLDivElement | null };
+    const focusRef = { current: null as HTMLTableElement | null };
     const handleRowActivation = vi.fn();
     let result: HarnessResult | null = null;
 
@@ -113,6 +114,7 @@ describe('useGridTableContextMenuWiring', () => {
         focusedRowIndex: opts.focusedRowIndex ?? null,
         focusedRowKey: opts.focusedRowKey ?? null,
         wrapperRef,
+        focusRef,
       });
       result = { ...wiring, handleRowActivation };
       return (
@@ -122,6 +124,11 @@ describe('useGridTableContextMenuWiring', () => {
               wrapperRef.current = el;
             }}
           >
+            <table
+              ref={(el) => {
+                focusRef.current = el;
+              }}
+            />
             {tableData.map((row) => (
               <div key={row.id} data-row-key={row.id} className="gridtable-row">
                 <div className="grid-cell" data-column={renderedColumnKey}>

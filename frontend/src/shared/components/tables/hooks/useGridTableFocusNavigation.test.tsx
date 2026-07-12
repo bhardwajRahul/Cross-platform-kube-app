@@ -4,9 +4,10 @@
  * Targeted regression tests for focused-row lookup and activation behavior.
  */
 
+import { AriaGrid } from '@shared/components/tables/AriaGridPrimitives';
 import { useGridTableFocusNavigation } from '@shared/components/tables/hooks/useGridTableFocusNavigation';
-import React, { act, forwardRef, useImperativeHandle, useRef } from 'react';
-import ReactDOM from 'react-dom/client';
+import React, { act, useImperativeHandle, useRef } from 'react';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 
@@ -29,40 +30,45 @@ interface HarnessProps {
  * real GridTable DOM structure: a single div with both .gridtable-row class and
  * data-row-key attribute on the same element.
  */
-const Harness = forwardRef<HarnessHandle, HarnessProps>(
-  ({ tableData, updateHoverForElement }, ref) => {
-    const wrapperRef = useRef<HTMLDivElement | null>(null);
+const Harness = ({
+  tableData,
+  updateHoverForElement,
+  ref,
+}: HarnessProps & { ref?: React.Ref<HarnessHandle> }) => {
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const focusRef = useRef<HTMLTableElement | null>(null);
 
-    const result = useGridTableFocusNavigation<Row>({
-      tableData,
-      keyExtractor: (row) => row.id,
-      wrapperRef,
-      updateHoverForElement,
-      isShortcutOptOutTarget: () => false,
-      shouldIgnoreRowClick: () => false,
-    });
+  const result = useGridTableFocusNavigation<Row>({
+    tableData,
+    keyExtractor: (row) => row.id,
+    wrapperRef,
+    focusRef,
+    updateHoverForElement,
+    isShortcutOptOutTarget: () => false,
+    shouldIgnoreRowClick: () => false,
+  });
 
-    useImperativeHandle(ref, () => ({
-      setFocusedRowKey: result.setFocusedRowKey,
-      focusByIndex: result.focusByIndex,
-      focusedRowIndex: result.focusedRowIndex,
-      focusedRowKey: result.focusedRowKey,
-    }));
+  useImperativeHandle(ref, () => ({
+    setFocusedRowKey: result.setFocusedRowKey,
+    focusByIndex: result.focusByIndex,
+    focusedRowIndex: result.focusedRowIndex,
+    focusedRowKey: result.focusedRowKey,
+  }));
 
-    return (
-      // biome-ignore lint/a11y/noNoninteractiveTabindex: this harness mirrors GridTable's programmatically focusable div-based DOM contract.
-      <div ref={wrapperRef} tabIndex={0}>
-        {tableData.map((row, i) => (
-          // Mirrors useGridTableRowRenderer: both .gridtable-row and
-          // data-row-key are on the same element.
-          <div key={row.id} className="gridtable-row" data-row-key={row.id}>
-            Row {i}
-          </div>
-        ))}
-      </div>
-    );
-  }
-);
+  return (
+    <div ref={wrapperRef}>
+      <AriaGrid ref={focusRef} tabIndex={0}>
+        <tbody>
+          {tableData.map((row, i) => (
+            <tr key={row.id} className="gridtable-row" data-row-key={row.id}>
+              <td>Row {i}</td>
+            </tr>
+          ))}
+        </tbody>
+      </AriaGrid>
+    </div>
+  );
+};
 
 describe('useGridTableFocusNavigation', () => {
   let container: HTMLDivElement;
@@ -102,7 +108,7 @@ describe('useGridTableFocusNavigation', () => {
     // data-row-key attribute live on the same element.
     expect(updateHover).toHaveBeenCalled();
     const calledWith = updateHover.mock.calls[updateHover.mock.calls.length - 1][0];
-    expect(calledWith).toBeInstanceOf(HTMLDivElement);
+    expect(calledWith).toBeInstanceOf(HTMLTableRowElement);
     expect(calledWith.dataset.rowKey).toBe('row-b');
     expect(calledWith.classList.contains('gridtable-row')).toBe(true);
   });
@@ -125,7 +131,7 @@ describe('useGridTableFocusNavigation', () => {
 
     expect(updateHover).toHaveBeenCalled();
     const calledWith = updateHover.mock.calls[updateHover.mock.calls.length - 1][0];
-    expect(calledWith).toBeInstanceOf(HTMLDivElement);
+    expect(calledWith).toBeInstanceOf(HTMLTableRowElement);
     expect(calledWith.dataset.rowKey).toBe('cluster|"prod]/pods/nginx:main');
   });
 });
@@ -151,52 +157,64 @@ interface ExtendedProps {
   tableData: Row[];
   updateHoverForElement: (el: HTMLDivElement | null) => void;
   onRowClick?: (item: Row) => void;
+  onRowPointerClick?: (item: Row) => void;
   isShortcutOptOutTarget?: (target: EventTarget | null) => boolean;
 }
 
-const ExtendedHarness = forwardRef<ExtendedHandle, ExtendedProps>(
-  ({ tableData, updateHoverForElement, onRowClick, isShortcutOptOutTarget }, ref) => {
-    const wrapperRef = useRef<HTMLDivElement | null>(null);
+const ExtendedHarness = ({
+  tableData,
+  updateHoverForElement,
+  onRowClick,
+  onRowPointerClick,
+  isShortcutOptOutTarget,
+  ref,
+}: ExtendedProps & { ref?: React.Ref<ExtendedHandle> }) => {
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const focusRef = useRef<HTMLTableElement | null>(null);
 
-    const result = useGridTableFocusNavigation<Row>({
-      tableData,
-      keyExtractor: (row) => row.id,
-      wrapperRef,
-      updateHoverForElement,
-      onRowClick,
-      isShortcutOptOutTarget: isShortcutOptOutTarget ?? (() => false),
-      shouldIgnoreRowClick: () => false,
-    });
+  const result = useGridTableFocusNavigation<Row>({
+    tableData,
+    keyExtractor: (row) => row.id,
+    wrapperRef,
+    focusRef,
+    updateHoverForElement,
+    onRowClick,
+    onRowPointerClick,
+    isShortcutOptOutTarget: isShortcutOptOutTarget ?? (() => false),
+    shouldIgnoreRowClick: () => false,
+  });
 
-    useImperativeHandle(ref, () => ({
-      setFocusedRowKey: result.setFocusedRowKey,
-      focusByIndex: result.focusByIndex,
-      focusedRowIndex: result.focusedRowIndex,
-      focusedRowKey: result.focusedRowKey,
-      shortcutsActive: result.shortcutsActive,
-      isShortcutsSuppressed: result.isShortcutsSuppressed,
-      isWrapperFocused: result.isWrapperFocused,
-      suppressFocusedRowHighlight: result.suppressFocusedRowHighlight,
-      getRowClassNameWithFocus: result.getRowClassNameWithFocus,
-      handleWrapperFocus: result.handleWrapperFocus,
-      handleWrapperBlur: result.handleWrapperBlur,
-      handleRowActivation: result.handleRowActivation,
-      handleRowClick: result.handleRowClick,
-      lastNavigationMethodRef: result.lastNavigationMethodRef,
-    }));
+  useImperativeHandle(ref, () => ({
+    setFocusedRowKey: result.setFocusedRowKey,
+    focusByIndex: result.focusByIndex,
+    focusedRowIndex: result.focusedRowIndex,
+    focusedRowKey: result.focusedRowKey,
+    shortcutsActive: result.shortcutsActive,
+    isShortcutsSuppressed: result.isShortcutsSuppressed,
+    isWrapperFocused: result.isWrapperFocused,
+    suppressFocusedRowHighlight: result.suppressFocusedRowHighlight,
+    getRowClassNameWithFocus: result.getRowClassNameWithFocus,
+    handleWrapperFocus: result.handleWrapperFocus,
+    handleWrapperBlur: result.handleWrapperBlur,
+    handleRowActivation: result.handleRowActivation,
+    handleRowClick: result.handleRowClick,
+    lastNavigationMethodRef: result.lastNavigationMethodRef,
+  }));
 
-    return (
-      // biome-ignore lint/a11y/noNoninteractiveTabindex: this harness mirrors GridTable's programmatically focusable div-based DOM contract.
-      <div ref={wrapperRef} tabIndex={0}>
-        {tableData.map((row, i) => (
-          <div key={row.id} className="gridtable-row" data-row-key={row.id}>
-            Row {i}
-          </div>
-        ))}
-      </div>
-    );
-  }
-);
+  return (
+    <div ref={wrapperRef}>
+      <AriaGrid ref={focusRef} tabIndex={0}>
+        <tbody>
+          {tableData.map((row, i) => (
+            <tr key={row.id} className="gridtable-row" data-row-key={row.id}>
+              <td>Row {i}</td>
+            </tr>
+          ))}
+        </tbody>
+      </AriaGrid>
+    </div>
+  );
+};
 
 describe('useGridTableFocusNavigation – pointer vs keyboard activation', () => {
   let container: HTMLDivElement;
@@ -215,6 +233,7 @@ describe('useGridTableFocusNavigation – pointer vs keyboard activation', () =>
 
   it('keyboard activation triggers onRowClick, pointer activation does not', async () => {
     const onRowClick = vi.fn();
+    const onRowPointerClick = vi.fn();
     const data: Row[] = [{ id: 'a' }, { id: 'b' }];
     const ref = React.createRef<ExtendedHandle>();
 
@@ -225,6 +244,7 @@ describe('useGridTableFocusNavigation – pointer vs keyboard activation', () =>
           tableData={data}
           updateHoverForElement={vi.fn()}
           onRowClick={onRowClick}
+          onRowPointerClick={onRowPointerClick}
         />
       );
     });
@@ -237,6 +257,7 @@ describe('useGridTableFocusNavigation – pointer vs keyboard activation', () =>
       ).handleRowActivation(data[0], 0, 'pointer');
     });
     expect(onRowClick).not.toHaveBeenCalled();
+    expect(onRowPointerClick).toHaveBeenCalledWith(data[0]);
     expect(
       requireValue(ref.current, 'expected test value in useGridTableFocusNavigation.test.tsx')
         .focusedRowIndex
@@ -259,6 +280,7 @@ describe('useGridTableFocusNavigation – pointer vs keyboard activation', () =>
     });
     expect(onRowClick).toHaveBeenCalledTimes(1);
     expect(onRowClick).toHaveBeenCalledWith(data[1]);
+    expect(onRowPointerClick).toHaveBeenCalledTimes(1);
     expect(
       requireValue(ref.current, 'expected test value in useGridTableFocusNavigation.test.tsx')
         .focusedRowIndex

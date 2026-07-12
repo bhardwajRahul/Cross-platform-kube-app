@@ -14,13 +14,14 @@ import {
 import { useKindFilterOptions } from '@shared/components/tables/hooks/useKindFilterOptions';
 import { useMetadataSearch } from '@shared/components/tables/hooks/useMetadataSearch';
 import { useGridTablePersistence } from '@shared/components/tables/persistence/useGridTablePersistence';
-import { useEffectWithInvalidation } from '@shared/hooks/useHookLifetimes';
+
 import { buildRequiredCanonicalObjectRowKey } from '@shared/utils/objectIdentity';
 import { useFavToggle } from '@ui/favorites/FavToggle';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import {
-  normalizeQueryBackedNamespaceFilters,
+  normalizeQueryBackedNamespaceQueryFilters,
   queryBackedFacetFilterOptions,
+  removeQueryBackedNamespaceFilterSentinels,
 } from './queryBackedTableState';
 import type {
   ClusterResourceGridTableParams,
@@ -319,7 +320,14 @@ function useResourceGridTableCommon<T extends ResourceGridTableRow>({
   const normalizeTableFilters = useCallback(
     (next: GridTableFilterState) =>
       isQueryBackedResourceGridTableMode(tableMode) && showNamespaceFilters
-        ? normalizeQueryBackedNamespaceFilters(next, availableFilterNamespaces)
+        ? removeQueryBackedNamespaceFilterSentinels(next)
+        : next,
+    [showNamespaceFilters, tableMode]
+  );
+  const normalizeQueryFilters = useCallback(
+    (next: GridTableFilterState) =>
+      isQueryBackedResourceGridTableMode(tableMode) && showNamespaceFilters
+        ? normalizeQueryBackedNamespaceQueryFilters(next, availableFilterNamespaces)
         : next,
     [availableFilterNamespaces, showNamespaceFilters, tableMode]
   );
@@ -335,30 +343,29 @@ function useResourceGridTableCommon<T extends ResourceGridTableRow>({
   );
 
   const persistenceHydrated = persistence.hydrated;
-  useEffectWithInvalidation(
-    () => {
-      const filters = normalizeTableFilters(persistenceFilters);
-      if (filters !== persistenceFilters) {
-        setPersistenceFilters(filters);
-      }
-      onTableStateChange?.({
-        filters,
-        sortConfig: sortConfig ?? null,
-      });
-      // persistenceHydrated is a deliberate dependency: hydration may commit
-      // WITHOUT changing the filters object identity, and the query lifecycle
-      // only arms itself on a post-hydration publish. Re-publishing the same
-      // value is safe (consumers dedupe by value).
-    },
-    [
-      normalizeTableFilters,
-      onTableStateChange,
-      persistenceFilters,
-      setPersistenceFilters,
-      sortConfig,
-    ],
-    [persistenceHydrated]
-  );
+  useEffect(() => {
+    void persistenceHydrated;
+    const filters = normalizeTableFilters(persistenceFilters);
+    if (filters !== persistenceFilters) {
+      setPersistenceFilters(filters);
+    }
+    onTableStateChange?.({
+      filters: normalizeQueryFilters(filters),
+      sortConfig: sortConfig ?? null,
+    });
+    // persistenceHydrated is a deliberate dependency: hydration may commit
+    // WITHOUT changing the filters object identity, and the query lifecycle
+    // only arms itself on a post-hydration publish. Re-publishing the same
+    // value is safe (consumers dedupe by value).
+  }, [
+    normalizeTableFilters,
+    normalizeQueryFilters,
+    onTableStateChange,
+    persistenceFilters,
+    setPersistenceFilters,
+    sortConfig,
+    persistenceHydrated,
+  ]);
 
   const useMetadata = Boolean(metadataSearch);
   const getDefaultMetadataSearchValues = useCallback(

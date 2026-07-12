@@ -4,7 +4,7 @@ import type {
   GridTableFilterState,
 } from '@shared/components/tables/GridTable';
 import { DEFAULT_TABLE_PAGE_SIZE } from '@shared/components/tables/pageSizeOptions';
-import { useEffectWithInvalidation } from '@shared/hooks/useHookLifetimes';
+
 import { errorHandler } from '@utils/errorHandler';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { requestRefreshDomainState } from '@/core/data-access';
@@ -329,32 +329,32 @@ export function useTypedResourceQuery<TPayload extends TypedQueryPayload, TRow>(
   const pageLimitRef = useRef(pageLimit);
   pageLimitRef.current = pageLimit;
 
-  const applyPayload = useCallback((payload: TPayload) => {
-    const nextRows = selectRowsRef.current(payload);
+  const applyPayload = useCallback((incomingPayload: TPayload) => {
+    const nextRows = selectRowsRef.current(incomingPayload);
     setRows(nextRows);
-    setPayload(payload);
-    setContinueToken(payload.continue ?? null);
-    setPreviousToken(payload.previous || null);
-    const hasTotal = typeof payload.total === 'number';
+    setPayload(incomingPayload);
+    setContinueToken(incomingPayload.continue ?? null);
+    setPreviousToken(incomingPayload.previous || null);
+    const hasTotal = typeof incomingPayload.total === 'number';
     // A missing total must never render as an exact 0 while rows are visible.
     // Fall back to the visible row count and mark the total approximate so the
     // UI shows "≈N" / no "Page N of M" rather than a false "0 of 0".
-    setTotalCount(hasTotal ? (payload.total as number) : nextRows.length);
-    setTotalIsExact(hasTotal ? payload.totalIsExact !== false : false);
-    setFilterOptions(filterOptionsFromTypedPayload(payload));
-    setDynamic(payload.dynamic ?? null);
-    if (typeof payload.pageStartRank === 'number') {
+    setTotalCount(hasTotal ? (incomingPayload.total as number) : nextRows.length);
+    setTotalIsExact(hasTotal ? incomingPayload.totalIsExact !== false : false);
+    setFilterOptions(filterOptionsFromTypedPayload(incomingPayload));
+    setDynamic(incomingPayload.dynamic ?? null);
+    if (typeof incomingPayload.pageStartRank === 'number') {
       // Serve-time position honesty: the backend counted this page's exact
       // start rank (anchored/offset landings); plain cursor pages keep the
       // client arithmetic below (the O(rank) count per cursor serve failed
       // the plan's benchmark gate — see large-data.md).
-      setPageIndex(Math.floor(payload.pageStartRank / pageLimitRef.current) + 1);
+      setPageIndex(Math.floor(incomingPayload.pageStartRank / pageLimitRef.current) + 1);
       pendingNavigationRef.current = null;
-      if (!payload.anchor) {
+      if (!incomingPayload.anchor) {
         // A numbered-jump landing: consume the one-shot intent and adopt the
         // self cursor (same page-stability mechanics as anchored landings).
         setStartRankIntent(null);
-        setRequestToken(payload.self || null);
+        setRequestToken(incomingPayload.self || null);
       }
     } else {
       const pendingNavigation = pendingNavigationRef.current;
@@ -367,19 +367,19 @@ export function useTypedResourceQuery<TPayload extends TypedQueryPayload, TRow>(
         pendingNavigationRef.current = null;
       }
     }
-    if (payload.anchor) {
-      setAnchorResult(payload.anchor);
+    if (incomingPayload.anchor) {
+      setAnchorResult(incomingPayload.anchor);
       // Disarm: the landing is done. The intent itself survives (soft resets
       // re-anchor) unless the anchor was missing — a filtered/not-found jump
       // must not keep re-firing on every sort change.
       setAnchorArmed(false);
-      if (payload.anchor.found) {
+      if (incomingPayload.anchor.found) {
         // Adopt the landing's self cursor as the page identity so live
         // refetches reproduce THIS page (page-stable, not object-stable).
         // Costs one redundant quiet refetch of the same page right now — the
         // per-Build cache and maintained stores make it cheap, and it keeps
         // the fetch machinery free of special cases.
-        setRequestToken(payload.self || null);
+        setRequestToken(incomingPayload.self || null);
       } else {
         setAnchorIntent(null);
       }
@@ -413,101 +413,111 @@ export function useTypedResourceQuery<TPayload extends TypedQueryPayload, TRow>(
     }, WARMUP_RETRY_MS);
   }, []);
 
-  useEffectWithInvalidation(
-    () => {
-      if (!enabled || !scope) {
-        return;
-      }
-      let cancelled = false;
-      const identityAtRequest = queryIdentityRef.current;
+  useEffect(() => {
+    void queryIdentity;
+    void requestTokenForScope;
+    void warmupAttempt;
+    if (!enabled || !scope) {
+      return;
+    }
+    let cancelled = false;
+    const identityAtRequest = queryIdentityRef.current;
 
-      setLoading(true);
-      setError(null);
+    setLoading(true);
+    setError(null);
 
-      void (async () => {
-        try {
-          const result = await requestRefreshDomainState({
-            domain,
-            scope,
-            reason: 'user',
-            label,
-            cleanup: true,
-            preserveState: false,
-          });
-          if (cancelled || queryIdentityRef.current !== identityAtRequest) {
-            return;
-          }
-          if (result.status !== 'executed') {
-            // A blocked refresh (cluster still connecting, auto-refresh paused) is a
-            // warm-up condition, not a failure: stay not-loaded so the table keeps its
-            // loading (or paused) presentation. Schedule a self-healing retry (the
-            // next live-data identity change also retries, but never comes for an
-            // empty domain). Persistent causes surface through the refresh error
-            // toasts — never as a fabricated table error.
+    void (async () => {
+      try {
+        const result = await requestRefreshDomainState({
+          domain,
+          scope,
+          reason: 'user',
+          label,
+          cleanup: true,
+          preserveState: false,
+        });
+        if (cancelled || queryIdentityRef.current !== identityAtRequest) {
+          return;
+        }
+        if (result.status !== 'executed') {
+          // A blocked refresh (cluster still connecting, auto-refresh paused) is a
+          // warm-up condition, not a failure: stay not-loaded so the table keeps its
+          // loading (or paused) presentation. Schedule a self-healing retry (the
+          // next live-data identity change also retries, but never comes for an
+          // empty domain). Persistent causes surface through the refresh error
+          // toasts — never as a fabricated table error.
+          revertFailedNavigation();
+          scheduleWarmupRetry();
+          return;
+        }
+        const responsePayload = result.data?.data as TPayload | null | undefined;
+        if (!responsePayload) {
+          if (result.data?.permissionDenied) {
+            // The backend refused this domain with a typed 403 — a SETTLED
+            // answer, not a warm-up: retrying cannot succeed until RBAC or
+            // the namespace scope changes (which rebuilds the subsystem and
+            // resets this state). Settle so the table renders the permission
+            // state instead of an endless first-load spinner.
             revertFailedNavigation();
-            scheduleWarmupRetry();
-            return;
-          }
-          const payload = result.data?.data as TPayload | null | undefined;
-          if (!payload) {
-            if (result.data?.permissionDenied) {
-              // The backend refused this domain with a typed 403 — a SETTLED
-              // answer, not a warm-up: retrying cannot succeed until RBAC or
-              // the namespace scope changes (which rebuilds the subsystem and
-              // resets this state). Settle so the table renders the permission
-              // state instead of an endless first-load spinner.
-              revertFailedNavigation();
-              setError(result.data.error ?? 'Insufficient permissions');
-              setLoaded(true);
-              return;
-            }
-            // Executed but the scoped state carries no payload yet (backend caches
-            // still syncing) — same warm-up treatment as a blocked request.
-            revertFailedNavigation();
-            scheduleWarmupRetry();
-            return;
-          }
-          if (payload.cursorInvalid) {
-            setRequestToken(null);
-            setContinueToken(null);
-            setPreviousToken(null);
-            setStartRankIntent(null);
-            pendingNavigationRef.current = null;
-            if (anchorIntentRef.current) {
-              // The page identity died under a held jump intent — retry the
-              // anchor, not page 1: the object's page is still the user's goal.
-              setAnchorArmed(true);
-            } else {
-              setPageIndex(1);
-            }
-            return;
-          }
-          applyPayload(payload);
-        } catch (caught) {
-          if (!cancelled && queryIdentityRef.current === identityAtRequest) {
-            revertFailedNavigation();
-            setError(caught instanceof Error ? caught.message : String(caught));
+            setError(result.data.error ?? 'Insufficient permissions');
             setLoaded(true);
+            return;
           }
-        } finally {
-          if (!cancelled) {
-            setLoading(false);
-            setIsRequestingMore(false);
-          }
+          // Executed but the scoped state carries no payload yet (backend caches
+          // still syncing) — same warm-up treatment as a blocked request.
+          revertFailedNavigation();
+          scheduleWarmupRetry();
+          return;
         }
-      })();
+        if (responsePayload.cursorInvalid) {
+          setRequestToken(null);
+          setContinueToken(null);
+          setPreviousToken(null);
+          setStartRankIntent(null);
+          pendingNavigationRef.current = null;
+          if (anchorIntentRef.current) {
+            // The page identity died under a held jump intent — retry the
+            // anchor, not page 1: the object's page is still the user's goal.
+            setAnchorArmed(true);
+          } else {
+            setPageIndex(1);
+          }
+          return;
+        }
+        applyPayload(responsePayload);
+      } catch (caught) {
+        if (!cancelled && queryIdentityRef.current === identityAtRequest) {
+          revertFailedNavigation();
+          setError(caught instanceof Error ? caught.message : String(caught));
+          setLoaded(true);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          setIsRequestingMore(false);
+        }
+      }
+    })();
 
-      return () => {
-        cancelled = true;
-        if (warmupTimerRef.current !== null) {
-          window.clearTimeout(warmupTimerRef.current);
-          warmupTimerRef.current = null;
-        }
-      };
-    },
-    [applyPayload, domain, enabled, label, revertFailedNavigation, scheduleWarmupRetry, scope],
-    [queryIdentity, requestTokenForScope, warmupAttempt]
-  );
+    return () => {
+      cancelled = true;
+      if (warmupTimerRef.current !== null) {
+        window.clearTimeout(warmupTimerRef.current);
+        warmupTimerRef.current = null;
+      }
+    };
+  }, [
+    applyPayload,
+    domain,
+    enabled,
+    label,
+    revertFailedNavigation,
+    scheduleWarmupRetry,
+    scope,
+    queryIdentity,
+    requestTokenForScope,
+    warmupAttempt,
+  ]);
 
   const loadMore = useCallback(() => {
     if (!continueToken || isRequestingMore) {
@@ -602,8 +612,8 @@ export function useTypedResourceQuery<TPayload extends TypedQueryPayload, TRow>(
         if (result.status !== 'executed') {
           throw new Error(`${exportLabel} export failed: page ${page + 1} request was blocked`);
         }
-        const payload = result.data?.data as TPayload | null | undefined;
-        if (!payload) {
+        const exportPayload = result.data?.data as TPayload | null | undefined;
+        if (!exportPayload) {
           throw new Error(`${exportLabel} export failed: page ${page + 1} returned no data`);
         }
         // The RAW per-source clock, never the scope-folded token (which embeds
@@ -612,8 +622,8 @@ export function useTypedResourceQuery<TPayload extends TypedQueryPayload, TRow>(
           (result.data as { sourceVersions?: Partial<Record<string, string>> } | undefined)
             ?.sourceVersions?.object ?? null;
         return {
-          items: selectRowsRef.current(payload),
-          continueToken: payload.continue ?? null,
+          items: selectRowsRef.current(exportPayload),
+          continueToken: exportPayload.continue ?? null,
           sourceVersion,
         };
       });

@@ -9,7 +9,7 @@ import ClusterViewConfig from '@modules/cluster/components/ClusterViewConfig';
 import { OBJECT_ACTION_IDS } from '@shared/actions/objectActionContract';
 import type { GridTableProps } from '@shared/components/tables/GridTable';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 
@@ -42,7 +42,7 @@ vi.mock('@ui/favorites/FavToggle', () => ({
     id: 'favorite',
     icon: null,
     active: false,
-    onClick: () => {},
+    onClick: () => undefined,
     title: 'Save as favorite',
   }),
 }));
@@ -199,7 +199,7 @@ describe('ClusterViewConfig', () => {
   });
 
   it('keeps initial empty query-backed cluster config behind the loading boundary', async () => {
-    requestRefreshDomainStateMock.mockImplementation(() => new Promise(() => {}));
+    requestRefreshDomainStateMock.mockImplementation(() => new Promise(() => undefined));
 
     await act(async () => {
       root.render(<ClusterViewConfig />);

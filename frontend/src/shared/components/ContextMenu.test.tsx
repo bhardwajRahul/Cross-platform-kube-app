@@ -5,10 +5,12 @@
  * Covers key behaviors and edge cases for ContextMenu.
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { ZoomProvider } from '@core/contexts/ZoomContext';
 import { KeyboardProvider } from '@ui/shortcuts';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ContextMenu from './ContextMenu';
 
@@ -91,6 +93,23 @@ describe('ContextMenu', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('renders separators without a native horizontal-rule border', async () => {
+    const style = document.createElement('style');
+    style.textContent = readFileSync(
+      resolve(process.cwd(), 'src/shared/components/ContextMenu.css'),
+      'utf8'
+    );
+    document.head.appendChild(style);
+    const { menu } = await renderMenu({
+      items: [{ label: 'First' }, { divider: true }, { label: 'Second' }],
+    });
+
+    const divider = menu.querySelector<HTMLElement>('.context-menu-divider');
+    expect(divider).toBeTruthy();
+    expect(getComputedStyle(divider as HTMLElement).borderTopWidth).toBe('0px');
+    style.remove();
+  });
+
   it('ignores clicks on disabled items', async () => {
     const onClose = vi.fn();
     const onClick = vi.fn();
@@ -156,14 +175,18 @@ describe('ContextMenu', () => {
     };
 
     const itemNodes = () =>
-      Array.from(menu.querySelectorAll<HTMLDivElement>('.context-menu-item')).filter(
+      Array.from(menu.querySelectorAll<HTMLButtonElement>('.context-menu-item')).filter(
         (node) => !node.classList.contains('context-menu-divider')
       );
 
     expect(itemNodes()[0]?.classList.contains('is-focused')).toBe(true);
+    expect(itemNodes()[0]?.tagName).toBe('BUTTON');
+    expect(itemNodes()[0]?.getAttribute('role')).toBe('menuitem');
+    expect(menu.getAttribute('aria-activedescendant')).toBe(itemNodes()[0]?.id);
 
     await dispatchKey('ArrowDown');
     expect(itemNodes()[1]?.classList.contains('is-focused')).toBe(true);
+    expect(menu.getAttribute('aria-activedescendant')).toBe(itemNodes()[1]?.id);
 
     await dispatchKey('ArrowUp');
     expect(itemNodes()[0]?.classList.contains('is-focused')).toBe(true);

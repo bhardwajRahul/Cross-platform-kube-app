@@ -8,7 +8,7 @@
 import ClusterViewEvents from '@modules/cluster/components/ClusterViewEvents';
 import type { GridTableProps } from '@shared/components/tables/GridTable';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ClusterEventsSnapshotPayload } from '@/core/refresh/types';
 import type { SortConfig, UseTableSortOptions } from '@/hooks/useTableSort';
@@ -67,7 +67,7 @@ vi.mock('@ui/favorites/FavToggle', () => ({
     id: 'favorite',
     icon: null,
     active: false,
-    onClick: () => {},
+    onClick: () => undefined,
     title: 'Save as favorite',
   }),
 }));

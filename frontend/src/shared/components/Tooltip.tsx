@@ -17,7 +17,7 @@
 import { useZoom } from '@core/contexts/ZoomContext';
 import { TooltipInfoIcon } from '@shared/components/icons/SharedIcons';
 import type React from 'react';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import './Tooltip.css';
 
@@ -88,6 +88,7 @@ const Tooltip: React.FC<TooltipProps> = ({
   interactive = false,
 }) => {
   const [visible, setVisible] = useState(false);
+  const tooltipId = `tooltip-${useId().replace(/:/g, '')}`;
   const [resolvedPlacement, setResolvedPlacement] = useState(placement);
   const [style, setStyle] = useState<React.CSSProperties>({});
 
@@ -106,7 +107,9 @@ const Tooltip: React.FC<TooltipProps> = ({
   // Positioning — runs after the tooltip is rendered so we can measure it
   // ------------------------------------------------------------------
   useLayoutEffect(() => {
-    if (!visible || !triggerRef.current || !tooltipRef.current) return;
+    if (!visible || !triggerRef.current || !tooltipRef.current) {
+      return;
+    }
 
     const zoomFactor = zoomLevel / 100;
     const triggerRect = triggerRef.current.getBoundingClientRect();
@@ -184,7 +187,9 @@ const Tooltip: React.FC<TooltipProps> = ({
   // Outside-click handler for click-trigger mode
   // ------------------------------------------------------------------
   useEffect(() => {
-    if (trigger !== 'click' || !visible) return;
+    if (trigger !== 'click' || !visible) {
+      return;
+    }
 
     const handleOutside = (e: MouseEvent) => {
       if (
@@ -245,7 +250,9 @@ const Tooltip: React.FC<TooltipProps> = ({
   // Global dismissal for hover tooltips
   // ------------------------------------------------------------------
   useEffect(() => {
-    if (trigger !== 'hover' || !visible) return;
+    if (trigger !== 'hover' || !visible) {
+      return;
+    }
 
     const hide = () => {
       clearTimers();
@@ -306,14 +313,18 @@ const Tooltip: React.FC<TooltipProps> = ({
   }, [interactive]);
 
   const handleMouseEnter = useCallback(() => {
-    if (disabled || trigger !== 'hover') return;
+    if (disabled || trigger !== 'hover') {
+      return;
+    }
     cancelHide();
     timerRef.current = setTimeout(() => setVisible(true), hoverDelay);
   }, [disabled, trigger, hoverDelay, cancelHide]);
 
   const handleMouseLeave = useCallback(
     (event: React.MouseEvent<HTMLElement>) => {
-      if (trigger !== 'hover') return;
+      if (trigger !== 'hover') {
+        return;
+      }
       if (timerRef.current) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
@@ -328,14 +339,18 @@ const Tooltip: React.FC<TooltipProps> = ({
 
   /** When the mouse enters the tooltip popup (interactive mode). */
   const handleTooltipMouseEnter = useCallback(() => {
-    if (!interactive) return;
+    if (!interactive) {
+      return;
+    }
     cancelHide();
   }, [interactive, cancelHide]);
 
   /** When the mouse leaves the tooltip popup (interactive mode). */
   const handleTooltipMouseLeave = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
-      if (!interactive) return;
+      if (!interactive) {
+        return;
+      }
       if (isWithinInteractiveRegion(event.relatedTarget)) {
         return;
       }
@@ -345,7 +360,9 @@ const Tooltip: React.FC<TooltipProps> = ({
   );
 
   const handleClick = useCallback(() => {
-    if (disabled || trigger !== 'click') return;
+    if (disabled || trigger !== 'click') {
+      return;
+    }
     setVisible((v) => !v);
   }, [disabled, trigger]);
 
@@ -364,8 +381,12 @@ const Tooltip: React.FC<TooltipProps> = ({
 
   const inlineStyle: React.CSSProperties = { ...style };
   inlineStyle.zIndex = zIndex ?? resolveTooltipZIndex();
-  if (maxWidth !== undefined) inlineStyle.maxWidth = maxWidth;
-  if (minWidth !== undefined) inlineStyle.minWidth = minWidth;
+  if (maxWidth !== undefined) {
+    inlineStyle.maxWidth = maxWidth;
+  }
+  if (minWidth !== undefined) {
+    inlineStyle.minWidth = minWidth;
+  }
 
   // ------------------------------------------------------------------
   // Render
@@ -376,12 +397,23 @@ const Tooltip: React.FC<TooltipProps> = ({
   // contexts (e.g. wrapping a ResourceBar).
   const TriggerTag = inline ? 'span' : 'div';
   const triggerClass = inline ? 'tooltip-trigger' : 'tooltip-trigger tooltip-trigger--block';
+  const tooltipInteractionProps: React.HTMLAttributes<HTMLDivElement> = interactive
+    ? {
+        role: 'dialog',
+        'aria-label': 'Additional information',
+        onMouseEnter: handleTooltipMouseEnter,
+        onMouseLeave: handleTooltipMouseLeave,
+      }
+    : { role: 'tooltip' };
 
   return (
     <>
       <TriggerTag
         ref={triggerRef}
         className={triggerClass}
+        aria-describedby={!interactive && visible ? tooltipId : undefined}
+        aria-controls={interactive && visible ? tooltipId : undefined}
+        aria-expanded={interactive ? visible : undefined}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         onClick={handleClick}
@@ -393,14 +425,13 @@ const Tooltip: React.FC<TooltipProps> = ({
         !disabled &&
         portalTarget &&
         createPortal(
-          // biome-ignore lint/a11y/noStaticElementInteractions: Interactive tooltip hover persistence uses pointer enter and leave on the tooltip surface and does not expose an activation action.
           <div
             ref={tooltipRef}
+            id={tooltipId}
             className={tooltipClasses}
             style={inlineStyle}
             data-placement={showArrow ? resolvedPlacement : undefined}
-            onMouseEnter={handleTooltipMouseEnter}
-            onMouseLeave={handleTooltipMouseLeave}
+            {...tooltipInteractionProps}
           >
             {content}
           </div>,

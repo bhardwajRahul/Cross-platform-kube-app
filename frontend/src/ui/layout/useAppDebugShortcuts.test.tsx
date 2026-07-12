@@ -1,5 +1,5 @@
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAppDebugShortcuts } from './useAppDebugShortcuts';
 
@@ -71,8 +71,8 @@ describe('useAppDebugShortcuts', () => {
 
   afterEach(() => {
     document.body.innerHTML = '';
-    delete window.runtime;
-    delete (window as Window & { WailsInvoke?: (message: string) => void }).WailsInvoke;
+    window.runtime = undefined;
+    (window as Window & { WailsInvoke?: (message: string) => void }).WailsInvoke = undefined;
   });
 
   it('toggles each debug overlay on its Ctrl+Alt shortcut', () => {

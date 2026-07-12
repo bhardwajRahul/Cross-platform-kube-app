@@ -194,8 +194,8 @@ const KeyboardProviderInner: React.FC<KeyboardProviderProps> = ({ children, disa
   const unregisterShortcut = useCallback((id: string) => {
     setShortcuts((prev) => {
       const next = new Map(prev);
-      for (const [key, shortcuts] of next.entries()) {
-        const filtered = shortcuts.filter((s) => s.id !== id);
+      for (const [key, registeredShortcuts] of next.entries()) {
+        const filtered = registeredShortcuts.filter((s) => s.id !== id);
         if (filtered.length === 0) {
           next.delete(key);
         } else {
@@ -414,7 +414,9 @@ const KeyboardProviderInner: React.FC<KeyboardProviderProps> = ({ children, disa
 
   // Handle keyboard events
   useEffect(() => {
-    if (!isEnabled || disabled) return;
+    if (!isEnabled || disabled) {
+      return;
+    }
 
     const handleCapturedTabKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') {
@@ -628,9 +630,9 @@ const KeyboardProviderInner: React.FC<KeyboardProviderProps> = ({ children, disa
       }
     }
 
-    return Array.from(groups.entries()).map(([category, shortcuts]) => ({
+    return Array.from(groups.entries()).map(([category, categoryShortcuts]) => ({
       category,
-      shortcuts: shortcuts.sort((a, b) => a.key.localeCompare(b.key)),
+      shortcuts: categoryShortcuts.sort((a, b) => a.key.localeCompare(b.key)),
     }));
   }, [shortcuts]);
 

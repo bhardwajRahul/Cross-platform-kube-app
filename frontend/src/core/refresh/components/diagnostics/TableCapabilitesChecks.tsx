@@ -5,9 +5,8 @@
  * Handles rendering and interactions for the shared components.
  */
 
-import { useEffectWithInvalidation } from '@shared/hooks/useHookLifetimes';
 import type React from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { permissionFeatureLabel } from '@/core/capabilities';
 import type { CapabilityBatchRow } from './diagnosticsPanelTypes';
 
@@ -36,13 +35,17 @@ const matchesSearch = (row: CapabilityBatchRow, query: string): boolean => {
     row.lastResult,
     row.lastError,
     row.method,
-    row.ssrrIncomplete == null ? null : row.ssrrIncomplete ? 'incomplete' : 'complete',
+    row.ssrrIncomplete === null || row.ssrrIncomplete === undefined
+      ? null
+      : row.ssrrIncomplete
+        ? 'incomplete'
+        : 'complete',
     row.ssrrRuleCount,
     row.ssarFallbackCount,
     row.totalChecks,
     descriptorText,
   ]
-    .filter((value) => value != null)
+    .filter((value) => value !== null && value !== undefined)
     .some((value) => String(value).toLowerCase().includes(query));
 };
 
@@ -68,7 +71,13 @@ const CapabilityRow: React.FC<{
     <td>{row.totalChecks}</td>
     <td className="diagnostics-permission-reason">{row.lastError ?? '—'}</td>
     <td>{row.method ?? '—'}</td>
-    <td>{row.ssrrIncomplete != null ? (row.ssrrIncomplete ? 'Yes' : 'No') : '—'}</td>
+    <td>
+      {row.ssrrIncomplete !== null && row.ssrrIncomplete !== undefined
+        ? row.ssrrIncomplete
+          ? 'Yes'
+          : 'No'
+        : '—'}
+    </td>
     <td>{row.ssrrRuleCount ?? '—'}</td>
     <td>{row.ssarFallbackCount ?? '—'}</td>
     <td>
@@ -76,7 +85,7 @@ const CapabilityRow: React.FC<{
         <button
           type="button"
           className={
-            `diagnostics-table-descriptor` +
+            'diagnostics-table-descriptor' +
             (!isCollapsed ? ' diagnostics-table-cell-expanded' : '')
           }
           onClick={() => onToggle(row.key)}
@@ -153,14 +162,11 @@ export const CapabilityChecksTable: React.FC<CapabilityChecksTableProps> = ({
     setVisibleLimit((current) => Math.min(current + ROW_INCREMENT, filteredTotalRows));
   }, [filteredTotalRows]);
 
-  useEffectWithInvalidation(
-    () => {
-      setVisibleLimit(INITIAL_VISIBLE_ROWS);
-      setExpandedRows(new Set());
-    },
-    [],
-    [normalizedSearch]
-  );
+  useEffect(() => {
+    void normalizedSearch;
+    setVisibleLimit(INITIAL_VISIBLE_ROWS);
+    setExpandedRows(new Set());
+  }, [normalizedSearch]);
 
   return (
     <div className="diagnostics-section">

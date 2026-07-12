@@ -1,6 +1,6 @@
 import type React from 'react';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { YamlEditorProps } from './YamlEditor';
 
@@ -157,26 +157,22 @@ vi.mock('@codemirror/view', () => ({
       return ranges;
     },
   },
-  // biome-ignore lint/complexity/noStaticOnlyClass: CodeMirror exposes EditorView as a constructable class with static extension facets.
-  EditorView: class {
-    static decorations = {
+  EditorView: Object.assign(class EditorViewMock {}, {
+    decorations: {
       of: (decorations: unknown) => ({ type: 'decorations', decorations }),
       compute: (_dependencies: unknown, compute: unknown) => ({
         type: 'computedDecorations',
         compute,
       }),
-    };
-
-    static contentAttributes = {
+    },
+    contentAttributes: {
       of: (attrs: unknown) => ({ type: 'contentAttributes', attrs }),
-    };
-
-    static domEventHandlers(handlers: unknown) {
+    },
+    domEventHandlers(handlers: unknown) {
       return handlers;
-    }
-
-    static lineWrapping = 'lineWrapping';
-  },
+    },
+    lineWrapping: 'lineWrapping',
+  }),
   keymap: {
     of: (bindings: unknown) => ({ type: 'keymap', bindings }),
   },
@@ -279,6 +275,13 @@ describe('YamlEditor', () => {
 
   afterEach(() => {
     document.body.textContent = '';
+  });
+
+  it('allows callers to disable line wrapping', async () => {
+    const { unmount } = await renderYamlEditor({ lineWrapping: false });
+
+    expect(codeMirrorState.props.extensions).not.toContain('lineWrapping');
+    await unmount();
   });
 
   it('renders view-only YAML and suppresses changes', async () => {

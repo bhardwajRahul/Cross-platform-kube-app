@@ -7,7 +7,7 @@
 
 import type React from 'react';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { eventBus } from '@/core/events';
@@ -68,7 +68,7 @@ vi.mock('./permissionStore', () => {
 
   // useUserPermissions reads the store via useSyncExternalStore; tests drive
   // updates by swapping the map and re-rendering, so subscribe is inert.
-  const subscribeUserPermissions = vi.fn(() => () => {});
+  const subscribeUserPermissions = vi.fn(() => () => undefined);
   const getUserPermissionMap = vi.fn(() => permissionStore.map);
 
   return {

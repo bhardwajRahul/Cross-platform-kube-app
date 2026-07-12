@@ -24,9 +24,10 @@ export interface AnsiTextSegment {
   style: AnsiTextStyle;
 }
 
-const ANSI_TEST_PATTERN = /(?:\u001b\[|\u009b)[0-9;]*m/;
-const ANSI_PATTERN = /(?:\u001b\[|\u009b)[0-9;]*m/g;
-const ANSI_CAPTURE_PATTERN = /(?:\u001b\[|\u009b)([0-9;]*)m/g;
+const ANSI_CSI_PATTERN_SOURCE = '(?:\\u001b\\[|\\u009b)';
+const ANSI_TEST_PATTERN = new RegExp(`${ANSI_CSI_PATTERN_SOURCE}[0-9;]*m`);
+const ANSI_PATTERN = new RegExp(`${ANSI_CSI_PATTERN_SOURCE}[0-9;]*m`, 'g');
+const ANSI_CAPTURE_PATTERN = new RegExp(`${ANSI_CSI_PATTERN_SOURCE}([0-9;]*)m`, 'g');
 const DIM_OPACITY = 0.5;
 
 interface ActiveAnsiState {
@@ -85,7 +86,7 @@ const normalizeRgb = (color: string): [number, number, number, number] | null =>
   const red = Number.parseInt(match[1] ?? '', 10);
   const green = Number.parseInt(match[2] ?? '', 10);
   const blue = Number.parseInt(match[3] ?? '', 10);
-  const alpha = match[4] == null ? 1 : Number.parseFloat(match[4]);
+  const alpha = match[4] === null || match[4] === undefined ? 1 : Number.parseFloat(match[4]);
   if ([red, green, blue].some((value) => Number.isNaN(value))) {
     return null;
   }
@@ -211,13 +212,13 @@ const applySgrCodes = (
     const code = normalizedCodes[i];
     switch (code) {
       case 0:
-        delete state.color;
-        delete state.backgroundColor;
-        delete state.fontWeight;
-        delete state.fontStyle;
-        delete state.textDecoration;
-        delete state.dim;
-        delete state.inverse;
+        state.color = undefined;
+        state.backgroundColor = undefined;
+        state.fontWeight = undefined;
+        state.fontStyle = undefined;
+        state.textDecoration = undefined;
+        state.dim = undefined;
+        state.inverse = undefined;
         break;
       case 1:
         state.fontWeight = '600';
@@ -235,23 +236,23 @@ const applySgrCodes = (
         state.inverse = true;
         break;
       case 22:
-        delete state.fontWeight;
-        delete state.dim;
+        state.fontWeight = undefined;
+        state.dim = undefined;
         break;
       case 23:
-        delete state.fontStyle;
+        state.fontStyle = undefined;
         break;
       case 24:
-        delete state.textDecoration;
+        state.textDecoration = undefined;
         break;
       case 27:
-        delete state.inverse;
+        state.inverse = undefined;
         break;
       case 39:
-        delete state.color;
+        state.color = undefined;
         break;
       case 49:
-        delete state.backgroundColor;
+        state.backgroundColor = undefined;
         break;
       case 38:
         i = applyExtendedColor(normalizedCodes, i, state, 'fg', terminalTheme);

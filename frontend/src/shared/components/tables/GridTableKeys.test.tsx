@@ -10,7 +10,7 @@ import { ZoomProvider } from '@core/contexts/ZoomContext';
 import GridTableFiltersBar from '@shared/components/tables/GridTableFiltersBar';
 import { useGridTableKeyboardScopes } from '@shared/components/tables/GridTableKeys';
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 
@@ -24,21 +24,21 @@ vi.mock('@ui/shortcuts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@ui/shortcuts')>();
   return {
     ...actual,
-    useSearchShortcutTarget: () => {},
+    useSearchShortcutTarget: () => undefined,
     useKeyboardContext: () => ({
       registerShortcut: () => 'mock-id',
-      unregisterShortcut: () => {},
+      unregisterShortcut: () => undefined,
       getAvailableShortcuts: () => [],
       isShortcutAvailable: () => false,
-      setEnabled: () => {},
+      setEnabled: () => undefined,
       isEnabled: true,
       registerSurface: () => 'mock-surface-id',
-      unregisterSurface: () => {},
-      updateSurface: () => {},
+      unregisterSurface: () => undefined,
+      updateSurface: () => undefined,
       dispatchNativeAction: () => false,
       hasActiveBlockingSurface: () => false,
     }),
-    useShortcuts: () => {},
+    useShortcuts: () => undefined,
     useKeyboardSurface: (surface: {
       kind: string;
       onKeyDown?: (event: KeyboardEvent) => boolean | 'handled-no-prevent' | undefined;
@@ -188,6 +188,7 @@ describe('GridTableKeys filter target selectors', () => {
     const HookHarness = () => {
       const filtersContainerRef = React.useRef<HTMLDivElement | null>(null);
       const wrapperRef = React.useRef<HTMLDivElement | null>(null);
+      const focusRef = React.useRef<HTMLTableElement | null>(null);
       const filterFocusIndexRef = React.useRef<number | null>(null);
 
       useGridTableKeyboardScopes({
@@ -197,6 +198,7 @@ describe('GridTableKeys filter target selectors', () => {
         filtersContainerRef,
         filterFocusIndexRef,
         wrapperRef,
+        focusRef,
         tableDataLength: 1,
         focusedRowKey: 'row-1',
         suppressFocusedRowHighlight: vi.fn(),
@@ -262,7 +264,9 @@ describe('GridTableKeys filter target selectors', () => {
               },
             ]}
           />
-          <div ref={wrapperRef} />
+          <div ref={wrapperRef}>
+            <table ref={focusRef} />
+          </div>
         </>
       );
     };
@@ -323,6 +327,7 @@ describe('GridTableKeys filter target selectors', () => {
     const HookHarness = () => {
       const filtersContainerRef = React.useRef<HTMLDivElement | null>(null);
       const wrapperRef = React.useRef<HTMLDivElement | null>(null);
+      const focusRef = React.useRef<HTMLTableElement | null>(null);
       const filterFocusIndexRef = React.useRef<number | null>(null);
 
       useGridTableKeyboardScopes({
@@ -332,6 +337,7 @@ describe('GridTableKeys filter target selectors', () => {
         filtersContainerRef,
         filterFocusIndexRef,
         wrapperRef,
+        focusRef,
         tableDataLength: 1,
         focusedRowKey: 'row-1',
         suppressFocusedRowHighlight: vi.fn(),
@@ -341,7 +347,9 @@ describe('GridTableKeys filter target selectors', () => {
       return (
         <>
           <div ref={filtersContainerRef} />
-          <div ref={wrapperRef} />
+          <div ref={wrapperRef}>
+            <table ref={focusRef} />
+          </div>
         </>
       );
     };
@@ -373,6 +381,7 @@ describe('GridTableKeys filter target selectors', () => {
     const HookHarness = () => {
       const filtersContainerRef = React.useRef<HTMLDivElement | null>(null);
       const wrapperRef = React.useRef<HTMLDivElement | null>(null);
+      const focusRef = React.useRef<HTMLTableElement | null>(null);
       const filterFocusIndexRef = React.useRef<number | null>(null);
 
       useGridTableKeyboardScopes({
@@ -382,6 +391,7 @@ describe('GridTableKeys filter target selectors', () => {
         filtersContainerRef,
         filterFocusIndexRef,
         wrapperRef,
+        focusRef,
         tableDataLength: 1,
         focusedRowKey: 'row-1',
         suppressFocusedRowHighlight,
@@ -393,7 +403,9 @@ describe('GridTableKeys filter target selectors', () => {
           <div ref={filtersContainerRef}>
             <button type="button">Columns</button>
           </div>
-          <div ref={wrapperRef} />
+          <div ref={wrapperRef}>
+            <table ref={focusRef} />
+          </div>
         </>
       );
     };

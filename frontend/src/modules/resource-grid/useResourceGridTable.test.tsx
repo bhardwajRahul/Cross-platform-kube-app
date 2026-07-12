@@ -12,7 +12,7 @@ import { DEFAULT_GRID_TABLE_FILTER_STATE } from '@shared/components/tables/gridT
 import { useGridTablePersistence } from '@shared/components/tables/persistence/useGridTablePersistence';
 import type React from 'react';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
 import type { ResourceGridTableResult, ResourceGridTableRow } from './resourceGridTableTypes';
 import {
@@ -35,7 +35,7 @@ vi.mock('@ui/favorites/FavToggle', () => ({
       id: 'favorite',
       icon: null,
       active: false,
-      onClick: () => {},
+      onClick: () => undefined,
       title: 'Save as favorite',
     },
     modal: null,
@@ -53,12 +53,12 @@ const columns: GridColumnDefinition<TestRow>[] = [
   {
     key: 'name',
     header: 'Name',
-    render: (row) => row.name,
+    render: (resourceRow) => resourceRow.name,
   },
   {
     key: 'age',
     header: 'Age',
-    render: (row) => row.name,
+    render: (resourceRow) => resourceRow.name,
   },
 ];
 
@@ -187,9 +187,9 @@ const renderNamespaceGrid = (
           namespacesPermissionDenied: false,
           namespaceRefreshing: false,
           namespaceReady: true,
-          setSelectedNamespace: () => {},
-          loadNamespaces: async () => {},
-          refreshNamespaces: async () => {},
+          setSelectedNamespace: () => undefined,
+          loadNamespaces: async () => undefined,
+          refreshNamespaces: async () => undefined,
           getClusterNamespace: () => undefined,
         }}
       >
@@ -231,7 +231,7 @@ describe('useObjectPanelResourceGridTable', () => {
 });
 
 describe('useNamespaceResourceGridTable', () => {
-  it('keeps all namespace options and normalizes selecting all to no namespace query filter', () => {
+  it('keeps all namespace options selected when the namespace dropdown selects all', () => {
     const harness = renderNamespaceGrid();
 
     expect(harness.result.current?.gridTableProps.filters?.options?.namespaces).toEqual([
@@ -246,12 +246,24 @@ describe('useNamespaceResourceGridTable', () => {
       });
     });
 
-    expect(harness.result.current?.gridTableProps.filters?.value?.namespaces).toEqual([]);
+    expect(harness.result.current?.gridTableProps.filters?.value?.namespaces).toEqual([
+      'team-a',
+      'team-b',
+    ]);
     expect(harness.onTableStateChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
         filters: expect.objectContaining({ namespaces: [] }),
       })
     );
+
+    act(() => {
+      harness.result.current?.gridTableProps.filters?.onChange?.({
+        ...DEFAULT_GRID_TABLE_FILTER_STATE,
+        namespaces: [],
+      });
+    });
+
+    expect(harness.result.current?.gridTableProps.filters?.value?.namespaces).toEqual([]);
 
     harness.cleanup();
   });

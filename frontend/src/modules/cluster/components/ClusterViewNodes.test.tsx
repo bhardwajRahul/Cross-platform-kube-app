@@ -10,7 +10,7 @@ import { OBJECT_ACTION_IDS } from '@shared/actions/objectActionContract';
 import type ResourceLoadingBoundary from '@shared/components/ResourceLoadingBoundary';
 import type { GridTableProps } from '@shared/components/tables/GridTable';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ClusterNodeRow } from '@/core/refresh/types';
 import type { SortConfig, UseTableSortOptions } from '@/hooks/useTableSort';
@@ -98,7 +98,7 @@ vi.mock('@ui/favorites/FavToggle', () => ({
       id: 'favorite',
       icon: null,
       active: false,
-      onClick: () => {},
+      onClick: () => undefined,
       title: 'Save as favorite',
     },
     modal: null,
@@ -344,7 +344,7 @@ describe('ClusterViewNodes', () => {
   });
 
   it('keeps initial empty query-backed nodes behind the loading boundary', async () => {
-    requestRefreshDomainStateMock.mockImplementation(() => new Promise(() => {}));
+    requestRefreshDomainStateMock.mockImplementation(() => new Promise(() => undefined));
 
     await act(async () => {
       root.render(<ClusterViewNodes />);
@@ -518,7 +518,7 @@ describe('ClusterViewNodes', () => {
 
     // Trigger the column click handler to exercise object navigation.
     act(() => {
-      cell.props.onClick?.({ stopPropagation: () => {} });
+      cell.props.onClick?.({ stopPropagation: () => undefined });
     });
 
     expect(openWithObjectMock).toHaveBeenCalledWith(

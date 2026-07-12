@@ -8,7 +8,7 @@
 import { KeyboardProvider } from '@ui/shortcuts';
 import type React from 'react';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const appInfoMock = vi.hoisted(() => ({
@@ -162,9 +162,9 @@ describe('AboutModal', () => {
     });
 
     const container = document.querySelector('.about-modal') as HTMLDivElement | null;
-    const overlay = document.querySelector('.modal-overlay') as HTMLDivElement | null;
+    const backdropDismiss = document.querySelector<HTMLButtonElement>('.modal-backdrop-dismiss');
     expect(container).toBeTruthy();
-    expect(overlay).toBeTruthy();
+    expect(backdropDismiss).toBeTruthy();
 
     act(() => {
       container?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -172,7 +172,7 @@ describe('AboutModal', () => {
     expect(onClose).not.toHaveBeenCalled();
 
     act(() => {
-      overlay?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      backdropDismiss?.click();
     });
     expect(onClose).toHaveBeenCalledTimes(1);
 

@@ -6,7 +6,7 @@
  * G6 renderer so the heavy graph dependency stays out of the initial bundle.
  */
 
-import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import './ObjectMap.css';
 import type { ObjectMapReference, ObjectMapSnapshotPayload } from '@core/refresh/types';
 import ContextMenu, { type ContextMenuItem } from '@shared/components/ContextMenu';
@@ -24,7 +24,7 @@ import {
 } from '@shared/components/icons/ObjectMapIcons';
 import { CloseIcon, RefreshIcon, ResetFiltersIcon } from '@shared/components/icons/SharedIcons';
 import Tooltip from '@shared/components/Tooltip';
-import { useEffectWithInvalidation } from '@shared/hooks/useHookLifetimes';
+
 import { useObjectActionController } from '@shared/hooks/useObjectActionController';
 import type { ObjectActionData } from '@shared/hooks/useObjectActions';
 import { withStableListKeys } from '@shared/utils/stableListKeys';
@@ -101,6 +101,7 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
   onNavigateView,
   onOpenObjectMap,
 }) => {
+  const elementIdPrefix = useId();
   const payload = useMemo(() => normalizeObjectMapPayload(wirePayload), [wirePayload]);
   const modelTimingStartedAt = objectMapTimingNow();
   const model = useObjectMapModel(payload);
@@ -202,16 +203,15 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
     return Array.from(groups.values());
   }, [visibleState.legendEntries]);
 
-  useEffectWithInvalidation(
-    () => {
-      setSearchIndex(0);
-    },
-    [],
-    [visibleState.normalizedSearchQuery]
-  );
+  useEffect(() => {
+    void visibleState.normalizedSearchQuery;
+    setSearchIndex(0);
+  }, [visibleState.normalizedSearchQuery]);
 
   const focusSearchMatch = useCallback(() => {
-    if (visibleState.searchMatches.length === 0) return;
+    if (visibleState.searchMatches.length === 0) {
+      return;
+    }
     const nextIndex = Math.min(searchIndex, visibleState.searchMatches.length - 1);
     const node = visibleState.searchMatches[nextIndex];
     setSearchIndex((prev) => (prev + 1) % visibleState.searchMatches.length);
@@ -336,7 +336,9 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
     [payload.nodes]
   );
   const contextMenuObject = useMemo<ObjectActionData | null>(() => {
-    if (contextMenu?.type !== 'object') return null;
+    if (contextMenu?.type !== 'object') {
+      return null;
+    }
     const ref = contextMenu.request.ref;
     const node = nodeByReference.get(objectMapReferenceKey(ref));
     const actionFacts = node?.actionFacts;
@@ -433,7 +435,9 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
     viewportControlsReady,
   ]);
   const contextMenuItems = useMemo(() => {
-    if (!contextMenu) return [];
+    if (!contextMenu) {
+      return [];
+    }
     return contextMenu.type === 'object'
       ? objectActions.getMenuItems(contextMenuObject)
       : canvasContextMenuItems;
@@ -451,19 +455,16 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
   }, []);
 
   const toolbar = (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: Toolbar and legend pointer handlers only stop canvas gesture propagation, while the controls remain native keyboard targets; the form role supplies the search landmark without adding a wrapper.
     <div
       className="object-map__toolbar"
       role="toolbar"
       aria-label="Object map controls"
       onPointerDown={(e) => e.stopPropagation()}
       onPointerUp={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
     >
-      {/** biome-ignore lint/a11y/useSemanticElements: Toolbar and legend pointer handlers only stop canvas gesture propagation, while the controls remain native keyboard targets; the form role supplies the search landmark without adding a wrapper. */}
       <form
         className="object-map__search"
-        role="search"
+        aria-label="Search object map"
         onSubmit={(event) => {
           event.preventDefault();
           focusSearchMatch();
@@ -471,7 +472,7 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
       >
         <div className="object-map__kind-filter" data-gridtable-filter-role="kind">
           <Dropdown
-            id="object-map-kind-filter"
+            id={`${elementIdPrefix}-object-map-kind-filter`}
             name="object-map-kind-filter"
             multiple
             size="compact"
@@ -629,7 +630,7 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
     <div className="object-map" data-testid="object-map">
       <div className="object-map__header">{toolbar}</div>
       <div ref={canvasRef} className="object-map__canvas">
-        <Suspense fallback={<div className="object-map__message">Loading map renderer…</div>}>
+        <React.Suspense fallback={<div className="object-map__message">Loading map renderer…</div>}>
           <ObjectMapG6Renderer
             layout={visibleState.visibleLayout}
             selectionState={visibleState.visibleSelectionState}
@@ -656,9 +657,8 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
             onUserViewportChange={disableAutoFitForManualViewport}
             onViewportControlsChange={setG6ViewportControls}
           />
-        </Suspense>
+        </React.Suspense>
         {!!showLegend && (
-          // biome-ignore lint/a11y/useKeyWithClickEvents: Toolbar and legend pointer handlers only stop canvas gesture propagation, while the controls remain native keyboard targets; the form role supplies the search landmark without adding a wrapper.
           <section
             className="object-map__legend"
             aria-label="Object map legend"
@@ -668,7 +668,6 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
                 : undefined
             }
             {...legendPointerHandlers}
-            onClick={(e) => e.stopPropagation()}
           >
             <Tooltip
               content="Close the legend. You can open it again with the Legend button on the toolbar."

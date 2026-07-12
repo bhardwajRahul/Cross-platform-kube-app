@@ -65,13 +65,17 @@ const AboutModal: React.FC<AboutModalProps> = React.memo(({ isOpen, onClose }) =
     ref: modalRef,
     disabled: !shouldRender,
     onEscape: () => {
-      if (!isOpen) return false;
+      if (!isOpen) {
+        return false;
+      }
       onClose();
       return true;
     },
   });
 
-  if (!shouldRender) return null;
+  if (!shouldRender) {
+    return null;
+  }
 
   return (
     <ModalSurface
@@ -86,8 +90,14 @@ const AboutModal: React.FC<AboutModalProps> = React.memo(({ isOpen, onClose }) =
 
       <div className="modal-content">
         <div className="about-logo-section">
-          <img src={captainK8s} alt="Captain K8s" className="about-captain-k8s" />
-          <img src={logo} alt="Luxury Yacht Logo" className="about-logo" />
+          <img
+            src={captainK8s}
+            alt="Captain K8s"
+            className="about-captain-k8s"
+            width={1024}
+            height={1024}
+          />
+          <img src={logo} alt="Luxury Yacht Logo" className="about-logo" width={827} height={500} />
         </div>
 
         <div className="about-info">

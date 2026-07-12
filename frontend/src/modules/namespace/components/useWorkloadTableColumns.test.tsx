@@ -6,7 +6,7 @@
  */
 
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
 import { requireReactElement } from '@/test-utils/requireReactElement';
 
@@ -88,7 +88,7 @@ describe('useWorkloadTableColumns', () => {
     const nameElement = requireReactElement<{
       onClick?: (event: { stopPropagation: () => void }) => void;
     }>(nameColumn?.render(workload), 'expected workload name element');
-    nameElement.props.onClick?.({ stopPropagation() {} });
+    nameElement.props.onClick?.({ stopPropagation: () => undefined });
     expect(handleWorkloadClick).toHaveBeenCalledTimes(1);
     hook.cleanup();
   });

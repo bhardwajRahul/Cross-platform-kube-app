@@ -90,7 +90,9 @@ export interface ObjectMapG6Palette {
 }
 
 const truncate = (text: string, maxChars: number): string => {
-  if (text.length <= maxChars) return text;
+  if (text.length <= maxChars) {
+    return text;
+  }
   return `${text.slice(0, maxChars - 1)}\u2026`;
 };
 
@@ -101,7 +103,9 @@ const formatNodeAge = (
   creationTimestamp: string | undefined,
   now?: Date | string | number
 ): string => {
-  if (!creationTimestamp) return '';
+  if (!creationTimestamp) {
+    return '';
+  }
   const age = now === undefined ? formatAge(creationTimestamp) : formatAge(creationTimestamp, now);
   return age === '-' ? '' : age;
 };
@@ -211,7 +215,9 @@ const objectMapG6SimpleEdgePath = (
 ): PathArray => {
   const source = nodeById.get(edge.sourceId);
   const target = nodeById.get(edge.targetId);
-  if (!source || !target) return parseObjectMapG6Path(edge.d);
+  if (!source || !target) {
+    return parseObjectMapG6Path(edge.d);
+  }
   return [
     ['M', source.x + source.width / 2, source.y + source.height / 2],
     ['L', target.x + target.width / 2, target.y + target.height / 2],
@@ -223,7 +229,9 @@ export const objectMapG6NodeState = (
   selectionState: ObjectMapSelectionState
 ): string[] => {
   const states: string[] = [];
-  if (node.isSeed) states.push('seed');
+  if (node.isSeed) {
+    states.push('seed');
+  }
   if (selectionState.activeId === node.id) {
     states.push('selected');
   } else if (selectionState.activeId !== null) {
@@ -236,20 +244,32 @@ export const objectMapG6EdgeState = (
   edge: PositionedEdge,
   selectionState: ObjectMapSelectionState
 ): string[] => {
-  if (selectionState.activeId === null) return [];
+  if (selectionState.activeId === null) {
+    return [];
+  }
   return [selectionState.connectedEdgeIds.has(edge.id) ? 'highlighted' : 'dimmed'];
 };
+
+export interface ObjectMapG6DataOptions {
+  kindBadgeStyleForKind?: (kind: string) => KindBadgeVisualStyle;
+  useShortResourceNames?: boolean;
+  cardDetailLevel?: ObjectMapG6CardDetailLevel;
+  edgeDetailLevel?: ObjectMapG6EdgeDetailLevel;
+  ageNow?: Date | string | number;
+}
 
 export const toObjectMapG6Data = (
   layout: ObjectMapLayout,
   selectionState: ObjectMapSelectionState,
   badgeForNode: ObjectMapNodeBadgeLookup,
   palette: ObjectMapG6Palette,
-  kindBadgeStyleForKind: (kind: string) => KindBadgeVisualStyle = fallbackKindBadgeVisualStyle,
-  useShortResourceNames = false,
-  cardDetailLevel: ObjectMapG6CardDetailLevel = 'full',
-  edgeDetailLevel: ObjectMapG6EdgeDetailLevel = 'routed',
-  ageNow?: Date | string | number
+  {
+    kindBadgeStyleForKind = fallbackKindBadgeVisualStyle,
+    useShortResourceNames = false,
+    cardDetailLevel = 'full',
+    edgeDetailLevel = 'routed',
+    ageNow,
+  }: ObjectMapG6DataOptions = {}
 ): GraphData => {
   const nodeById = new Map(layout.nodes.map((node) => [node.id, node]));
 

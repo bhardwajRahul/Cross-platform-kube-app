@@ -10,7 +10,7 @@ import {
   useFrameSampler,
 } from '@shared/components/tables/hooks/useFrameSampler';
 import React, { act, useImperativeHandle } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type HarnessHandle = {
@@ -32,7 +32,10 @@ const createHarness = async (props: HarnessProps) => {
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
 
-  const Harness = React.forwardRef<HarnessHandle, HarnessProps>((incomingProps, ref) => {
+  const Harness = ({
+    ref: samplerRef,
+    ...incomingProps
+  }: HarnessProps & { ref?: React.Ref<HarnessHandle> }) => {
     const sampler = useFrameSampler({
       enabled: incomingProps.enabled ?? true,
       sampleLabel: 'GridTable scroll',
@@ -45,13 +48,13 @@ const createHarness = async (props: HarnessProps) => {
       clearTimeoutImpl: incomingProps.clearTimeoutImpl,
     });
 
-    useImperativeHandle(ref, () => ({
+    useImperativeHandle(samplerRef, () => ({
       start: sampler.start,
       stop: sampler.stop,
     }));
 
     return null;
-  });
+  };
 
   const ref = React.createRef<HarnessHandle>();
 

@@ -136,6 +136,11 @@
   text-transform: uppercase;
 }
 
+.app-logs-header > thead,
+.app-logs-header > thead > tr {
+  display: contents;
+}
+
 .app-logs-header-cell {
   position: relative;
   min-width: 0;
@@ -150,6 +155,9 @@
 }
 
 .app-logs-column-resizer {
+  border: 0;
+  margin: 0;
+  padding: 0;
   position: absolute;
   top: -5px;
   right: -4px;

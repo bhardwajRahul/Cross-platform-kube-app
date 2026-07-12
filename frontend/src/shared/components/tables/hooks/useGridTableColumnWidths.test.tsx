@@ -17,7 +17,7 @@ import {
 import { useGridTableColumnWidths } from '@shared/components/tables/hooks/useGridTableColumnWidths';
 import type React from 'react';
 import { act, useEffect } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 
@@ -50,7 +50,7 @@ describe('useGridTableColumnWidths', () => {
     if (typeof window !== 'undefined') {
       window.requestAnimationFrame = immediateRaf;
     }
-    const noop = () => {};
+    const noop = () => undefined;
     globalThis.cancelAnimationFrame = noop;
     if (typeof window !== 'undefined') {
       window.cancelAnimationFrame = noop;
@@ -309,7 +309,9 @@ describe('useGridTableColumnWidths', () => {
     ];
 
     const measureColumnWidth = vi.fn((column: GridColumnDefinition<Row>) => {
-      if (column.key === 'kind') return 120;
+      if (column.key === 'kind') {
+        return 120;
+      }
       return 180;
     });
 
@@ -360,8 +362,12 @@ describe('useGridTableColumnWidths', () => {
     const columns = [createColumn('kind'), createColumn('name'), createColumn('misc')];
 
     const measureColumnWidth = vi.fn((column: GridColumnDefinition<Row>) => {
-      if (column.key === 'kind') return 90;
-      if (column.key === 'misc') return 140;
+      if (column.key === 'kind') {
+        return 90;
+      }
+      if (column.key === 'misc') {
+        return 140;
+      }
       return 260;
     });
 
@@ -446,8 +452,12 @@ describe('useGridTableColumnWidths', () => {
     const columns = [createColumn('kind'), createColumn('name'), createColumn('age')];
 
     const measureColumnWidth = vi.fn((column: GridColumnDefinition<Row>) => {
-      if (column.key === 'kind') return 90;
-      if (column.key === 'age') return 100;
+      if (column.key === 'kind') {
+        return 90;
+      }
+      if (column.key === 'age') {
+        return 100;
+      }
       return 180;
     });
 

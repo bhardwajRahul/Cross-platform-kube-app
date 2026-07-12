@@ -108,8 +108,15 @@ export function createResourceBarColumn<T>(
   };
 
   const parseResourceForExport = (value: string | undefined): number => {
-    if (!value || value === '-' || value === 'undefined' || value === 'null' || value === 'not set')
+    if (
+      !value ||
+      value === '-' ||
+      value === 'undefined' ||
+      value === 'null' ||
+      value === 'not set'
+    ) {
       return 0;
+    }
 
     if (type === 'cpu') {
       if (value.endsWith('m')) {
@@ -318,15 +325,14 @@ export function createTextColumn<T>(
         return display;
       }
 
-      const className = ['gridtable-link', dynamicClass].filter(Boolean).join(' ');
+      const className = ['gridtable-cell-button', 'gridtable-link', dynamicClass]
+        .filter(Boolean)
+        .join(' ');
 
       return (
-        // biome-ignore lint/a11y/useSemanticElements: The div-based virtualized ARIA grid preserves column sizing and delegates focus, keyboard activation, and sorting to the shared GridTable hooks.
-        <span
+        <button
+          type="button"
           className={className}
-          style={{ cursor: 'pointer' }}
-          role="button"
-          tabIndex={0}
           title={title}
           data-gridtable-shortcut-optout="true"
           data-gridtable-rowclick="allow"
@@ -339,19 +345,9 @@ export function createTextColumn<T>(
               options?.onClick?.(item);
             }
           }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              if (event.altKey && options?.onAltClick) {
-                options.onAltClick(item);
-              } else {
-                options?.onClick?.(item);
-              }
-            }
-          }}
         >
           {display}
-        </span>
+        </button>
       );
     },
   };
@@ -461,7 +457,7 @@ export const createKindColumn = <T,>(
         return <span data-kind-value={kindValue}>{displayText}</span>;
       }
 
-      const handleClick = (event: React.MouseEvent<HTMLSpanElement>) => {
+      const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
         if (event.altKey && options.onAltClick) {
           event.preventDefault();
           event.stopPropagation();
@@ -471,32 +467,18 @@ export const createKindColumn = <T,>(
         }
       };
 
-      const handleKeyDown = (event: React.KeyboardEvent<HTMLSpanElement>) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          if (event.altKey && options.onAltClick) {
-            options.onAltClick(item);
-          } else {
-            onClick?.(item);
-          }
-        }
-      };
-
       return (
-        // biome-ignore lint/a11y/useSemanticElements: The div-based virtualized ARIA grid preserves column sizing and delegates focus, keyboard activation, and sorting to the shared GridTable hooks.
-        <span
+        <button
+          type="button"
+          className="gridtable-cell-button"
           data-kind-value={kindValue}
           data-kind-interactive="true"
           data-gridtable-shortcut-optout="true"
           data-gridtable-rowclick="allow"
           onClick={handleClick}
-          onKeyDown={handleKeyDown}
-          role="button"
-          tabIndex={0}
-          style={{ cursor: 'pointer' }}
         >
           {displayText}
-        </span>
+        </button>
       );
     },
   };

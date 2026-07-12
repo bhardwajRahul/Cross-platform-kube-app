@@ -12,7 +12,7 @@ import {
 import { TabDragProvider } from '@shared/components/tabs/dragCoordinator';
 import ClusterTabs from '@ui/layout/ClusterTabs';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installWindowProperty } from '@/test-utils/windowProperty';
 
@@ -140,17 +140,27 @@ describe('ClusterTabs', () => {
     Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
       configurable: true,
       get() {
-        if (this.classList.contains('cluster-tabs-add')) return 100;
-        if (this.classList.contains('tab-item')) return 80;
+        if (this.classList.contains('cluster-tabs-add')) {
+          return 100;
+        }
+        if (this.classList.contains('tab-item')) {
+          return 80;
+        }
         return 0;
       },
     });
     const restoreResizeObserver = installWindowProperty(
       'ResizeObserver',
       class implements ResizeObserver {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
+        observe() {
+          return undefined;
+        }
+        unobserve() {
+          return undefined;
+        }
+        disconnect() {
+          return undefined;
+        }
       }
     );
 
@@ -281,9 +291,15 @@ describe('ClusterTabs', () => {
   it('shows filename:context for tabs with name collisions', async () => {
     // Two clusters with the same context name but different files.
     mockState.getClusterMeta = (config: string) => {
-      if (config === '/kube/alpha:dev') return { id: 'alpha:dev', name: 'dev' };
-      if (config === '/kube/beta:dev') return { id: 'beta:dev', name: 'dev' };
-      if (config === '/kube/gamma:prod') return { id: 'gamma:prod', name: 'prod' };
+      if (config === '/kube/alpha:dev') {
+        return { id: 'alpha:dev', name: 'dev' };
+      }
+      if (config === '/kube/beta:dev') {
+        return { id: 'beta:dev', name: 'dev' };
+      }
+      if (config === '/kube/gamma:prod') {
+        return { id: 'gamma:prod', name: 'prod' };
+      }
       return { id: config, name: config };
     };
     mockState.selectedKubeconfigs = ['/kube/alpha:dev', '/kube/beta:dev', '/kube/gamma:prod'];

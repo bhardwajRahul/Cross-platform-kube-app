@@ -8,7 +8,7 @@
 
 import type { DisplayDiffLine } from '@shared/components/diff/diffUtils';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 import DiffViewer from './DiffViewer';
@@ -24,9 +24,13 @@ class MockResizeObserver {
     this.callback([{ target } as ResizeObserverEntry], this as unknown as ResizeObserver);
   }
 
-  unobserve() {}
+  unobserve() {
+    return undefined;
+  }
 
-  disconnect() {}
+  disconnect() {
+    return undefined;
+  }
 }
 
 const buildRect = (width: number, height: number): DOMRect =>
@@ -389,10 +393,14 @@ describe('DiffViewer', () => {
 
     const table = container.querySelector('.object-diff-table') as HTMLDivElement | null;
     expect(table).toBeTruthy();
-    requireValue(table, 'expected test value in DiffViewer.test.tsx').focus();
+    const keyboardControl = container.querySelector<HTMLButtonElement>(
+      '.object-diff-keyboard-control'
+    );
+    expect(keyboardControl?.type).toBe('button');
+    requireValue(keyboardControl, 'expected test value in DiffViewer.test.tsx').focus();
 
     await act(async () => {
-      requireValue(table, 'expected test value in DiffViewer.test.tsx').dispatchEvent(
+      requireValue(keyboardControl, 'expected test value in DiffViewer.test.tsx').dispatchEvent(
         new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })
       );
       await Promise.resolve();
@@ -400,7 +408,7 @@ describe('DiffViewer', () => {
     expect(requireValue(table, 'expected test value in DiffViewer.test.tsx').scrollTop).toBe(40);
 
     await act(async () => {
-      requireValue(table, 'expected test value in DiffViewer.test.tsx').dispatchEvent(
+      requireValue(keyboardControl, 'expected test value in DiffViewer.test.tsx').dispatchEvent(
         new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true })
       );
       await Promise.resolve();
@@ -408,7 +416,7 @@ describe('DiffViewer', () => {
     expect(requireValue(table, 'expected test value in DiffViewer.test.tsx').scrollTop).toBe(120);
 
     await act(async () => {
-      requireValue(table, 'expected test value in DiffViewer.test.tsx').dispatchEvent(
+      requireValue(keyboardControl, 'expected test value in DiffViewer.test.tsx').dispatchEvent(
         new KeyboardEvent('keydown', { key: 'End', bubbles: true })
       );
       await Promise.resolve();
@@ -416,7 +424,7 @@ describe('DiffViewer', () => {
     expect(requireValue(table, 'expected test value in DiffViewer.test.tsx').scrollTop).toBe(4880);
 
     await act(async () => {
-      requireValue(table, 'expected test value in DiffViewer.test.tsx').dispatchEvent(
+      requireValue(keyboardControl, 'expected test value in DiffViewer.test.tsx').dispatchEvent(
         new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })
       );
       await Promise.resolve();
@@ -424,7 +432,7 @@ describe('DiffViewer', () => {
     expect(requireValue(table, 'expected test value in DiffViewer.test.tsx').scrollTop).toBe(4840);
 
     await act(async () => {
-      requireValue(table, 'expected test value in DiffViewer.test.tsx').dispatchEvent(
+      requireValue(keyboardControl, 'expected test value in DiffViewer.test.tsx').dispatchEvent(
         new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true })
       );
       await Promise.resolve();
@@ -432,7 +440,7 @@ describe('DiffViewer', () => {
     expect(requireValue(table, 'expected test value in DiffViewer.test.tsx').scrollTop).toBe(4760);
 
     await act(async () => {
-      requireValue(table, 'expected test value in DiffViewer.test.tsx').dispatchEvent(
+      requireValue(keyboardControl, 'expected test value in DiffViewer.test.tsx').dispatchEvent(
         new KeyboardEvent('keydown', { key: 'Home', bubbles: true })
       );
       await Promise.resolve();

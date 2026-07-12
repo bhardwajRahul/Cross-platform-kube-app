@@ -7,9 +7,10 @@
 
 import { KeyboardProvider } from '@ui/shortcuts';
 import type React from 'react';
-import { act, useState } from 'react';
-import ReactDOM from 'react-dom/client';
+import { act, useEffect, useRef, useState } from 'react';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createTestId } from '@/test-utils/createTestId';
 import { requireValue } from '@/test-utils/requireValue';
 import Dropdown from './Dropdown';
 import type { DropdownOption } from './types';
@@ -63,21 +64,27 @@ describe('Dropdown', () => {
   };
 
   const click = (element: Element | null) => {
-    if (!element) throw new Error('Element not found');
+    if (!element) {
+      throw new Error('Element not found');
+    }
     act(() => {
       element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
   };
 
   const mouseDown = (element: Element | null) => {
-    if (!element) throw new Error('Element not found');
+    if (!element) {
+      throw new Error('Element not found');
+    }
     act(() => {
       element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     });
   };
 
   const pressKey = async (element: Element | null, key: string) => {
-    if (!element) throw new Error('Element not found');
+    if (!element) {
+      throw new Error('Element not found');
+    }
     await act(async () => {
       element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
       await Promise.resolve();
@@ -85,7 +92,9 @@ describe('Dropdown', () => {
   };
 
   const setTextInputValue = async (input: HTMLInputElement | null, value: string) => {
-    if (!input) throw new Error('Input not found');
+    if (!input) {
+      throw new Error('Input not found');
+    }
     const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
     descriptor?.set?.call(input, value);
     await act(async () => {
@@ -129,11 +138,18 @@ describe('Dropdown', () => {
     const Harness = () => {
       const [firstValue, setFirstValue] = useState<string[]>([]);
       const [secondValue, setSecondValue] = useState<string[]>([]);
+      const formRef = useRef<HTMLFormElement>(null);
+      useEffect(() => {
+        const form = formRef.current;
+        if (!form) {
+          return;
+        }
+        const stopMouseDownPropagation = (event: MouseEvent) => event.stopPropagation();
+        form.addEventListener('mousedown', stopMouseDownPropagation);
+        return () => form.removeEventListener('mousedown', stopMouseDownPropagation);
+      }, []);
       return (
-        <form
-          aria-label="Dropdown propagation harness"
-          onMouseDown={(event) => event.stopPropagation()}
-        >
+        <form ref={formRef} aria-label="Dropdown propagation harness">
           <Dropdown
             options={OPTIONS}
             value={firstValue}
@@ -317,10 +333,18 @@ describe('Dropdown', () => {
     click(trigger);
 
     await pressKey(trigger, 'ArrowDown');
-    expect(container.querySelector('.dropdown-option.highlighted')?.textContent).toContain('Alpha');
+    const firstHighlighted = container.querySelector<HTMLElement>('.dropdown-option.highlighted');
+    expect(firstHighlighted?.textContent).toContain('Alpha');
+    expect(trigger?.getAttribute('aria-activedescendant')).toBe(firstHighlighted?.id);
+    expect(firstHighlighted?.getAttribute('role')).toBe('option');
+    expect(firstHighlighted?.getAttribute('aria-selected')).toBe('true');
 
     await pressKey(trigger, 'ArrowDown');
-    expect(container.querySelector('.dropdown-option.highlighted')?.textContent).toContain('Beta');
+    const secondHighlighted = container.querySelector<HTMLElement>('.dropdown-option.highlighted');
+    expect(secondHighlighted?.textContent).toContain('Beta');
+    expect(trigger?.getAttribute('aria-activedescendant')).toBe(secondHighlighted?.id);
+    expect(firstHighlighted?.getAttribute('aria-selected')).toBe('false');
+    expect(secondHighlighted?.getAttribute('aria-selected')).toBe('true');
 
     await pressKey(trigger, 'Enter');
     expect(handleChange).toHaveBeenCalledWith('beta');
@@ -338,10 +362,18 @@ describe('Dropdown', () => {
     searchInput?.focus();
 
     await pressKey(searchInput, 'ArrowDown');
-    expect(container.querySelector('.dropdown-option.highlighted')?.textContent).toContain('Alpha');
+    const firstHighlighted = container.querySelector<HTMLElement>('.dropdown-option.highlighted');
+    expect(firstHighlighted?.textContent).toContain('Alpha');
+    expect(searchInput?.getAttribute('role')).toBe('combobox');
+    expect(searchInput?.getAttribute('aria-controls')).toBe(
+      container.querySelector<HTMLElement>('[role="listbox"]')?.id
+    );
+    expect(searchInput?.getAttribute('aria-activedescendant')).toBe(firstHighlighted?.id);
 
     await pressKey(searchInput, 'ArrowDown');
-    expect(container.querySelector('.dropdown-option.highlighted')?.textContent).toContain('Beta');
+    const secondHighlighted = container.querySelector<HTMLElement>('.dropdown-option.highlighted');
+    expect(secondHighlighted?.textContent).toContain('Beta');
+    expect(searchInput?.getAttribute('aria-activedescendant')).toBe(secondHighlighted?.id);
   });
 
   it('removes the trigger highlight while the internal search input is focused', async () => {
@@ -543,6 +575,19 @@ describe('Dropdown', () => {
     expect(container.querySelector('.search-input')).toBeNull();
   });
 
+  it('renders bulk-action icons at the dropdown-specific size', async () => {
+    await mount(
+      <Dropdown options={OPTIONS} value={[]} onChange={vi.fn()} multiple showBulkActions />
+    );
+
+    click(container.querySelector('.dropdown-trigger'));
+
+    const icon = container.querySelector<SVGElement>('.dropdown-bulk-action svg');
+    expect(icon).not.toBeNull();
+    expect(requireValue(icon, 'expected bulk-action icon').getAttribute('width')).toBe('20');
+    expect(requireValue(icon, 'expected bulk-action icon').getAttribute('height')).toBe('20');
+  });
+
   it('preserves menu scroll position across multi-select updates', async () => {
     const manyOptions = Array.from({ length: 40 }, (_, index) => ({
       value: `opt-${index}`,
@@ -617,7 +662,7 @@ describe('Dropdown', () => {
         right: 200,
         x: 0,
         y: 500,
-        toJSON: () => {},
+        toJSON: () => undefined,
       }),
     });
 
@@ -634,6 +679,58 @@ describe('Dropdown', () => {
     Object.defineProperty(window, 'innerHeight', {
       configurable: true,
       value: originalInnerHeight,
+    });
+  });
+
+  it('end-aligns the menu when start alignment would overflow the viewport', async () => {
+    const originalInnerWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 });
+
+    const offsetWidthDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'offsetWidth'
+    );
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+      configurable: true,
+      get() {
+        return this.classList.contains('dropdown-menu')
+          ? 300
+          : (offsetWidthDescriptor?.get?.call(this) ?? 0);
+      },
+    });
+
+    await mount(<Dropdown options={OPTIONS} value="" onChange={vi.fn()} />);
+
+    const trigger = container.querySelector('.dropdown-trigger') as HTMLElement;
+    Object.defineProperty(trigger, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        top: 40,
+        bottom: 80,
+        height: 40,
+        width: 150,
+        left: 650,
+        right: 800,
+        x: 650,
+        y: 40,
+        toJSON: () => undefined,
+      }),
+    });
+
+    click(trigger);
+
+    expect(container.querySelector('.dropdown-menu')?.className).toContain(
+      'position-horizontal-end'
+    );
+
+    if (offsetWidthDescriptor) {
+      Object.defineProperty(HTMLElement.prototype, 'offsetWidth', offsetWidthDescriptor);
+    } else {
+      Reflect.deleteProperty(HTMLElement.prototype, 'offsetWidth');
+    }
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: originalInnerWidth,
     });
   });
 
@@ -658,8 +755,9 @@ describe('Dropdown', () => {
   });
 
   it('renders form input values when name is provided', async () => {
+    const dropdownId = createTestId('example');
     await mount(
-      <Dropdown options={OPTIONS} value="beta" onChange={vi.fn()} name="example" id="example-id" />
+      <Dropdown options={OPTIONS} value="beta" onChange={vi.fn()} name="example" id={dropdownId} />
     );
 
     const hidden = container.querySelector<HTMLInputElement>(
@@ -668,6 +766,6 @@ describe('Dropdown', () => {
     expect(hidden).toBeTruthy();
     expect(hidden?.value).toBe('beta');
     const trigger = container.querySelector('.dropdown-trigger');
-    expect(trigger?.getAttribute('aria-controls')).toBe('example-id-menu');
+    expect(trigger?.getAttribute('aria-controls')).toBe(`${dropdownId}-menu`);
   });
 });

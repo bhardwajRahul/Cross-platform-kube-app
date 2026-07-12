@@ -6,10 +6,10 @@
 
 import { types } from '@wailsjs/go/models';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
-import AppearanceSection from './AppearanceSection';
+import AppearanceSection, { reorderThemeByOffset } from './AppearanceSection';
 
 const setInputValue = (input: HTMLInputElement, value: string): void => {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
@@ -202,7 +202,7 @@ describe('AppearanceSection', () => {
 
   it('prompts to save live appearance changes as the default theme', async () => {
     const hueInput = requireValue(
-      container.querySelector<HTMLInputElement>('#palette-hue'),
+      container.querySelector<HTMLInputElement>('[id$="-palette-hue"]'),
       'expected the palette hue input'
     );
 
@@ -320,6 +320,7 @@ describe('AppearanceSection', () => {
       container.querySelector<HTMLInputElement>('.theme-pattern-input'),
       'expected the theme cluster-pattern input'
     );
+    expect(document.activeElement).toBe(nameInput);
 
     await act(async () => {
       setInputValue(nameInput, 'Prod');
@@ -348,5 +349,16 @@ describe('AppearanceSection', () => {
 
     expect(container.textContent).not.toContain('Invalid cluster pattern');
     expect(patternInput.hasAttribute('aria-invalid')).toBe(false);
+  });
+});
+
+describe('reorderThemeByOffset', () => {
+  it('moves custom themes while keeping the default theme last', () => {
+    const ids = ['one', 'two', 'default'];
+    expect(reorderThemeByOffset(ids, 'one', 1)).toEqual(['two', 'one', 'default']);
+    expect(reorderThemeByOffset(ids, 'two', -1)).toEqual(['two', 'one', 'default']);
+    expect(reorderThemeByOffset(ids, 'one', -1)).toBeNull();
+    expect(reorderThemeByOffset(ids, 'two', 1)).toBeNull();
+    expect(reorderThemeByOffset(ids, 'default', -1)).toBeNull();
   });
 });

@@ -148,6 +148,8 @@ export interface GridTableProps<T> {
   getRowClassName?: (item: T, index: number) => string | undefined | null;
   getRowStyle?: (item: T, index: number) => React.CSSProperties | undefined;
   onRowClick?: (item: T) => void;
+  /** Called for pointer row activation after interactive descendants are excluded. */
+  onRowPointerClick?: (item: T) => void;
   onSort?: (key: string, targetDirection?: 'asc' | 'desc' | null) => void;
   sortConfig?: { key: string; direction: 'asc' | 'desc' | null };
   embedded?: boolean;
@@ -169,13 +171,13 @@ export interface GridTableProps<T> {
   emptyMessage?: string;
   /** Rendered in the table's pagination footer (e.g. cursor pagination controls). */
   paginationControls?: React.ReactNode;
-  /** ArrowLeft pages back when the table has keyboard focus. */
+  /** Ctrl+ArrowLeft (Command+ArrowLeft on macOS) pages back while the table has focus. */
   onPagePrevious?: () => void;
-  /** ArrowRight pages forward when the table has keyboard focus. */
+  /** Ctrl+ArrowRight (Command+ArrowRight on macOS) pages forward while the table has focus. */
   onPageNext?: () => void;
-  /** Gates ArrowLeft paging (e.g. first page, request in flight). */
+  /** Gates the previous-page shortcut (e.g. first page, request in flight). */
   canPagePrevious?: boolean;
-  /** Gates ArrowRight paging (e.g. last page, request in flight). */
+  /** Gates the next-page shortcut (e.g. last page, request in flight). */
   canPageNext?: boolean;
   virtualization?: GridTableVirtualizationOptions;
   loadingOverlay?: {

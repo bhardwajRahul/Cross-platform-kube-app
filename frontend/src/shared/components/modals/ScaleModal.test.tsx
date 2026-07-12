@@ -1,6 +1,6 @@
 import { KeyboardProvider } from '@ui/shortcuts';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 import ScaleModal from './ScaleModal';
@@ -80,7 +80,7 @@ describe('ScaleModal', () => {
 
     await renderModal({ value: 5 });
 
-    const input = document.querySelector('#scale-replicas') as HTMLInputElement | null;
+    const input = document.querySelector('[id$="-scale-replicas"]') as HTMLInputElement | null;
     expect(input).not.toBeNull();
     expect(input?.value).toBe('5');
 
@@ -123,7 +123,7 @@ describe('ScaleModal', () => {
   it('cancels on Escape through the keyboard surface manager', async () => {
     await renderModal();
 
-    const input = document.querySelector('#scale-replicas') as HTMLInputElement | null;
+    const input = document.querySelector('[id$="-scale-replicas"]') as HTMLInputElement | null;
     expect(input).not.toBeNull();
     input?.focus();
 

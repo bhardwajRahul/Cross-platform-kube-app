@@ -10,7 +10,7 @@ import type ConfirmationModal from '@shared/components/modals/ConfirmationModal'
 import type { GridTableProps } from '@shared/components/tables/GridTable';
 import { withStableListKeys } from '@shared/utils/stableListKeys';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireReactElement } from '@/test-utils/requireReactElement';
@@ -80,7 +80,7 @@ vi.mock('@ui/favorites/FavToggle', () => ({
     id: 'favorite',
     icon: null,
     active: false,
-    onClick: () => {},
+    onClick: () => undefined,
     title: 'Save as favorite',
   }),
 }));
@@ -340,7 +340,7 @@ describe('NsViewStorage', () => {
     expect(renderedCell.props.className).toContain('storage-class-link');
 
     act(() => {
-      renderedCell.props.onClick({ stopPropagation: () => {} });
+      renderedCell.props.onClick({ stopPropagation: () => undefined });
     });
 
     expect(openWithObjectMock).toHaveBeenCalledWith(
@@ -370,7 +370,7 @@ describe('NsViewStorage', () => {
     }>(storageColumn.render(entry), 'expected the storage-class cell element');
 
     act(() => {
-      renderedCell.props.onClick({ stopPropagation: () => {} });
+      renderedCell.props.onClick({ stopPropagation: () => undefined });
     });
 
     expect(openWithObjectMock).toHaveBeenCalledWith(
@@ -437,7 +437,7 @@ describe('NsViewStorage', () => {
     expect(renderedCell.props.className).toContain('default-class');
 
     act(() => {
-      renderedCell.props.onClick?.({ stopPropagation: () => {} });
+      renderedCell.props.onClick?.({ stopPropagation: () => undefined });
     });
     expect(openWithObjectMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'StorageClass' })

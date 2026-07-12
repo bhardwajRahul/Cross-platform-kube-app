@@ -406,30 +406,12 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
   // (e.g. after a cluster-switch round trip) the lazy reducer
   // initializer above pulls these values back out.
   //
-  // Deps list every persistent field individually so changes to derived
-  // state (containers, availablePods, parsedContainerLogs, view mode, etc.)
-  // don't trigger an unnecessary writeback. The previous-logs view is the only
-  // mode that persists, so depend on that boolean (not the loading sub-state).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: individual persistent fields intentionally control preference writeback
+  // The reducer state is the source snapshot. Projecting it on every state
+  // transition keeps the cache synchronized without maintaining a second,
+  // manually duplicated dependency contract for its persistent fields.
   useEffect(() => {
     setLogViewerPrefs(panelId, extractLogViewerPrefs(state));
-  }, [
-    panelId,
-    state.selectedContainer,
-    state.selectedFilters,
-    state.autoRefresh,
-    state.timestampMode,
-    state.wrapText,
-    state.showAnsiColors,
-    state.textFilter,
-    state.highlightMatches,
-    state.inverseMatches,
-    state.caseSensitiveMatches,
-    state.regexMatches,
-    state.displayMode,
-    state.expandedRows,
-    showPreviousContainerLogs,
-  ]);
+  }, [panelId, state]);
 
   const hasPrimedScopeRef = useRef(false);
   const fallbackRecoveringRef = useRef(false);
@@ -771,8 +753,8 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
           return;
         }
         // The error surfaces through the refresh-store snapshot status below.
-        setScopedDomainState(CONTAINER_LOGS_DOMAIN, containerLogsScope, (previous) => ({
-          ...previous,
+        setScopedDomainState(CONTAINER_LOGS_DOMAIN, containerLogsScope, (previousState) => ({
+          ...previousState,
           status: 'error',
           error: message,
           scope: containerLogsScope,
@@ -868,12 +850,12 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
 
     const clearAllEntries = normalizedActivePods.length === 0;
     const activePodSet = new Set(normalizedActivePods);
-    const filteredEntries = clearAllEntries
+    const visibleEntries = clearAllEntries
       ? []
       : logEntries.filter((entry) => activePodSet.has(entry.pod));
     const hasChanged = clearAllEntries
       ? logEntries.length > 0
-      : filteredEntries.length !== logEntries.length;
+      : visibleEntries.length !== logEntries.length;
 
     if (!hasChanged) {
       previousActivePodsRef.current = normalizedActivePods;
@@ -897,7 +879,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
         error: null,
         data: {
           ...previousPayload,
-          entries: filteredEntries,
+          entries: visibleEntries,
           generatedAt,
           resetCount: previousPayload.resetCount + 1,
         },
@@ -908,7 +890,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       };
     });
 
-    hasPrimedScopeRef.current = filteredEntries.length > 0;
+    hasPrimedScopeRef.current = visibleEntries.length > 0;
     previousActivePodsRef.current = normalizedActivePods;
   }, [isWorkload, logEntries, containerLogsScope, normalizedActivePods, showPreviousContainerLogs]);
 
@@ -1611,7 +1593,9 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
 
   // Schedule copy feedback reset, cancelling any prior pending timer
   const scheduleCopyReset = useCallback(() => {
-    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    if (copyTimerRef.current) {
+      clearTimeout(copyTimerRef.current);
+    }
     copyTimerRef.current = setTimeout(
       () => dispatch({ type: 'SET_COPY_FEEDBACK', payload: 'idle' }),
       750
@@ -1621,7 +1605,9 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
   // Clean up copy timer on unmount
   useEffect(() => {
     return () => {
-      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+      }
     };
   }, []);
 
@@ -1646,7 +1632,9 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
         });
         const containerList = result.status === 'executed' ? (result.data ?? []) : [];
 
-        if (isCancelled) return;
+        if (isCancelled) {
+          return;
+        }
 
         if (!containerList || containerList.length === 0) {
           dispatch({ type: 'SET_CONTAINERS', payload: [] });
@@ -1657,7 +1645,9 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
         dispatch({ type: 'SET_CONTAINERS', payload: containerList });
         dispatch({ type: 'SET_SELECTED_CONTAINER', payload: isWorkload ? '' : ALL_CONTAINERS });
       } catch (err) {
-        if (isCancelled) return;
+        if (isCancelled) {
+          return;
+        }
         console.warn('Failed to fetch containers:', err);
         dispatch({ type: 'SET_CONTAINERS', payload: [] });
         dispatch({ type: 'SET_SELECTED_CONTAINER', payload: '' });
@@ -1689,7 +1679,9 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
   );
 
   const tableColumns = useMemo(() => {
-    if (derivedFieldKeys.length === 0) return [];
+    if (derivedFieldKeys.length === 0) {
+      return [];
+    }
 
     const columns: GridColumnDefinition<ParsedLogEntry>[] = [];
 
@@ -2224,12 +2216,8 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
           </div>
 
           {activeFilterChips.length > 0 && (
-            // biome-ignore lint/a11y/useSemanticElements: The virtualized filter summary uses an ARIA group so existing flex layout remains intact without fieldset presentation semantics.
-            <div
-              className="logs-viewer-active-filters"
-              role="group"
-              aria-label="Active log filters"
-            >
+            <fieldset className="logs-viewer-active-filters" aria-label="Active log filters">
+              <legend className="logs-viewer-active-filters__legend">Active log filters</legend>
               {activeFilterChips.length > 0 && (
                 <button
                   type="button"
@@ -2255,7 +2243,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
                   </button>
                 </span>
               ))}
-            </div>
+            </fieldset>
           )}
 
           {visibleLogWarnings.length > 0 && (

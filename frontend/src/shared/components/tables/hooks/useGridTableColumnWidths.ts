@@ -211,9 +211,12 @@ export function useGridTableColumnWidths<T>(
             source = 'user';
           } else if (resolvedAuto) {
             source = 'auto';
-          } else if (initialColumnWidths?.[key] != null) {
+          } else if (
+            initialColumnWidths?.[key] !== null &&
+            initialColumnWidths?.[key] !== undefined
+          ) {
             source = 'table';
-          } else if (column?.width != null) {
+          } else if (column?.width !== null && column?.width !== undefined) {
             source = 'column';
           } else {
             source = 'table';
@@ -247,11 +250,11 @@ export function useGridTableColumnWidths<T>(
       let source: ColumnWidthState['source'] = 'column';
       if (manual) {
         source = 'user';
-      } else if (initialInput != null) {
+      } else if (initialInput !== null && initialInput !== undefined) {
         source = 'table';
       } else if (autoActive) {
         source = 'auto';
-      } else if (column?.width != null) {
+      } else if (column?.width !== null && column?.width !== undefined) {
         source = 'column';
       }
 
@@ -294,7 +297,7 @@ export function useGridTableColumnWidths<T>(
     (
       base: Record<string, number>,
       containerWidth: number,
-      options?: { forceFit?: boolean }
+      resizeOptions?: { forceFit?: boolean }
     ): Record<string, number> => {
       // Adjust widths so the table fits its container without fighting the user.
       // - Skip auto-fitting while a drag is in progress.
@@ -313,7 +316,7 @@ export function useGridTableColumnWidths<T>(
         naturalWidths: naturalWidthsRef.current,
         containerWidth,
         allowHorizontalOverflow,
-        forceFit: options?.forceFit,
+        forceFit: resizeOptions?.forceFit,
         enableColumnResizing,
         externalColumnWidths,
         manuallyResizedColumnKeys: manuallyResizedColumnsRef.current,

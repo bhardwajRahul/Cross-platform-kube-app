@@ -5,7 +5,6 @@
  * manual positioning, and auto-fit.
  */
 
-import { useEffectWithInvalidation } from '@shared/hooks/useHookLifetimes';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   computeCollapseInfo,
@@ -51,7 +50,9 @@ export const useObjectMapModel = (payload: NormalizedObjectMapPayload) => {
     return (
       payload.nodes.find((node) => {
         const r = node.ref;
-        if (r.uid && ref.uid) return r.uid === ref.uid;
+        if (r.uid && ref.uid) {
+          return r.uid === ref.uid;
+        }
         return (
           r.clusterId === ref.clusterId &&
           r.kind === ref.kind &&
@@ -127,14 +128,12 @@ export const useObjectMapModel = (payload: NormalizedObjectMapPayload) => {
   );
   const nodeDragRef = useRef<NodeDragState | null>(null);
 
-  useEffectWithInvalidation(
-    () => {
-      setNodePositionOverrides(new Map());
-      nodeDragRef.current = null;
-    },
-    [],
-    [filtered.nodes, filtered.edges]
-  );
+  useEffect(() => {
+    void filtered.nodes;
+    void filtered.edges;
+    setNodePositionOverrides(new Map());
+    nodeDragRef.current = null;
+  }, [filtered.nodes, filtered.edges]);
 
   const layout: ObjectMapLayout = useMemo(() => {
     if (nodePositionOverrides.size === 0) {
@@ -142,7 +141,9 @@ export const useObjectMapModel = (payload: NormalizedObjectMapPayload) => {
     }
     const nodes = baseLayout.nodes.map((node) => {
       const override = nodePositionOverrides.get(node.id);
-      if (!override) return node;
+      if (!override) {
+        return node;
+      }
       return { ...node, x: override.x, y: override.y };
     });
     return {
@@ -155,7 +156,9 @@ export const useObjectMapModel = (payload: NormalizedObjectMapPayload) => {
   const badgeForNode = useCallback(
     (nodeId: string): ObjectMapNodeBadge | null => {
       const group: DeploymentGroup | undefined = collapseInfo.groupsByCurrentRs.get(nodeId);
-      if (!group) return null;
+      if (!group) {
+        return null;
+      }
       return {
         deploymentId: group.deploymentId,
         hiddenCount: group.collapsibleRsIds.length,
@@ -171,7 +174,9 @@ export const useObjectMapModel = (payload: NormalizedObjectMapPayload) => {
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (activeNodeId === null) return;
+    if (activeNodeId === null) {
+      return;
+    }
     if (!layout.nodes.some((n) => n.id === activeNodeId)) {
       setActiveNodeId(null);
     }
@@ -188,14 +193,18 @@ export const useObjectMapModel = (payload: NormalizedObjectMapPayload) => {
 
   const focusNode = useCallback(
     (id: string) => {
-      if (!layout.nodes.some((node) => node.id === id)) return;
+      if (!layout.nodes.some((node) => node.id === id)) {
+        return;
+      }
       setActiveNodeId(id);
     },
     [layout.nodes]
   );
 
   const startNodeDrag = useCallback((node: PositionedNode, pointer: ObjectMapPointer) => {
-    if (pointer.button !== 0) return;
+    if (pointer.button !== 0) {
+      return;
+    }
     nodeDragRef.current = {
       pointerId: pointer.pointerId,
       nodeId: node.id,
@@ -211,14 +220,18 @@ export const useObjectMapModel = (payload: NormalizedObjectMapPayload) => {
 
   const moveNodeDrag = useCallback((pointer: ObjectMapPointer) => {
     const drag = nodeDragRef.current;
-    if (!drag || drag.pointerId !== pointer.pointerId) return;
+    if (!drag || drag.pointerId !== pointer.pointerId) {
+      return;
+    }
     const dxScreen = pointer.clientX - drag.originClientX;
     const dyScreen = pointer.clientY - drag.originClientY;
     if (!drag.didDrag && Math.hypot(dxScreen, dyScreen) >= OBJECT_MAP_NODE_DRAG_THRESHOLD_PX) {
       drag.didDrag = true;
       setAutoFit(false);
     }
-    if (!drag.didDrag) return;
+    if (!drag.didDrag) {
+      return;
+    }
     const { originLayoutX, originLayoutY } = drag;
     const { layoutX, layoutY } = pointer;
     const dxLayout =
@@ -240,7 +253,9 @@ export const useObjectMapModel = (payload: NormalizedObjectMapPayload) => {
 
   const endNodeDrag = useCallback((pointer: ObjectMapPointer) => {
     const drag = nodeDragRef.current;
-    if (!drag || drag.pointerId !== pointer.pointerId) return;
+    if (!drag || drag.pointerId !== pointer.pointerId) {
+      return;
+    }
     nodeDragRef.current = null;
   }, []);
 

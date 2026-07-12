@@ -8,7 +8,7 @@
 import { withStableListKeys } from '@shared/utils/stableListKeys';
 import type React from 'react';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FetchContainerLogs, GetContainerLogsScopeContainers } from '@/core/backend-api';
 import { buildClusterScope } from '@/core/refresh/clusterScope';
@@ -1337,7 +1337,9 @@ describe('LogViewer active pod synchronisation', () => {
     });
 
     expect(document.body.textContent).toContain('Object Panel Logs Tab Settings');
-    expect(document.querySelector<HTMLInputElement>('input#log-api-timestamp-format')).toBeTruthy();
+    expect(
+      document.querySelector<HTMLInputElement>('input[id$="-log-api-timestamp-format"]')
+    ).toBeTruthy();
   });
 
   it('formats API timestamps in the local timezone when enabled', async () => {

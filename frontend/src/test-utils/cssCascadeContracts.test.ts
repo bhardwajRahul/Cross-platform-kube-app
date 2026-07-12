@@ -101,17 +101,75 @@ describe('strict CSS cascade contracts', () => {
     expect(computed.borderLeftWidth).toBe('3px');
   });
 
-  it('limits important declarations to documented external and global-state boundaries', () => {
+  it('resets native rule chrome on the sidebar resize separator', () => {
+    const style = installStyles(readProjectFile('src/ui/layout/Sidebar.css'));
+    style.dataset.cssContract = 'sidebar-resizer';
+    document.body.innerHTML = '<hr class="sidebar-resizer" />';
+
+    const resizer = document.querySelector<HTMLElement>('.sidebar-resizer');
+    const computed = window.getComputedStyle(resizer as HTMLElement);
+    expect(Number.parseFloat(computed.marginTop || '0')).toBe(0);
+    expect(computed.borderTopStyle).toBe('none');
+    expect(computed.borderRightStyle).toBe('none');
+    expect(computed.borderBottomStyle).toBe('none');
+    expect(computed.borderLeftStyle).toBe('none');
+  });
+
+  it('keeps namespace row spacing on the wrapper instead of doubling button margins', () => {
+    const style = installStyles(readProjectFile('src/ui/layout/Sidebar.css'));
+    style.dataset.cssContract = 'namespace-row-spacing';
+    document.body.innerHTML = `
+      <div class="namespace-items">
+        <div><div class="sidebar-item-row"><button class="sidebar-item">default</button></div></div>
+        <div><div class="sidebar-item-row"><button class="sidebar-item">kube-system</button></div></div>
+      </div>
+    `;
+
+    const row = document.querySelector<HTMLElement>('.sidebar-item-row');
+    const button = document.querySelector<HTMLButtonElement>('.sidebar-item');
+    expect(window.getComputedStyle(row as HTMLElement).marginTop).toBe('0.2rem');
+    expect(Number.parseFloat(window.getComputedStyle(button as HTMLButtonElement).marginTop)).toBe(
+      0
+    );
+  });
+
+  it('keeps sortable table headers uppercase over native button styling', () => {
+    const style = installStyles(
+      'button { text-transform: none; }',
+      readProjectFile('styles/components/gridtables.css')
+    );
+    style.dataset.cssContract = 'gridtable-sort-label';
+    document.body.innerHTML = `
+      <div class="gridtable-header">
+        <div class="grid-cell-header" data-sortable="true">
+          <span class="header-content"><button class="gridtable-sort-button">Kind</button></span>
+        </div>
+      </div>
+    `;
+
+    const button = document.querySelector<HTMLButtonElement>('.gridtable-sort-button');
+    expect(window.getComputedStyle(button as HTMLButtonElement).textTransform).toBe('uppercase');
+  });
+
+  it('keeps motion and interaction CSS free of important declarations', () => {
     const classifiedBoundaries = [
-      ['src/modules/object-panel/components/ObjectPanel/Shell/ShellTab.css', 3],
-      ['src/ui/dockable/DockablePanel.css', 6],
-      ['src/ui/layout/Sidebar.css', 2],
-      ['styles/utilities/motion.css', 3],
+      ['src/modules/object-panel/components/ObjectPanel/Shell/ShellTab.css', 0],
+      ['src/ui/dockable/DockablePanel.css', 0],
+      ['src/ui/layout/Sidebar.css', 0],
+      ['styles/utilities/motion.css', 0],
     ] as const;
 
     for (const [path, expectedCount] of classifiedBoundaries) {
       const declarations = readProjectFile(path).match(/!important\b/g) ?? [];
       expect(declarations, path).toHaveLength(expectedCount);
     }
+  });
+
+  it('gives the reduced-motion rule app-root specificity', () => {
+    const motion = readProjectFile('styles/utilities/motion.css');
+
+    expect(motion).toContain('#app *');
+    expect(motion).toContain('#app *::before');
+    expect(motion).toContain('#app *::after');
   });
 });

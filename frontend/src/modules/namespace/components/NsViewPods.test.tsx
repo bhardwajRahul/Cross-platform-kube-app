@@ -11,7 +11,7 @@ import type ConfirmationModal from '@shared/components/modals/ConfirmationModal'
 import type { GridTableProps } from '@shared/components/tables/GridTable';
 import type React from 'react';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eventBus } from '@/core/events';
 import type { PodMetricsInfo, PodSnapshotEntry } from '@/core/refresh/types';
@@ -114,7 +114,7 @@ vi.mock('@ui/favorites/FavToggle', () => ({
       id: 'favorite',
       icon: null,
       active: false,
-      onClick: () => {},
+      onClick: () => undefined,
       title: 'Save as favorite',
     },
     modal: null,
@@ -607,7 +607,7 @@ describe('NsViewPods', () => {
     }>(nameColumn.render(gridProps.data[0]), 'expected the pod name cell element');
 
     act(() => {
-      cell.props.onClick?.({ stopPropagation: () => {} });
+      cell.props.onClick?.({ stopPropagation: () => undefined });
     });
 
     expect(openWithObjectMock).toHaveBeenCalledWith(

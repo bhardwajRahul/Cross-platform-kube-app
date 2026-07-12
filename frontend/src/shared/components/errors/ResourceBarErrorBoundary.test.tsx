@@ -7,7 +7,7 @@
 
 import type React from 'react';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 import ResourceBarErrorBoundary from './ResourceBarErrorBoundary';
@@ -37,7 +37,7 @@ describe('ResourceBarErrorBoundary', () => {
     document.body.appendChild(container);
     root = ReactDOM.createRoot(container);
     consoleErrorSpy = vi.spyOn(console, 'error');
-    consoleErrorSpy.mockImplementation(() => {});
+    consoleErrorSpy.mockImplementation(() => undefined);
   });
 
   afterEach(() => {

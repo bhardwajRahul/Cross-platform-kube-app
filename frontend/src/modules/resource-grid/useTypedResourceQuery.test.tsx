@@ -1,7 +1,7 @@
 import type { SortConfig } from '@hooks/useTableSort';
 import { DEFAULT_GRID_TABLE_FILTER_STATE } from '@shared/components/tables/gridTableFilterState';
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 import type { TypedQueryPayload } from './typedResourceQueryScope';
@@ -821,7 +821,7 @@ describe('useTypedResourceQuery', () => {
         });
       }
       // cluster-b: keep the fetch in flight so no cluster-b rows ever arrive.
-      return new Promise(() => {});
+      return new Promise(() => undefined);
     });
 
     const committed: Array<{ clusterId: string; rows: TestRow[] }> = [];

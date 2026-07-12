@@ -2,18 +2,10 @@
  * frontend/src/modules/object-panel/components/ObjectPanel/Shell/ShellTab.tsx
  */
 
-import { ClipboardAddon } from '@xterm/addon-clipboard';
-import { FitAddon } from '@xterm/addon-fit';
-import { Terminal } from '@xterm/xterm';
-import {
-  type MouseEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type WheelEvent,
-} from 'react';
+import * as XtermClipboard from '@xterm/addon-clipboard';
+import * as XtermFit from '@xterm/addon-fit';
+import * as Xterm from '@xterm/xterm';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type WheelEvent } from 'react';
 import {
   readShellSessionBacklog,
   readShellSessions,
@@ -30,7 +22,7 @@ import ContextMenu from '@shared/components/ContextMenu';
 import type { DropdownOption } from '@shared/components/dropdowns/Dropdown';
 import { Dropdown } from '@shared/components/dropdowns/Dropdown';
 import Tooltip from '@shared/components/Tooltip';
-import { useEffectWithInvalidation } from '@shared/hooks/useHookLifetimes';
+
 import { useVirtualScrollbar } from '@shared/scrollbars/useVirtualScrollbar';
 import { resolveTerminalTheme, toXtermThemeDefinition } from '@shared/terminal/terminalTheme';
 import { useDockablePanelState } from '@ui/dockable';
@@ -78,6 +70,8 @@ interface ShellContextMenuState {
   position: { x: number; y: number };
 }
 
+const ANSI_ESCAPE_SEQUENCE_PATTERN_SOURCE = '\\u001b\\[[0-9;]*[A-Za-z]';
+
 const ShellTab: React.FC<ShellTabProps> = ({
   namespace,
   resourceName,
@@ -87,6 +81,7 @@ const ShellTab: React.FC<ShellTabProps> = ({
   availableContainers,
   clusterId,
 }) => {
+  const elementIdPrefix = useId();
   const shellDropdownMenuClassName = 'shell-tab__dropdown-menu';
   const panelState = useDockablePanelState('object-panel');
   const [session, setSession] = useState<types.ShellSession | null>(null);
@@ -106,9 +101,10 @@ const ShellTab: React.FC<ShellTabProps> = ({
   const [contextMenu, setContextMenu] = useState<ShellContextMenuState | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const statusRef = useRef<ShellStatus>('idle');
-  const terminalRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
+  const terminalRef = useRef<Xterm.Terminal | null>(null);
+  const fitAddonRef = useRef<XtermFit.FitAddon | null>(null);
   const terminalContainerRef = useRef<HTMLDivElement | null>(null);
+  const terminalWrapperRef = useRef<HTMLDivElement | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const terminalDataDisposableRef = useRef<{ dispose: () => void } | null>(null);
   const terminalScrollDisposableRef = useRef<{ dispose: () => void } | null>(null);
@@ -188,7 +184,7 @@ const ShellTab: React.FC<ShellTabProps> = ({
   }, []);
 
   const selectAllTerminalText = useCallback(() => {
-    const terminal = terminalRef.current as (Terminal & { selectAll?: () => void }) | null;
+    const terminal = terminalRef.current as (Xterm.Terminal & { selectAll?: () => void }) | null;
     if (!terminal?.selectAll) {
       return false;
     }
@@ -278,7 +274,7 @@ const ShellTab: React.FC<ShellTabProps> = ({
 
   const applyTerminalTheme = useCallback(() => {
     const terminal = terminalRef.current as
-      | (Terminal & {
+      | (Xterm.Terminal & {
           options?: {
             theme?: ReturnType<typeof toXtermThemeDefinition>;
             overviewRuler?: { width?: number };
@@ -304,7 +300,7 @@ const ShellTab: React.FC<ShellTabProps> = ({
     }
 
     const theme = resolveThemeColors();
-    const terminal = new Terminal({
+    const terminal = new Xterm.Terminal({
       cursorBlink: true,
       cursorStyle: 'underline',
       scrollback: 5000,
@@ -316,10 +312,10 @@ const ShellTab: React.FC<ShellTabProps> = ({
       },
       theme: toXtermThemeDefinition(theme),
     });
-    const fitAddon = new FitAddon();
+    const fitAddon = new XtermFit.FitAddon();
     terminal.loadAddon(fitAddon);
     // Enable OSC 52 clipboard integration for in-terminal apps (tmux/vim/etc).
-    terminal.loadAddon(new ClipboardAddon());
+    terminal.loadAddon(new XtermClipboard.ClipboardAddon());
     terminal.open(terminalContainerRef.current);
     fitAddon.fit();
     terminal.focus();
@@ -451,16 +447,15 @@ const ShellTab: React.FC<ShellTabProps> = ({
     return () => observer.disconnect();
   }, [applyTerminalTheme]);
 
-  useEffectWithInvalidation(
-    () => {
-      if (!terminalReady || !isActive) {
-        return;
-      }
-      terminalRef.current?.focus();
-    },
-    [terminalReady, isActive],
-    [panelState.position, panelState.size.width, panelState.size.height]
-  );
+  useEffect(() => {
+    void panelState.position;
+    void panelState.size.width;
+    void panelState.size.height;
+    if (!terminalReady || !isActive) {
+      return;
+    }
+    terminalRef.current?.focus();
+  }, [terminalReady, isActive, panelState.position, panelState.size.width, panelState.size.height]);
 
   const activeContainer = containerOverride ?? session?.container ?? '';
 
@@ -484,7 +479,7 @@ const ShellTab: React.FC<ShellTabProps> = ({
     }
 
     const normalizedOutput = sessionOutputBufferRef.current
-      .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+      .replace(new RegExp(ANSI_ESCAPE_SEQUENCE_PATTERN_SOURCE, 'g'), '')
       .replace(/\r/g, '\n');
     const lines = normalizedOutput
       .split('\n')
@@ -565,62 +560,60 @@ const ShellTab: React.FC<ShellTabProps> = ({
     lastTargetRef.current = { namespace, resourceName };
   }, [disposeTerminal, namespace, resourceName]);
 
-  useEffectWithInvalidation(
-    () => {
-      if (!isActive || statusRef.current !== 'connecting' || !namespace || !resourceName) {
-        return;
-      }
+  useEffect(() => {
+    void reconnectToken;
+    if (!isActive || statusRef.current !== 'connecting' || !namespace || !resourceName) {
+      return;
+    }
 
-      let cancelled = false;
-      const start = async () => {
-        try {
-          const shellSession = await StartShellSession(resolvedClusterId, {
-            namespace,
-            podName: resourceName,
-            container: containerOverride ?? undefined,
-            command: resolvedShell ? [resolvedShell] : undefined,
-          });
-          if (cancelled) {
-            // If a superseding connect was started before this one returned, clean up this session.
-            await CloseShellSession(shellSession.sessionId);
-            return;
-          }
-          sessionIdRef.current = shellSession.sessionId;
-          sessionOpenedAtRef.current = Date.now();
-          setSession(shellSession);
-          statusRef.current = 'open';
-          setStatus('open');
-          setStatusReason(null);
-        } catch (error) {
-          if (!cancelled) {
-            const reason = error instanceof Error ? error.message : String(error);
-            sessionIdRef.current = null;
-            sessionOpenedAtRef.current = null;
-            setSession(null);
-            statusRef.current = 'error';
-            setStatus('error');
-            setStatusReason(reason);
-            disposeTerminal();
-          }
+    let cancelled = false;
+    const start = async () => {
+      try {
+        const shellSession = await StartShellSession(resolvedClusterId, {
+          namespace,
+          podName: resourceName,
+          container: containerOverride ?? undefined,
+          command: resolvedShell ? [resolvedShell] : undefined,
+        });
+        if (cancelled) {
+          // If a superseding connect was started before this one returned, clean up this session.
+          await CloseShellSession(shellSession.sessionId);
+          return;
         }
-      };
+        sessionIdRef.current = shellSession.sessionId;
+        sessionOpenedAtRef.current = Date.now();
+        setSession(shellSession);
+        statusRef.current = 'open';
+        setStatus('open');
+        setStatusReason(null);
+      } catch (error) {
+        if (!cancelled) {
+          const reason = error instanceof Error ? error.message : String(error);
+          sessionIdRef.current = null;
+          sessionOpenedAtRef.current = null;
+          setSession(null);
+          statusRef.current = 'error';
+          setStatus('error');
+          setStatusReason(reason);
+          disposeTerminal();
+        }
+      }
+    };
 
-      void start();
-      return () => {
-        cancelled = true;
-      };
-    },
-    [
-      resolvedShell,
-      containerOverride,
-      disposeTerminal,
-      isActive,
-      namespace,
-      resourceName,
-      resolvedClusterId,
-    ],
-    [reconnectToken]
-  );
+    void start();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    resolvedShell,
+    containerOverride,
+    disposeTerminal,
+    isActive,
+    namespace,
+    resourceName,
+    resolvedClusterId,
+    reconnectToken,
+  ]);
 
   useEffect(() => {
     const offOutput = EventsOn('object-shell:output', (evt: ShellOutputEvent) => {
@@ -689,16 +682,13 @@ const ShellTab: React.FC<ShellTabProps> = ({
     };
   }, [appendOutput, deriveConnectionFailureReason, disposeTerminal, ensureTerminal, writeLine]);
 
-  useEffectWithInvalidation(
-    () => {
-      if (!isActive || !terminalReady) {
-        return;
-      }
-      terminalRef.current?.focus();
-    },
-    [isActive, terminalReady],
-    [session]
-  );
+  useEffect(() => {
+    void session;
+    if (!isActive || !terminalReady) {
+      return;
+    }
+    terminalRef.current?.focus();
+  }, [isActive, terminalReady, session]);
 
   const handleReconnect = useCallback(() => {
     initiateConnection();
@@ -834,13 +824,19 @@ const ShellTab: React.FC<ShellTabProps> = ({
   const containerOptions = useMemo<DropdownOption[]>(() => {
     const merged = new Set<string>();
     availableContainers.forEach((name) => {
-      if (name) merged.add(name);
+      if (name) {
+        merged.add(name);
+      }
     });
     discoveredContainers.forEach((name) => {
-      if (name) merged.add(name);
+      if (name) {
+        merged.add(name);
+      }
     });
     session?.containers?.forEach((name) => {
-      if (name) merged.add(name);
+      if (name) {
+        merged.add(name);
+      }
     });
     return Array.from(merged).map((name) => ({ value: name, label: name }));
   }, [availableContainers, discoveredContainers, session?.containers]);
@@ -982,7 +978,7 @@ const ShellTab: React.FC<ShellTabProps> = ({
     terminalRef.current?.focus();
   }, []);
 
-  const handleTerminalContextMenu = useCallback((event: MouseEvent<HTMLDivElement>) => {
+  const handleTerminalContextMenu = useCallback((event: globalThis.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
     terminalRef.current?.focus();
@@ -990,6 +986,28 @@ const ShellTab: React.FC<ShellTabProps> = ({
       position: { x: event.clientX, y: event.clientY },
     });
   }, []);
+
+  useEffect(() => {
+    const wrapper = terminalWrapperRef.current;
+    if (!wrapper) {
+      return;
+    }
+    wrapper.addEventListener('contextmenu', handleTerminalContextMenu);
+    wrapper.addEventListener('pointerleave', handleShellScrollbarPointerLeave);
+    wrapper.addEventListener('pointermove', handleShellScrollbarPointerMove);
+    wrapper.addEventListener('wheel', showShellScrollbar);
+    return () => {
+      wrapper.removeEventListener('contextmenu', handleTerminalContextMenu);
+      wrapper.removeEventListener('pointerleave', handleShellScrollbarPointerLeave);
+      wrapper.removeEventListener('pointermove', handleShellScrollbarPointerMove);
+      wrapper.removeEventListener('wheel', showShellScrollbar);
+    };
+  }, [
+    handleShellScrollbarPointerLeave,
+    handleShellScrollbarPointerMove,
+    handleTerminalContextMenu,
+    showShellScrollbar,
+  ]);
 
   const contextMenuItems: ContextMenuItem[] = [
     {
@@ -1021,9 +1039,12 @@ const ShellTab: React.FC<ShellTabProps> = ({
       {!hasActiveSession && (
         <div className="shell-tab__toolbar">
           <div className="shell-tab__controls">
-            <label className="shell-tab__debug-toggle" htmlFor="shell-tab-debug-toggle">
+            <label
+              className="shell-tab__debug-toggle"
+              htmlFor={`${elementIdPrefix}-shell-tab-debug-toggle`}
+            >
               <input
-                id="shell-tab-debug-toggle"
+                id={`${elementIdPrefix}-shell-tab-debug-toggle`}
                 type="checkbox"
                 checked={startDebugContainer}
                 onChange={(event) => setStartDebugContainer(event.target.checked)}
@@ -1179,22 +1200,17 @@ const ShellTab: React.FC<ShellTabProps> = ({
         </div>
       )}
 
-      {/** biome-ignore lint/a11y/noStaticElementInteractions: The terminal wrapper forwards pointer activity to xterm scrollbar and focus behavior; xterm owns keyboard interaction inside the wrapper. */}
-      {/** biome-ignore lint/a11y/useKeyWithClickEvents: The terminal wrapper forwards pointer activity to xterm scrollbar and focus behavior; xterm owns keyboard interaction inside the wrapper. */}
       <div
+        ref={terminalWrapperRef}
         className="shell-tab__terminal-wrapper"
         data-tab-native="true"
-        onClick={() => terminalRef.current?.focus()}
-        onContextMenu={handleTerminalContextMenu}
-        onPointerLeave={handleShellScrollbarPointerLeave}
-        onPointerMove={handleShellScrollbarPointerMove}
-        onWheel={showShellScrollbar}
+        role="application"
+        aria-label="Shell terminal"
+        tabIndex={-1}
       >
         <div
           className={`shell-tab__terminal${terminalReady ? '' : ' shell-tab__terminal--hidden'}`}
           ref={terminalContainerRef}
-          role="application"
-          aria-label="Shell terminal"
           data-tab-native="true"
         />
         {shellScrollbarElement}

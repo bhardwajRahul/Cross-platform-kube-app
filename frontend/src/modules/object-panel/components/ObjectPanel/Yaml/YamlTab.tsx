@@ -8,6 +8,7 @@
 
 import ClusterDataPausedState from '@shared/components/ClusterDataPausedState';
 import IconBar, { type IconBarItem } from '@shared/components/IconBar/IconBar';
+import { WrapTextIcon } from '@shared/components/icons/LogIcons';
 import { CloseIcon } from '@shared/components/icons/SharedIcons';
 import LoadingSpinner from '@shared/components/LoadingSpinner';
 import ConfirmationModal from '@shared/components/modals/ConfirmationModal';
@@ -129,6 +130,7 @@ const YamlTab: React.FC<YamlTabProps> = ({
 }) => {
   const { isPaused, isManualRefreshActive } = useAutoRefreshLoadingState();
   const [showManagedFields, setShowManagedFields] = useState(false);
+  const [wrapLines, setWrapLines] = useState(true);
   const [expandedDiffs, setExpandedDiffs] = useState<Record<string, boolean>>({});
   const yamlEditorRef = useRef<YamlEditorHandle>(null);
 
@@ -198,7 +200,7 @@ const YamlTab: React.FC<YamlTabProps> = ({
       const obj = doc.toJSON();
 
       if (!showManagedFields && obj && obj.metadata && obj.metadata.managedFields) {
-        delete obj.metadata.managedFields;
+        obj.metadata.managedFields = undefined;
       }
 
       return YAML.stringify(obj, YAML_STRINGIFY_OPTIONS);
@@ -235,6 +237,10 @@ const YamlTab: React.FC<YamlTabProps> = ({
     setShowManagedFields((prev) => !prev);
   }, []);
 
+  const handleToggleLineWrapping = useCallback(() => {
+    setWrapLines((current) => !current);
+  }, []);
+
   const handleEnterEditClick = useCallback(() => {
     setExpandedDiffs({});
     handleEnterEdit();
@@ -255,7 +261,9 @@ const YamlTab: React.FC<YamlTabProps> = ({
   useShortcut({
     key: 'm',
     handler: useCallback(() => {
-      if (!isActive || isEditing) return false;
+      if (!isActive || isEditing) {
+        return false;
+      }
       setShowManagedFields((prev) => !prev);
       return true;
     }, [isActive, isEditing]),
@@ -334,6 +342,15 @@ const YamlTab: React.FC<YamlTabProps> = ({
             : 'Show managedFields',
         disabled: isEditing,
       },
+      {
+        type: 'toggle' as const,
+        id: 'wrap-lines',
+        icon: <WrapTextIcon width={20} height={20} />,
+        active: wrapLines,
+        onClick: handleToggleLineWrapping,
+        title: wrapLines ? 'Disable YAML line wrapping' : 'Enable YAML line wrapping',
+        ariaLabel: 'Wrap YAML lines',
+      },
       ...(isEditing
         ? [
             {
@@ -387,10 +404,12 @@ const YamlTab: React.FC<YamlTabProps> = ({
       handleCancelClick,
       handleEnterEditClick,
       handleSaveClick,
+      handleToggleLineWrapping,
       handleToggleManagedFields,
       isEditing,
       isSaving,
       showManagedFields,
+      wrapLines,
     ]
   );
 
@@ -537,6 +556,7 @@ const YamlTab: React.FC<YamlTabProps> = ({
           shortcutPriority={30}
           ariaLabel="Object YAML editor"
           showSearchOptions
+          lineWrapping={wrapLines}
           protectedRangeResolver={
             isEditing ? (value) => resolveProtectedYamlRanges(value, 'edit') : undefined
           }

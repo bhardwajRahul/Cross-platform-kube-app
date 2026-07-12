@@ -8,7 +8,7 @@
 import type React from 'react';
 import { act } from 'react';
 import * as ReactDOM from 'react-dom';
-import ReactDOMClient from 'react-dom/client';
+import * as ReactDOMClient from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-dom', async () => {
@@ -226,7 +226,7 @@ describe('ResourceBar', () => {
       compactContainer.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       await Promise.resolve();
     });
-    await act(async () => {});
+    await act(async () => undefined);
 
     expect(container.querySelector('.resource-bar-overcommit')).toBeTruthy();
     await act(async () => {

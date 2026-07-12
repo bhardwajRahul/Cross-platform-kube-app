@@ -39,10 +39,10 @@ interface TabDragContextValue {
 
 export const TabDragContext = createContext<TabDragContextValue>({
   currentDrag: null,
-  beginDrag: () => {},
-  endDrag: () => {},
-  registerTarget: () => {},
-  unregisterTarget: () => {},
+  beginDrag: () => undefined,
+  endDrag: () => undefined,
+  registerTarget: () => undefined,
+  unregisterTarget: () => undefined,
 });
 
 export interface TabDragProviderProps {
@@ -82,11 +82,17 @@ export function TabDragProvider({ children, onTearOff }: TabDragProviderProps) {
   // no drop target consumed the drag AND the cursor is outside the
   // window bounds. Stubbed for now — no production consumer wires it.
   useEffect(() => {
-    if (!onTearOff) return;
+    if (!onTearOff) {
+      return;
+    }
     const handler = (event: DragEvent) => {
       const payload = lastDragRef.current;
-      if (!payload) return;
-      if (event.dataTransfer && event.dataTransfer.dropEffect !== 'none') return;
+      if (!payload) {
+        return;
+      }
+      if (event.dataTransfer && event.dataTransfer.dropEffect !== 'none') {
+        return;
+      }
       const { clientX, clientY } = event;
       if (
         clientX < 0 ||

@@ -46,6 +46,14 @@ Surface kinds include:
 - Modals trap focus and own `Escape` unless explicitly delegated.
 - Command palette owns its local navigation while open.
 - Dropdowns and menus own arrows, `Enter`, `Space`, and `Escape` while active.
+- Comboboxes keep DOM focus on the trigger or search field and expose the
+  highlighted option through `aria-activedescendant`; popup options are not
+  additional tab stops.
+- Virtualized tables keep DOM focus on their native table element while shared
+  state marks the active row, allowing native table semantics and row recycling
+  without moving focus to an element that can unmount.
+- Adjustable separators support the appropriate arrow keys and Home/End while
+  publishing their current, minimum, and maximum values.
 - Panels and table regions own focused keyboard behavior without blocking the
   whole app.
 - Editors may own editor-specific keys; app-level `Escape` wins unless the

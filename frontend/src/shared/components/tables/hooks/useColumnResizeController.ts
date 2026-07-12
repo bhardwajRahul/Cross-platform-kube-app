@@ -21,6 +21,8 @@ interface ResizeState {
   leftStartWidth: number;
 }
 
+const KEYBOARD_RESIZE_STEP = 16;
+
 export interface ColumnResizeControllerOptions<T> {
   columns: GridColumnDefinition<T>[];
   renderedColumns: GridColumnDefinition<T>[];
@@ -40,6 +42,7 @@ export interface ColumnResizeControllerOptions<T> {
 
 export interface ColumnResizeController {
   handleResizeStart: (event: React.MouseEvent, leftKey: string, rightKey: string) => void;
+  handleResizeKeyDown: (event: React.KeyboardEvent, columnKey: string) => void;
   autoSizeColumn: (columnKey: string) => void;
   resetManualResizes: () => void;
 }
@@ -99,6 +102,56 @@ export function useColumnResizeController<T>({
     [columnWidths, enableColumnResizing, getColumnMinWidth, isFixedColumnKey, onManualResize]
   );
 
+  const handleResizeKeyDown = useCallback(
+    (event: React.KeyboardEvent, columnKey: string) => {
+      if (!enableColumnResizing || isFixedColumnKey(columnKey)) {
+        return;
+      }
+      const column = columnsRef.current.find((candidate) => candidate.key === columnKey);
+      if (!column) {
+        return;
+      }
+
+      const minimum = getColumnMinWidth(column);
+      const maximum = getColumnMaxWidth(column);
+      const current = columnWidths[columnKey] ?? minimum;
+      let nextWidth: number;
+      switch (event.key) {
+        case 'ArrowLeft':
+          nextWidth = current - KEYBOARD_RESIZE_STEP;
+          break;
+        case 'ArrowRight':
+          nextWidth = current + KEYBOARD_RESIZE_STEP;
+          break;
+        case 'Home':
+          nextWidth = minimum;
+          break;
+        case 'End':
+          nextWidth = maximum;
+          break;
+        default:
+          return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      const clampedWidth = Math.min(Math.max(nextWidth, minimum), maximum);
+      setColumnWidths((previous) => ({ ...previous, [columnKey]: clampedWidth }));
+      manuallyResizedColumnsRef.current.add(columnKey);
+      onManualResize?.({ type: 'dragEnd', columns: [columnKey] });
+    },
+    [
+      columnWidths,
+      enableColumnResizing,
+      getColumnMaxWidth,
+      getColumnMinWidth,
+      isFixedColumnKey,
+      manuallyResizedColumnsRef,
+      onManualResize,
+      setColumnWidths,
+    ]
+  );
+
   useEffect(() => {
     if (!enableColumnResizing) {
       return;
@@ -131,11 +184,11 @@ export function useColumnResizeController<T>({
 
       pendingResizeRef.current = nextLeft;
 
-      if (resizeRafRef.current == null) {
+      if (resizeRafRef.current === null || resizeRafRef.current === undefined) {
         const applyResize = () => {
           resizeRafRef.current = null;
           const pending = pendingResizeRef.current;
-          if (pending == null) {
+          if (pending === null || pending === undefined) {
             return;
           }
           pendingResizeRef.current = null;
@@ -155,12 +208,16 @@ export function useColumnResizeController<T>({
     };
 
     const handleMouseUp = () => {
-      if (resizeRafRef.current != null && typeof window !== 'undefined') {
+      if (
+        resizeRafRef.current !== null &&
+        resizeRafRef.current !== undefined &&
+        typeof window !== 'undefined'
+      ) {
         window.cancelAnimationFrame(resizeRafRef.current);
         resizeRafRef.current = null;
       }
       const pending = pendingResizeRef.current;
-      if (pending != null) {
+      if (pending !== null && pending !== undefined) {
         pendingResizeRef.current = null;
         setColumnWidths((prev) => ({
           ...prev,
@@ -187,7 +244,11 @@ export function useColumnResizeController<T>({
       document.removeEventListener('mouseup', handleMouseUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      if (resizeRafRef.current != null && typeof window !== 'undefined') {
+      if (
+        resizeRafRef.current !== null &&
+        resizeRafRef.current !== undefined &&
+        typeof window !== 'undefined'
+      ) {
         window.cancelAnimationFrame(resizeRafRef.current);
         resizeRafRef.current = null;
       }
@@ -224,7 +285,7 @@ export function useColumnResizeController<T>({
       const configuredMaxWidth = getColumnMaxWidth(column);
       const autoSizeMaxWidth = parseWidthInputToNumber(column.autoSizeMaxWidth);
       const maxWidth =
-        autoSizeMaxWidth != null
+        autoSizeMaxWidth !== null && autoSizeMaxWidth !== undefined
           ? Math.min(configuredMaxWidth, autoSizeMaxWidth)
           : configuredMaxWidth;
       const clampedWidth = Math.max(minWidth, Math.min(maxWidth, measuredWidth));
@@ -265,6 +326,7 @@ export function useColumnResizeController<T>({
 
   return {
     handleResizeStart,
+    handleResizeKeyDown,
     autoSizeColumn,
     resetManualResizes,
   };

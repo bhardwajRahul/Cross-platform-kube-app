@@ -4,7 +4,7 @@
 
 import type * as React from 'react';
 import { act, useContext } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 
@@ -310,7 +310,9 @@ describe('useTabDragSourceFactory', () => {
         <div>
           {tabs.map((tab) => {
             const props = makeDragSource({ kind: 'cluster-tab', clusterId: tab.id });
-            if (props.onDragStart) dragStartCallbacks.push(props.onDragStart);
+            if (props.onDragStart) {
+              dragStartCallbacks.push(props.onDragStart);
+            }
             return (
               <div key={tab.id} data-testid={`tab-${tab.id}`} draggable={props.draggable}>
                 {tab.label}
@@ -365,7 +367,7 @@ describe('useTabDropTarget', () => {
     function Probe() {
       captured = useTabDropTarget({
         accepts: ['cluster-tab'],
-        onDrop: () => {},
+        onDrop: () => undefined,
       });
       return (
         <div ref={captured.ref} data-testid="target">
@@ -446,7 +448,9 @@ describe('useTabDropTarget', () => {
     expect(onDrop).toHaveBeenCalledTimes(1);
     const [payload] = onDrop.mock.calls[0];
     expect(payload.kind).toBe('cluster-tab');
-    if (payload.kind !== 'cluster-tab') throw new Error('expected a cluster-tab drop payload');
+    if (payload.kind !== 'cluster-tab') {
+      throw new Error('expected a cluster-tab drop payload');
+    }
     expect(payload.clusterId).toBe('c1');
   });
 
@@ -539,7 +543,9 @@ describe('useTabDropTarget', () => {
     expect(onDrop).toHaveBeenCalledTimes(1);
     const [payload] = onDrop.mock.calls[0];
     expect(payload.kind).toBe('cluster-tab');
-    if (payload.kind !== 'cluster-tab') throw new Error('expected a cluster-tab drop payload');
+    if (payload.kind !== 'cluster-tab') {
+      throw new Error('expected a cluster-tab drop payload');
+    }
     expect(payload.clusterId).toBe('c1');
   });
 
@@ -659,7 +665,7 @@ describe('useTabDropTarget', () => {
     function Probe() {
       captured = useTabDropTarget({
         accepts: ['cluster-tab'],
-        onDrop: () => {},
+        onDrop: () => undefined,
       });
       return (
         <div ref={captured.ref} data-testid="target" data-drag-over={captured.isDragOver}>

@@ -8,7 +8,7 @@
 import { ALL_NAMESPACES_SCOPE } from '@modules/namespace/constants';
 import { KeyboardProvider } from '@ui/shortcuts';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eventBus } from '@/core/events';
 import {
@@ -112,7 +112,7 @@ vi.mock('@core/contexts/ViewStateContext', () => ({
 describe('Sidebar', () => {
   beforeAll(() => {
     if (!Element.prototype.scrollIntoView) {
-      Element.prototype.scrollIntoView = () => {};
+      Element.prototype.scrollIntoView = () => undefined;
     }
   });
 
@@ -121,7 +121,7 @@ describe('Sidebar', () => {
       Element.prototype.scrollIntoView = nativeScrollIntoView;
     } else {
       // @ts-expect-error cleanup
-      delete Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = undefined;
     }
   });
   let container: HTMLDivElement | null;
@@ -148,6 +148,31 @@ describe('Sidebar', () => {
       );
     });
   };
+
+  it('exposes navigation items and disclosure state with native buttons', () => {
+    renderSidebar();
+
+    const host = requireValue(container, 'expected Sidebar test container');
+    const overview = host.querySelector<HTMLElement>('[data-sidebar-target-kind="overview"]');
+    const resources = host.querySelector<HTMLElement>(
+      '[data-sidebar-target-kind="cluster-toggle"]'
+    );
+    const namespace = host.querySelector<HTMLElement>(
+      '[data-sidebar-target-kind="namespace-toggle"]'
+    );
+
+    expect(overview?.tagName).toBe('BUTTON');
+    expect(overview?.getAttribute('aria-current')).toBe('page');
+    expect(resources?.tagName).toBe('BUTTON');
+    expect(resources?.getAttribute('aria-expanded')).toBe('true');
+    expect(resources?.getAttribute('aria-controls')).toBeTruthy();
+    expect(namespace?.tagName).toBe('BUTTON');
+    expect(namespace?.getAttribute('aria-expanded')).toBe('false');
+    expect(namespace?.getAttribute('aria-controls')).toBeTruthy();
+
+    act(() => resources?.click());
+    expect(resources?.getAttribute('aria-expanded')).toBe('false');
+  });
 
   beforeEach(() => {
     container = document.createElement('div');
@@ -431,7 +456,7 @@ describe('Sidebar', () => {
       Element.prototype.scrollIntoView = originalScroll;
     } else {
       // @ts-expect-error cleanup
-      delete Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = undefined;
     }
     document.querySelector = originalQuerySelector;
   });

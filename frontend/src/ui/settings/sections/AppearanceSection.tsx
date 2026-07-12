@@ -34,6 +34,7 @@ import {
   type RefObject,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -56,6 +57,24 @@ import { changeAppearanceMode } from '@/utils/appearanceMode';
 import { useThemes } from './useThemes';
 
 const DEFAULT_THEME_ID = 'default';
+
+export function reorderThemeByOffset(
+  ids: string[],
+  themeId: string,
+  offset: -1 | 1
+): string[] | null {
+  const fromIndex = ids.indexOf(themeId);
+  const defaultIndex = ids.indexOf(DEFAULT_THEME_ID);
+  const lastCustomIndex = defaultIndex === -1 ? ids.length - 1 : defaultIndex - 1;
+  const toIndex = fromIndex + offset;
+  if (themeId === DEFAULT_THEME_ID || fromIndex < 0 || toIndex < 0 || toIndex > lastCustomIndex) {
+    return null;
+  }
+  const reordered = [...ids];
+  reordered.splice(fromIndex, 1);
+  reordered.splice(toIndex, 0, themeId);
+  return reordered;
+}
 
 const isDefaultTheme = (theme: types.Theme) => theme.id === DEFAULT_THEME_ID;
 
@@ -154,6 +173,8 @@ function PaletteControls({
   onSaturationReset: () => void;
   onBrightnessReset: () => void;
 }) {
+  const elementIdPrefix = useId();
+
   return (
     <div className="settings-row">
       <div className="settings-row-label">
@@ -165,10 +186,10 @@ function PaletteControls({
       </div>
       <div className="settings-row-control">
         <div className="palette-tint-controls">
-          <label htmlFor="palette-hue">Hue</label>
+          <label htmlFor={`${elementIdPrefix}-palette-hue`}>Hue</label>
           <input
             type="range"
-            id="palette-hue"
+            id={`${elementIdPrefix}-palette-hue`}
             className="palette-slider palette-slider-hue"
             min={paletteBounds.hue.min}
             max={paletteBounds.hue.max}
@@ -187,10 +208,10 @@ function PaletteControls({
             ↺
           </button>
 
-          <label htmlFor="palette-saturation">Saturation</label>
+          <label htmlFor={`${elementIdPrefix}-palette-saturation`}>Saturation</label>
           <input
             type="range"
-            id="palette-saturation"
+            id={`${elementIdPrefix}-palette-saturation`}
             className="palette-slider palette-slider-saturation"
             min={paletteBounds.saturation.min}
             max={paletteBounds.saturation.max}
@@ -209,10 +230,10 @@ function PaletteControls({
             ↺
           </button>
 
-          <label htmlFor="palette-brightness">Brightness</label>
+          <label htmlFor={`${elementIdPrefix}-palette-brightness`}>Brightness</label>
           <input
             type="range"
-            id="palette-brightness"
+            id={`${elementIdPrefix}-palette-brightness`}
             className="palette-slider palette-slider-brightness"
             min={paletteBounds.brightness.min}
             max={paletteBounds.brightness.max}
@@ -292,7 +313,9 @@ function ColorControl({
                 } else if (e.key === 'Escape') {
                   e.preventDefault();
                   onHexCancel();
-                } else e.stopPropagation();
+                } else {
+                  e.stopPropagation();
+                }
               }}
               onBlur={onHexCancel}
               maxLength={7}
@@ -323,6 +346,7 @@ function ColorControl({
 }
 
 function AppearanceSection() {
+  const elementIdPrefix = useId();
   const { mode, resolvedMode } = useAppearanceMode();
 
   // Palette tint state for hue/saturation/brightness sliders.
@@ -369,6 +393,7 @@ function AppearanceSection() {
   const [deleteConfirmThemeId, setDeleteConfirmThemeId] = useState<string | null>(null);
   const [hasUnsavedDefaultThemeChanges, setHasUnsavedDefaultThemeChanges] = useState(false);
   const [themePatternError, setThemePatternError] = useState<string | null>(null);
+  const newThemeNameInputRef = useRef<HTMLInputElement>(null);
   const appearanceModeMetadata = getPreferenceMetadata('appearanceMode');
   const enabledAppearanceModeOptions = appearanceModeOptions.filter(
     (option) =>
@@ -410,6 +435,12 @@ function AppearanceSection() {
       paletteInputRef.current.select();
     }
   }, [editingPaletteField]);
+
+  useEffect(() => {
+    if (editingThemeId === 'new') {
+      newThemeNameInputRef.current?.focus();
+    }
+  }, [editingThemeId]);
 
   // Clean up pending preference commits on unmount.
   useEffect(() => {
@@ -539,7 +570,9 @@ function AppearanceSection() {
 
   const handleAccentHexCommit = () => {
     let trimmed = accentHexDraft.trim().toLowerCase();
-    if (!trimmed.startsWith('#')) trimmed = `#${trimmed}`;
+    if (!trimmed.startsWith('#')) {
+      trimmed = `#${trimmed}`;
+    }
     if (/^#[0-9a-f]{3}$/.test(trimmed)) {
       trimmed = `#${trimmed[1]}${trimmed[1]}${trimmed[2]}${trimmed[2]}${trimmed[3]}${trimmed[3]}`;
     }
@@ -582,7 +615,9 @@ function AppearanceSection() {
 
   const handleLinkHexCommit = () => {
     let trimmed = linkHexDraft.trim().toLowerCase();
-    if (!trimmed.startsWith('#')) trimmed = `#${trimmed}`;
+    if (!trimmed.startsWith('#')) {
+      trimmed = `#${trimmed}`;
+    }
     if (/^#[0-9a-f]{3}$/.test(trimmed)) {
       trimmed = `#${trimmed[1]}${trimmed[1]}${trimmed[2]}${trimmed[2]}${trimmed[3]}${trimmed[3]}`;
     }
@@ -602,7 +637,9 @@ function AppearanceSection() {
   };
 
   const handlePaletteValueCommit = () => {
-    if (!editingPaletteField) return;
+    if (!editingPaletteField) {
+      return;
+    }
     const parsed = parseInt(paletteDraft, 10);
     if (Number.isNaN(parsed)) {
       setEditingPaletteField(null);
@@ -651,11 +688,17 @@ function AppearanceSection() {
 
   // Commit the active theme's edits (palette + name/pattern from themeDraft).
   const handleSaveActiveTheme = async () => {
-    if (!activeThemeId) return;
+    if (!activeThemeId) {
+      return;
+    }
     const existing = themes.find((t) => t.id === activeThemeId);
-    if (!existing) return;
+    if (!existing) {
+      return;
+    }
     const trimmedName = themeDraft.name.trim();
-    if (!trimmedName) return; // Name is required.
+    if (!trimmedName) {
+      return; // Name is required.
+    }
     const isDefault = existing.id === DEFAULT_THEME_ID;
     const clusterPattern = isDefault ? '' : themeDraft.clusterPattern.trim();
 
@@ -681,7 +724,9 @@ function AppearanceSection() {
 
   // Cancel: re-apply the saved theme values and exit edit mode.
   const handleCancelActiveTheme = async () => {
-    if (!activeThemeId) return;
+    if (!activeThemeId) {
+      return;
+    }
     await handleApplyTheme(activeThemeId);
     setThemePatternError(null);
     setActiveThemeId(null);
@@ -691,7 +736,9 @@ function AppearanceSection() {
   };
 
   const handleThemeSave = async () => {
-    if (!themeDraft.name.trim()) return;
+    if (!themeDraft.name.trim()) {
+      return;
+    }
     const clusterPattern = themeDraft.clusterPattern.trim();
 
     if (!(await validateThemePatternDraft(clusterPattern))) {
@@ -719,7 +766,9 @@ function AppearanceSection() {
   };
 
   const handleDeleteThemeConfirm = async () => {
-    if (!deleteConfirmThemeId) return;
+    if (!deleteConfirmThemeId) {
+      return;
+    }
     try {
       await deleteThemeEntry(deleteConfirmThemeId);
     } catch (error) {
@@ -853,7 +902,9 @@ function AppearanceSection() {
   }
 
   const handleSaveDefaultThemeFromPrompt = async () => {
-    if (!defaultTheme) return;
+    if (!defaultTheme) {
+      return;
+    }
     try {
       await saveThemeEntry(
         buildThemeFromCurrentAppearance({
@@ -882,7 +933,9 @@ function AppearanceSection() {
     const ids = themes.map((t) => t.id);
     const fromIdx = ids.indexOf(draggingThemeId);
     const toIdx = ids.indexOf(targetId);
-    if (fromIdx === -1 || toIdx === -1) return;
+    if (fromIdx === -1 || toIdx === -1) {
+      return;
+    }
 
     const reordered = [...ids];
     reordered.splice(fromIdx, 1);
@@ -895,6 +948,22 @@ function AppearanceSection() {
     } finally {
       setDraggingThemeId(null);
       setDropTargetThemeId(null);
+    }
+  };
+
+  const handleThemeKeyboardReorder = async (themeId: string, offset: -1 | 1) => {
+    const reordered = reorderThemeByOffset(
+      themes.map((theme) => theme.id),
+      themeId,
+      offset
+    );
+    if (!reordered) {
+      return;
+    }
+    try {
+      await reorderThemeEntries(reordered);
+    } catch (error) {
+      errorHandler.handle(error, { action: 'reorderThemes' });
     }
   };
 
@@ -1069,28 +1138,15 @@ function AppearanceSection() {
                   const isDropTarget =
                     theme.id === dropTargetThemeId && theme.id !== draggingThemeId && !isDefault;
                   return (
-                    // biome-ignore lint/a11y/noStaticElementInteractions: Theme rows use pointer drag boundaries without activation semantics, and a newly requested editor focuses its name field after the explicit Add Theme action.
                     <div
                       key={theme.id}
                       className={`setting-item setting-item-surface themes-table-row${isDragging ? ' themes-table-row--dragging' : ''}${isDropTarget ? ' themes-table-row--drop-target' : ''}${activeThemeId && activeThemeId !== theme.id ? ' themes-table-row--dimmed' : ''}`}
-                      onDragOver={(e) => {
-                        if (!draggingThemeId || isDefault) return;
-                        e.preventDefault();
-                        setDropTargetThemeId(theme.id);
-                      }}
-                      onDragLeave={() => {
-                        setDropTargetThemeId((c) => (c === theme.id ? null : c));
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        handleThemeDrop(theme.id);
-                      }}
                     >
                       {isDefault ? (
                         <span className="themes-drag-handle themes-drag-handle--placeholder"></span>
                       ) : (
-                        // biome-ignore lint/a11y/noStaticElementInteractions: Theme rows use pointer drag boundaries without activation semantics, and a newly requested editor focuses its name field after the explicit Add Theme action.
-                        <span
+                        <button
+                          type="button"
                           className="themes-drag-handle"
                           draggable
                           onDragStart={(e) => {
@@ -1101,10 +1157,37 @@ function AppearanceSection() {
                             setDraggingThemeId(null);
                             setDropTargetThemeId(null);
                           }}
-                          title="Drag to reorder"
+                          onDragOver={(event) => {
+                            if (!draggingThemeId) {
+                              return;
+                            }
+                            event.preventDefault();
+                            setDropTargetThemeId(theme.id);
+                          }}
+                          onDragLeave={() => {
+                            setDropTargetThemeId((current) =>
+                              current === theme.id ? null : current
+                            );
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            void handleThemeDrop(theme.id);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') {
+                              return;
+                            }
+                            event.preventDefault();
+                            void handleThemeKeyboardReorder(
+                              theme.id,
+                              event.key === 'ArrowUp' ? -1 : 1
+                            );
+                          }}
+                          aria-label={`Reorder ${theme.name}. Use Up and Down Arrow keys.`}
+                          title="Drag or use Up and Down Arrow keys to reorder"
                         >
                           &#x283F;
-                        </span>
+                        </button>
                       )}
                       {activeThemeId === theme.id && !isDefault ? (
                         <div className="theme-fields">
@@ -1114,9 +1197,13 @@ function AppearanceSection() {
                             onChange={(e) => setThemeDraft((d) => ({ ...d, name: e.target.value }))}
                             placeholder="Name"
                             onKeyDown={(e) => {
-                              if (e.key === 'Enter') handleSaveActiveTheme();
-                              else if (e.key === 'Escape') handleCancelActiveTheme();
-                              else e.stopPropagation();
+                              if (e.key === 'Enter') {
+                                handleSaveActiveTheme();
+                              } else if (e.key === 'Escape') {
+                                handleCancelActiveTheme();
+                              } else {
+                                e.stopPropagation();
+                              }
                             }}
                           />
                           <input
@@ -1135,13 +1222,20 @@ function AppearanceSection() {
                               themePatternError ? 'theme-pattern-error-active' : undefined
                             }
                             onKeyDown={(e) => {
-                              if (e.key === 'Enter') handleSaveActiveTheme();
-                              else if (e.key === 'Escape') handleCancelActiveTheme();
-                              else e.stopPropagation();
+                              if (e.key === 'Enter') {
+                                handleSaveActiveTheme();
+                              } else if (e.key === 'Escape') {
+                                handleCancelActiveTheme();
+                              } else {
+                                e.stopPropagation();
+                              }
                             }}
                           />
                           {!!themePatternError && (
-                            <div id="theme-pattern-error-active" className="theme-pattern-error">
+                            <div
+                              id={`${elementIdPrefix}-theme-pattern-error-active`}
+                              className="theme-pattern-error"
+                            >
                               {themePatternError}
                             </div>
                           )}
@@ -1213,16 +1307,19 @@ function AppearanceSection() {
                     <span className="themes-drag-handle themes-drag-handle--placeholder"></span>
                     <div className="theme-fields">
                       <input
+                        ref={newThemeNameInputRef}
                         className="theme-name-input"
                         value={themeDraft.name}
                         onChange={(e) => setThemeDraft((d) => ({ ...d, name: e.target.value }))}
                         placeholder="Name"
-                        // biome-ignore lint/a11y/noAutofocus: Theme rows use pointer drag boundaries without activation semantics, and a newly requested editor focuses its name field after the explicit Add Theme action.
-                        autoFocus
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleThemeSave();
-                          else if (e.key === 'Escape') handleThemeEditCancel();
-                          else e.stopPropagation();
+                          if (e.key === 'Enter') {
+                            handleThemeSave();
+                          } else if (e.key === 'Escape') {
+                            handleThemeEditCancel();
+                          } else {
+                            e.stopPropagation();
+                          }
                         }}
                       />
                       <input
@@ -1239,13 +1336,20 @@ function AppearanceSection() {
                         aria-invalid={themePatternError ? 'true' : undefined}
                         aria-describedby={themePatternError ? 'theme-pattern-error-new' : undefined}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleThemeSave();
-                          else if (e.key === 'Escape') handleThemeEditCancel();
-                          else e.stopPropagation();
+                          if (e.key === 'Enter') {
+                            handleThemeSave();
+                          } else if (e.key === 'Escape') {
+                            handleThemeEditCancel();
+                          } else {
+                            e.stopPropagation();
+                          }
                         }}
                       />
                       {!!themePatternError && (
-                        <div id="theme-pattern-error-new" className="theme-pattern-error">
+                        <div
+                          id={`${elementIdPrefix}-theme-pattern-error-new`}
+                          className="theme-pattern-error"
+                        >
                           {themePatternError}
                         </div>
                       )}

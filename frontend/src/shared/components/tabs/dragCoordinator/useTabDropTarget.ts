@@ -40,8 +40,15 @@
  * browser silently rejects the drop — drag-and-drop appears "broken" in
  * production with no errors or warnings.
  */
-import { useMountEffect } from '@shared/hooks/useHookLifetimes';
-import { type RefCallback, useCallback, useContext, useRef, useState } from 'react';
+import {
+  type RefCallback,
+  useCallback,
+  useContext,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+} from 'react';
 
 import { type DropTargetRegistration, TabDragContext } from './TabDragProvider';
 import { TAB_DRAG_DATA_TYPE, type TabDragPayload } from './types';
@@ -85,7 +92,9 @@ function computeDropInsertIndex(container: HTMLElement, clientX: number): number
   const buttons = container.querySelectorAll<HTMLElement>('[role="tab"]');
   for (let i = 0; i < buttons.length; i += 1) {
     const rect = buttons[i].getBoundingClientRect();
-    if (clientX < rect.left + rect.width / 2) return i;
+    if (clientX < rect.left + rect.width / 2) {
+      return i;
+    }
   }
   return buttons.length;
 }
@@ -98,9 +107,13 @@ let nextTargetId = 0;
  * mode and this returns null for custom MIME types.
  */
 function readPayloadFromDataTransfer(event: DragEvent): TabDragPayload | null {
-  if (!event.dataTransfer) return null;
+  if (!event.dataTransfer) {
+    return null;
+  }
   const raw = event.dataTransfer.getData(TAB_DRAG_DATA_TYPE);
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   try {
     return JSON.parse(raw) as TabDragPayload;
   } catch {
@@ -114,13 +127,17 @@ function readPayloadFromDataTransfer(event: DragEvent): TabDragPayload | null {
  * mode), so we use it as the presence gate. Works cross-browser.
  */
 function hasTabDragType(event: DragEvent): boolean {
-  if (!event.dataTransfer) return false;
+  if (!event.dataTransfer) {
+    return false;
+  }
   const types = event.dataTransfer.types;
   // `types` is a frozen array in modern browsers and a DOMStringList in
   // older ones. Both are iterable, but only the former has `.includes`,
   // so loop manually for portability.
   for (let i = 0; i < types.length; i += 1) {
-    if (types[i] === TAB_DRAG_DATA_TYPE) return true;
+    if (types[i] === TAB_DRAG_DATA_TYPE) {
+      return true;
+    }
   }
   return false;
 }
@@ -150,21 +167,31 @@ export function useTabDropTarget<K extends TabDragPayload['kind']>(
   currentDragRef.current = currentDrag;
 
   const handleDragEnter = useCallback((event: DragEvent) => {
-    if (!hasTabDragType(event)) return;
+    if (!hasTabDragType(event)) {
+      return;
+    }
     const drag = currentDragRef.current;
-    if (!drag || !acceptsRef.current.includes(drag.kind as K)) return;
+    if (!drag || !acceptsRef.current.includes(drag.kind as K)) {
+      return;
+    }
     event.preventDefault();
     setIsDragOver(true);
     onDragEnterRef.current?.(drag as Extract<TabDragPayload, { kind: K }>);
   }, []);
 
   const handleDragOver = useCallback((event: DragEvent) => {
-    if (!hasTabDragType(event)) return;
+    if (!hasTabDragType(event)) {
+      return;
+    }
     const drag = currentDragRef.current;
-    if (!drag || !acceptsRef.current.includes(drag.kind as K)) return;
+    if (!drag || !acceptsRef.current.includes(drag.kind as K)) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move';
+    }
     const el = elementRef.current;
     if (el) {
       const nextIndex = computeDropInsertIndex(el, event.clientX);
@@ -191,7 +218,9 @@ export function useTabDropTarget<K extends TabDragPayload['kind']>(
     // different document/window where the provider's state isn't
     // visible).
     const payload = readPayloadFromDataTransfer(event) ?? currentDragRef.current ?? null;
-    if (!payload || !acceptsRef.current.includes(payload.kind as K)) return;
+    if (!payload || !acceptsRef.current.includes(payload.kind as K)) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     const el = elementRef.current;
@@ -201,7 +230,6 @@ export function useTabDropTarget<K extends TabDragPayload['kind']>(
     onDropRef.current(payload as Extract<TabDragPayload, { kind: K }>, event, insertIndex);
   }, []);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: stable handlers intentionally do not churn the ref callback identity
   const ref = useCallback<RefCallback<HTMLElement>>(
     (el) => {
       // Detach from old element
@@ -229,13 +257,11 @@ export function useTabDropTarget<K extends TabDragPayload['kind']>(
         });
       }
     },
-    // The handler functions are stable (empty deps) so they don't need
-    // to be listed; including them would churn the ref callback identity.
-    [registerTarget, unregisterTarget]
+    [handleDragEnter, handleDragLeave, handleDragOver, handleDrop, registerTarget, unregisterTarget]
   );
 
   // Cleanup on unmount.
-  useMountEffect(() => {
+  const cleanUpDropTarget = useEffectEvent(() => {
     // Capture refs to locals so the cleanup function uses the values that
     // existed when the effect ran, not whatever they happen to be at unmount.
     const id = idRef.current;
@@ -250,6 +276,7 @@ export function useTabDropTarget<K extends TabDragPayload['kind']>(
       unregisterTarget(id);
     };
   });
+  useEffect(() => cleanUpDropTarget(), []);
 
   return { ref, isDragOver, dropInsertIndex };
 }

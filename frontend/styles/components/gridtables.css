@@ -104,7 +104,19 @@
   position: relative;
 }
 
-.gridtable-wrapper:focus {
+.gridtable--body > caption {
+  display: block;
+}
+
+.gridtable--body > tbody {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  width: fit-content;
+  min-width: 100%;
+}
+
+.gridtable--body:focus {
   outline: none;
 }
 
@@ -115,6 +127,8 @@
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  border-collapse: collapse;
+  border-spacing: 0;
 }
 
 /* ============================================
@@ -175,6 +189,11 @@ body.dockable-panel-resizing .content-body .gridtable-header-container {
   will-change: transform;
 }
 
+.gridtable--header > thead {
+  display: block;
+  width: 100%;
+}
+
 .gridtable--body {
   width: fit-content;
   min-width: 100%;
@@ -231,7 +250,8 @@ body.dockable-panel-resizing .content-body .gridtable-header-container {
   overflow: hidden;
 }
 
-.header-content > span {
+.header-content > span,
+.gridtable-sort-button {
   display: inline-block;
   line-height: inherit;
   white-space: nowrap;
@@ -239,11 +259,21 @@ body.dockable-panel-resizing .content-body .gridtable-header-container {
   text-overflow: ellipsis;
 }
 
+.gridtable-sort-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  text-align: left;
+}
+
 .grid-cell-header[data-sortable="true"] {
   transition: background-color var(--transition-fast);
 }
 
-.grid-cell-header[data-sortable="true"] .header-content > span {
+.grid-cell-header[data-sortable="true"] .gridtable-sort-button {
   cursor: pointer;
 }
 
@@ -268,6 +298,9 @@ body.dockable-panel-resizing .content-body .gridtable-header-container {
   z-index: var(--z-index-grid-resize-handle);
   transition: background-color 0.2s;
   touch-action: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .resize-handle::before {
@@ -348,14 +381,6 @@ body.dockable-panel-resizing .content-body .gridtable-header-container {
 .gridtable-virtual-body {
   position: relative;
   width: 100%;
-}
-
-.gridtable-virtual-inner {
-  position: absolute;
-  top: 0;
-  left: 0;
-  will-change: transform;
-  min-width: 100%;
 }
 
 .gridtable-row {
@@ -473,6 +498,10 @@ body.gridtable-disable-hover .gridtable-hover-overlay {
   background-color: var(--grid-bg-primary);
   border-radius: 4px;
   margin: 1rem;
+}
+
+.gridtable-empty-body {
+  align-items: center;
 }
 
 .gridtable-empty-filter-hint {
@@ -617,6 +646,16 @@ body.dockable-panel-resizing .content-body .gridtable-pagination {
 .gridtable-link {
   color: var(--color-text);
   transition: color 0.2s;
+}
+
+.gridtable-cell-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .gridtable-link:hover {

@@ -7,7 +7,7 @@
  */
 
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { eventBus } from '@/core/events';
@@ -91,12 +91,12 @@ describe('ClusterLifecycleContext', () => {
 
   it('useClusterLifecycle() throws outside provider', () => {
     // Suppress React error boundary logging for the expected throw.
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     expect(() => {
-      const root = ReactDOM.createRoot(document.createElement('div'));
+      const renderRoot = ReactDOM.createRoot(document.createElement('div'));
       // Synchronous render — the hook throws immediately.
       act(() => {
-        root.render(<Harness />);
+        renderRoot.render(<Harness />);
       });
     }).toThrow('useClusterLifecycle must be used within ClusterLifecycleProvider');
     spy.mockRestore();
@@ -164,8 +164,12 @@ describe('ClusterLifecycleContext', () => {
     });
 
     // Deliver a LIVE event before hydration resolves.
-    let resolveHydration: (value: unknown) => void = () => {};
-    mockGetAllStates.mockReturnValue(new Promise((resolve) => (resolveHydration = resolve)));
+    let resolveHydration: (value: unknown) => void = () => undefined;
+    mockGetAllStates.mockReturnValue(
+      new Promise((resolve) => {
+        resolveHydration = resolve;
+      })
+    );
 
     await renderProvider();
     await act(async () => {
@@ -300,7 +304,7 @@ describe('ClusterLifecycleContext', () => {
     // consumers — gates comparing against known literals would silently hold
     // dispatch forever. Dropping keeps the previous state, matching the
     // documented fail-open handling of unknown clusters in clusterReadiness.
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const frontendListener = vi.fn();
     const unsubscribe = eventBus.on('cluster:lifecycle', frontendListener);
 
@@ -323,7 +327,7 @@ describe('ClusterLifecycleContext', () => {
   });
 
   it('drops unknown states during hydration but keeps the valid entries', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     mockGetAllStates.mockResolvedValue({
       'cluster-a': 'context-test-bogus-hydrate',
       'cluster-b': 'ready',

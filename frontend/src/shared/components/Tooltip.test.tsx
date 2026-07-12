@@ -7,7 +7,7 @@
 
 import React, { act } from 'react';
 import * as ReactDOM from 'react-dom';
-import ReactDOMClient from 'react-dom/client';
+import * as ReactDOMClient from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock createPortal so tooltip content renders inline for assertions
@@ -147,6 +147,10 @@ describe('Tooltip', () => {
     });
     expect(container.querySelector('.tooltip')).toBeTruthy();
     expect(container.querySelector('.tooltip')?.textContent).toBe('Delayed tip');
+    const tooltip = container.querySelector('.tooltip');
+    expect(tooltip?.getAttribute('role')).toBe('tooltip');
+    expect(tooltip?.id).toBeTruthy();
+    expect(trigger.getAttribute('aria-describedby')).toBe(tooltip?.id);
 
     cleanup();
     vi.useRealTimers();

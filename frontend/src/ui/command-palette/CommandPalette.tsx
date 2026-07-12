@@ -206,7 +206,9 @@ export function buildCatalogDisplayEntries(
   return scored.slice(0, limit).map(({ score: _score, ...entry }) => entry);
 }
 
-export const CommandPalette = memo(function CommandPalette({ commands = [] }: CommandPaletteProps) {
+export const CommandPalette = memo(function CommandPaletteComponent({
+  commands = [],
+}: CommandPaletteProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -223,7 +225,7 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
-  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const selectedIndexRef = useRef(0);
   // True when the palette was opened straight into a sub-mode (e.g. kubeconfig
   // mode via the "+"/⌘O event). Then Escape closes in one press instead of
@@ -296,8 +298,12 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
       }
 
       // If only one is in the order array, it comes first
-      if (indexA !== -1) return -1;
-      if (indexB !== -1) return 1;
+      if (indexA !== -1) {
+        return -1;
+      }
+      if (indexB !== -1) {
+        return 1;
+      }
 
       // If neither is in the order array, sort alphabetically
       return a[0].localeCompare(b[0]);
@@ -438,6 +444,16 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
     });
     return flattened;
   }, [groupedCommands, catalogDisplayItems]);
+
+  const resultsId = 'command-palette-results';
+  const selectedOptionId =
+    paletteItems.length > 0 ? `command-palette-option-${selectedIndex}` : undefined;
+  const inputLabel =
+    selectMode === 'namespaces'
+      ? 'Select a namespace'
+      : selectMode === 'kubeconfigs'
+        ? 'Select a kubeconfig'
+        : 'Search commands and Kubernetes objects';
   const paletteItemCount = paletteItems.length;
 
   const hasCommandResults = filteredCommands.length > 0;
@@ -862,7 +878,9 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
 
   // Handle clicks outside to close
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      return;
+    }
 
     const handleClickOutside = (event: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
@@ -876,7 +894,36 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
     };
   }, [isOpen, close]);
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!mouseSelectionArmedRef.current) {
+        mouseSelectionArmedRef.current = true;
+        setMouseSelectionArmed(true);
+      }
+      setHideCursor(false);
+      const targetElement = event.target instanceof HTMLElement ? event.target : null;
+      const targetItem = targetElement?.closest<HTMLButtonElement>('.command-palette-item') ?? null;
+      const targetIndex = itemRefs.current.indexOf(targetItem);
+      if (targetIndex !== -1 && targetIndex !== selectedIndexRef.current) {
+        updateSelection(targetIndex);
+      }
+    };
+
+    container.addEventListener('pointermove', handlePointerMove);
+    return () => container.removeEventListener('pointermove', handlePointerMove);
+  }, [isOpen, updateSelection]);
+
+  if (!isOpen) {
+    return null;
+  }
 
   return (
     <ErrorBoundary
@@ -896,7 +943,6 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
         </div>
       )}
     >
-      {/** biome-ignore lint/a11y/noStaticElementInteractions: The palette input retains focus and owns keyboard selection while result rows provide pointer selection inside the registered blocking palette surface. */}
       <div
         className={[
           'command-palette',
@@ -906,22 +952,6 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
           .filter(Boolean)
           .join(' ')}
         ref={containerRef}
-        onMouseMove={(event) => {
-          if (!mouseSelectionArmedRef.current) {
-            mouseSelectionArmedRef.current = true;
-            setMouseSelectionArmed(true);
-          }
-          if (hideCursor) {
-            setHideCursor(false);
-          }
-          const targetElement = event.target instanceof HTMLElement ? event.target : null;
-          const targetItem =
-            targetElement?.closest<HTMLDivElement>('.command-palette-item') ?? null;
-          const targetIndex = itemRefs.current.indexOf(targetItem);
-          if (targetIndex !== -1 && targetIndex !== selectedIndexRef.current) {
-            updateSelection(targetIndex);
-          }
-        }}
       >
         <div className="command-palette-header">
           <input
@@ -936,6 +966,12 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
                   : 'Type a command or search...'
             }
             value={searchQuery}
+            role="combobox"
+            aria-label={inputLabel}
+            aria-autocomplete="list"
+            aria-expanded="true"
+            aria-controls={resultsId}
+            aria-activedescendant={selectedOptionId}
             onChange={(e) => {
               setSearchQuery(e.target.value);
               setSelectedIndex(0);
@@ -944,7 +980,13 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
           />
         </div>
 
-        <div className="command-palette-results" ref={resultsRef}>
+        <div
+          className="command-palette-results"
+          ref={resultsRef}
+          id={resultsId}
+          role="listbox"
+          aria-label={`${inputLabel} results`}
+        >
           {noResults ? (
             <div className="command-palette-empty">
               {searchQuery.trim().length > 0
@@ -955,20 +997,23 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
             <>
               {hasCommandResults &&
                 groupedCommands.map(([category, categoryCommands]) => (
-                  <div key={category}>
-                    <div className="command-palette-group-header">{category}</div>
+                  <fieldset key={category} className="command-palette-group">
+                    <legend className="command-palette-group-header">{category}</legend>
                     {categoryCommands.map((command) => {
                       const currentIndex = commandIndexMap.get(command.id) ?? 0;
                       const isSelected = currentIndex === selectedIndex;
                       return (
-                        // biome-ignore lint/a11y/noStaticElementInteractions: The palette input retains focus and owns keyboard selection while result rows provide pointer selection inside the registered blocking palette surface.
-                        // biome-ignore lint/a11y/useKeyWithClickEvents: The palette input retains focus and owns keyboard selection while result rows provide pointer selection inside the registered blocking palette surface.
-                        <div
+                        <button
+                          type="button"
                           key={command.id}
                           ref={(el) => {
                             itemRefs.current[currentIndex] = el;
                           }}
                           className={`command-palette-item ${isSelected ? 'selected' : ''}`}
+                          id={`command-palette-option-${currentIndex}`}
+                          role="option"
+                          aria-selected={isSelected}
+                          tabIndex={-1}
                           onClick={() => executePaletteItem({ type: 'command', command })}
                           onMouseEnter={() => {
                             if (mouseSelectionArmedRef.current) {
@@ -1003,20 +1048,20 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
                               )}
                             </div>
                           )}
-                        </div>
+                        </button>
                       );
                     })}
-                  </div>
+                  </fieldset>
                 ))}
 
               {!!(catalogLoading || hasCatalogResults) && (
-                <div>
-                  <div className="command-palette-group-header">
+                <fieldset className="command-palette-group">
+                  <legend className="command-palette-group-header">
                     Catalog Results
                     {catalogStats?.truncated && hasCatalogResults
                       ? ` (${catalogDisplayItems.length} / ${catalogStats.total})`
                       : ''}
-                  </div>
+                  </legend>
                   {catalogLoading && catalogDisplayItems.length === 0 && (
                     <div className="command-palette-loading">Searching catalog…</div>
                   )}
@@ -1024,14 +1069,17 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
                     const currentIndex = catalogBaseIndex + idx;
                     const isSelected = currentIndex === selectedIndex;
                     return (
-                      // biome-ignore lint/a11y/noStaticElementInteractions: The palette input retains focus and owns keyboard selection while result rows provide pointer selection inside the registered blocking palette surface.
-                      // biome-ignore lint/a11y/useKeyWithClickEvents: The palette input retains focus and owns keyboard selection while result rows provide pointer selection inside the registered blocking palette surface.
-                      <div
+                      <button
+                        type="button"
                         key={entry.item.uid}
                         ref={(el) => {
                           itemRefs.current[currentIndex] = el;
                         }}
                         className={`command-palette-item ${isSelected ? 'selected' : ''}`}
+                        id={`command-palette-option-${currentIndex}`}
+                        role="option"
+                        aria-selected={isSelected}
+                        tabIndex={-1}
                         onClick={() => executePaletteItem({ type: 'catalog', item: entry.item })}
                         onMouseEnter={() => {
                           if (mouseSelectionArmedRef.current) {
@@ -1047,7 +1095,7 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
                             <span className="command-palette-item-name">{entry.displayName}</span>
                           </div>
                         </div>
-                      </div>
+                      </button>
                     );
                   })}
                   {catalogStats?.truncated && catalogDisplayItems.length > 0 && (
@@ -1056,7 +1104,7 @@ export const CommandPalette = memo(function CommandPalette({ commands = [] }: Co
                       Refine your search to narrow further.
                     </div>
                   )}
-                </div>
+                </fieldset>
               )}
             </>
           )}

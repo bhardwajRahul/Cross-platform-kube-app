@@ -68,7 +68,7 @@ type DomainFetchOptions = {
 // registration, regardless of whether the user is on the relevant view.
 // Set autoStart: true on individual domain registrations when needed.
 const DEFAULT_AUTO_START = false;
-const noopStreamingCleanup = () => {};
+const noopStreamingCleanup = () => undefined;
 
 const logInfo = (message: string, cluster?: AppLogsClusterMeta): void => {
   logAppLogsInfo(message, APP_LOG_SOURCES.RefreshOrchestrator, cluster);
@@ -772,14 +772,7 @@ class RefreshOrchestrator {
         // visit to a streaming view. Fetch once now; streamSignal bypasses
         // the healthy-stream skip, performFetch dedupes in-flight, and a
         // denied domain gets its typed-403 stamp immediately.
-        if (!streaming.snapshotless && !getScopedDomainState(domain, scope).data) {
-          void this.performFetch(domain, scope, {
-            isManual: false,
-            streamSignal: true,
-          }).catch(() => {
-            // Failures land in the scoped state via performFetch's own path.
-          });
-        }
+        this.reconcileInitialStreamingSnapshot(domain, scope, streaming);
       })
       .catch((error) => {
         runtime.failStreamingStart(domain, scope);
@@ -799,6 +792,22 @@ class RefreshOrchestrator {
     return startPromise.then(() => undefined).catch(() => undefined);
   }
 
+  private reconcileInitialStreamingSnapshot(
+    domain: RefreshDomain,
+    scope: string,
+    streaming: StreamingRegistration
+  ): void {
+    if (streaming.snapshotless || getScopedDomainState(domain, scope).data) {
+      return;
+    }
+    void this.performFetch(domain, scope, {
+      isManual: false,
+      streamSignal: true,
+    }).catch(() => {
+      // Failures land in the scoped state via performFetch's own path.
+    });
+  }
+
   private stopStreamingScope(
     domain: RefreshDomain,
     scope: string,
@@ -810,7 +819,7 @@ class RefreshOrchestrator {
 
     if (pending) {
       pending
-        .then((cleanup) => {
+        .then((streamingCleanup) => {
           // LOAD-BEARING — docs/architecture/refresh-system.md, "Streaming
           // Start Lifecycle": teardown has exactly one owner. The start's
           // own continuation (attached first) already handled a cancelled
@@ -823,9 +832,9 @@ class RefreshOrchestrator {
           }
           runtime.failStreamingStart(domain, scope);
           runtime.clearStreamingCancelled(domain, scope);
-          if (typeof cleanup === 'function') {
+          if (typeof streamingCleanup === 'function') {
             try {
-              cleanup();
+              streamingCleanup();
             } catch (error) {
               console.error(`Failed to stop pending streaming domain ${domain}::${scope}`, error);
             }

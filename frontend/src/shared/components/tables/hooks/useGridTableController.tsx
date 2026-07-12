@@ -53,8 +53,9 @@ const DEFAULT_NON_HIDEABLE_COLUMNS: string[] = [];
 export interface GridTableControllerResult<T> {
   // Refs needed by sub-components
   wrapperRef: RefObject<HTMLDivElement | null>;
-  tableRef: RefObject<HTMLDivElement | null>;
-  headerInnerRef: RefObject<HTMLDivElement | null>;
+  gridRef: RefObject<HTMLTableElement | null>;
+  tableRef: RefObject<HTMLTableSectionElement | null>;
+  headerInnerRef: RefObject<HTMLTableElement | null>;
 
   // Filtered data
   tableData: T[];
@@ -62,8 +63,8 @@ export interface GridTableControllerResult<T> {
 
   // Focus
   focusedRowKey: string | null;
-  handleWrapperFocus: (e: React.FocusEvent<HTMLDivElement>) => void;
-  handleWrapperBlur: (e: React.FocusEvent<HTMLDivElement>) => void;
+  handleWrapperFocus: (e: React.FocusEvent<HTMLElement>) => void;
+  handleWrapperBlur: (e: React.FocusEvent<HTMLElement>) => void;
 
   // Hover
   hoverState: HoverState;
@@ -78,7 +79,7 @@ export interface GridTableControllerResult<T> {
   virtualRows: T[];
   virtualRange: { start: number; end: number };
   totalVirtualHeight: number;
-  virtualOffset: number;
+  getRowTop: (index: number) => number;
   scrollbarWidth: number;
 
   // Columns
@@ -112,6 +113,7 @@ export function useGridTableController<T>({
   getRowClassName,
   getRowStyle,
   onRowClick,
+  onRowPointerClick,
   onSort,
   sortConfig,
   loading = false,
@@ -147,8 +149,9 @@ export function useGridTableController<T>({
     [inputData]
   );
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const tableRef = useRef<HTMLDivElement>(null);
-  const headerInnerRef = useRef<HTMLDivElement | null>(null);
+  const gridRef = useRef<HTMLTableElement>(null);
+  const tableRef = useRef<HTMLTableSectionElement>(null);
+  const headerInnerRef = useRef<HTMLTableElement | null>(null);
   const previousInputDataRef = useRef(inputData);
   const contextMenuActiveRef = useRef(false);
   const clusterKeyCheckRef = useRef(false);
@@ -268,11 +271,13 @@ export function useGridTableController<T>({
     keyExtractor,
     getRowClassName,
     onRowClick,
+    onRowPointerClick,
     enableContextMenu,
     getCustomContextMenuItems,
     sortConfig,
     onSort,
     wrapperRef,
+    gridRef,
     headerInnerRef,
     hideHeader,
     contextMenuActiveRef,
@@ -287,6 +292,9 @@ export function useGridTableController<T>({
     tableContentWidth,
     tableViewportWidth,
     handleResizeStart,
+    handleResizeKeyDown,
+    getColumnMinWidth,
+    getColumnMaxWidth,
     autoSizeColumn,
     markVisibleAutoColumnsDirty,
   } = useGridTableColumnLayout<T>({
@@ -321,7 +329,6 @@ export function useGridTableController<T>({
     virtualRange,
     virtualRowHeight,
     totalVirtualHeight,
-    virtualOffset,
     measureRowRef,
     getRowTop,
     scrollbarWidth,
@@ -345,8 +352,9 @@ export function useGridTableController<T>({
   // The dirty queue hashes rendered cells before measuring. Row virtualization changes that
   // visible signature without changing the callback identity, so both range bounds must invalidate
   // this effect after the new virtual rows commit.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Virtual row-window bounds intentionally enqueue visible auto-width columns after scrolling changes their rendered-cell signature.
   useEffect(() => {
+    void virtualRange.start;
+    void virtualRange.end;
     markVisibleAutoColumnsDirty();
   }, [markVisibleAutoColumnsDirty, virtualRange.end, virtualRange.start]);
 
@@ -371,6 +379,7 @@ export function useGridTableController<T>({
     filtersContainerRef,
     filterFocusIndexRef,
     wrapperRef,
+    focusRef: gridRef,
     tableDataLength: tableData.length,
     focusedRowKey,
     suppressFocusedRowHighlight,
@@ -414,7 +423,7 @@ export function useGridTableController<T>({
       warnDevOnce(
         `GridTable: keyExtractor returned "${sampleKey}" which does not appear ` +
           `cluster-scoped (missing "|" separator). Use buildClusterScopedKey() ` +
-          `to prevent key collisions in multi-cluster views.`
+          'to prevent key collisions in multi-cluster views.'
       );
     }
   }
@@ -453,12 +462,16 @@ export function useGridTableController<T>({
     handleHeaderClick,
     renderSortIndicator,
     handleResizeStart,
+    handleResizeKeyDown,
+    getColumnMinWidth,
+    getColumnMaxWidth,
     autoSizeColumn,
     sortConfig,
   });
 
   return {
     wrapperRef,
+    gridRef,
     tableRef,
     headerInnerRef,
     tableData,
@@ -474,7 +487,7 @@ export function useGridTableController<T>({
     virtualRows,
     virtualRange,
     totalVirtualHeight,
-    virtualOffset,
+    getRowTop,
     scrollbarWidth,
     tableContentWidth,
     tableViewportWidth,

@@ -5,24 +5,28 @@
  * Provides shared helper functions for the frontend.
  */
 
-export enum ErrorCategory {
-  NETWORK = 'NETWORK',
-  AUTHENTICATION = 'AUTHENTICATION',
-  PERMISSION = 'PERMISSION',
-  NOT_FOUND = 'NOT_FOUND',
-  VALIDATION = 'VALIDATION',
-  TIMEOUT = 'TIMEOUT',
-  RATE_LIMIT = 'RATE_LIMIT',
-  SERVER_ERROR = 'SERVER_ERROR',
-  UNKNOWN = 'UNKNOWN',
-}
+export const ErrorCategory = {
+  NETWORK: 'NETWORK',
+  AUTHENTICATION: 'AUTHENTICATION',
+  PERMISSION: 'PERMISSION',
+  NOT_FOUND: 'NOT_FOUND',
+  VALIDATION: 'VALIDATION',
+  TIMEOUT: 'TIMEOUT',
+  RATE_LIMIT: 'RATE_LIMIT',
+  SERVER_ERROR: 'SERVER_ERROR',
+  UNKNOWN: 'UNKNOWN',
+} as const;
 
-export enum ErrorSeverity {
-  INFO = 'info',
-  WARNING = 'warning',
-  ERROR = 'error',
-  CRITICAL = 'critical',
-}
+export type ErrorCategory = (typeof ErrorCategory)[keyof typeof ErrorCategory];
+
+export const ErrorSeverity = {
+  INFO: 'info',
+  WARNING: 'warning',
+  ERROR: 'error',
+  CRITICAL: 'critical',
+} as const;
+
+export type ErrorSeverity = (typeof ErrorSeverity)[keyof typeof ErrorSeverity];
 
 // Word-boundary matching avoids resource-name false positives
 // (e.g. "authorization" in "rbac.authorization.k8s.io" is not an auth error).
@@ -168,12 +172,13 @@ class ErrorHandler {
    * Determines if an error is retryable based on its category
    */
   private isRetryable(category: ErrorCategory): boolean {
-    return [
+    const retryableCategories: ErrorCategory[] = [
       ErrorCategory.NETWORK,
       ErrorCategory.TIMEOUT,
       ErrorCategory.RATE_LIMIT,
       ErrorCategory.SERVER_ERROR,
-    ].includes(category);
+    ];
+    return retryableCategories.includes(category);
   }
 
   /**
@@ -241,8 +246,12 @@ class ErrorHandler {
    * Extracts error string from various error types
    */
   private getErrorString(error: unknown): string {
-    if (typeof error === 'string') return error;
-    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') {
+      return error;
+    }
+    if (error instanceof Error) {
+      return error.message;
+    }
     if (error && typeof error === 'object' && 'message' in error) {
       return String(error.message);
     }
@@ -276,6 +285,7 @@ class ErrorHandler {
     context?: Record<string, unknown>,
     customMessage?: string
   ): ErrorDetails {
+    let errorContext = context;
     const errorString = this.getErrorString(error);
     const category = this.categorizeError(error);
     const severity = this.getSeverity(category);
@@ -291,8 +301,8 @@ class ErrorHandler {
       technicalMsg = parts[1]?.trim() || errorString;
 
       // Add the original error to context for debugging
-      context = {
-        ...context,
+      errorContext = {
+        ...errorContext,
         originalError: parts[0].trim(),
         stderr: parts[1]?.trim(),
       };
@@ -303,7 +313,7 @@ class ErrorHandler {
       category,
       severity,
       originalError: error,
-      context,
+      context: errorContext,
       timestamp: new Date(),
       retryable: this.isRetryable(category),
       userMessage: userMsg,
@@ -351,7 +361,9 @@ class ErrorHandler {
    * Logs error based on configuration
    */
   private logError(error: ErrorDetails): void {
-    if (!this.options.enableLogging) return;
+    if (!this.options.enableLogging) {
+      return;
+    }
 
     if (this.options.logToConsole) {
       console.groupCollapsed(
@@ -360,10 +372,16 @@ class ErrorHandler {
       );
       console.error('Message:', error.userMessage);
       console.error('Technical:', error.technicalMessage);
-      if (error.context) console.error('Context:', error.context);
-      if (error.suggestions?.length) console.error('Suggestions:', error.suggestions);
+      if (error.context) {
+        console.error('Context:', error.context);
+      }
+      if (error.suggestions?.length) {
+        console.error('Suggestions:', error.suggestions);
+      }
       console.error('Timestamp:', error.timestamp);
-      if (error.originalError) console.error('Original Error:', error.originalError);
+      if (error.originalError) {
+        console.error('Original Error:', error.originalError);
+      }
       console.groupEnd();
     }
 
@@ -485,10 +503,13 @@ class ErrorHandler {
  * Scoped error handler for specific contexts
  */
 class ScopedErrorHandler {
-  constructor(
-    private parent: ErrorHandler,
-    private contextName: string
-  ) {}
+  private parent: ErrorHandler;
+  private contextName: string;
+
+  constructor(parent: ErrorHandler, contextName: string) {
+    this.parent = parent;
+    this.contextName = contextName;
+  }
 
   handle(error: unknown, additionalContext?: Record<string, unknown>, customMessage?: string) {
     return this.parent.handle(

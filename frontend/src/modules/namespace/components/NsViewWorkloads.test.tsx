@@ -9,7 +9,7 @@ import type { WorkloadData } from '@modules/namespace/components/NsViewWorkloads
 import { ALL_NAMESPACES_SCOPE } from '@modules/namespace/constants';
 import type { GridTableProps } from '@shared/components/tables/GridTable';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UseTableSortOptions } from '@/hooks/useTableSort';
 import { requireReactElement } from '@/test-utils/requireReactElement';
@@ -64,7 +64,7 @@ vi.mock('@ui/favorites/FavToggle', () => ({
     id: 'favorite',
     icon: null,
     active: false,
-    onClick: () => {},
+    onClick: () => undefined,
     title: 'Save as favorite',
   }),
 }));
@@ -686,7 +686,7 @@ describe('NsViewWorkloads', () => {
 
     // Use the name column click handler to verify object panel routing.
     act(() => {
-      cell.props.onClick?.({ stopPropagation: () => {} });
+      cell.props.onClick?.({ stopPropagation: () => undefined });
     });
 
     expect(openWithObjectMock).toHaveBeenCalledWith(

@@ -3,7 +3,7 @@ import { useModalFocusTrap } from '@shared/components/modals/useModalFocusTrap';
 import { KeyboardProvider } from '@ui/shortcuts/context';
 import { useKeyboardSurface } from '@ui/shortcuts/surfaces';
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eventBus } from '@/core/events';
 import { requireValue } from '@/test-utils/requireValue';
@@ -85,6 +85,7 @@ function BlockingSurfaceHarness() {
 
 function SharedModalHarness() {
   const modalRef = React.useRef<HTMLDivElement>(null);
+  const titleId = React.useId();
 
   useModalFocusTrap({
     ref: modalRef,
@@ -94,13 +95,13 @@ function SharedModalHarness() {
   return (
     <ModalSurface
       modalRef={modalRef}
-      labelledBy="blocking-modal-title"
-      onClose={() => {}}
+      labelledBy={titleId}
+      onClose={() => undefined}
       containerClassName="test-blocking-modal"
       closeOnBackdrop={false}
     >
       <div className="modal-header">
-        <h2 id="blocking-modal-title">Blocking modal</h2>
+        <h2 id={titleId}>Blocking modal</h2>
       </div>
       <div className="modal-content">
         <button type="button">Inside modal</button>

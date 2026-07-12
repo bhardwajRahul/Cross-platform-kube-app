@@ -5,7 +5,7 @@
  */
 
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const searchShortcutMocks = vi.hoisted(() => ({
@@ -45,19 +45,21 @@ const codeMirrorState = {
 interface CapturedCodeMirrorProps {
   value: string;
   onCreateEditor?: (view: unknown) => void;
+  ref?: React.Ref<unknown>;
 }
 
-const CodeMirrorMock = React.forwardRef((props: CapturedCodeMirrorProps, ref) => {
+const CodeMirrorMock = ({ ref, ...props }: CapturedCodeMirrorProps) => {
+  const { onCreateEditor, value } = props;
   if (ref && typeof ref === 'object') {
     (ref as React.RefObject<{ view: typeof codeMirrorState.editorView } | null>).current = {
       view: codeMirrorState.editorView,
     };
   }
   React.useEffect(() => {
-    props.onCreateEditor?.(codeMirrorState.editorView);
-  }, [props]);
-  return <div data-testid="code-mirror">{props.value}</div>;
-});
+    onCreateEditor?.(codeMirrorState.editorView);
+  }, [onCreateEditor]);
+  return <div data-testid="code-mirror">{value}</div>;
+};
 CodeMirrorMock.displayName = 'CodeMirrorMock';
 
 const themeMocks = vi.hoisted(() => ({
@@ -125,18 +127,15 @@ vi.mock('@codemirror/lang-yaml', () => ({
 }));
 
 vi.mock('@codemirror/view', () => ({
-  // biome-ignore lint/complexity/noStaticOnlyClass: CodeMirror exposes EditorView as a constructable class with static extension facets.
-  EditorView: class {
-    static contentAttributes = {
+  EditorView: Object.assign(class EditorViewMock {}, {
+    contentAttributes: {
       of: (attrs: unknown) => ({ type: 'contentAttributes', attrs }),
-    };
-
-    static domEventHandlers(handlers: unknown) {
+    },
+    domEventHandlers(handlers: unknown) {
       return handlers;
-    }
-
-    static lineWrapping = 'lineWrapping';
-  },
+    },
+    lineWrapping: 'lineWrapping',
+  }),
   keymap: {
     of: (bindings: unknown) => bindings,
   },

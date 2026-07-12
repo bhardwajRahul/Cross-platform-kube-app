@@ -6,8 +6,9 @@
  */
 
 import { useGridTableHeaderSyncEffects } from '@shared/components/tables/hooks/useGridTableHeaderSyncEffects';
-import { act, forwardRef } from 'react';
-import ReactDOM from 'react-dom/client';
+import type React from 'react';
+import { act } from 'react';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 afterEach(() => {
@@ -30,7 +31,13 @@ describe('useGridTableHeaderSyncEffects', () => {
 
     const addEventListenerSpy = vi.spyOn(wrapper, 'addEventListener');
 
-    const Harness = forwardRef<HTMLDivElement, { hideHeader: boolean }>((props, ref) => {
+    const Harness = ({
+      ref,
+      ...props
+    }: {
+      hideHeader: boolean;
+      ref?: React.Ref<HTMLDivElement>;
+    }) => {
       useGridTableHeaderSyncEffects({
         hideHeader: props.hideHeader,
         wrapperRef,
@@ -40,7 +47,7 @@ describe('useGridTableHeaderSyncEffects', () => {
         updateColumnWindowRange,
       });
       return <div ref={ref} />;
-    });
+    };
 
     const container = document.createElement('div');
     document.body.appendChild(container);

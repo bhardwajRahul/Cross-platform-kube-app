@@ -10,7 +10,7 @@ import { OBJECT_ACTION_IDS } from '@shared/actions/objectActionContract';
 import type ConfirmationModal from '@shared/components/modals/ConfirmationModal';
 import type { GridTableProps } from '@shared/components/tables/GridTable';
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireReactElement } from '@/test-utils/requireReactElement';
 import { requireValue } from '@/test-utils/requireValue';
@@ -90,7 +90,7 @@ vi.mock('@ui/favorites/FavToggle', () => ({
     id: 'favorite',
     icon: null,
     active: false,
-    onClick: () => {},
+    onClick: () => undefined,
     title: 'Save as favorite',
   }),
 }));
@@ -268,7 +268,7 @@ describe('NsViewConfig ConfigViewGrid', () => {
             onClick?: (event: { stopPropagation: () => void }) => void;
             onKeyDown?: (event: { key: string; preventDefault: () => void }) => void;
           }>(rendered, 'expected a configuration cell element');
-          element.props.onClick?.({ stopPropagation() {} });
+          element.props.onClick?.({ stopPropagation: () => undefined });
           element.props.onKeyDown?.({ key: 'Enter', preventDefault: vi.fn() });
         }
       }

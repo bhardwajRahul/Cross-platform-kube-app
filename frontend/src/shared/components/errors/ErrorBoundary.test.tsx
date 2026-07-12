@@ -7,7 +7,7 @@
 
 import type React from 'react';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import type { MockInstance } from 'vitest';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,9 +40,9 @@ describe('ErrorBoundary', () => {
     consoleGroupSpy = vi.spyOn(console, 'group');
     consoleGroupEndSpy = vi.spyOn(console, 'groupEnd');
 
-    consoleErrorSpy.mockImplementation(() => {});
-    consoleGroupSpy.mockImplementation(() => {});
-    consoleGroupEndSpy.mockImplementation(() => {});
+    consoleErrorSpy.mockImplementation(() => undefined);
+    consoleGroupSpy.mockImplementation(() => undefined);
+    consoleGroupEndSpy.mockImplementation(() => undefined);
   });
 
   afterEach(() => {

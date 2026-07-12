@@ -10,7 +10,8 @@ import IconBar, { type IconBarItem } from '@shared/components/IconBar/IconBar';
 import { AutoScrollIcon, CopyIcon } from '@shared/components/icons/LogIcons';
 import { DeleteIcon } from '@shared/components/icons/SharedIcons';
 import LoadingSpinner from '@shared/components/LoadingSpinner';
-import { useLayoutEffectWithInvalidation } from '@shared/hooks/useHookLifetimes';
+import { AriaGridColumnHeader, AriaGridRow } from '@shared/components/tables/AriaGridPrimitives';
+
 import { withStableListKeys } from '@shared/utils/stableListKeys';
 import { DockablePanel } from '@ui/dockable';
 import { useKeyboardSurface, useShortcut } from '@ui/shortcuts';
@@ -22,6 +23,7 @@ import {
   type PointerEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -264,15 +266,11 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
 
   const renderHeaderCell = useCallback(
     (column: LogColumnKey | 'message', label: string, className: string) => (
-      // biome-ignore lint/a11y/useFocusableInteractive: The virtualized app-log grid and focus region delegate keyboard navigation to the shared grid and panel surfaces while retaining pointer selection boundaries.
-      // biome-ignore lint/a11y/useSemanticElements: The virtualized app-log grid and focus region delegate keyboard navigation to the shared grid and panel surfaces while retaining pointer selection boundaries.
-      <span className={`app-logs-header-cell ${className}`} role="columnheader">
+      <AriaGridColumnHeader className={`app-logs-header-cell ${className}`}>
         <span className="app-logs-header-label">{label}</span>
         {column !== 'message' && (
-          // biome-ignore lint/a11y/useSemanticElements: The virtualized app-log grid and focus region delegate keyboard navigation to the shared grid and panel surfaces while retaining pointer selection boundaries.
-          <span
+          <hr
             className="app-logs-column-resizer"
-            role="separator"
             tabIndex={0}
             aria-label={`Resize ${label} column`}
             aria-orientation="vertical"
@@ -283,7 +281,7 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
             onKeyDown={(event) => handleColumnResizeKeyDown(column, event)}
           />
         )}
-      </span>
+      </AriaGridColumnHeader>
     ),
     [columnWidths, handleColumnResizeKeyDown, handleColumnResizePointerDown]
   );
@@ -315,35 +313,35 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
   }, []);
 
   // Auto-scroll when logs change
-  useLayoutEffectWithInvalidation(
-    () => {
-      const container = logsContainerRef.current;
-      if (!container) {
-        return;
-      }
+  useLayoutEffect(() => {
+    void logLevelFilter;
+    void componentFilter;
+    void clusterFilter;
+    void textFilter;
+    const container = logsContainerRef.current;
+    if (!container) {
+      return;
+    }
 
-      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
 
-      if (isAutoScroll && isPinnedToBottomRef.current && logs.length > 0) {
-        container.scrollTop = maxScrollTop;
-        prevScrollTopRef.current = container.scrollTop;
-        prevScrollHeightRef.current = container.scrollHeight;
-        offsetFromBottomRef.current = 0;
-      } else {
-        const previousTop = prevScrollTopRef.current;
-        const clampedTop = Math.max(0, Math.min(previousTop, maxScrollTop));
-        container.scrollTop = clampedTop;
-        prevScrollTopRef.current = container.scrollTop;
-        prevScrollHeightRef.current = container.scrollHeight;
-        offsetFromBottomRef.current = Math.max(
-          container.scrollHeight - container.scrollTop - container.clientHeight,
-          0
-        );
-      }
-    },
-    [logs, isAutoScroll],
-    [logLevelFilter, componentFilter, clusterFilter, textFilter]
-  );
+    if (isAutoScroll && isPinnedToBottomRef.current && logs.length > 0) {
+      container.scrollTop = maxScrollTop;
+      prevScrollTopRef.current = container.scrollTop;
+      prevScrollHeightRef.current = container.scrollHeight;
+      offsetFromBottomRef.current = 0;
+    } else {
+      const previousTop = prevScrollTopRef.current;
+      const clampedTop = Math.max(0, Math.min(previousTop, maxScrollTop));
+      container.scrollTop = clampedTop;
+      prevScrollTopRef.current = container.scrollTop;
+      prevScrollHeightRef.current = container.scrollHeight;
+      offsetFromBottomRef.current = Math.max(
+        container.scrollHeight - container.scrollTop - container.clientHeight,
+        0
+      );
+    }
+  }, [logs, isAutoScroll, logLevelFilter, componentFilter, clusterFilter, textFilter]);
 
   useEffect(() => {
     if (!isAutoScroll) {
@@ -875,8 +873,7 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
       contentClassName="app-logs-panel-content"
     >
       {/* Panel-specific controls toolbar (moved from header for tab support) */}
-      {/** biome-ignore lint/a11y/noStaticElementInteractions: The virtualized app-log grid and focus region delegate keyboard navigation to the shared grid and panel surfaces while retaining pointer selection boundaries. */}
-      <div className="app-logs-panel-toolbar" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="app-logs-panel-toolbar">
         <div className="app-logs-panel-controls">
           <Dropdown
             options={clusterOptions}
@@ -948,20 +945,21 @@ function AppLogsPanel({ isOpen, onClose }: AppLogsPanelProps) {
         </div>
       </div>
 
-      {/** biome-ignore lint/a11y/useFocusableInteractive: The virtualized app-log grid and focus region delegate keyboard navigation to the shared grid and panel surfaces while retaining pointer selection boundaries. */}
-      {/** biome-ignore lint/a11y/useSemanticElements: The virtualized app-log grid and focus region delegate keyboard navigation to the shared grid and panel surfaces while retaining pointer selection boundaries. */}
-      <div
+      <table
         className="app-logs-header"
-        role="row"
         aria-label="Application log columns"
         style={columnWidthStyle}
       >
-        {renderHeaderCell('timestamp', 'Time', 'log-timestamp')}
-        {renderHeaderCell('level', 'Level', 'log-level')}
-        {renderHeaderCell('source', 'Source', 'log-source')}
-        {renderHeaderCell('cluster', 'Cluster', 'log-cluster')}
-        {renderHeaderCell('message', 'Message', 'log-message')}
-      </div>
+        <thead>
+          <AriaGridRow>
+            {renderHeaderCell('timestamp', 'Time', 'log-timestamp')}
+            {renderHeaderCell('level', 'Level', 'log-level')}
+            {renderHeaderCell('source', 'Source', 'log-source')}
+            {renderHeaderCell('cluster', 'Cluster', 'log-cluster')}
+            {renderHeaderCell('message', 'Message', 'log-message')}
+          </AriaGridRow>
+        </thead>
+      </table>
 
       <div
         ref={logsContainerRef}

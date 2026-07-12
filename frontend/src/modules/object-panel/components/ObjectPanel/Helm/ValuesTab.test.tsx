@@ -6,7 +6,7 @@
  */
 
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as YAML from 'yaml';
 import { requireValue } from '@/test-utils/requireValue';
@@ -14,6 +14,7 @@ import { requireValue } from '@/test-utils/requireValue';
 interface CapturedCodeMirrorProps {
   value: string;
   onCreateEditor?: (view: unknown) => void;
+  ref?: React.Ref<unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,7 +57,7 @@ const codeMirrorState = {
   value: '',
 };
 
-const CodeMirrorMock = React.forwardRef((props: CapturedCodeMirrorProps, ref) => {
+const CodeMirrorMock = ({ ref, ...props }: CapturedCodeMirrorProps) => {
   const { onCreateEditor } = props;
   codeMirrorState.value = props.value;
   codeMirrorState.latestProps.current = props;
@@ -73,7 +74,7 @@ const CodeMirrorMock = React.forwardRef((props: CapturedCodeMirrorProps, ref) =>
       {props.value}
     </div>
   );
-});
+};
 CodeMirrorMock.displayName = 'CodeMirrorMock';
 
 const themeMocks = vi.hoisted(() => ({
@@ -145,18 +146,15 @@ vi.mock('@codemirror/lang-yaml', () => ({
 }));
 
 vi.mock('@codemirror/view', () => ({
-  // biome-ignore lint/complexity/noStaticOnlyClass: CodeMirror exposes EditorView as a constructable class with static extension facets.
-  EditorView: class {
-    static contentAttributes = {
+  EditorView: Object.assign(class EditorViewMock {}, {
+    contentAttributes: {
       of: (attrs: unknown) => ({ type: 'contentAttributes', attrs }),
-    };
-
-    static domEventHandlers(handlers: unknown) {
+    },
+    domEventHandlers(handlers: unknown) {
       return handlers;
-    }
-
-    static lineWrapping = 'lineWrapping';
-  },
+    },
+    lineWrapping: 'lineWrapping',
+  }),
   keymap: {
     of: (bindings: unknown) => bindings,
   },
@@ -365,6 +363,34 @@ describe('ValuesTab', () => {
     expect(parsed.replicaCount).toBe(3);
     expect(parsed.image).toEqual({ repository: 'nginx', tag: 'v2.0' });
     expect(parsed.service).toEqual({ type: 'ClusterIP', port: 80 });
+
+    await unmount();
+  });
+
+  it('ignores inherited properties when deriving Helm value modes', async () => {
+    const allValues = Object.assign(Object.create({ inheritedDefault: 'not-a-value' }), {
+      ownDefault: 'default',
+      ownOverride: 'base',
+    });
+    const userValues = Object.assign(Object.create({ inheritedOverride: 'not-an-override' }), {
+      ownOverride: 'override',
+    });
+    snapshotState.current = {
+      status: 'ready',
+      data: { values: { allValues, userValues } },
+      error: null,
+    };
+
+    const { container, unmount } = await renderValuesTab();
+    await waitForUpdates();
+
+    expect(parsedValue()).toEqual({ ownDefault: 'default' });
+
+    await clickSegmentedOption(container, 'Overrides');
+    expect(parsedValue()).toEqual({ ownOverride: 'override' });
+
+    await clickSegmentedOption(container, 'Merged');
+    expect(parsedValue()).toEqual({ ownDefault: 'default', ownOverride: 'override' });
 
     await unmount();
   });

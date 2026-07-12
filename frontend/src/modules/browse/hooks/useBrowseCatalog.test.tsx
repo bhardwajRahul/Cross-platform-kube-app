@@ -6,7 +6,7 @@
  */
 
 import React, { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeCatalogSnapshotPayload } from '@/core/refresh/refreshContractTestBuilders';
 import type { CatalogItem, CatalogSnapshotPayload } from '@/core/refresh/types';
@@ -15,7 +15,7 @@ import { type UseBrowseCatalogResult, useBrowseCatalog } from './useBrowseCatalo
 
 const mocks = vi.hoisted(() => ({
   setScopedDomainEnabled: vi.fn(),
-  useRefreshScopedDomain: vi.fn(),
+  readRefreshScopedDomain: vi.fn(),
   requestRefreshDomain: vi.fn(),
   requestRefreshDomainState: vi.fn(),
   getScopedDomainState: vi.fn(),
@@ -28,7 +28,7 @@ vi.mock('@/core/refresh', () => ({
   refreshOrchestrator: {
     setScopedDomainEnabled: (...args: unknown[]) => mocks.setScopedDomainEnabled(...args),
   },
-  useRefreshScopedDomain: (...args: unknown[]) => mocks.useRefreshScopedDomain(...args),
+  useRefreshScopedDomain: (...args: unknown[]) => mocks.readRefreshScopedDomain(...args),
 }));
 
 vi.mock('@/core/data-access', () => ({
@@ -47,8 +47,7 @@ vi.mock('@/core/data-access', () => ({
       mocks.refreshFns.set(key, refresh);
     }
     return {
-      // biome-ignore lint/correctness/useHookAtTopLevel: this is a stable mock function, not a React component or custom hook
-      state: domain && scope ? mocks.useRefreshScopedDomain(domain, scope) : { status: 'idle' },
+      state: domain && scope ? mocks.readRefreshScopedDomain(domain, scope) : { status: 'idle' },
       refresh,
     };
   },
@@ -188,14 +187,14 @@ describe('useBrowseCatalog', () => {
         clusterScopedOnly: false,
         customOnly: false,
         pageLimit: undefined,
-        onPageLimitChange: () => {},
+        onPageLimitChange: () => undefined,
         filters: { search: '', kinds: [], namespaces: [] },
         diagnosticLabel: 'test browse',
       });
       return null;
     };
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => ({
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => ({
       status: 'idle',
       data: null,
       scope,
@@ -210,7 +209,8 @@ describe('useBrowseCatalog', () => {
   });
 
   it('holds the last filter options while a filter-change scope swap has no data yet', async () => {
-    const baseScope = 'cluster-1|limit=2&namespace=default';
+    const baseScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default';
     const first = makeItem({ uid: 'pod-a', name: 'pod-a' });
     const baseState = {
       status: 'ready',
@@ -218,7 +218,7 @@ describe('useBrowseCatalog', () => {
       scope: baseScope,
     };
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) =>
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) =>
       scope === baseScope ? baseState : { status: 'idle', data: null, scope }
     );
 
@@ -239,8 +239,10 @@ describe('useBrowseCatalog', () => {
   });
 
   it('stays quiet (no loading) when the catalog refreshes after the first load', async () => {
-    const baseScope = 'cluster-1|limit=2&namespace=default';
-    const metadataScope = 'cluster-1|limit=1&namespace=default';
+    const baseScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const metadataScope =
+      'cluster-1|limit=1&resourceScope=namespace&namespace=default&scopeNamespace=default';
     const first = makeItem({ uid: 'pod-a', name: 'pod-a' });
     const readyState = {
       status: 'ready',
@@ -254,7 +256,7 @@ describe('useBrowseCatalog', () => {
     };
     let scopeState = readyState;
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === baseScope) {
         return scopeState;
       }
@@ -286,8 +288,10 @@ describe('useBrowseCatalog', () => {
   });
 
   it('refetches the current catalog query when a catalog doorbell advances its signal clock', async () => {
-    const baseScope = 'cluster-1|limit=2&namespace=default';
-    const metadataScope = 'cluster-1|limit=1&namespace=default';
+    const baseScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const metadataScope =
+      'cluster-1|limit=1&resourceScope=namespace&namespace=default&scopeNamespace=default';
     const first = makeItem({ uid: 'pod-a', name: 'pod-a' });
     // Doorbells write signalVersions (never touched by payload applies) plus
     // the folded sourceVersion — bumpSourceVersionOnly's exact shape.
@@ -305,7 +309,7 @@ describe('useBrowseCatalog', () => {
       sourceVersion: 'catalog:1',
     };
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === baseScope) {
         return baseState;
       }
@@ -344,8 +348,10 @@ describe('useBrowseCatalog', () => {
   });
 
   it('payload validator churn must NOT refire the doorbell effect (no echo refetch)', async () => {
-    const baseScope = 'cluster-1|limit=2&namespace=default';
-    const metadataScope = 'cluster-1|limit=1&namespace=default';
+    const baseScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const metadataScope =
+      'cluster-1|limit=1&resourceScope=namespace&namespace=default&scopeNamespace=default';
     const first = makeItem({ uid: 'pod-a', name: 'pod-a' });
     let baseState = {
       status: 'ready',
@@ -360,7 +366,7 @@ describe('useBrowseCatalog', () => {
       scope: metadataScope,
       sourceVersion: 'validator-1',
     };
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === baseScope) {
         return baseState;
       }
@@ -393,8 +399,10 @@ describe('useBrowseCatalog', () => {
   });
 
   it('refetches on the FIRST doorbell after mount (no pre-doorbell signal value exists)', async () => {
-    const baseScope = 'cluster-1|limit=2&namespace=default';
-    const metadataScope = 'cluster-1|limit=1&namespace=default';
+    const baseScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const metadataScope =
+      'cluster-1|limit=1&resourceScope=namespace&namespace=default&scopeNamespace=default';
     const first = makeItem({ uid: 'pod-a', name: 'pod-a' });
     // Fresh mount: the scope has data (payload apply) but NO signalVersions —
     // doorbell values exist only after the first doorbell rings.
@@ -410,7 +418,7 @@ describe('useBrowseCatalog', () => {
       scope: metadataScope,
       sourceVersion: 'validator-1',
     };
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === baseScope) {
         return baseState;
       }
@@ -448,9 +456,12 @@ describe('useBrowseCatalog', () => {
   });
 
   it('replaces the current row window with the next cursor page', async () => {
-    const baseScope = 'cluster-1|limit=2&namespace=default';
-    const metadataScope = 'cluster-1|limit=1&namespace=default';
-    const pageScope = 'cluster-1|limit=2&namespace=default&continue=2';
+    const baseScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const metadataScope =
+      'cluster-1|limit=1&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const pageScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default&continue=2';
     const first = makeItem({ uid: 'pod-a', name: 'pod-a' });
     const second = makeItem({ uid: 'pod-b', name: 'pod-b' });
     const baseState = {
@@ -469,7 +480,7 @@ describe('useBrowseCatalog', () => {
       scope: pageScope,
     };
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === baseScope) {
         return baseState;
       }
@@ -515,10 +526,10 @@ describe('useBrowseCatalog', () => {
 
   it('fetchAllRows rejects when a page fails instead of returning a partial result', async () => {
     const first = makeItem({ uid: 'pod-a', name: 'pod-a' });
-    mocks.useRefreshScopedDomain.mockReturnValue({
+    mocks.readRefreshScopedDomain.mockReturnValue({
       status: 'ready',
       data: makePayload({ items: [first], total: 2, batchSize: 1 }),
-      scope: 'cluster-1|limit=2&namespace=default',
+      scope: 'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default',
     });
     // First export page succeeds with a cursor; the follow-up page is blocked.
     mocks.requestRefreshDomainState
@@ -543,10 +554,10 @@ describe('useBrowseCatalog', () => {
 
   it('fetchAllRows pages at the backend max page size', async () => {
     const first = makeItem({ uid: 'pod-a', name: 'pod-a' });
-    mocks.useRefreshScopedDomain.mockReturnValue({
+    mocks.readRefreshScopedDomain.mockReturnValue({
       status: 'ready',
       data: makePayload({ items: [first], total: 1, batchSize: 1 }),
-      scope: 'cluster-1|limit=2&namespace=default',
+      scope: 'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default',
     });
     mocks.requestRefreshDomainState.mockResolvedValue({
       status: 'executed',
@@ -576,9 +587,9 @@ describe('useBrowseCatalog', () => {
   });
 
   it('keeps the selected Cluster Browse cursor page when the base scope refreshes', async () => {
-    const baseScope = 'cluster-1|limit=2&namespace=cluster';
-    const metadataScope = 'cluster-1|limit=1&namespace=cluster';
-    const pageScope = 'cluster-1|limit=2&namespace=cluster&continue=page-2';
+    const baseScope = 'cluster-1|limit=2&resourceScope=cluster&namespace=cluster';
+    const metadataScope = 'cluster-1|limit=1&resourceScope=cluster&namespace=cluster';
+    const pageScope = 'cluster-1|limit=2&resourceScope=cluster&namespace=cluster&continue=page-2';
     const first = makeItem({
       kind: 'Node',
       resource: 'nodes',
@@ -649,7 +660,7 @@ describe('useBrowseCatalog', () => {
       scope: pageScope,
     };
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === baseScope) {
         return baseState;
       }
@@ -740,9 +751,11 @@ describe('useBrowseCatalog', () => {
 
   it('uses the persisted initial page size and publishes page size changes', async () => {
     const onPageLimitChange = vi.fn();
-    const baseScope = 'cluster-1|limit=250&namespace=default';
-    const metadataScope = 'cluster-1|limit=1&namespace=default';
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    const baseScope =
+      'cluster-1|limit=250&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const metadataScope =
+      'cluster-1|limit=1&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === baseScope || scope === metadataScope) {
         return {
           status: 'ready',
@@ -769,11 +782,14 @@ describe('useBrowseCatalog', () => {
   });
 
   it('does not request catalog scopes before owning persisted table state is hydrated', async () => {
-    const defaultScope = 'cluster-1|limit=2&namespace=default';
-    const persistedScope = 'cluster-1|limit=250&namespace=default';
-    const metadataScope = 'cluster-1|limit=1&namespace=default';
+    const defaultScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const persistedScope =
+      'cluster-1|limit=250&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const metadataScope =
+      'cluster-1|limit=1&resourceScope=namespace&namespace=default&scopeNamespace=default';
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === persistedScope || scope === metadataScope) {
         return {
           status: 'ready',
@@ -813,9 +829,9 @@ describe('useBrowseCatalog', () => {
   });
 
   it('keeps Cluster Browse loading for empty non-final catalog snapshots', async () => {
-    const clusterScope = 'cluster-1|limit=2&namespace=cluster';
-    const metadataScope = 'cluster-1|limit=1&namespace=cluster';
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    const clusterScope = 'cluster-1|limit=2&resourceScope=cluster&namespace=cluster';
+    const metadataScope = 'cluster-1|limit=1&resourceScope=cluster&namespace=cluster';
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === clusterScope) {
         return {
           status: 'updating',
@@ -849,10 +865,12 @@ describe('useBrowseCatalog', () => {
   });
 
   it('resets loaded state when switching into Cluster Browse and then accepts cluster rows', async () => {
-    const namespaceScope = 'cluster-1|limit=2&namespace=default';
-    const namespaceMetadataScope = 'cluster-1|limit=1&namespace=default';
-    const clusterScope = 'cluster-1|limit=2&namespace=cluster';
-    const clusterMetadataScope = 'cluster-1|limit=1&namespace=cluster';
+    const namespaceScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const namespaceMetadataScope =
+      'cluster-1|limit=1&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const clusterScope = 'cluster-1|limit=2&resourceScope=cluster&namespace=cluster';
+    const clusterMetadataScope = 'cluster-1|limit=1&resourceScope=cluster&namespace=cluster';
     const pod = makeItem({ uid: 'pod-a', name: 'pod-a' });
     const node = makeItem({
       kind: 'Node',
@@ -864,7 +882,7 @@ describe('useBrowseCatalog', () => {
     });
     let clusterReady = false;
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === namespaceScope) {
         return {
           status: 'ready',
@@ -933,9 +951,12 @@ describe('useBrowseCatalog', () => {
   });
 
   it('replaces the current row window with the previous cursor page', async () => {
-    const baseScope = 'cluster-1|limit=2&namespace=default';
-    const metadataScope = 'cluster-1|limit=1&namespace=default';
-    const pageScope = 'cluster-1|limit=2&namespace=default&continue=prev';
+    const baseScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const metadataScope =
+      'cluster-1|limit=1&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const pageScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default&continue=prev';
     const first = makeItem({ uid: 'pod-a', name: 'pod-a' });
     const second = makeItem({ uid: 'pod-b', name: 'pod-b' });
     const baseState = {
@@ -960,7 +981,7 @@ describe('useBrowseCatalog', () => {
       scope: pageScope,
     };
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === baseScope) {
         return baseState;
       }
@@ -1000,9 +1021,12 @@ describe('useBrowseCatalog', () => {
   });
 
   it('refreshes the first page when the backend reports an invalid cursor', async () => {
-    const baseScope = 'cluster-1|limit=2&namespace=default';
-    const metadataScope = 'cluster-1|limit=1&namespace=default';
-    const pageScope = 'cluster-1|limit=2&namespace=default&continue=bad-cursor';
+    const baseScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const metadataScope =
+      'cluster-1|limit=1&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const pageScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default&continue=bad-cursor';
     const first = makeItem({ uid: 'pod-a', name: 'pod-a' });
     const baseState = {
       status: 'ready',
@@ -1020,7 +1044,7 @@ describe('useBrowseCatalog', () => {
       scope: pageScope,
     };
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === baseScope) {
         return baseState;
       }
@@ -1057,11 +1081,14 @@ describe('useBrowseCatalog', () => {
 
   it('debounces backend search scope refreshes', async () => {
     vi.useFakeTimers();
-    const baseScope = 'cluster-1|limit=2&namespace=default';
-    const searchScope = 'cluster-1|limit=2&search=api&namespace=default';
-    const metadataScope = 'cluster-1|limit=1&namespace=default';
+    const baseScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const searchScope =
+      'cluster-1|limit=2&resourceScope=namespace&search=api&namespace=default&scopeNamespace=default';
+    const metadataScope =
+      'cluster-1|limit=1&resourceScope=namespace&namespace=default&scopeNamespace=default';
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === baseScope || scope === searchScope || scope === metadataScope) {
         return {
           status: 'ready',
@@ -1103,10 +1130,12 @@ describe('useBrowseCatalog', () => {
   });
 
   it('threads custom-resource-only queries into catalog scopes', async () => {
-    const customScope = 'cluster-1|limit=2&customOnly=true&namespace=default';
-    const metadataScope = 'cluster-1|limit=1&customOnly=true&namespace=default';
+    const customScope =
+      'cluster-1|limit=2&customOnly=true&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const metadataScope =
+      'cluster-1|limit=1&customOnly=true&resourceScope=namespace&namespace=default&scopeNamespace=default';
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === customScope || scope === metadataScope) {
         return {
           status: 'ready',
@@ -1135,11 +1164,13 @@ describe('useBrowseCatalog', () => {
   });
 
   it('refetches with the kind in scope when the kind filter changes on a cluster-scoped custom query', async () => {
-    const baseScope = 'cluster-1|limit=2&customOnly=true&namespace=cluster';
-    const metadataScope = 'cluster-1|limit=1&customOnly=true&namespace=cluster';
-    const filteredScope = 'cluster-1|limit=2&customOnly=true&kind=Widget&namespace=cluster';
+    const baseScope = 'cluster-1|limit=2&customOnly=true&resourceScope=cluster&namespace=cluster';
+    const metadataScope =
+      'cluster-1|limit=1&customOnly=true&resourceScope=cluster&namespace=cluster';
+    const filteredScope =
+      'cluster-1|limit=2&customOnly=true&resourceScope=cluster&kind=Widget&namespace=cluster';
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === baseScope || scope === metadataScope || scope === filteredScope) {
         return { status: 'ready', data: makePayload({ items: [], total: 0, batchSize: 0 }), scope };
       }
@@ -1169,8 +1200,10 @@ describe('useBrowseCatalog', () => {
   });
 
   it('keeps only the current page window across repeated page navigation', async () => {
-    const baseScope = 'cluster-1|limit=2&namespace=default';
-    const metadataScope = 'cluster-1|limit=1&namespace=default';
+    const baseScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const metadataScope =
+      'cluster-1|limit=1&resourceScope=namespace&namespace=default&scopeNamespace=default';
     const first = makeItem({ uid: 'pod-0', name: 'pod-0' });
     const baseState = {
       status: 'ready',
@@ -1183,7 +1216,7 @@ describe('useBrowseCatalog', () => {
       scope: metadataScope,
     };
 
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
       if (scope === baseScope) {
         return baseState;
       }
@@ -1270,8 +1303,10 @@ describe('doorbell refetch quietness on a paged catalog', () => {
   // footer). On a churning cluster doorbells ring continuously — a busy flag
   // per ring means a permanently dead footer (the reported bug).
   it('keeps isRequestingMore false during doorbell-driven current-page refetches', async () => {
-    const baseScope = 'cluster-1|limit=2&namespace=default';
-    const metadataScope = 'cluster-1|limit=1&namespace=default';
+    const baseScope =
+      'cluster-1|limit=2&resourceScope=namespace&namespace=default&scopeNamespace=default';
+    const metadataScope =
+      'cluster-1|limit=1&resourceScope=namespace&namespace=default&scopeNamespace=default';
     const pageOne = [makeItem({ uid: 'a', name: 'a' }), makeItem({ uid: 'b', name: 'b' })];
     let baseState = {
       status: 'ready',
@@ -1292,9 +1327,13 @@ describe('doorbell refetch quietness on a paged catalog', () => {
       scope: metadataScope,
       sourceVersion: 'catalog:1',
     };
-    mocks.useRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
-      if (scope === baseScope) return baseState;
-      if (scope === metadataScope) return metadataState;
+    mocks.readRefreshScopedDomain.mockImplementation((_domain: string, scope: string) => {
+      if (scope === baseScope) {
+        return baseState;
+      }
+      if (scope === metadataScope) {
+        return metadataState;
+      }
       return { status: 'idle', data: null, scope };
     });
 
@@ -1308,9 +1347,12 @@ describe('doorbell refetch quietness on a paged catalog', () => {
 
     // User navigation: resolves page 2; the busy flag is EXPECTED while a
     // user-initiated fetch is in flight.
-    let resolveUserFetch: (value: unknown) => void = () => {};
+    let resolveUserFetch: (value: unknown) => void = () => undefined;
     mocks.requestRefreshDomainState.mockImplementationOnce(
-      () => new Promise((resolve) => (resolveUserFetch = resolve))
+      () =>
+        new Promise((resolve) => {
+          resolveUserFetch = resolve;
+        })
     );
 
     await act(async () => {
@@ -1335,9 +1377,12 @@ describe('doorbell refetch quietness on a paged catalog', () => {
 
     // Doorbell ring: hold the quiet current-page refetch in flight and assert
     // the busy flag stays FALSE the whole time.
-    let resolveQuietFetch: (value: unknown) => void = () => {};
+    let resolveQuietFetch: (value: unknown) => void = () => undefined;
     mocks.requestRefreshDomainState.mockImplementationOnce(
-      () => new Promise((resolve) => (resolveQuietFetch = resolve))
+      () =>
+        new Promise((resolve) => {
+          resolveQuietFetch = resolve;
+        })
     );
     baseState = {
       ...baseState,

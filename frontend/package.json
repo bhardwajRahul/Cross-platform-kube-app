@@ -17,9 +17,9 @@
     "format:check": "biome format .",
     "lint": "biome lint .",
     "lint:fix": "biome lint --write .",
-    "check": "biome check . && npm run check:biome-exceptions",
-    "check:fix": "biome check --write . && npm run check:biome-exceptions",
-    "check:biome-exceptions": "node scripts/check-biome-exceptions.mjs",
+    "check": "biome check . && npm run check:biome-suppressions",
+    "check:fix": "biome check --write . && npm run check:biome-suppressions",
+    "check:biome-suppressions": "node scripts/check-biome-suppressions.mjs",
     "test": "vitest run",
     "knip": "knip",
     "storybook": "storybook dev -p 6006"

@@ -28,6 +28,9 @@ cluster/object scoped.
   `ObjectPanel.groupLeaderContext.test.tsx`).
 - Layout CSS and measured group geometry are part of behavior; do not remove
   geometry transfer without replacing it.
+- Menus and other transient surfaces opened from docked content must render
+  through their shared body-level portal. Do not weaken the panel's scrolling
+  or overflow boundaries to make an inline surface visible.
 
 ## Ownership
 
@@ -46,6 +49,9 @@ cluster/object scoped.
 - Dragging to another compatible tab bar moves.
 - Dropping away from a tab bar may create or use a floating group according to
   dockable state rules.
+- A floating group moves from any non-interactive header space, including blank
+  tab-strip space. Tabs, close buttons, and panel controls retain their own
+  pointer behavior and must not start a group move.
 
 ## Change Checklist
 

@@ -227,9 +227,15 @@ const SessionsStatus: React.FC = () => {
   const totalUnhealthy = Math.max(0, totalCount - totalHealthy);
 
   const status = useMemo<StatusState>(() => {
-    if (totalCount === 0) return 'inactive';
-    if (totalUnhealthy === 0) return 'healthy';
-    if (totalHealthy === 0) return 'unhealthy';
+    if (totalCount === 0) {
+      return 'inactive';
+    }
+    if (totalUnhealthy === 0) {
+      return 'healthy';
+    }
+    if (totalHealthy === 0) {
+      return 'unhealthy';
+    }
     return 'degraded';
   }, [totalCount, totalHealthy, totalUnhealthy]);
 
@@ -254,7 +260,7 @@ const SessionsStatus: React.FC = () => {
                     <div className="as-section-empty">No active shell sessions</div>
                   ) : (
                     filteredShellSessions.map((session) => {
-                      const status = session.status || 'active';
+                      const sessionStatus = session.status || 'active';
                       const shellPath = session.command?.[0] || '/bin/sh';
                       const fields = [
                         {
@@ -281,7 +287,9 @@ const SessionsStatus: React.FC = () => {
                               {fields.map((field, index) => (
                                 <div key={field.label} className="ss-field-row as-pf-field-row">
                                   <span className="as-pf-status-slot" aria-hidden={index !== 0}>
-                                    {index === 0 ? renderPortForwardStatusIcon(status) : null}
+                                    {index === 0
+                                      ? renderPortForwardStatusIcon(sessionStatus)
+                                      : null}
                                   </span>
                                   <span className="ss-field-label">{field.label}:</span>
                                   <span className="ss-field-value">{field.value}</span>

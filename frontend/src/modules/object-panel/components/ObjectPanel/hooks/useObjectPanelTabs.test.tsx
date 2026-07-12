@@ -10,7 +10,7 @@ import type {
 } from '@modules/object-panel/components/ObjectPanel/types';
 import type React from 'react';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 
@@ -195,7 +195,7 @@ describe('useObjectPanelTabs', () => {
   });
 
   it('keeps the Map tab for backend-supported object-map types', async () => {
-    for (const objectData of [
+    for (const candidateObject of [
       {
         kind: 'IngressClass',
         name: 'public',
@@ -218,7 +218,7 @@ describe('useObjectPanelTabs', () => {
         version: 'v1',
       },
     ]) {
-      const { availableTabs } = await renderHook({ objectData });
+      const { availableTabs } = await renderHook({ objectData: candidateObject });
       expect(availableTabs.map((tab) => tab.label)).toContain('Map');
     }
   });

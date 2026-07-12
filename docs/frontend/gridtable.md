@@ -28,6 +28,19 @@ workflow and that exception is documented.
   rendering details. Changes to them need tests proving controlled search keeps
   focus across updates and rows-per-page menus open and dispatch supported
   values.
+- The Columns menu uses `Dropdown`'s shared bulk-action controls. Its options are
+  hideable columns only; do not add synthetic show-all or hide-all options.
+- Multi-select filter state preserves an explicit Select All selection so the
+  controlled dropdown remains distinct from Select None. Query adapters may
+  remove a full-dimension selection only when building an equivalent backend
+  query; they must not write that query optimization back into dropdown state.
+- Shared filter and Columns dropdown menus measure both viewport axes when they
+  open. Right-edge menus end-align when start alignment would overflow, and menu
+  width remains capped to the visible viewport.
+- Query-backed filter feedback displays the backend's filtered total against the
+  unfiltered total for the same view scope. Producers must not widen the
+  denominator beyond cluster-scoped, all-namespaces, or pinned-namespace
+  boundaries when clearing user filters.
 
 ## Ownership
 
@@ -49,6 +62,31 @@ of interpolating keys into selectors.
 
 DOM ids must use stable helper functions that cannot collapse distinct
 cluster-scoped row keys.
+
+### Accessibility model
+
+`GridTable` renders native `table`, `thead`, `tbody`, `tr`, `th`, and `td`
+elements. The table is the single keyboard entry point; Arrow, Home, End, Page
+Up, and Page Down update the focused-row state while DOM focus stays on the
+table, so recycling a virtual row never moves focus to an element that can
+unmount. Virtual rows remain direct `tbody` children and are positioned from the
+virtualizer's per-row top offsets.
+
+The body table lives inside a distinct `.gridtable-wrapper` scroll viewport.
+Keep scrolling, viewport measurement, virtualization, and header synchronization
+bound to the wrapper while focus remains on the native table. Collapsing those
+elements into one prevents the scroll viewport from constraining content wider
+than itself and removes horizontal scrolling.
+
+Plain Left/Right arrows retain native horizontal scrolling. Paginated tables use
+Ctrl+Left/Right off macOS and Command+Left/Right on macOS for previous/next page;
+the modified shortcut remains unhandled when its page direction is unavailable.
+
+Sortable column labels are native buttons. Column and docked-layout resize
+separators are keyboard focusable and support arrow keys plus Home and End. Keep
+the native elements centralized in `AriaGridPrimitives.tsx`. Production grids,
+app-log grids, tests, and stories must reuse those primitives or `GridTable` so
+virtualization cannot regress to synthetic table roles.
 
 Auto-width dirty checking hashes the currently rendered cells before running column measurement.
 When row virtualization changes `virtualRange.start/end`, the controller must enqueue visible
@@ -197,6 +235,8 @@ When changing table behavior:
 
 1. Check row key, column key, and persisted-state compatibility.
 2. Verify virtualization, keyboard focus, hover, context menu, and empty states.
+   For accessibility changes, also verify the wrapper's active descendant,
+   row/cell roles, native sort buttons, and separator value attributes.
 3. Verify pagination placement, page-size behavior, visible range, and total
    exactness for query-backed tables.
 4. Verify partial/degraded copy and action limits for Local Partial tables.

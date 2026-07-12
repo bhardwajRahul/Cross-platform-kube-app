@@ -7,8 +7,8 @@
 
 import type { GridColumnDefinition } from '@shared/components/tables/GridTable.types';
 import { useColumnResizeController } from '@shared/components/tables/hooks/useColumnResizeController';
-import React, { act, forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import ReactDOM from 'react-dom/client';
+import React, { act, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type SampleRow = {
@@ -24,6 +24,7 @@ type HarnessProps = {
 
 type HarnessHandle = {
   beginResize: (event: React.MouseEvent, leftKey: string, rightKey: string) => void;
+  resizeWithKeyboard: (event: React.KeyboardEvent, columnKey: string) => void;
   autoSizeColumn: (columnKey: string) => void;
   resetManualResizes: () => void;
   getWidths: () => Record<string, number>;
@@ -60,48 +61,51 @@ const getColumnMinWidth = <T,>(column: GridColumnDefinition<T>) =>
 const getColumnMaxWidth = <T,>(column: GridColumnDefinition<T>) =>
   typeof column.maxWidth === 'number' ? column.maxWidth : 480;
 
-const Harness = forwardRef<HarnessHandle, HarnessProps>(
-  ({ enable = true, measureWidth = 320 }, ref) => {
-    const [widths, setWidths] = useState<Record<string, number>>({
-      name: 220,
-      kind: 140,
-      status: 110,
-    });
-    const manualRef = useRef(new Set<string>());
+const Harness = ({
+  enable = true,
+  measureWidth = 320,
+  ref,
+}: HarnessProps & { ref?: React.Ref<HarnessHandle> }) => {
+  const [widths, setWidths] = useState<Record<string, number>>({
+    name: 220,
+    kind: 140,
+    status: 110,
+  });
+  const manualRef = useRef(new Set<string>());
 
-    const columns = useMemo(() => baseColumns, []);
+  const columns = useMemo(() => baseColumns, []);
 
-    const controller = useColumnResizeController<SampleRow>({
-      columns,
-      renderedColumns: columns,
-      columnWidths: widths,
-      setColumnWidths: setWidths,
-      manuallyResizedColumnsRef: manualRef,
-      getColumnMinWidth,
-      getColumnMaxWidth,
-      measureColumnWidth: () => measureWidth,
-      enableColumnResizing: enable,
-      isFixedColumnKey: (key) => key === 'status',
-    });
+  const controller = useColumnResizeController<SampleRow>({
+    columns,
+    renderedColumns: columns,
+    columnWidths: widths,
+    setColumnWidths: setWidths,
+    manuallyResizedColumnsRef: manualRef,
+    getColumnMinWidth,
+    getColumnMaxWidth,
+    measureColumnWidth: () => measureWidth,
+    enableColumnResizing: enable,
+    isFixedColumnKey: (key) => key === 'status',
+  });
 
-    const widthsRef = useRef(widths);
-    widthsRef.current = widths;
+  const widthsRef = useRef(widths);
+  widthsRef.current = widths;
 
-    useImperativeHandle(
-      ref,
-      () => ({
-        beginResize: controller.handleResizeStart,
-        autoSizeColumn: controller.autoSizeColumn,
-        resetManualResizes: controller.resetManualResizes,
-        getWidths: () => widthsRef.current,
-        getManualKeys: () => Array.from(manualRef.current),
-      }),
-      [controller]
-    );
+  useImperativeHandle(
+    ref,
+    () => ({
+      beginResize: controller.handleResizeStart,
+      resizeWithKeyboard: controller.handleResizeKeyDown,
+      autoSizeColumn: controller.autoSizeColumn,
+      resetManualResizes: controller.resetManualResizes,
+      getWidths: () => widthsRef.current,
+      getManualKeys: () => Array.from(manualRef.current),
+    }),
+    [controller]
+  );
 
-    return null;
-  }
-);
+  return null;
+};
 
 const renderHarness = async (props?: HarnessProps) => {
   const container = document.createElement('div');
@@ -142,6 +146,29 @@ afterEach(() => {
 });
 
 describe('useColumnResizeController', () => {
+  it('resizes a column with Arrow, Home, and End keys within its configured bounds', async () => {
+    const harness = await renderHarness();
+    const handle = harness.getHandle();
+    const keyEvent = (key: string) =>
+      ({
+        key,
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+      }) as unknown as React.KeyboardEvent;
+
+    await act(async () => handle.resizeWithKeyboard(keyEvent('ArrowRight'), 'name'));
+    expect(handle.getWidths().name).toBe(236);
+
+    await act(async () => handle.resizeWithKeyboard(keyEvent('Home'), 'name'));
+    expect(handle.getWidths().name).toBe(140);
+
+    await act(async () => handle.resizeWithKeyboard(keyEvent('End'), 'name'));
+    expect(handle.getWidths().name).toBe(420);
+    expect(handle.getManualKeys()).toEqual(['name']);
+
+    await harness.unmount();
+  });
+
   it('updates widths and manual keys when dragging between columns', async () => {
     const harness = await renderHarness();
     const handle = harness.getHandle();

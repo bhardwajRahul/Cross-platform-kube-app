@@ -14,7 +14,7 @@ import {
 } from '@shared/components/tabs/dragCoordinator';
 import type React from 'react';
 import { act } from 'react';
-import ReactDOM from 'react-dom/client';
+import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 import { useDockablePanelEmptySpaceDropTarget } from './DockablePanelContentArea';
@@ -113,7 +113,7 @@ function createDataTransfer(): DataTransfer {
     clearData: () => {
       store.clear();
     },
-    setDragImage: () => {},
+    setDragImage: () => undefined,
   } as unknown as DataTransfer;
 }
 
@@ -1201,7 +1201,7 @@ describe('DockablePanelProvider', () => {
           <DockableTabBar
             tabs={bottomTabs}
             activeTab={ctx.tabGroups.bottom.activeTab}
-            onTabClick={() => {}}
+            onTabClick={() => undefined}
             groupKey="bottom"
           />
         </div>
