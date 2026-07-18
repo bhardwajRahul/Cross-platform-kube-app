@@ -77,6 +77,6 @@
 
 /* Separator between button groups — invisible but preserves spacing */
 .icon-bar-separator {
-  margin: 0 8px;
+  margin: 0 0.25em;
   visibility: hidden;
 }

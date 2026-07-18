@@ -4,9 +4,7 @@
  * Secret's resource-stream registry entry. Secret is an owned-reflector ingest
  * kind (IngestOwned), so its namespace-config live notify is driven by the generic
  * ingest notify sink (registerIngestNotifyStreams), not a shared-informer handler.
- * The Helm-release refresh side-effect that previously forced a bespoke
- * CustomStreamHandler is now served by the dedicated helm-storage source. The
- * Informer accessor stays so any uncut path can still resolve the kind.
+ * The Informer accessor stays so any uncut path can still resolve the kind.
  */
 
 package secret

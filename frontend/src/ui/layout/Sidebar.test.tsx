@@ -5,6 +5,8 @@
  * Covers key behaviors and edge cases for Sidebar.
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { ALL_NAMESPACES_SCOPE } from '@modules/namespace/constants';
 import { KeyboardProvider } from '@ui/shortcuts';
 import { act } from 'react';
@@ -18,6 +20,8 @@ import {
 import { requireValue } from '@/test-utils/requireValue';
 import Sidebar from './Sidebar';
 
+const sidebarStyles = readFileSync(resolve(process.cwd(), 'src/ui/layout/Sidebar.css'), 'utf8');
+
 const runtimeMocks = vi.hoisted(() => ({
   eventsOn: vi.fn(),
   eventsOff: vi.fn(),
@@ -25,6 +29,21 @@ const runtimeMocks = vi.hoisted(() => ({
 
 const autoRefreshLoadingState = vi.hoisted(() => ({
   suppressPassiveLoading: false,
+}));
+
+const attentionState = vi.hoisted(() => ({
+  byScope: {
+    'cluster-a|': {
+      severityCounts: { info: 2, warning: 3, error: 1 },
+    },
+  } as Record<string, { severityCounts: { info: number; warning: number; error: number } }>,
+  useRefreshDomainHandle: vi.fn(),
+  useStreamSignalRefetch: vi.fn(),
+}));
+
+const kubeconfigState = vi.hoisted(() => ({
+  selectedClusterId: 'cluster-a',
+  selectedClusterIds: ['cluster-a', 'cluster-b'],
 }));
 
 const testClusterId = 'cluster-a';
@@ -36,11 +55,22 @@ vi.mock('@wailsjs/runtime/runtime', () => ({
 }));
 
 vi.mock('@modules/kubernetes/config/KubeconfigContext', () => ({
-  useKubeconfig: () => ({ selectedClusterId: testClusterId }),
+  useKubeconfig: () => kubeconfigState,
 }));
 
 vi.mock('@/core/refresh/hooks/useAutoRefreshLoadingState', () => ({
   useAutoRefreshLoadingState: () => autoRefreshLoadingState,
+}));
+
+vi.mock('@/core/data-access', () => ({
+  useRefreshDomainHandle: (options: { scope?: string }) => {
+    attentionState.useRefreshDomainHandle(options);
+    return { data: options.scope ? attentionState.byScope[options.scope] : null };
+  },
+}));
+
+vi.mock('@/core/refresh/hooks/useStreamSignalRefetch', () => ({
+  useStreamSignalRefetch: (...args: unknown[]) => attentionState.useStreamSignalRefetch(...args),
 }));
 
 type NamespaceEntry = {
@@ -50,6 +80,15 @@ type NamespaceEntry = {
   hasWorkloads: boolean;
   workloadsUnknown: boolean;
   details: string;
+  unhealthyWorkloads?: number;
+  warningEvents?: number;
+  warningEventsState?: 'available' | 'loading' | 'unavailable';
+  cpuUsageMilli?: number;
+  memoryUsageBytes?: number;
+  utilizationState?: 'available' | 'loading' | 'unavailable';
+  quotaHighestUsedPercentage?: number;
+  quotaPressure?: '' | 'warning' | 'critical';
+  quotaPressureState?: 'available' | 'loading' | 'unavailable';
 };
 
 type NamespaceState = {
@@ -88,10 +127,12 @@ const createViewState = () => ({
     | { type: 'cluster'; value: string },
   viewType: 'overview' as 'overview' | 'cluster' | 'namespace',
   activeClusterTab: 'nodes' as string | null,
+  activeGlobalTab: 'fleet' as const,
   activeNamespaceTab: 'workloads' as string | null,
   toggleSidebar: vi.fn(),
   setViewType: vi.fn(),
   setActiveClusterView: vi.fn(),
+  navigateToGlobal: vi.fn(),
   setSidebarSelection: vi.fn(),
   onNamespaceSelect: vi.fn(),
   setActiveNamespaceTab: vi.fn(),
@@ -174,6 +215,257 @@ describe('Sidebar', () => {
     expect(resources?.getAttribute('aria-expanded')).toBe('false');
   });
 
+  it('shows active-cluster Attention severity counts beside the label', () => {
+    renderSidebar();
+
+    const getAttention = () =>
+      requireValue(container, 'expected Sidebar test container').querySelector<HTMLElement>(
+        '[data-sidebar-target-view="attention"]'
+      );
+    const attention = getAttention();
+    expect(attention?.querySelector('.sidebar-attention-badge--info')?.textContent).toBe('2');
+    expect(attention?.querySelector('.sidebar-attention-badge--warning')?.textContent).toBe('3');
+    expect(attention?.querySelector('.sidebar-attention-badge--error')?.textContent).toBe('1');
+    expect(attention?.getAttribute('aria-label')).toBe('Attention: 2 info, 3 warnings, 1 error');
+    expect(attentionState.useRefreshDomainHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        domain: 'cluster-attention',
+        scope: 'cluster-a|',
+        enabled: true,
+        preserveState: true,
+      })
+    );
+    expect(attentionState.useStreamSignalRefetch).toHaveBeenCalledWith('cluster-attention', [
+      'cluster-a|',
+    ]);
+
+    attentionState.byScope['cluster-b|'] = {
+      severityCounts: { info: 0, warning: 4, error: 2 },
+    };
+    kubeconfigState.selectedClusterId = 'cluster-b';
+    renderSidebar();
+
+    expect(getAttention()?.querySelector('.sidebar-attention-badge--info')).toBeNull();
+    expect(getAttention()?.querySelector('.sidebar-attention-badge--warning')?.textContent).toBe(
+      '4'
+    );
+    expect(getAttention()?.querySelector('.sidebar-attention-badge--error')?.textContent).toBe('2');
+    expect(attentionState.useRefreshDomainHandle).toHaveBeenLastCalledWith(
+      expect.objectContaining({ scope: 'cluster-b|' })
+    );
+  });
+
+  it('renders flat cluster and namespace view lists in canonical order', () => {
+    renderSidebar();
+
+    const host = requireValue(container, 'expected Sidebar test container');
+    const viewIdsWithin = (element: Element) =>
+      Array.from(
+        element.querySelectorAll<HTMLElement>('[data-sidebar-target-view]'),
+        (view) => view.dataset.sidebarTargetView
+      );
+    const clusterViews = requireValue(
+      host.querySelector('[id$="-sidebar-cluster-resource-views"]'),
+      'expected cluster resource views'
+    );
+    expect(Array.from(clusterViews.children).every((child) => child.matches('.sidebar-item'))).toBe(
+      true
+    );
+    expect(viewIdsWithin(clusterViews)).toEqual([
+      'namespaces',
+      'browse',
+      'events',
+      'nodes',
+      'config',
+      'storage',
+      'crds',
+      'custom',
+      'rbac',
+    ]);
+
+    const namespaceToggle = requireValue(
+      host.querySelector<HTMLElement>(
+        `[data-sidebar-target-kind="namespace-toggle"][data-sidebar-target-namespace="${namespaceKey(
+          'default'
+        )}"]`
+      ),
+      'expected namespace toggle'
+    );
+    act(() => namespaceToggle.click());
+
+    const namespaceViewsId = requireValue(
+      namespaceToggle.getAttribute('aria-controls'),
+      'expected namespace view controls id'
+    );
+    const namespaceViews = requireValue(
+      document.getElementById(namespaceViewsId),
+      'expected namespace resource views'
+    );
+    expect(
+      Array.from(namespaceViews.children).every((child) => child.matches('.sidebar-item'))
+    ).toBe(true);
+    expect(viewIdsWithin(namespaceViews)).toEqual([
+      'browse',
+      'map',
+      'events',
+      'workloads',
+      'autoscaling',
+      'helm',
+      'config',
+      'network',
+      'storage',
+      'custom',
+      'quotas',
+      'rbac',
+    ]);
+  });
+
+  it('presents cross-cluster views under the Global scope instead of Cluster resources', () => {
+    viewStateMock.viewType = 'global' as never;
+    renderSidebar();
+
+    const host = requireValue(container, 'expected Sidebar test container');
+    expect(
+      Array.from(host.querySelectorAll('.sidebar-section > h3'), (heading) =>
+        heading.textContent?.trim()
+      )
+    ).toEqual(['Global', 'Cluster', 'Namespaces']);
+
+    const globalClusters = requireValue(
+      host.querySelector<HTMLElement>(
+        '[data-sidebar-scope="global"][data-sidebar-target-view="fleet"]'
+      ),
+      'expected global Clusters entry'
+    );
+    expect(globalClusters.textContent?.trim()).toBe('Clusters');
+    const globalNamespaces = requireValue(
+      host.querySelector<HTMLElement>(
+        '[data-sidebar-scope="global"][data-sidebar-target-view="global-namespaces"]'
+      ),
+      'expected global Namespaces entry'
+    );
+    expect(globalNamespaces.textContent?.trim()).toBe('Namespaces');
+
+    const clusterViews = requireValue(
+      host.querySelector('[id$="-sidebar-cluster-resource-views"]'),
+      'expected cluster resource views'
+    );
+    expect(clusterViews.querySelector('[data-sidebar-target-view="fleet"]')).toBeNull();
+    expect(clusterViews.querySelector('[data-sidebar-target-view="global-namespaces"]')).toBeNull();
+  });
+
+  it.each(['overview', 'cluster', 'namespace'] as const)(
+    'does not show Global navigation while the %s workspace is active',
+    (viewType) => {
+      viewStateMock.viewType = viewType;
+      renderSidebar();
+
+      const host = requireValue(container, 'expected Sidebar test container');
+      expect(host.querySelector('[data-sidebar-scope="global"]')).toBeNull();
+      expect(
+        Array.from(host.querySelectorAll('.sidebar-section > h3'), (heading) =>
+          heading.textContent?.trim()
+        )
+      ).toEqual(['Cluster', 'Namespaces']);
+    }
+  );
+
+  it('enters Global through a Global sidebar target', () => {
+    viewStateMock.viewType = 'global' as never;
+    renderSidebar();
+    const globalNamespaces = requireValue(
+      container,
+      'expected Sidebar test container'
+    ).querySelector<HTMLElement>(
+      '[data-sidebar-target-kind="global-view"][data-sidebar-target-view="global-namespaces"]'
+    );
+
+    act(() => {
+      requireValue(globalNamespaces, 'expected Global Namespaces entry').click();
+    });
+
+    expect(viewStateMock.navigateToGlobal).toHaveBeenCalledWith('global-namespaces');
+    expect(viewStateMock.setActiveClusterView).not.toHaveBeenCalled();
+  });
+
+  it('does not show active-cluster navigation while Global is active', () => {
+    viewStateMock.viewType = 'global' as never;
+    renderSidebar();
+
+    const host = requireValue(container, 'expected Sidebar test container');
+    expect(
+      host.querySelector('[data-sidebar-target-kind="overview"]')?.closest('[hidden]')
+    ).not.toBeNull();
+    const namespacesSection = requireValue(
+      host.querySelector<HTMLElement>('.namespaces-section'),
+      'expected namespace section'
+    );
+    expect(namespacesSection.hasAttribute('hidden')).toBe(true);
+    expect(sidebarStyles).toMatch(/\.sidebar-section\[hidden\]\s*\{[^}]*display:\s*none;/s);
+  });
+
+  it('hides the Global section when fewer than two clusters are open', () => {
+    kubeconfigState.selectedClusterIds = ['cluster-a'];
+    renderSidebar();
+
+    const host = requireValue(container, 'expected Sidebar test container');
+    expect(
+      Array.from(host.querySelectorAll('.sidebar-section > h3'), (heading) =>
+        heading.textContent?.trim()
+      )
+    ).toEqual(['Cluster', 'Namespaces']);
+    expect(host.querySelector('[data-sidebar-scope="global"]')).toBeNull();
+  });
+
+  it('keeps namespace rows free of operational telemetry badges', () => {
+    renderSidebar({
+      namespaces: [
+        {
+          name: 'alpha',
+          scope: 'alpha',
+          resourceVersion: '1',
+          hasWorkloads: true,
+          workloadsUnknown: false,
+          unhealthyWorkloads: 3,
+          warningEvents: 2,
+          warningEventsState: 'available',
+          cpuUsageMilli: 200,
+          memoryUsageBytes: 96 * 1024 * 1024,
+          utilizationState: 'available',
+          quotaHighestUsedPercentage: 92,
+          quotaPressure: 'warning',
+          quotaPressureState: 'available',
+          details: '',
+        },
+        {
+          name: 'beta',
+          scope: 'beta',
+          resourceVersion: '2',
+          hasWorkloads: true,
+          workloadsUnknown: false,
+          unhealthyWorkloads: 0,
+          warningEvents: 0,
+          warningEventsState: 'available',
+          details: '',
+        },
+      ],
+    });
+
+    const alpha = document.querySelector(
+      `[data-sidebar-target-namespace="${namespaceKey('alpha')}"]`
+    );
+    const beta = document.querySelector(
+      `[data-sidebar-target-namespace="${namespaceKey('beta')}"]`
+    );
+    expect(alpha?.querySelector('.namespace-signal-badges')).toBeNull();
+    expect(alpha?.querySelector('.namespace-attention-badge')).toBeNull();
+    expect(alpha?.querySelector('.namespace-warning-events-badge')).toBeNull();
+    expect(alpha?.querySelector('.namespace-utilization-badge')).toBeNull();
+    expect(alpha?.querySelector('.namespace-quota-pressure-badge')).toBeNull();
+    expect(beta?.querySelector('.namespace-attention-badge')).toBeNull();
+    expect(beta?.querySelector('.namespace-warning-events-badge')).toBeNull();
+  });
+
   beforeEach(() => {
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -181,6 +473,13 @@ describe('Sidebar', () => {
     namespaceState = createNamespaceState();
     viewStateMock = createViewState();
     autoRefreshLoadingState.suppressPassiveLoading = false;
+    kubeconfigState.selectedClusterIds = ['cluster-a', 'cluster-b'];
+    kubeconfigState.selectedClusterId = 'cluster-a';
+    attentionState.byScope = {
+      'cluster-a|': {
+        severityCounts: { info: 2, warning: 3, error: 1 },
+      },
+    };
     resetAppPreferencesCacheForTesting();
   });
 
@@ -803,18 +1102,18 @@ describe('Sidebar', () => {
       await Promise.resolve();
     });
 
-    const podsView = requireValue(
+    const workloadsView = requireValue(
       container,
       'expected test value in Sidebar.test.tsx'
     ).querySelector<HTMLDivElement>(
       `[data-sidebar-target-kind="namespace-view"][data-sidebar-target-namespace="${namespaceKey(
         'default'
-      )}"][data-sidebar-target-view="pods"]`
+      )}"][data-sidebar-target-view="workloads"]`
     );
-    expect(podsView).not.toBeNull();
+    expect(workloadsView).not.toBeNull();
 
     act(() => {
-      requireValue(podsView, 'expected test value in Sidebar.test.tsx').click();
+      requireValue(workloadsView, 'expected test value in Sidebar.test.tsx').click();
     });
 
     expect(viewStateMock.onNamespaceSelect).not.toHaveBeenCalled();
@@ -840,23 +1139,23 @@ describe('Sidebar', () => {
       requireValue(namespaceToggle, 'expected test value in Sidebar.test.tsx').click();
     });
 
-    const podsView = requireValue(
+    const workloadsView = requireValue(
       container,
       'expected test value in Sidebar.test.tsx'
     ).querySelector<HTMLDivElement>(
       `[data-sidebar-target-kind="namespace-view"][data-sidebar-target-namespace="${namespaceKey(
         'default'
-      )}"][data-sidebar-target-view="pods"]`
+      )}"][data-sidebar-target-view="workloads"]`
     );
-    expect(podsView).not.toBeNull();
+    expect(workloadsView).not.toBeNull();
 
     act(() => {
-      requireValue(podsView, 'expected test value in Sidebar.test.tsx').click();
+      requireValue(workloadsView, 'expected test value in Sidebar.test.tsx').click();
     });
 
     expect(namespaceState.setSelectedNamespace).toHaveBeenCalledWith('default', testClusterId);
     expect(viewStateMock.onNamespaceSelect).toHaveBeenCalledWith('default');
-    expect(viewStateMock.setActiveNamespaceTab).toHaveBeenCalledWith('pods');
+    expect(viewStateMock.setActiveNamespaceTab).toHaveBeenCalledWith('workloads');
   });
 
   it('allows modified navigation keys to bubble to global handlers', () => {
@@ -1056,20 +1355,20 @@ describe('Sidebar', () => {
       viewState: {
         sidebarSelection: { type: 'namespace', value: 'default' },
         viewType: 'namespace',
-        activeNamespaceTab: 'pods',
+        activeNamespaceTab: 'workloads',
       },
     });
     await act(async () => {
       await Promise.resolve();
     });
-    const podsView = requireValue(
+    const workloadsView = requireValue(
       container,
       'expected test value in Sidebar.test.tsx'
     ).querySelector<HTMLDivElement>(
       `[data-sidebar-target-kind="namespace-view"][data-sidebar-target-namespace="${namespaceKey(
         'default'
-      )}"][data-sidebar-target-view="pods"]`
+      )}"][data-sidebar-target-view="workloads"]`
     );
-    expect(podsView).not.toBeNull();
+    expect(workloadsView).not.toBeNull();
   });
 });

@@ -72,8 +72,6 @@ export interface ResourceGridTableBaseParams<T extends ResourceGridTableRow> {
   filterOptions?: GridTableFilterPersistenceOptions;
   pageSizeOptions?: readonly number[];
   filterOptionOverrides?: Partial<GridTableFilterOptions>;
-  kindDropdownBulkActions?: boolean;
-  kindDropdownSearchable?: boolean;
   metadataSearch?: ResourceGridMetadataSearchParams<T>;
   onTableStateChange?: (state: {
     filters: GridTableFilterState;
@@ -85,6 +83,8 @@ export interface ResourceGridTableBaseParams<T extends ResourceGridTableRow> {
   showKindDropdown?: boolean;
   getTrailingFilterActions?: (sortedData: T[]) => IconBarItem[];
   transformSortedData?: (sortedData: T[]) => T[];
+  /** Named route-level favorite pane; omitted for ordinary one-table views. */
+  favoritePane?: { id: string; label: string };
 }
 
 export interface ResourceGridMetadataSearchParams<T extends ResourceGridTableRow> {
@@ -122,7 +122,7 @@ export interface ObjectPanelResourceGridTableParams<T extends ResourceGridTableR
 
 export interface ResourceGridPersistence<T extends ResourceGridTableRow> {
   sortConfig: SortConfig | null;
-  setSortConfig: (next: SortConfig) => void;
+  setSortConfig: (next: SortConfig | null) => void;
   columnWidths: Record<string, ColumnWidthState> | null;
   setColumnWidths: (next: Record<string, ColumnWidthState>) => void;
   columnVisibility: Record<string, boolean> | null;
@@ -179,4 +179,5 @@ export interface QueryResourceGridTableParams<T extends ResourceGridTableRow> {
   filterOptions: GridTableFilterOptions;
   rowIdentity?: (item: T, index: number) => string;
   virtualization?: GridTableVirtualizationOptions;
+  favoritePane?: { id: string; label: string };
 }

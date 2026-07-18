@@ -5,24 +5,30 @@
  * Mirrors the pattern established in clusterTabOrder.ts.
  */
 
+import {
+  ALL_MULTISELECT_FILTER,
+  type MultiSelectFilterSelection,
+  NONE_MULTISELECT_FILTER,
+  normalizeMultiSelectFilterSelection,
+} from '@shared/components/dropdowns/multiSelectFilterSelection';
+import type { GridTableFilterState } from '@shared/components/tables/GridTable.types';
 import { backend } from '@wailsjs/go/models';
 import { requestAppState } from '@/core/app-state-access';
 import { eventBus } from '@/core/events';
 
 // ---------- Types ----------
 
-export interface FavoriteFilters {
-  search: string;
-  kinds: string[];
-  namespaces: string[];
-  caseSensitive: boolean;
-  includeMetadata: boolean;
-}
+export type FavoriteFilters = GridTableFilterState;
 
 export interface FavoriteTableState {
   sortColumn: string;
   sortDirection: string;
   columnVisibility: Record<string, boolean>;
+}
+
+export interface FavoritePaneState {
+  filters: FavoriteFilters;
+  tableState: FavoriteTableState;
 }
 
 export interface Favorite {
@@ -34,10 +40,57 @@ export interface Favorite {
   viewType: string;
   view: string;
   namespace: string;
-  filters: FavoriteFilters | null;
-  tableState: FavoriteTableState | null;
+  panes: Record<string, FavoritePaneState>;
   order: number;
 }
+
+const fromBackendSelection = (
+  selection: backend.FavoriteFilterSelection | undefined
+): MultiSelectFilterSelection => {
+  if (selection?.mode === 'none') {
+    return NONE_MULTISELECT_FILTER;
+  }
+  if (selection?.mode === 'some') {
+    return normalizeMultiSelectFilterSelection({ mode: 'some', values: selection.values ?? [] });
+  }
+  return ALL_MULTISELECT_FILTER;
+};
+
+const fromBackendFilters = (
+  filters: backend.FavoriteFilters | undefined
+): FavoriteFilters | null => {
+  if (!filters) {
+    return null;
+  }
+  return {
+    search: filters.search ?? '',
+    kinds: fromBackendSelection(filters.kinds),
+    namespaces: fromBackendSelection(filters.namespaces),
+    clusters: fromBackendSelection(filters.clusters),
+    queryFacets: filters.queryFacets
+      ? Object.fromEntries(
+          Object.entries(filters.queryFacets).map(([key, selection]) => [
+            key,
+            fromBackendSelection(selection),
+          ])
+        )
+      : undefined,
+    caseSensitive: filters.caseSensitive ?? false,
+    includeMetadata: filters.includeMetadata ?? false,
+  };
+};
+
+const fromBackendPane = (pane: backend.FavoritePaneState): FavoritePaneState => ({
+  filters: fromBackendFilters(pane.filters) ?? {
+    search: '',
+    kinds: { mode: 'all' },
+    namespaces: { mode: 'all' },
+    clusters: { mode: 'all' },
+    caseSensitive: false,
+    includeMetadata: false,
+  },
+  tableState: pane.tableState,
+});
 
 const fromBackendFavorite = (favorite: backend.Favorite): Favorite => ({
   id: favorite.id,
@@ -48,16 +101,37 @@ const fromBackendFavorite = (favorite: backend.Favorite): Favorite => ({
   viewType: favorite.viewType,
   view: favorite.view,
   namespace: favorite.namespace,
-  filters: favorite.filters ?? null,
-  tableState: favorite.tableState ?? null,
+  panes: Object.fromEntries(
+    Object.entries(favorite.panes ?? {}).map(([key, pane]) => [key, fromBackendPane(pane)])
+  ),
   order: favorite.order,
 });
 
 const toBackendFavorite = (favorite: Favorite): backend.Favorite =>
   new backend.Favorite({
     ...favorite,
-    filters: favorite.filters ?? undefined,
-    tableState: favorite.tableState ?? undefined,
+    panes: Object.fromEntries(
+      Object.entries(favorite.panes).map(([key, pane]) => [
+        key,
+        new backend.FavoritePaneState({
+          filters: new backend.FavoriteFilters({
+            ...pane.filters,
+            kinds: new backend.FavoriteFilterSelection(pane.filters.kinds),
+            namespaces: new backend.FavoriteFilterSelection(pane.filters.namespaces),
+            clusters: new backend.FavoriteFilterSelection(pane.filters.clusters),
+            queryFacets: pane.filters.queryFacets
+              ? Object.fromEntries(
+                  Object.entries(pane.filters.queryFacets).map(([facetKey, selection]) => [
+                    facetKey,
+                    new backend.FavoriteFilterSelection(selection),
+                  ])
+                )
+              : undefined,
+          }),
+          tableState: new backend.FavoriteTableState(pane.tableState),
+        }),
+      ])
+    ),
   });
 
 // ---------- Internal state ----------

@@ -14,6 +14,7 @@ import GridTable, {
   GRIDTABLE_VIRTUALIZATION_DEFAULT,
   type GridColumnDefinition,
   type GridTableFilterConfig,
+  type GridTableFilterState,
   type GridTableProps,
 } from '@shared/components/tables/GridTable';
 import { KeyboardProvider } from '@ui/shortcuts';
@@ -124,6 +125,12 @@ type RenderOptions = Partial<{
   allowHorizontalOverflow: boolean;
   keyExtractor: (item: SimpleRow, index: number) => string;
   paginationControls: React.ReactNode;
+  localPagination: {
+    idPrefix: string;
+    pageSize: number;
+    pageSizeOptions: readonly number[];
+    onPageSizeChange: (value: number) => void;
+  };
 }>;
 
 let cleanupRoot: (() => void) | null = null;
@@ -252,7 +259,9 @@ describe('GridTable virtualization', () => {
     expect(renderedRows).toHaveLength(8);
     expect(container.textContent).toContain('Row 7');
     const resultCount = container.querySelector('[data-gridtable-filter-role="result-count"]');
-    expect(resultCount?.textContent).toBe('showing 20 of 20 items due to filters');
+    expect(resultCount?.textContent).toBe('Showing 20 of 20 items');
+    expect(resultCount?.classList.contains('active-filter-chips__summary')).toBe(true);
+    expect(resultCount?.classList.contains('active-filter-chip')).toBe(false);
   });
 
   it('renders the Copy · Export pair acting on all matching rows (no scope toggle)', () => {
@@ -875,10 +884,11 @@ describe('GridTable interactions (non-virtualized)', () => {
 
   it('renders filter controls and propagates search changes', async () => {
     const onFilterChange = vi.fn();
-    let currentFilters = {
+    let currentFilters: GridTableFilterState = {
       search: '',
-      kinds: [] as string[],
-      namespaces: [] as string[],
+      kinds: { mode: 'all' },
+      namespaces: { mode: 'all' },
+      clusters: { mode: 'all' },
       caseSensitive: false,
       includeMetadata: false,
     };
@@ -927,8 +937,9 @@ describe('GridTable interactions (non-virtualized)', () => {
 
     await applyFilters({
       search: 'Row 1',
-      kinds: [],
-      namespaces: [],
+      kinds: { mode: 'all' },
+      namespaces: { mode: 'all' },
+      clusters: { mode: 'all' },
       caseSensitive: false,
       includeMetadata: false,
     });
@@ -940,19 +951,20 @@ describe('GridTable interactions (non-virtualized)', () => {
 
     onFilterChange.mockClear();
 
-    const resetButton = container.querySelector<HTMLButtonElement>(
-      '.gridtable-filter-actions button'
+    const clearAllButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Clear all filters"]'
     );
-    expect(resetButton).not.toBeNull();
+    expect(clearAllButton).not.toBeNull();
     act(() => {
-      requireValue(resetButton, 'expected test value in GridTable.test.tsx').dispatchEvent(
+      requireValue(clearAllButton, 'expected test value in GridTable.test.tsx').dispatchEvent(
         new MouseEvent('click', { bubbles: true })
       );
     });
     expect(onFilterChange).toHaveBeenCalledWith({
       search: '',
-      kinds: [],
-      namespaces: [],
+      kinds: { mode: 'all' },
+      namespaces: { mode: 'all' },
+      clusters: { mode: 'all' },
       caseSensitive: false,
       includeMetadata: false,
     });
@@ -964,10 +976,11 @@ describe('GridTable interactions (non-virtualized)', () => {
   });
 
   it('tabs from the last filter control into the table body', async () => {
-    let currentFilters = {
+    let currentFilters: GridTableFilterState = {
       search: 'Row 1',
-      kinds: [] as string[],
-      namespaces: [] as string[],
+      kinds: { mode: 'all' },
+      namespaces: { mode: 'all' },
+      clusters: { mode: 'all' },
       caseSensitive: false,
       includeMetadata: false,
     };
@@ -1020,10 +1033,11 @@ describe('GridTable interactions (non-virtualized)', () => {
   });
 
   it('shift-tabs from the table body back to the last filter control', async () => {
-    let currentFilters = {
+    let currentFilters: GridTableFilterState = {
       search: 'Row 1',
-      kinds: [] as string[],
-      namespaces: [] as string[],
+      kinds: { mode: 'all' },
+      namespaces: { mode: 'all' },
+      clusters: { mode: 'all' },
       caseSensitive: false,
       includeMetadata: false,
     };
@@ -1103,10 +1117,11 @@ describe('GridTable interactions (non-virtualized)', () => {
   });
 
   it('shows selection counts in kind and namespace dropdown labels', async () => {
-    let currentFilters = {
+    let currentFilters: GridTableFilterState = {
       search: '',
-      kinds: ['Pod', 'Deployment'],
-      namespaces: ['team-a', 'team-b', 'team-c'],
+      kinds: { mode: 'some', values: ['Pod', 'Deployment'] },
+      namespaces: { mode: 'some', values: ['team-a', 'team-b', 'team-c'] },
+      clusters: { mode: 'all' },
       caseSensitive: false,
       includeMetadata: false,
     };
@@ -1144,8 +1159,9 @@ describe('GridTable interactions (non-virtualized)', () => {
 
     currentFilters = {
       search: '',
-      kinds: [],
-      namespaces: [],
+      kinds: { mode: 'all' },
+      namespaces: { mode: 'all' },
+      clusters: { mode: 'all' },
       caseSensitive: false,
       includeMetadata: false,
     };
@@ -1232,6 +1248,7 @@ function renderGridTable(options: RenderOptions = {}) {
     columnWidths: options.columnWidths ?? {},
     allowHorizontalOverflow: options.allowHorizontalOverflow ?? false,
     paginationControls: options.paginationControls,
+    localPagination: options.localPagination,
   };
 
   let currentProps = initialProps;
@@ -1311,6 +1328,174 @@ it('renders paginationControls in the footer without any pagination callbacks', 
 
   expect(container.querySelector('.gridtable-pagination')).not.toBeNull();
   expect(container.querySelector('[data-testid="cursor-pagination-controls"]')).not.toBeNull();
+
+  cleanup();
+});
+
+it('paginates a local row set after the table pipeline and renders exact footer controls', async () => {
+  const { container, cleanup } = renderGridTable({
+    data: createRows(5),
+    virtualization: { enabled: false },
+    localPagination: {
+      idPrefix: 'local-table',
+      pageSize: 2,
+      pageSizeOptions: [2, 3],
+      onPageSizeChange: vi.fn(),
+    },
+  });
+  cleanupRoot = cleanup;
+
+  expect(
+    Array.from(container.querySelectorAll('.gridtable-row'), (row) => row.textContent)
+  ).toEqual(['Row 0', 'Row 1']);
+  expect(container.querySelector('.gridtable-pagination')?.textContent).toContain('1-2 of 5');
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('button[aria-label="Next page"]')?.click();
+  });
+
+  expect(
+    Array.from(container.querySelectorAll('.gridtable-row'), (row) => row.textContent)
+  ).toEqual(['Row 2', 'Row 3']);
+  expect(container.querySelector('.gridtable-pagination')?.textContent).toContain('3-4 of 5');
+
+  cleanup();
+});
+
+it('commits the clamped local page when the row set shrinks and later regrows', async () => {
+  const { container, cleanup, rerender } = renderGridTable({
+    data: createRows(6),
+    virtualization: { enabled: false },
+    localPagination: {
+      idPrefix: 'local-shrinking-table',
+      pageSize: 2,
+      pageSizeOptions: [2, 3],
+      onPageSizeChange: vi.fn(),
+    },
+  });
+  cleanupRoot = cleanup;
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('button[aria-label="Next page"]')?.click();
+    container.querySelector<HTMLButtonElement>('button[aria-label="Next page"]')?.click();
+  });
+  expect(container.querySelector('.gridtable-pagination')?.textContent).toContain('5-6 of 6');
+
+  await act(async () => {
+    rerender({ data: createRows(3) });
+    await Promise.resolve();
+  });
+  expect(
+    Array.from(container.querySelectorAll('.gridtable-row'), (row) => row.textContent)
+  ).toEqual(['Row 2']);
+  expect(container.querySelector('.gridtable-pagination')?.textContent).toContain('3-3 of 3');
+
+  await act(async () => {
+    rerender({ data: createRows(6) });
+    await Promise.resolve();
+  });
+  expect(
+    Array.from(container.querySelectorAll('.gridtable-row'), (row) => row.textContent)
+  ).toEqual(['Row 2', 'Row 3']);
+  expect(container.querySelector('.gridtable-pagination')?.textContent).toContain('3-4 of 6');
+
+  cleanup();
+});
+
+it('keeps local pagination on the first page after a filter is applied and removed', async () => {
+  let filterValue: GridTableFilterState = {
+    search: '',
+    kinds: { mode: 'all' },
+    namespaces: { mode: 'all' },
+    clusters: { mode: 'all' },
+    caseSensitive: false,
+    includeMetadata: false,
+  };
+  const filters = (): GridTableFilterConfig<SimpleRow> => ({
+    enabled: true,
+    value: filterValue,
+    onChange: vi.fn(),
+  });
+  const { container, cleanup, rerender } = renderGridTable({
+    data: createRows(6),
+    filters: filters(),
+    virtualization: { enabled: false },
+    localPagination: {
+      idPrefix: 'local-filtered-table',
+      pageSize: 2,
+      pageSizeOptions: [2, 3],
+      onPageSizeChange: vi.fn(),
+    },
+  });
+  cleanupRoot = cleanup;
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('button[aria-label="Next page"]')?.click();
+    container.querySelector<HTMLButtonElement>('button[aria-label="Next page"]')?.click();
+  });
+  expect(container.querySelector('.gridtable-pagination')?.textContent).toContain('5-6 of 6');
+
+  filterValue = { ...filterValue, search: 'Row 0' };
+  await act(async () => {
+    rerender({ filters: filters() });
+    await Promise.resolve();
+  });
+
+  expect(
+    Array.from(container.querySelectorAll('.gridtable-row'), (row) => row.textContent)
+  ).toEqual(['Row 0']);
+  expect(container.querySelector('.gridtable-pagination')).toBeNull();
+
+  filterValue = { ...filterValue, search: '' };
+  await act(async () => {
+    rerender({ filters: filters() });
+    await Promise.resolve();
+  });
+
+  expect(
+    Array.from(container.querySelectorAll('.gridtable-row'), (row) => row.textContent)
+  ).toEqual(['Row 0', 'Row 1']);
+  expect(container.querySelector('.gridtable-pagination')?.textContent).toContain('1-2 of 6');
+
+  cleanup();
+});
+
+it('copies every filtered local row when only one local page is rendered', async () => {
+  const clipboardWriteText = vi.fn().mockResolvedValue(undefined);
+  if (!navigator.clipboard) {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: clipboardWriteText },
+    });
+  } else {
+    Object.assign(navigator.clipboard, { writeText: clipboardWriteText });
+  }
+
+  const { container, cleanup } = renderGridTable({
+    data: createRows(5),
+    virtualization: { enabled: false },
+    filters: { enabled: true },
+    localPagination: {
+      idPrefix: 'local-copy-table',
+      pageSize: 2,
+      pageSizeOptions: [2, 3],
+      onPageSizeChange: vi.fn(),
+    },
+  });
+  cleanupRoot = cleanup;
+
+  expect(container.querySelectorAll('.gridtable-row')).toHaveLength(2);
+  const copyButton = container.querySelector<HTMLButtonElement>(
+    '.icon-bar-button[aria-label="Copy all matching rows as CSV"]'
+  );
+  expect(copyButton).not.toBeNull();
+
+  await act(async () => {
+    requireValue(copyButton, 'expected local pagination copy action').click();
+    await Promise.resolve();
+  });
+
+  expect(clipboardWriteText).toHaveBeenCalledWith('Label\nRow 0\nRow 1\nRow 2\nRow 3\nRow 4');
 
   cleanup();
 });
@@ -1813,7 +1998,7 @@ it('filters rows using the kind dropdown initial state', () => {
     virtualization: { enabled: false },
     filters: {
       enabled: true,
-      initial: { kinds: ['Alpha'] },
+      initial: { kinds: { mode: 'some', values: ['Alpha'] } },
       accessors: {
         getKind: (row) => (row.label.startsWith('Alpha') ? 'Alpha' : 'Beta'),
         getNamespace: () => '',
@@ -1893,7 +2078,7 @@ it('shows the full local item count without a user-preference cap', () => {
   });
 
   const resultCount = container.querySelector('[data-gridtable-filter-role="result-count"]');
-  expect(resultCount?.textContent).toBe('showing 8 of 8 items due to filters');
+  expect(resultCount?.textContent).toBe('Showing 8 of 8 items');
   expect(resultCount?.querySelector('.tooltip-trigger')).toBeNull();
 
   cleanup();
@@ -1918,7 +2103,7 @@ it('applies local search across the full provided local dataset', () => {
   expect(container.textContent).not.toContain('Row 0');
 
   const resultCount = container.querySelector('[data-gridtable-filter-role="result-count"]');
-  expect(resultCount?.textContent).toBe('showing 1 of 8 items due to filters');
+  expect(resultCount?.textContent).toBe('Showing 1 of 8 items');
 
   cleanup();
 });
@@ -1941,7 +2126,7 @@ it('does not show the capped-results tooltip when the table is not capped', () =
   });
 
   const resultCount = container.querySelector('[data-gridtable-filter-role="result-count"]');
-  expect(resultCount?.textContent).toBe('showing 3 of 3 items due to filters');
+  expect(resultCount?.textContent).toBe('Showing 3 of 3 items');
   expect(resultCount?.querySelector('.tooltip-trigger')).toBeNull();
 
   cleanup();

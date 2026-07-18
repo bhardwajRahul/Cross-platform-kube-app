@@ -1,9 +1,7 @@
 /**
  * frontend/src/shared/components/tables/GridTableKeys.test.tsx
  *
- * Contract test: verifies that the DOM selectors in getFilterTargets
- * (GridTableKeys.ts) match the actual elements rendered by
- * GridTableFiltersBar.tsx. Prevents selector / attribute drift.
+ * Contract tests for GridTable filter-bar keyboard target discovery and order.
  */
 
 import { ZoomProvider } from '@core/contexts/ZoomContext';
@@ -72,13 +70,14 @@ describe('GridTableKeys filter target selectors', () => {
     vi.restoreAllMocks();
   });
 
-  // These selectors must stay in sync with getFilterTargets in GridTableKeys.ts.
+  // These selectors identify the controls whose keyboard order the tests exercise.
   const SELECTORS = {
     search: '[data-gridtable-filter-role="search"] input',
-    reset: '.icon-bar-button[title="Reset filters"]',
     caseSensitive: '.icon-bar-button[title="Match case"]',
     kind: '[data-gridtable-filter-role="kind"] .dropdown-trigger',
     namespace: '[data-gridtable-filter-role="namespace"] .dropdown-trigger',
+    cluster: '[data-gridtable-filter-role="cluster"] .dropdown-trigger',
+    apiGroups: '[data-gridtable-filter-role="query-facet-apiGroups"] .dropdown-trigger',
     columns: '[data-gridtable-filter-role="columns"] .dropdown-trigger',
   };
 
@@ -88,26 +87,32 @@ describe('GridTableKeys filter target selectors', () => {
     const defaultProps: React.ComponentProps<typeof GridTableFiltersBar> = {
       activeFilters: {
         search: '',
-        kinds: [],
-        namespaces: [],
+        kinds: { mode: 'all' },
+        namespaces: { mode: 'all' },
+        clusters: { mode: 'all' },
         caseSensitive: false,
         includeMetadata: false,
       },
       resolvedFilterOptions: {
         kinds: [{ label: 'Pod', value: 'Pod' }],
         namespaces: [{ label: 'default', value: 'default' }],
+        clusters: [{ label: 'alpha', value: 'cluster-a' }],
       },
       kindDropdownId: 'test-kind',
       namespaceDropdownId: 'test-ns',
+      clusterDropdownId: 'test-cluster',
       searchInputId: 'test-search',
       onKindsChange: vi.fn(),
       onNamespacesChange: vi.fn(),
+      onClustersChange: vi.fn(),
+      onFiltersChange: vi.fn(),
       onSearchChange: vi.fn(),
       onReset: vi.fn(),
       onToggleCaseSensitive: vi.fn(),
       renderOption: (opt) => opt.label,
       renderKindsValue: () => 'Kinds',
       renderNamespacesValue: () => 'Namespaces',
+      renderClustersValue: () => 'Clusters',
       showKindDropdown: true,
       showNamespaceDropdown: true,
       ...overrides,
@@ -134,16 +139,6 @@ describe('GridTableKeys filter target selectors', () => {
     );
   });
 
-  it('reset selector matches the reset button', async () => {
-    const el = await renderFiltersBar();
-
-    const resetBtn = el.querySelector<HTMLElement>(SELECTORS.reset);
-    expect(resetBtn).not.toBeNull();
-    expect(requireValue(resetBtn, 'expected test value in GridTableKeys.test.tsx').tagName).toBe(
-      'BUTTON'
-    );
-  });
-
   it('kind selector matches the kind dropdown trigger', async () => {
     const el = await renderFiltersBar({ showKindDropdown: true });
 
@@ -156,6 +151,13 @@ describe('GridTableKeys filter target selectors', () => {
 
     const nsTrigger = el.querySelector<HTMLElement>(SELECTORS.namespace);
     expect(nsTrigger).not.toBeNull();
+  });
+
+  it('cluster selector matches the cluster dropdown trigger', async () => {
+    const el = await renderFiltersBar({ showClusterDropdown: true });
+
+    const clusterTrigger = el.querySelector<HTMLElement>(SELECTORS.cluster);
+    expect(clusterTrigger).not.toBeNull();
   });
 
   it('search input is found when dropdowns are hidden', async () => {
@@ -184,7 +186,7 @@ describe('GridTableKeys filter target selectors', () => {
     expect(columnsTrigger).not.toBeNull();
   });
 
-  it('finds icon-bar buttons in DOM order and skips disabled ones before columns', async () => {
+  it('moves backward into a leading query facet and forward out without trapping focus', async () => {
     const HookHarness = () => {
       const filtersContainerRef = React.useRef<HTMLDivElement | null>(null);
       const wrapperRef = React.useRef<HTMLDivElement | null>(null);
@@ -193,8 +195,6 @@ describe('GridTableKeys filter target selectors', () => {
 
       useGridTableKeyboardScopes({
         filteringEnabled: true,
-        showKindDropdown: false,
-        showNamespaceDropdown: false,
         filtersContainerRef,
         filterFocusIndexRef,
         wrapperRef,
@@ -211,8 +211,130 @@ describe('GridTableKeys filter target selectors', () => {
             containerRef={filtersContainerRef}
             activeFilters={{
               search: '',
-              kinds: [],
+              kinds: { mode: 'all' },
+              namespaces: { mode: 'all' },
+              clusters: { mode: 'all' },
+              queryFacets: { apiGroups: { mode: 'all' } },
+              caseSensitive: false,
+              includeMetadata: false,
+            }}
+            resolvedFilterOptions={{
+              kinds: [{ label: 'Pod', value: 'Pod' }],
               namespaces: [],
+              queryFacets: [
+                {
+                  key: 'apiGroups',
+                  label: 'API groups',
+                  placeholder: 'All API groups',
+                  options: [{ label: 'core', value: '(core)' }],
+                  placement: 'before-kinds',
+                },
+              ],
+            }}
+            kindDropdownId="kind"
+            namespaceDropdownId="namespace"
+            clusterDropdownId="cluster"
+            queryFacetDropdownIdPrefix="facet"
+            searchInputId="search"
+            onKindsChange={vi.fn()}
+            onNamespacesChange={vi.fn()}
+            onClustersChange={vi.fn()}
+            onQueryFacetChange={vi.fn()}
+            onFiltersChange={vi.fn()}
+            onSearchChange={vi.fn()}
+            onReset={vi.fn()}
+            onToggleCaseSensitive={vi.fn()}
+            renderOption={(option) => option.label}
+            renderKindsValue={() => 'Kinds'}
+            renderNamespacesValue={() => 'Namespaces'}
+            renderClustersValue={() => 'Clusters'}
+            showKindDropdown
+          />
+          <div ref={wrapperRef}>
+            <table ref={focusRef} />
+          </div>
+        </>
+      );
+    };
+
+    await act(async () => {
+      root.render(
+        <ZoomProvider>
+          <HookHarness />
+        </ZoomProvider>
+      );
+      await Promise.resolve();
+    });
+
+    const searchInput = requireValue(
+      container.querySelector<HTMLInputElement>(SELECTORS.search),
+      'expected the GridTable filter input'
+    );
+    const kindTrigger = requireValue(
+      container.querySelector<HTMLElement>(SELECTORS.kind),
+      'expected the Kind dropdown trigger'
+    );
+    const apiGroupsTrigger = requireValue(
+      container.querySelector<HTMLElement>(SELECTORS.apiGroups),
+      'expected the API Groups dropdown trigger'
+    );
+    const [filtersSurface] = registeredSurfaces;
+
+    const dispatchFilterTab = async (shiftKey: boolean) => {
+      const target = document.activeElement as HTMLElement;
+      await act(async () => {
+        filtersSurface?.onKeyDown?.({
+          key: 'Tab',
+          shiftKey,
+          metaKey: false,
+          ctrlKey: false,
+          altKey: false,
+          target,
+          preventDefault: vi.fn(),
+        } as unknown as KeyboardEvent);
+        await Promise.resolve();
+      });
+    };
+
+    searchInput.focus();
+    await dispatchFilterTab(true);
+    expect(document.activeElement).toBe(kindTrigger);
+
+    await dispatchFilterTab(true);
+    expect(document.activeElement).toBe(apiGroupsTrigger);
+
+    await dispatchFilterTab(false);
+    expect(document.activeElement).toBe(kindTrigger);
+  });
+
+  it('finds icon-bar buttons in DOM order and skips disabled ones before columns', async () => {
+    const HookHarness = () => {
+      const filtersContainerRef = React.useRef<HTMLDivElement | null>(null);
+      const wrapperRef = React.useRef<HTMLDivElement | null>(null);
+      const focusRef = React.useRef<HTMLTableElement | null>(null);
+      const filterFocusIndexRef = React.useRef<number | null>(null);
+
+      useGridTableKeyboardScopes({
+        filteringEnabled: true,
+        filtersContainerRef,
+        filterFocusIndexRef,
+        wrapperRef,
+        focusRef,
+        tableDataLength: 1,
+        focusedRowKey: 'row-1',
+        suppressFocusedRowHighlight: vi.fn(),
+        jumpToIndex: () => true,
+      });
+
+      return (
+        <>
+          <GridTableFiltersBar
+            containerRef={filtersContainerRef}
+            activeFilters={{
+              search: '',
+              kinds: { mode: 'all' },
+              namespaces: { mode: 'all' },
+              clusters: { mode: 'all' },
               caseSensitive: false,
               includeMetadata: false,
             }}
@@ -222,16 +344,20 @@ describe('GridTableKeys filter target selectors', () => {
             }}
             kindDropdownId="kind"
             namespaceDropdownId="namespace"
+            clusterDropdownId="cluster"
             columnsDropdownId="columns"
             searchInputId="search"
             onKindsChange={vi.fn()}
             onNamespacesChange={vi.fn()}
+            onClustersChange={vi.fn()}
+            onFiltersChange={vi.fn()}
             onSearchChange={vi.fn()}
             onReset={vi.fn()}
             onToggleCaseSensitive={vi.fn()}
             renderOption={(option) => option.label}
             renderKindsValue={() => 'Kinds'}
             renderNamespacesValue={() => 'Namespaces'}
+            renderClustersValue={() => 'Clusters'}
             renderColumnsValue={() => 'Columns'}
             showColumnsDropdown
             columnOptions={[{ label: 'Name', value: 'name' }]}
@@ -332,8 +458,6 @@ describe('GridTableKeys filter target selectors', () => {
 
       useGridTableKeyboardScopes({
         filteringEnabled: false,
-        showKindDropdown: false,
-        showNamespaceDropdown: false,
         filtersContainerRef,
         filterFocusIndexRef,
         wrapperRef,
@@ -386,8 +510,6 @@ describe('GridTableKeys filter target selectors', () => {
 
       useGridTableKeyboardScopes({
         filteringEnabled: true,
-        showKindDropdown: false,
-        showNamespaceDropdown: false,
         filtersContainerRef,
         filterFocusIndexRef,
         wrapperRef,

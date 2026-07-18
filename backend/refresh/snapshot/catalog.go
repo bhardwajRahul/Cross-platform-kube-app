@@ -59,6 +59,8 @@ type CatalogSnapshot struct {
 	ResourceCount   int                        `json:"resourceCount"`
 	Kinds           []objectcatalog.KindInfo   `json:"kinds,omitempty"`
 	Namespaces      []string                   `json:"namespaces,omitempty"`
+	Groups          []string                   `json:"groups,omitempty"`
+	ResourceScopes  []objectcatalog.Scope      `json:"resourceScopes,omitempty"`
 	FacetsExact     bool                       `json:"facetsExact"`
 	Issues          []ResourceQueryIssue       `json:"issues,omitempty"`
 	HasNext         bool                       `json:"hasNext"`
@@ -95,12 +97,15 @@ type browseQueryOptions struct {
 	ScopeNamespaces []string
 	Kinds           []string
 	Namespaces      []string
+	Groups          []string
+	ResourceScopes  []objectcatalog.Scope
 	Search          string
 	SortField       string
 	SortDir         string
 	Limit           int
 	Continue        string
 	CustomOnly      bool
+	MatchNone       bool
 	Anchor          *ResourceQueryAnchor
 	StartRank       *int
 }
@@ -164,7 +169,7 @@ func (b *catalogBuilder) Build(ctx context.Context, scope string) (*refresh.Snap
 func newCatalogCapabilities() ResourceQueryCapabilities {
 	return ResourceQueryCapabilities{
 		SortableFields:   []string{"name", "kind", "namespace", "age", "creationTimestamp"},
-		FilterableFields: []string{"kinds", "namespaces"},
+		FilterableFields: []string{"kinds", "namespaces", "apiGroups", "resourceScopes"},
 		SearchableFields: []string{"name", "kind", "namespace"},
 	}
 }
@@ -237,6 +242,8 @@ func buildCatalogSnapshot(
 		ResourceCount:   result.ResourceCount,
 		Kinds:           cloneKindInfos(result.Kinds),
 		Namespaces:      cloneStrings(result.Namespaces),
+		Groups:          cloneStrings(result.Groups),
+		ResourceScopes:  cloneResourceScopes(result.ResourceScopes),
 		FacetsExact:     result.FacetsExact,
 		Issues:          issues,
 		HasNext:         hasNext,
@@ -267,7 +274,7 @@ func catalogSnapshotIssues(result objectcatalog.QueryResult, health objectcatalo
 	if !result.FacetsExact {
 		issues = append(issues, ResourceQueryIssue{
 			Kind:    "Catalog facets",
-			Message: "Kind and namespace filter options are approximate because the catalog metadata is incomplete.",
+			Message: "Catalog filter options are approximate because the catalog metadata is incomplete.",
 		})
 	}
 	if health.Status == objectcatalog.HealthStateDegraded ||
@@ -386,17 +393,31 @@ func parseBrowseScope(scope string) (browseQueryOptions, error) {
 	default:
 		return browseQueryOptions{}, fmt.Errorf("invalid catalog resource scope %q", values.Get("resourceScope"))
 	}
+	resourceScopeFilters := make([]objectcatalog.Scope, 0, len(values["resourceScopeFilter"]))
+	for _, raw := range values["resourceScopeFilter"] {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "cluster":
+			resourceScopeFilters = append(resourceScopeFilters, objectcatalog.ScopeCluster)
+		case "namespace":
+			resourceScopeFilters = append(resourceScopeFilters, objectcatalog.ScopeNamespace)
+		default:
+			return browseQueryOptions{}, fmt.Errorf("invalid catalog resource scope filter %q", raw)
+		}
+	}
 	opts := browseQueryOptions{
 		Scope:           resourceScope,
 		ScopeNamespaces: values["scopeNamespace"],
 		Kinds:           request.Kinds,
 		Namespaces:      request.Namespaces,
+		Groups:          values["apiGroup"],
+		ResourceScopes:  resourceScopeFilters,
 		Search:          request.Search,
 		SortField:       request.SortField,
 		SortDir:         request.SortDirection,
 		Continue:        request.Continue,
 		Limit:           request.Limit,
 		CustomOnly:      values.Get("customOnly") == "true",
+		MatchNone:       request.MatchNone,
 		Anchor:          request.Anchor,
 		StartRank:       request.StartRank,
 	}
@@ -409,12 +430,15 @@ func (o browseQueryOptions) toQueryOptions() objectcatalog.QueryOptions {
 		ScopeNamespaces: o.ScopeNamespaces,
 		Kinds:           o.Kinds,
 		Namespaces:      o.Namespaces,
+		Groups:          o.Groups,
+		ResourceScopes:  o.ResourceScopes,
 		Search:          o.Search,
 		SortField:       o.SortField,
 		SortDirection:   o.SortDir,
 		Limit:           o.Limit,
 		Continue:        o.Continue,
 		CustomOnly:      o.CustomOnly,
+		MatchNone:       o.MatchNone,
 	}
 	if a := o.Anchor; a != nil {
 		// ClusterID stays behind: parseBrowseScope already enforced the
@@ -455,6 +479,15 @@ func cloneKindInfos(values []objectcatalog.KindInfo) []objectcatalog.KindInfo {
 		return []objectcatalog.KindInfo{}
 	}
 	cloned := make([]objectcatalog.KindInfo, len(values))
+	copy(cloned, values)
+	return cloned
+}
+
+func cloneResourceScopes(values []objectcatalog.Scope) []objectcatalog.Scope {
+	if len(values) == 0 {
+		return []objectcatalog.Scope{}
+	}
+	cloned := make([]objectcatalog.Scope, len(values))
 	copy(cloned, values)
 	return cloned
 }

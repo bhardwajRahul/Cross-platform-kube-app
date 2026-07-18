@@ -12,6 +12,8 @@
 package system
 
 import (
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/luxury-yacht/app/backend/kind/kindregistry"
@@ -69,7 +71,12 @@ func ingestObjectMapProjector(clusterID string, d kindspec.Descriptor) ingest.Ob
 // pod's ReplicaSet->Deployment owner from the shared factory's RS lister (the RS
 // informer stays registered — only pods is cut). It must run before the hub starts so
 // the pod reflector launches with the rest and its initial relist is sync-gated.
-func registerPodReflector(mgr *ingest.IngestManager, factory *informer.Factory, meta snapshot.ClusterMeta) {
+func registerPodReflector(
+	mgr *ingest.IngestManager,
+	factory *informer.Factory,
+	meta snapshot.ClusterMeta,
+	jobOwnerLookup func(namespace, jobName string) (snapshot.JobControllerOwner, bool),
+) {
 	if mgr == nil || factory == nil {
 		return
 	}
@@ -82,7 +89,10 @@ func registerPodReflector(mgr *ingest.IngestManager, factory *informer.Factory, 
 	// (ingest_notify_pods) paths read the STORED Table half (PodSummary), so it must not be
 	// dropped. Every other reflector below passes false — its Table half lives only in the
 	// columnar maintained store after being fanned to the BundleSink.
-	mgr.RegisterReflector(snapshot.PodGVR, snapshot.PodGVK, snapshot.NewPodIngestProjector(meta, rsLister), true)
+	mgr.RegisterReflector(snapshot.PodGVR, snapshot.PodGVK, snapshot.NewPodIngestProjector(meta, snapshot.PodOwnerSources{
+		ReplicaSets:        rsLister,
+		JobControllerOwner: jobOwnerLookup,
+	}), true)
 }
 
 // registerWorkloadReflectors wires the five bespoke workload reflectors onto the manager.
@@ -94,15 +104,26 @@ func registerPodReflector(mgr *ingest.IngestManager, factory *informer.Factory, 
 // only the workload's own typed object — no lister needed (unlike pods, which resolve the RS
 // owner). It must run before the hub starts so the workload reflectors launch with the rest
 // and their initial relists are sync-gated.
-func registerWorkloadReflectors(mgr *ingest.IngestManager, meta snapshot.ClusterMeta) {
+func registerWorkloadReflectors(mgr *ingest.IngestManager, meta snapshot.ClusterMeta) error {
 	if mgr == nil {
-		return
+		return fmt.Errorf("register workload reflectors: ingest manager is nil")
 	}
-	mgr.RegisterReflector(snapshot.DeploymentGVR, snapshot.DeploymentGVK, snapshot.NewDeploymentIngestProjector(meta), false)
-	mgr.RegisterReflector(snapshot.StatefulSetGVR, snapshot.StatefulSetGVK, snapshot.NewStatefulSetIngestProjector(meta), false)
-	mgr.RegisterReflector(snapshot.DaemonSetGVR, snapshot.DaemonSetGVK, snapshot.NewDaemonSetIngestProjector(meta), false)
-	mgr.RegisterReflector(snapshot.JobGVR, snapshot.JobGVK, snapshot.NewJobIngestProjector(meta), false)
-	mgr.RegisterReflector(snapshot.CronJobGVR, snapshot.CronJobGVK, snapshot.NewCronJobIngestProjector(meta), false)
+	if !mgr.RegisterReflector(snapshot.DeploymentGVR, snapshot.DeploymentGVK, snapshot.NewDeploymentIngestProjector(meta), false) {
+		return fmt.Errorf("register workload reflector: Deployment")
+	}
+	if !mgr.RegisterReflector(snapshot.StatefulSetGVR, snapshot.StatefulSetGVK, snapshot.NewStatefulSetIngestProjector(meta), false) {
+		return fmt.Errorf("register workload reflector: StatefulSet")
+	}
+	if !mgr.RegisterReflector(snapshot.DaemonSetGVR, snapshot.DaemonSetGVK, snapshot.NewDaemonSetIngestProjector(meta), false) {
+		return fmt.Errorf("register workload reflector: DaemonSet")
+	}
+	if !mgr.RegisterReflector(snapshot.JobGVR, snapshot.JobGVK, snapshot.NewJobIngestProjector(meta), false) {
+		return fmt.Errorf("register workload reflector: Job")
+	}
+	if !mgr.RegisterReflector(snapshot.CronJobGVR, snapshot.CronJobGVK, snapshot.NewCronJobIngestProjector(meta), false) {
+		return fmt.Errorf("register workload reflector: CronJob")
+	}
+	return nil
 }
 
 // registerNodeReflector wires the bespoke node reflector onto the manager. Node has no

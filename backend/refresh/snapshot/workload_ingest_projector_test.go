@@ -34,7 +34,7 @@ func TestNewWorkloadIngestProjectorBundleMatchesLivePaths(t *testing.T) {
 	replicas := int32(3)
 
 	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web", UID: "d-1", CreationTimestamp: metav1.Now()},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web", UID: "d-1", CreationTimestamp: metav1.Now(), Labels: map[string]string{"app.kubernetes.io/part-of": "storefront"}},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Ports: []corev1.ContainerPort{{ContainerPort: 8080}}}}}},

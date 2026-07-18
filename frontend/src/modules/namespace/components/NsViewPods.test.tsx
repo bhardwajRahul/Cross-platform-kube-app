@@ -5,10 +5,11 @@
  * Covers key behaviors and edge cases for NsViewPods.
  */
 
-import { getPodsUnhealthyStorageKey } from '@modules/namespace/components/podsFilterSignals';
 import { ALL_NAMESPACES_SCOPE } from '@modules/namespace/constants';
+import { CollapseIcon, ExpandIcon } from '@shared/components/icons/SharedIcons';
 import type ConfirmationModal from '@shared/components/modals/ConfirmationModal';
-import type { GridTableProps } from '@shared/components/tables/GridTable';
+import type { GridTableFilterState, GridTableProps } from '@shared/components/tables/GridTable';
+import { getTextContent } from '@shared/components/tables/GridTable.utils';
 import type React from 'react';
 import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
@@ -45,6 +46,9 @@ const {
   useUserPermissionsMock,
   queryNamespacesPermissionsMock,
   requestRefreshDomainStateMock,
+  scopedLifecycleMock,
+  setFiltersMock,
+  persistedFiltersRef,
   runObjectActionMock,
   errorHandlerMock,
 } = vi.hoisted(() => ({
@@ -61,6 +65,18 @@ const {
   useUserPermissionsMock: vi.fn(),
   queryNamespacesPermissionsMock: vi.fn(),
   requestRefreshDomainStateMock: vi.fn(),
+  scopedLifecycleMock: vi.fn(),
+  setFiltersMock: vi.fn(),
+  persistedFiltersRef: {
+    current: {
+      search: '',
+      kinds: { mode: 'all' },
+      namespaces: { mode: 'all' },
+      clusters: { mode: 'all' },
+      caseSensitive: false,
+      includeMetadata: false,
+    } as GridTableFilterState,
+  },
   runObjectActionMock: vi.fn().mockResolvedValue(undefined),
   errorHandlerMock: { handle: vi.fn() },
 }));
@@ -181,14 +197,8 @@ vi.mock('@modules/namespace/hooks/useNamespaceGridTablePersistence', () => {
       },
       columnVisibility: null,
       setColumnVisibility: vi.fn(),
-      filters: {
-        search: '',
-        kinds: [],
-        namespaces: [],
-        caseSensitive: false,
-        includeMetadata: false,
-      },
-      setFilters: vi.fn(),
+      filters: persistedFiltersRef.current,
+      setFilters: setFiltersMock,
       pageSize: null,
       setPageSize: vi.fn(),
       isNamespaceScoped: true,
@@ -214,14 +224,8 @@ vi.mock('@shared/components/tables/persistence/useGridTablePersistence', () => {
       },
       columnVisibility: null,
       setColumnVisibility: vi.fn(),
-      filters: {
-        search: '',
-        kinds: [],
-        namespaces: [],
-        caseSensitive: false,
-        includeMetadata: false,
-      },
-      setFilters: vi.fn(),
+      filters: persistedFiltersRef.current,
+      setFilters: setFiltersMock,
       pageSize: null,
       setPageSize: vi.fn(),
       resetState: vi.fn(),
@@ -251,7 +255,7 @@ vi.mock('@shared/components/modals/ConfirmationModal', () => ({
 
 vi.mock('@/core/data-access', () => ({
   requestRefreshDomainState: (...args: unknown[]) => requestRefreshDomainStateMock(...(args as [])),
-  useScopedRefreshDomainLifecycle: vi.fn(),
+  useScopedRefreshDomainLifecycle: (...args: unknown[]) => scopedLifecycleMock(...args),
 }));
 
 vi.mock('@/core/refresh', () => ({
@@ -302,7 +306,7 @@ vi.mock('@utils/errorHandler', () => ({
   errorHandler: errorHandlerMock,
 }));
 
-import NsViewPods, { matchesPodsFilter } from '@modules/namespace/components/NsViewPods';
+import NsViewPods from '@modules/namespace/components/NsViewPods';
 
 const createPod = (override: Partial<PodSnapshotEntry> = {}): PodSnapshotEntry => ({
   name: 'pod-default',
@@ -342,6 +346,16 @@ describe('NsViewPods', () => {
     runObjectActionMock.mockClear();
     queryNamespacesPermissionsMock.mockReset();
     requestRefreshDomainStateMock.mockReset();
+    scopedLifecycleMock.mockReset();
+    setFiltersMock.mockReset();
+    persistedFiltersRef.current = {
+      search: '',
+      kinds: { mode: 'all' },
+      namespaces: { mode: 'all' },
+      clusters: { mode: 'all' },
+      caseSensitive: false,
+      includeMetadata: false,
+    };
     useTableSortMock.mockReset();
     useUserPermissionsMock.mockReset();
     errorHandlerMock.handle.mockClear();
@@ -424,16 +438,8 @@ describe('NsViewPods', () => {
     const effectiveMetrics =
       'metrics' in props ? (props.metrics ?? clusterMetricsMock.current ?? null) : defaultMetrics;
     if (effectiveNamespace !== ALL_NAMESPACES_SCOPE && !skipDefaultQueryMock) {
-      requestRefreshDomainStateMock.mockImplementation((request?: unknown) => {
-        const args = request as { domain?: string; scope?: string } | undefined;
-        // Mirror the backend: apply the health predicate carried in the query scope, so the
-        // unhealthy/restarts/not-ready toggle (a server-side predicate now) yields filtered rows.
-        const healthMatch = /predicate\.health=([^&]+)/.exec(args?.scope ?? '');
-        const rows = healthMatch
-          ? effectiveData.filter((pod) =>
-              matchesPodsFilter(healthMatch[1] as Parameters<typeof matchesPodsFilter>[0], pod)
-            )
-          : effectiveData;
+      requestRefreshDomainStateMock.mockImplementation(() => {
+        const rows = effectiveData;
         return Promise.resolve({
           status: 'executed',
           data: {
@@ -448,16 +454,6 @@ describe('NsViewPods', () => {
               // Usage rides the pod rows; the base payload carries the poller
               // freshness block joined at serve.
               metrics: effectiveMetrics,
-              // Scope counts mirror the backend: over all scope pods (effectiveData),
-              // not the health-filtered page, so the unhealthy badge stays correct.
-              totalCount: effectiveData.length,
-              healthCounts: {
-                unhealthy: effectiveData.filter((pod) => matchesPodsFilter('unhealthy', pod))
-                  .length,
-                restarts: effectiveData.filter((pod) => matchesPodsFilter('restarts', pod)).length,
-                'not-ready': effectiveData.filter((pod) => matchesPodsFilter('not-ready', pod))
-                  .length,
-              },
             },
           },
         });
@@ -500,6 +496,81 @@ describe('NsViewPods', () => {
     expect(requestRefreshDomainStateMock).toHaveBeenCalled();
   });
 
+  it('owns the Pods collapse action as the first structural filter action', async () => {
+    const onPodsCollapsedChange = vi.fn();
+    await renderPods({ onPodsCollapsedChange });
+
+    const structuralActions = gridTablePropsRef.current.filters?.options?.beforeNamespaceActions;
+    expect(
+      structuralActions?.map((action) => (action.type === 'separator' ? null : action.title))
+    ).toEqual(['Collapse Pods']);
+    const collapseAction = structuralActions?.[0];
+    if (!collapseAction || collapseAction.type === 'separator') {
+      throw new Error('Expected the Collapse Pods action');
+    }
+    expect(requireReactElement(collapseAction.icon, 'expected collapse icon').type).toBe(
+      ExpandIcon
+    );
+
+    act(() => {
+      collapseAction.onClick();
+    });
+    expect(onPodsCollapsedChange).toHaveBeenCalledWith(true);
+  });
+
+  it('shows only the expand control and Show Pods text while collapsed', async () => {
+    const onPodsCollapsedChange = vi.fn();
+    await renderPods({ collapsed: true, onPodsCollapsedChange });
+
+    expect(scopedLifecycleMock).toHaveBeenCalledWith(
+      expect.objectContaining({ domain: 'pods', enabled: false })
+    );
+
+    expect(container.querySelector('[data-testid="grid-table"]')).toBeNull();
+    expect(container.querySelector('.gridtable-filter-bar')?.textContent).toBe('Show Pods');
+    expect(container.querySelectorAll('.gridtable-filter-bar button')).toHaveLength(1);
+    const expandButton = container.querySelector<HTMLButtonElement>(
+      '.gridtable-filter-bar button[title="Expand Pods"]'
+    );
+    expect(expandButton).not.toBeNull();
+    const renderedCollapseIcon = CollapseIcon({});
+    if (renderedCollapseIcon instanceof Promise) {
+      throw new Error('Expected CollapseIcon to render synchronously');
+    }
+    const collapseSvg = requireReactElement<{ children: React.ReactNode }>(
+      renderedCollapseIcon,
+      'expected collapsed-state icon'
+    );
+    expect(expandButton?.querySelector('svg path')?.getAttribute('d')).toBe(
+      requireReactElement<{ d: string }>(
+        collapseSvg.props.children,
+        'expected collapsed-state icon path'
+      ).props.d
+    );
+
+    act(() => expandButton?.click());
+    expect(onPodsCollapsedChange).toHaveBeenCalledWith(false);
+  });
+
+  it('expands a collapsed Pods pane when a Pod focus request targets it', async () => {
+    const onPodsCollapsedChange = vi.fn();
+    await renderPods({ collapsed: true, onPodsCollapsedChange });
+
+    act(() => {
+      eventBus.emit('gridtable:focus-request', {
+        clusterId: 'alpha:ctx',
+        group: '',
+        version: 'v1',
+        kind: 'Pod',
+        namespace: 'team-a',
+        name: 'web-1',
+        destinationViewId: 'namespace-pods',
+      });
+    });
+
+    expect(onPodsCollapsedChange).toHaveBeenCalledWith(false);
+  });
+
   it('uses the typed query result for all-namespaces pods on first render', async () => {
     const localPod = createPod({ name: 'local-provider-row', namespace: 'team-a' });
     const queryPod = createPod({ name: 'query-row', namespace: 'team-b' });
@@ -533,14 +604,7 @@ describe('NsViewPods', () => {
     });
 
     expect(gridTablePropsRef.current.data).toEqual([queryPod]);
-    expect(gridTablePropsRef.current.paginationControls?.props).toMatchObject({
-      pageIndex: 1,
-      pageSize: 50,
-      totalCount: 1,
-      totalIsExact: true,
-      hasPrevious: false,
-      hasNext: false,
-    });
+    expect(gridTablePropsRef.current.paginationControls).toBeNull();
     expect(requestRefreshDomainStateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         domain: 'pods',
@@ -551,6 +615,187 @@ describe('NsViewPods', () => {
       [{ namespace: 'team-b', clusterId: 'alpha:ctx' }],
       expect.objectContaining({ specLists: expect.any(Array) })
     );
+  });
+
+  it('populates Namespace and Owner filters for an embedded Workloads selection', async () => {
+    const onWorkloadFilterMismatch = vi.fn();
+    const workloadFilterRequest = {
+      type: 'set' as const,
+      workload: {
+        clusterId: 'alpha:ctx',
+        group: 'apps',
+        version: 'v1',
+        kind: 'Deployment',
+        namespace: 'team-a',
+        name: 'api',
+      },
+    };
+    const props = {
+      namespace: ALL_NAMESPACES_SCOPE,
+      workloadFilterRequest,
+      onWorkloadFilterMismatch,
+    };
+    await renderPods(props);
+
+    expect(setFiltersMock).toHaveBeenCalledWith({
+      search: '',
+      kinds: { mode: 'all' },
+      namespaces: { mode: 'some', values: ['team-a'] },
+      clusters: { mode: 'all' },
+      queryFacets: {
+        owners: {
+          mode: 'some',
+          values: ['["owner","Deployment","api","alpha:ctx","apps","v1","team-a"]'],
+        },
+      },
+      caseSensitive: false,
+      includeMetadata: false,
+    });
+    expect(container.querySelector('.metrics-warning-banner')).toBeNull();
+
+    act(() => gridTablePropsRef.current.filters?.onReset?.());
+    expect(onWorkloadFilterMismatch).toHaveBeenCalledOnce();
+    onWorkloadFilterMismatch.mockClear();
+
+    setFiltersMock.mockClear();
+    const currentFilters = requireValue(
+      gridTablePropsRef.current.filters?.value,
+      'expected controlled Pod filters'
+    );
+    act(() =>
+      gridTablePropsRef.current.filters?.onChange?.({
+        ...currentFilters,
+        queryFacets: {
+          ...currentFilters.queryFacets,
+          owners: { mode: 'some', values: ['another-owner'] },
+        },
+      })
+    );
+    expect(onWorkloadFilterMismatch).toHaveBeenCalledOnce();
+    expect(setFiltersMock).toHaveBeenCalledOnce();
+
+    await renderPods(props);
+    expect(setFiltersMock).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a persisted owner facet when the embedded pane has no workload selection', async () => {
+    persistedFiltersRef.current = {
+      search: '',
+      kinds: { mode: 'none' },
+      namespaces: { mode: 'some', values: ['team-b'] },
+      clusters: { mode: 'all' },
+      queryFacets: {
+        nodes: { mode: 'some', values: ['node-a'] },
+        owners: {
+          mode: 'some',
+          values: ['["owner","Deployment","api","alpha:ctx","apps","v1","team-a"]'],
+        },
+      },
+      caseSensitive: false,
+      includeMetadata: false,
+    };
+
+    await renderPods({
+      namespace: ALL_NAMESPACES_SCOPE,
+      onWorkloadFilterMismatch: vi.fn(),
+    });
+
+    expect(setFiltersMock).not.toHaveBeenCalled();
+  });
+
+  it('omits Status while preserving the backend-owned Node query facet', async () => {
+    requestRefreshDomainStateMock.mockResolvedValue({
+      status: 'executed',
+      data: {
+        status: 'ready',
+        data: {
+          rows: [createPod()],
+          total: 1,
+          totalIsExact: true,
+          namespaces: ['team-a'],
+          kinds: ['Pod'],
+          facetValues: [
+            {
+              key: 'statuses',
+              options: [
+                { value: 'Pending', label: 'Pending' },
+                { value: 'Running', label: 'Running' },
+              ],
+              exact: true,
+            },
+            {
+              key: 'owners',
+              options: [
+                {
+                  value: '["owner","Deployment","api","alpha:ctx","apps","v1","team-a"]',
+                  label: 'Deployment/api',
+                },
+              ],
+              exact: true,
+            },
+            {
+              key: 'nodes',
+              options: [
+                { value: 'node-a', label: 'node-a' },
+                { value: 'node-b', label: 'node-b' },
+              ],
+              exact: true,
+            },
+          ],
+          facetsExact: true,
+          capabilities: {
+            filterableFields: ['kinds', 'namespaces'],
+            queryFacets: [
+              {
+                key: 'statuses',
+                label: 'Status',
+                placeholder: 'All statuses',
+                searchable: false,
+                bulkActions: true,
+              },
+              {
+                key: 'owners',
+                label: 'Owner',
+                placeholder: 'All owners',
+                searchable: true,
+                bulkActions: true,
+              },
+              {
+                key: 'nodes',
+                label: 'Node',
+                placeholder: 'All nodes',
+                searchable: true,
+                bulkActions: true,
+              },
+            ],
+          },
+          metrics: { stale: false, successCount: 1, failureCount: 0 },
+        },
+      },
+    });
+
+    await renderPods({}, { skipDefaultQueryMock: true });
+
+    expect(gridTablePropsRef.current.filters?.options?.queryFacets).toEqual([
+      expect.objectContaining({
+        key: 'owners',
+        label: 'Owner',
+        options: [
+          {
+            value: '["owner","Deployment","api","alpha:ctx","apps","v1","team-a"]',
+            label: 'Deployment/api',
+          },
+        ],
+      }),
+      expect.objectContaining({
+        key: 'nodes',
+        label: 'Node',
+        options: [
+          { value: 'node-a', label: 'node-a' },
+          { value: 'node-b', label: 'node-b' },
+        ],
+      }),
+    ]);
   });
 
   it('uses backend statusPresentation for the pod status class', async () => {
@@ -573,6 +818,20 @@ describe('NsViewPods', () => {
       'expected the pod status cell element'
     );
     expect(cell.props.className).toBe('status-text warning');
+  });
+
+  it('renders zero pod restarts as no value without changing numeric sorting', async () => {
+    const pods = [createPod(), createPod({ name: 'restarted', restarts: 2 })];
+    await renderPods({ data: pods });
+
+    const column = requireValue(
+      gridTablePropsRef.current.columns.find(({ key }) => key === 'restarts'),
+      'expected pod restarts column'
+    );
+    expect(getTextContent(column.render(pods[0]))).toBe('-');
+    expect(getTextContent(column.render(pods[1]))).toBe('2');
+    expect(column.sortValue?.(pods[0])).toBe(0);
+    expect(column.sortValue?.(pods[1])).toBe(2);
   });
 
   it('passes keyed sort reuse and numeric pod sort values into useTableSort', async () => {
@@ -621,7 +880,7 @@ describe('NsViewPods', () => {
     );
   });
 
-  it('treats a missing query payload as warm-up and still renders the metrics banner', async () => {
+  it('treats a missing query payload as warm-up without adding table-level metrics status', async () => {
     // A null query payload is a backend warm-up condition, not a failure: the
     // table stays in its loading presentation with no error surface, and the
     // next live-data identity change retries.
@@ -648,12 +907,9 @@ describe('NsViewPods', () => {
 
     expect(container.querySelector('.resource-inventory-error')).toBeNull();
     expect(container.textContent).not.toContain('returned no data');
-    expect(container.querySelector('.metrics-warning-banner')?.textContent).toContain(
-      'Awaiting metrics data...'
-    );
   });
 
-  it('prefers trimmed metrics error messages over stale warnings', async () => {
+  it('keeps metrics errors out of the Pods table surface', async () => {
     await renderPods({
       metrics: {
         stale: false,
@@ -664,9 +920,7 @@ describe('NsViewPods', () => {
       },
     });
 
-    expect(container.querySelector('.metrics-warning-banner')?.textContent).toContain(
-      'Metrics API not found'
-    );
+    expect(container.querySelector('.metrics-warning-banner')).toBeNull();
   });
 
   it('falls back to cluster metrics when pod metrics are unavailable', async () => {
@@ -689,9 +943,15 @@ describe('NsViewPods', () => {
       metrics: null,
     });
 
-    expect(container.querySelector('.metrics-warning-banner')?.textContent).toContain(
-      'Metrics API not found'
+    const cpuColumn = requireValue(
+      gridTablePropsRef.current.columns.find((col) => col.key === 'cpu'),
+      'expected the pod CPU column'
     );
+    const cpuElement = requireReactElement<{ metricsError?: string }>(
+      cpuColumn.render(gridTablePropsRef.current.data[0]),
+      'expected the pod CPU cell element'
+    );
+    expect(cpuElement.props.metricsError).toBe('metrics api unavailable');
   });
 
   it('toggles namespace styling when the column is shown', async () => {
@@ -833,333 +1093,16 @@ describe('NsViewPods', () => {
     expect(gridTablePropsRef.current.columns).toBe(firstColumnsRef);
   });
 
-  it('filters pods when the unhealthy toggle is enabled', async () => {
-    const pods = [
-      createPod({ name: 'healthy', status: 'Running', ready: '1/1', restarts: 0 }),
-      createPod({
-        name: 'pending',
-        status: 'Pending',
-        statusPresentation: 'warning',
-        ready: '0/1',
-        restarts: 0,
-      }),
-      createPod({
-        name: 'failing',
-        status: 'CrashLoopBackOff',
-        statusPresentation: 'error',
-        ready: '0/1',
-        restarts: 2,
-      }),
-    ];
-
-    await renderPods({ data: pods });
-
-    const toggle = container.querySelector<HTMLButtonElement>(
-      'button[title="Show unhealthy pods (2/3)"]'
-    );
-    expect(toggle).not.toBeNull();
-    expect(toggle?.getAttribute('aria-pressed')).toBe('false');
-    expect(gridTablePropsRef.current.data).toEqual(pods);
-
-    await act(async () => {
-      toggle?.click();
-      await Promise.resolve();
-    });
-    expect(gridTablePropsRef.current.data).toEqual([pods[1], pods[2]]);
-    const activeToggle = container.querySelector<HTMLButtonElement>(
-      'button[title="Show all pods"]'
-    );
-    expect(activeToggle).not.toBeNull();
-    expect(activeToggle?.getAttribute('aria-pressed')).toBe('true');
-
-    await act(async () => {
-      activeToggle?.click();
-      await Promise.resolve();
-    });
-    expect(gridTablePropsRef.current.data).toEqual(pods);
-  });
-
-  it('uses backend statusPresentation for the unhealthy filter', async () => {
-    const pods = [
-      createPod({ name: 'healthy', status: 'Running', ready: '1/1', restarts: 0 }),
-      createPod({
-        name: 'frontend-mismatch-only',
-        status: 'Pending',
-        statusPresentation: 'ready',
-        ready: '0/1',
-        restarts: 5,
-      }),
-      createPod({
-        name: 'pending',
-        status: 'Running',
-        statusPresentation: 'warning',
-        ready: '1/1',
-        restarts: 0,
-      }),
-    ];
-
-    await renderPods({ data: pods });
-
-    const toggle = container.querySelector<HTMLButtonElement>(
-      'button[title="Show unhealthy pods (1/3)"]'
-    );
-    expect(toggle).not.toBeNull();
-    expect(toggle?.getAttribute('aria-pressed')).toBe('false');
-
-    await act(async () => {
-      toggle?.click();
-      await Promise.resolve();
-    });
-    expect(gridTablePropsRef.current.data).toEqual([pods[2]]);
-  });
-
-  it('enables the unhealthy filter when an event targets the namespace and cluster', async () => {
-    const pods = [
-      createPod({ name: 'healthy', status: 'Running', ready: '1/1', restarts: 0 }),
-      createPod({
-        name: 'pending',
-        status: 'Pending',
-        statusPresentation: 'warning',
-        ready: '0/1',
-        restarts: 0,
-      }),
-    ];
-
-    await renderPods({ data: pods });
-
-    await act(async () => {
-      // Event must include clusterId to match the current cluster context.
-      eventBus.emit('pods:show-unhealthy', { clusterId: 'alpha:ctx', scope: 'team-a' });
-      // The filter is a backend predicate now → re-query; let it resolve.
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(gridTablePropsRef.current.data).toEqual([pods[1]]);
-  });
-
-  it('enables the unhealthy filter when an event targets all namespaces', async () => {
-    const pods = [
-      createPod({ name: 'healthy', namespace: 'team-a', status: 'Running', ready: '1/1' }),
-      createPod({
-        name: 'pending',
-        namespace: 'team-b',
-        status: 'Pending',
-        statusPresentation: 'warning',
-        ready: '0/1',
-      }),
-    ];
-    requestRefreshDomainStateMock.mockImplementation((request?: unknown) => {
-      const { scope = '' } = (request as { domain?: string; scope?: string }) ?? {};
-      const rows = scope.includes('predicate.health=unhealthy') ? [pods[1]] : [];
-      return Promise.resolve({
-        status: 'executed',
-        data: {
-          status: 'ready',
-          data: {
-            rows,
-            total: rows.length,
-            totalIsExact: true,
-            namespaces: ['team-a', 'team-b'],
-            kinds: ['Pod'],
-            facetsExact: true,
-            metrics: { stale: false, successCount: 1, failureCount: 0 },
-          },
-        },
-      });
-    });
-
-    await renderPods({
-      namespace: ALL_NAMESPACES_SCOPE,
-      data: pods,
-      showNamespaceColumn: true,
-    });
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(gridTablePropsRef.current.data).toEqual([]);
-
-    await act(async () => {
-      eventBus.emit('pods:show-unhealthy', {
-        clusterId: 'alpha:ctx',
-        scope: ALL_NAMESPACES_SCOPE,
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(gridTablePropsRef.current.data).toEqual([pods[1]]);
-    expect(requestRefreshDomainStateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        domain: 'pods',
-        scope: expect.stringContaining('predicate.health=unhealthy'),
-      })
-    );
-  });
-
-  it('filters restarted pods when a restart signal targets the namespace and cluster', async () => {
-    const pods = [
-      createPod({ name: 'healthy', status: 'Running', ready: '1/1', restarts: 0 }),
-      createPod({ name: 'restarted', status: 'Running', ready: '1/1', restarts: 2 }),
-      createPod({
-        name: 'pending',
-        status: 'Pending',
-        statusPresentation: 'warning',
-        ready: '0/1',
-        restarts: 0,
-      }),
-    ];
-
-    await renderPods({ data: pods });
-
-    await act(async () => {
-      eventBus.emit('pods:show-unhealthy', {
-        clusterId: 'alpha:ctx',
-        scope: 'team-a',
-        filter: 'restarts',
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(gridTablePropsRef.current.data).toEqual([pods[1]]);
-  });
-
-  it('filters not-ready pods when a not-ready signal targets the namespace and cluster', async () => {
-    const pods = [
-      createPod({ name: 'healthy', status: 'Running', ready: '1/1', restarts: 0 }),
-      createPod({ name: 'not-ready', status: 'Running', ready: '0/1', restarts: 0 }),
-      createPod({
-        name: 'completed',
-        status: 'Completed',
-        statusState: 'Succeeded',
-        statusPresentation: 'ready',
-        ready: '0/1',
-        restarts: 0,
-      }),
-      createPod({
-        name: 'pending',
-        status: 'Pending',
-        statusPresentation: 'warning',
-        ready: '0/1',
-        restarts: 0,
-      }),
-    ];
-
-    await renderPods({ data: pods });
-
-    await act(async () => {
-      eventBus.emit('pods:show-unhealthy', {
-        clusterId: 'alpha:ctx',
-        scope: 'team-a',
-        filter: 'not-ready',
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(gridTablePropsRef.current.data).toEqual([pods[1], pods[3]]);
-  });
-
-  it('ignores unhealthy filter events for other clusters', async () => {
-    const pods = [
-      createPod({ name: 'healthy', status: 'Running', ready: '1/1', restarts: 0 }),
-      createPod({
-        name: 'pending',
-        status: 'Pending',
-        statusPresentation: 'warning',
-        ready: '0/1',
-        restarts: 0,
-      }),
-    ];
-
-    await renderPods({ data: pods });
-
-    act(() => {
-      // Event for a different cluster should be ignored.
-      eventBus.emit('pods:show-unhealthy', { clusterId: 'other-cluster', scope: 'team-a' });
-    });
-
-    // Should still show all pods since the event was for a different cluster.
-    expect(gridTablePropsRef.current.data).toEqual(pods);
-  });
-
-  it('applies pending unhealthy filter requests from session storage', async () => {
-    // Use the cluster-specific storage key.
-    const storageKey = getPodsUnhealthyStorageKey('alpha:ctx');
-    window.sessionStorage.setItem(storageKey, 'team-a');
-    const pods = [
-      createPod({ name: 'healthy', status: 'Running', ready: '1/1', restarts: 0 }),
-      createPod({
-        name: 'failing',
-        status: 'CrashLoopBackOff',
-        statusPresentation: 'error',
-        ready: '0/1',
-        restarts: 5,
-      }),
-    ];
-
-    await renderPods({ data: pods });
-
-    expect(gridTablePropsRef.current.data).toEqual([pods[1]]);
-    expect(window.sessionStorage.getItem(storageKey)).toBeNull();
-  });
-
-  it('keeps the unhealthy toggle visible while active when no unhealthy pods remain', async () => {
-    const pods = [
-      createPod({ name: 'healthy', status: 'Running', ready: '1/1' }),
-      createPod({
-        name: 'pending',
-        status: 'Pending',
-        statusPresentation: 'warning',
-        ready: '0/1',
-      }),
-    ];
-
-    await renderPods({ data: pods });
-
-    const toggle = container.querySelector<HTMLButtonElement>(
-      'button[title="Show unhealthy pods (1/2)"]'
-    );
-    expect(toggle).not.toBeNull();
-
-    await act(async () => {
-      toggle?.click();
-      await Promise.resolve();
-    });
-    expect(gridTablePropsRef.current.data).toEqual([pods[1]]);
-
+  it('does not render a competing unhealthy-pods filter action', async () => {
     await renderPods({
       data: [
-        createPod({ name: 'healthy', status: 'Running', ready: '1/1' }),
-        createPod({
-          name: 'recovered',
-          status: 'Running',
-          statusPresentation: 'ready',
-          ready: '1/1',
-        }),
+        createPod({ name: 'healthy', statusPresentation: 'ready' }),
+        createPod({ name: 'failing', statusPresentation: 'error', restarts: 2 }),
       ],
     });
 
-    // The toggle stays active and visible even though the live snapshot now has no unhealthy
-    // pods — its count comes from the live snapshot, while the filtered table is query-backed.
-    const activeToggle = container.querySelector<HTMLButtonElement>(
-      'button[title="Show all pods"]'
-    );
-    expect(activeToggle).not.toBeNull();
-    expect(activeToggle?.getAttribute('aria-pressed')).toBe('true');
-
-    await act(async () => {
-      activeToggle?.click();
-      await Promise.resolve();
-    });
-    expect(gridTablePropsRef.current.data.map((pod: PodSnapshotEntry) => pod.name)).toEqual([
-      'healthy',
-      'recovered',
-    ]);
+    expect(container.querySelector('[title^="Show unhealthy pods"]')).toBeNull();
+    expect(container.querySelector('[title="Show all pods"]')).toBeNull();
   });
 
   it('deletes a pod when confirmation succeeds', async () => {

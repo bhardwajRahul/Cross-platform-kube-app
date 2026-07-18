@@ -167,8 +167,8 @@ describe('useTypedResourceQuery', () => {
           ...DEFAULT_GRID_TABLE_FILTER_STATE,
           search: 'api',
           includeMetadata: true,
-          namespaces: ['team-b', 'team-a'],
-          kinds: ['Pod'],
+          namespaces: { mode: 'some', values: ['team-b', 'team-a'] },
+          kinds: { mode: 'some', values: ['Pod'] },
         },
         sortConfig: { key: 'cpu', direction: 'desc' },
         pageLimit: 25,
@@ -281,7 +281,10 @@ describe('useTypedResourceQuery', () => {
         clusterId: 'cluster-a',
         domain: 'pods',
         label: 'All Namespaces Pods',
-        filters: { ...DEFAULT_GRID_TABLE_FILTER_STATE, kinds },
+        filters: {
+          ...DEFAULT_GRID_TABLE_FILTER_STATE,
+          kinds: kinds.length > 0 ? { mode: 'some', values: kinds } : { mode: 'all' },
+        },
         sortConfig,
         selectRows,
       });
@@ -500,7 +503,7 @@ describe('useTypedResourceQuery', () => {
     expect(result?.loaded).toBe(true);
   });
 
-  it('keeps the applied rows and loaded state during user filter refetches (quiet refresh)', async () => {
+  it('keeps the applied rows and loaded state during provider facet refetches (focus-safe quiet refresh)', async () => {
     let resolveFetch: ((value: unknown) => void) | undefined;
     requestRefreshDomainStateMock.mockImplementation(
       () =>
@@ -509,13 +512,17 @@ describe('useTypedResourceQuery', () => {
         })
     );
 
-    const Probe: React.FC<{ kinds: string[] }> = ({ kinds }) => {
+    const Probe: React.FC<{ reasons: string[] }> = ({ reasons }) => {
       result = useTypedResourceQuery<TestPayload, TestRow>({
         enabled: true,
         clusterId: 'cluster-a',
         domain: 'pods',
         label: 'All Namespaces Pods',
-        filters: { ...DEFAULT_GRID_TABLE_FILTER_STATE, kinds },
+        filters: {
+          ...DEFAULT_GRID_TABLE_FILTER_STATE,
+          queryFacets:
+            reasons.length > 0 ? { reasons: { mode: 'some', values: reasons } } : undefined,
+        },
         sortConfig,
         liveDataVersion: 'v1',
         selectRows,
@@ -531,7 +538,7 @@ describe('useTypedResourceQuery', () => {
     };
 
     await act(async () => {
-      root.render(<Probe kinds={[]} />);
+      root.render(<Probe reasons={[]} />);
       await Promise.resolve();
     });
     await settle([{ name: 'pod-a' }]);
@@ -542,7 +549,7 @@ describe('useTypedResourceQuery', () => {
     // survive until the new page lands, so the table never dims or swaps to a
     // spinner mid-filtering.
     await act(async () => {
-      root.render(<Probe kinds={['Pod']} />);
+      root.render(<Probe reasons={['BackOff']} />);
       await Promise.resolve();
     });
     expect(result?.rows).toEqual([{ name: 'pod-a' }]);
@@ -556,7 +563,7 @@ describe('useTypedResourceQuery', () => {
     expect(result?.loaded).toBe(true);
 
     await act(async () => {
-      root.render(<Probe kinds={['Pod', 'Job']} />);
+      root.render(<Probe reasons={['BackOff', 'FailedScheduling']} />);
       await Promise.resolve();
     });
     expect(result?.loaded).toBe(true);

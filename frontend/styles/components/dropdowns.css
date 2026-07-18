@@ -1,31 +1,31 @@
 /* ============================================
-   DROPDOWN COMPONENT STYLES
-   ============================================
-   Structure:
-   1. Container & Base Styles
-   2. Trigger Button Styles
-   3. Menu/Popover Styles
-   4. Option & Item Styles
-   5. Special Elements (Search, Headers, Dividers)
-   6. Size Variants
-   7. Style Variants
-   8. State Modifiers
-   9. Animations
-   10. Theme Support
-   11. Utility Classes
-   ============================================ */
+  DROPDOWN COMPONENT STYLES
+  ============================================
+  Structure:
+  1. Container & Base Styles
+  2. Trigger Button Styles
+  3. Menu/Popover Styles
+  4. Option & Item Styles
+  5. Special Elements (Search, Headers, Dividers)
+  6. Size Variants
+  7. Style Variants
+  8. State Modifiers
+  9. Animations
+  10. Theme Support
+  11. Utility Classes
+  ============================================ */
 
 /* ============================================
-   1. CONTAINER & BASE STYLES
-   ============================================ */
+  1. CONTAINER & BASE STYLES
+  ============================================ */
 .dropdown {
   display: inline-block;
   position: relative;
 }
 
 /* ============================================
-   2. TRIGGER BUTTON STYLES
-   ============================================ */
+  2. TRIGGER BUTTON STYLES
+  ============================================ */
 .dropdown-trigger {
   display: inline-flex;
   align-items: center;
@@ -125,8 +125,8 @@
 }
 
 /* ============================================
-   3. MENU/POPOVER STYLES
-   ============================================ */
+  3. MENU/POPOVER STYLES
+  ============================================ */
 .dropdown-menu {
   position: absolute;
   left: 0;
@@ -186,9 +186,15 @@
   bottom: auto;
 }
 
+.dropdown-menu.dropdown-menu--portal {
+  min-width: var(--dropdown-menu-anchor-width);
+  max-height: min(400px, var(--dropdown-menu-available-height));
+  margin: 0;
+}
+
 /* ============================================
-   4. OPTION & ITEM STYLES
-   ============================================ */
+  4. OPTION & ITEM STYLES
+  ============================================ */
 .dropdown-option {
   width: 100%;
   display: flex;
@@ -300,8 +306,8 @@
 }
 
 /* ============================================
-   5. SPECIAL ELEMENTS
-   ============================================ */
+  5. SPECIAL ELEMENTS
+  ============================================ */
 
 /* Group headers */
 .dropdown-group-header {
@@ -427,23 +433,23 @@
 }
 
 /* ============================================
-   6. SIZE VARIANTS
-   ============================================ */
+  6. SIZE VARIANTS
+  ============================================ */
 .dropdown .dropdown-trigger {
   /* Default/compact/small all use same styling for consistency */
   padding: 0 2rem 0 var(--spacing-md);
   min-height: 12px;
   font-size: var(--font-size-button);
-  min-width: 150px;
+  min-width: 50px;
 }
 
 /* ============================================
-   7. STYLE VARIANTS
-   ============================================ */
+  7. STYLE VARIANTS
+  ============================================ */
 
 /* ============================================
-   8. STATE MODIFIERS
-   ============================================ */
+  8. STATE MODIFIERS
+  ============================================ */
 .disabled {
   opacity: 0.6;
   pointer-events: none;
@@ -460,8 +466,8 @@
 }
 
 /* ============================================
-   9. ANIMATIONS
-   ============================================ */
+  9. ANIMATIONS
+  ============================================ */
 @keyframes dropdownSlide {
   from {
     opacity: 0;
@@ -474,12 +480,12 @@
 }
 
 /* ============================================
-   10. THEME SUPPORT
-   ============================================ */
+  10. THEME SUPPORT
+  ============================================ */
 
 /* ============================================
-   11. UTILITY CLASSES
-   ============================================ */
+  11. UTILITY CLASSES
+  ============================================ */
 .sr-only {
   position: absolute;
   width: 1px;

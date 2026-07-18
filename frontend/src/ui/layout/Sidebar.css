@@ -44,6 +44,10 @@
   margin-bottom: 0;
 }
 
+.sidebar-section[hidden] {
+  display: none;
+}
+
 /* sidebar section header (CLUSTER, NAMESPACE) */
 .sidebar h3 {
   display: flex;
@@ -79,7 +83,7 @@
 
 /* Sidebar views container with animation (namespace/resources). */
 .sidebar-views {
-  max-height: 400px;
+  max-height: 520px;
   overflow: hidden;
   animation: expandDown 0.3s var(--ease-out, ease-out);
   transform-origin: top;
@@ -151,6 +155,32 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-attention-label {
+  min-width: 0;
+}
+
+.sidebar-item .sidebar-attention-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+  margin-left: auto;
+  overflow: visible;
+}
+
+.sidebar-item .sidebar-attention-badge {
+  min-width: 1.1rem;
+  padding: 0 0.25rem;
+  line-height: 1.2;
+  text-align: center;
+  overflow: visible;
+}
+
+.sidebar-item .sidebar-attention-badge-wrapper {
+  display: inline-flex;
+  overflow: visible;
 }
 
 .sidebar-item svg {
@@ -410,7 +440,7 @@ body.sidebar-resizing::after {
   display: inline-flex;
   align-items: center;
   margin-left: 0.25rem;
-  color: var(--color-warning, #b58900);
+  color: var(--color-warning);
 }
 
 /* Inaccessible scope entries cannot expand: no pointer affordance, muted

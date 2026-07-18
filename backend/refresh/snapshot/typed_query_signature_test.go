@@ -40,3 +40,47 @@ func TestTypedQuerySignatureIncludesBaseScopeAndIncludeMetadata(t *testing.T) {
 		t.Error("equal query identity must share a signature")
 	}
 }
+
+func TestTypedQuerySignatureIncludesProviderFacetFilters(t *testing.T) {
+	base := ResourceQueryRequest{ClusterID: "c1", Table: "pods"}
+	sig := func(req ResourceQueryRequest) string {
+		return typedQuerySignature("name", querypage.Ascending, 50, "namespace:all", req)
+	}
+
+	withStatus := base
+	withStatus.Facets = map[string][]string{"statuses": {"Running"}}
+	if sig(base) == sig(withStatus) {
+		t.Error("Statuses must change the signature")
+	}
+
+	withNode := base
+	withNode.Facets = map[string][]string{"nodes": {"node-a"}}
+	if sig(base) == sig(withNode) {
+		t.Error("Nodes must change the signature")
+	}
+
+	reordered := base
+	reordered.Facets = map[string][]string{"statuses": {"Running", "Pending"}}
+	equivalent := base
+	equivalent.Facets = map[string][]string{"statuses": {"Pending", "Running"}}
+	if sig(reordered) != sig(equivalent) {
+		t.Error("equivalent unordered status filters must share a signature")
+	}
+}
+
+func TestTypedQuerySignatureSeparatesOpaqueFacetSelections(t *testing.T) {
+	request := func(values ...string) ResourceQueryRequest {
+		return ResourceQueryRequest{
+			ClusterID: "c1",
+			Table:     "pods",
+			Facets:    map[string][]string{"values": values},
+		}
+	}
+	sig := func(req ResourceQueryRequest) string {
+		return typedQuerySignature("name", querypage.Ascending, 50, "namespace:all", req)
+	}
+
+	if sig(request("a,b", "c")) == sig(request("a", "b,c")) {
+		t.Fatal("distinct opaque facet selections must not share a cursor signature")
+	}
+}

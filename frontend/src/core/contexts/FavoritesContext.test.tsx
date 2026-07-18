@@ -39,9 +39,11 @@ let mockActiveNamespaceTab = 'workloads';
 let mockActiveClusterTab: string | null = null;
 let mockSelectedNamespace: string | undefined = 'default';
 let mockNamespaceReady = true;
+let mockClusterLifecycleState = 'ready';
 const mockSetViewType = vi.fn();
 const mockSetActiveNamespaceTab = vi.fn();
 const mockSetActiveClusterView = vi.fn();
+const mockNavigateToGlobal = vi.fn();
 const mockSetSidebarSelection = vi.fn();
 const mockOnNamespaceSelect = vi.fn();
 const mockSetSelectedNamespace = vi.fn();
@@ -55,8 +57,8 @@ vi.mock('@modules/kubernetes/config/KubeconfigContext', () => ({
 
 vi.mock('@core/contexts/ClusterLifecycleContext', () => ({
   useClusterLifecycle: () => ({
-    getClusterState: () => 'ready',
-    isClusterReady: () => true,
+    getClusterState: () => mockClusterLifecycleState,
+    isClusterReady: () => mockClusterLifecycleState === 'ready',
   }),
   ClusterLifecycleProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
@@ -69,6 +71,7 @@ vi.mock('@core/contexts/ViewStateContext', () => ({
     setViewType: mockSetViewType,
     setActiveNamespaceTab: mockSetActiveNamespaceTab,
     setActiveClusterView: mockSetActiveClusterView,
+    navigateToGlobal: mockNavigateToGlobal,
     setSidebarSelection: mockSetSidebarSelection,
     onNamespaceSelect: mockOnNamespaceSelect,
   }),
@@ -96,8 +99,7 @@ function makeFavorite(overrides: Partial<Favorite> = {}): Favorite {
     viewType: 'namespace',
     view: 'workloads',
     namespace: 'default',
-    filters: null,
-    tableState: null,
+    panes: {},
     order: 0,
     ...overrides,
   };
@@ -129,9 +131,11 @@ describe('FavoritesContext', () => {
     mockActiveClusterTab = null;
     mockSelectedNamespace = 'default';
     mockNamespaceReady = true;
+    mockClusterLifecycleState = 'ready';
     mockSetViewType.mockReset();
     mockSetActiveNamespaceTab.mockReset();
     mockSetActiveClusterView.mockReset();
+    mockNavigateToGlobal.mockReset();
     mockSetSidebarSelection.mockReset();
     mockOnNamespaceSelect.mockReset();
     mockSetSelectedNamespace.mockReset();
@@ -276,6 +280,55 @@ describe('FavoritesContext', () => {
     });
   });
 
+  it('applies each newly activated favorite without requiring an intermediate clear', async () => {
+    await renderProvider();
+
+    act(() => stateRef.current?.setPendingFavorite(makeFavorite({ id: 'first' })));
+    expect(mockSetActiveNamespaceTab).toHaveBeenCalledTimes(1);
+
+    act(() =>
+      stateRef.current?.setPendingFavorite(
+        makeFavorite({ id: 'second', viewType: 'cluster', view: 'nodes', namespace: '' })
+      )
+    );
+    expect(mockSetViewType).toHaveBeenLastCalledWith('cluster');
+    expect(mockSetActiveClusterView).toHaveBeenCalledWith('nodes');
+  });
+
+  it('opens new and legacy Global favorites without applying cluster navigation', async () => {
+    await renderProvider();
+
+    act(() => {
+      stateRef.current?.setPendingFavorite(
+        makeFavorite({
+          viewType: 'cluster',
+          view: 'global-namespaces',
+          namespace: '',
+        })
+      );
+    });
+
+    expect(mockNavigateToGlobal).toHaveBeenCalledWith('global-namespaces');
+    expect(mockSetViewType).not.toHaveBeenCalled();
+    expect(mockSetActiveClusterView).not.toHaveBeenCalled();
+
+    act(() => stateRef.current?.setPendingFavorite(null));
+    act(() => {
+      stateRef.current?.setPendingFavorite(
+        makeFavorite({
+          id: 'fav-global',
+          clusterSelection: '',
+          clusterId: '',
+          viewType: 'global',
+          view: 'fleet',
+          namespace: '',
+        })
+      );
+    });
+
+    expect(mockNavigateToGlobal).toHaveBeenLastCalledWith('fleet');
+  });
+
   it('waits for the favorite clusterId before applying cluster-specific navigation', async () => {
     mockSelectedKubeconfig = '/path/to/kubeconfig:other-context';
     mockSelectedClusterId = 'cluster-other';
@@ -307,6 +360,33 @@ describe('FavoritesContext', () => {
 
     expect(mockSetViewType).toHaveBeenCalledWith('cluster');
     expect(mockSetActiveClusterView).toHaveBeenCalledWith('nodes');
+  });
+
+  it('expires a pending favorite only after 15 seconds without lifecycle progress', async () => {
+    vi.useFakeTimers();
+    mockClusterLifecycleState = 'connecting';
+    try {
+      await renderProvider();
+
+      act(() => stateRef.current?.setPendingFavorite(makeFavorite()));
+      act(() => vi.advanceTimersByTime(14_000));
+
+      mockClusterLifecycleState = 'connected';
+      await act(async () => {
+        root.render(
+          <FavoritesProvider>
+            <Harness />
+          </FavoritesProvider>
+        );
+      });
+      act(() => vi.advanceTimersByTime(2_000));
+      expect(stateRef.current?.pendingFavorite?.id).toBe('fav-1');
+
+      act(() => vi.advanceTimersByTime(13_000));
+      expect(stateRef.current?.pendingFavorite).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // Note: currentFavoriteMatch was moved from FavoritesContext to useFavToggle

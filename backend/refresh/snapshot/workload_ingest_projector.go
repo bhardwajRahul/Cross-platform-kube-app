@@ -6,7 +6,7 @@
  * bespoke cross-kind WorkloadSummary, not the generic StreamRow dispatch), so the
  * IngestManager's StreamDescriptors loop never builds them. Each NewXIngestProjector is
  * the bespoke ProjectFunc the system wires onto the manager via RegisterReflector: it
- * projects each reflector-decoded workload into a three-half ingest.Bundle so one intake
+ * projects each reflector-decoded workload into an ingest.Bundle so one intake
  * feeds every workload consumer, and the typed object is then dropped:
  *
  *   - Table     = the workload-OWN-fields WorkloadSummary the namespace-workloads builder
@@ -31,6 +31,7 @@ import (
 	"github.com/luxury-yacht/app/backend/kind/objectmapnode"
 	"github.com/luxury-yacht/app/backend/objectcatalog"
 	"github.com/luxury-yacht/app/backend/refresh/ingest"
+	"github.com/luxury-yacht/app/backend/resourcemodel"
 	"github.com/luxury-yacht/app/backend/resources/cronjob"
 	"github.com/luxury-yacht/app/backend/resources/daemonset"
 	"github.com/luxury-yacht/app/backend/resources/deployment"
@@ -57,6 +58,40 @@ var (
 	JobGVK         = schema.GroupVersionKind{Group: jobres.Identity.Group, Version: jobres.Identity.Version, Kind: jobres.Identity.Kind}
 	CronJobGVK     = schema.GroupVersionKind{Group: cronjob.Identity.Group, Version: cronjob.Identity.Version, Kind: cronjob.Identity.Kind}
 )
+
+// JobControllerOwner is the complete identity of a Job's controlling CronJob,
+// retained as the Job bundle's aggregate half so Pod projection can resolve
+// Job->CronJob without a second typed Job cache.
+type JobControllerOwner struct {
+	Job        resourcemodel.ResourceRef
+	Controller resourcemodel.ResourceRef
+}
+
+func projectJobControllerOwner(meta ClusterMeta, job *batchv1.Job) JobControllerOwner {
+	if job == nil {
+		return JobControllerOwner{}
+	}
+	result := JobControllerOwner{Job: resourcemodel.NewResourceRef(
+		meta.ClusterID,
+		jobres.Identity.Group, jobres.Identity.Version, jobres.Identity.Kind, jobres.Identity.Resource,
+		job.Namespace, job.Name, string(job.UID),
+	)}
+	for _, owner := range job.OwnerReferences {
+		if owner.Controller != nil && *owner.Controller && owner.Kind == cronjob.Identity.Kind && owner.Name != "" {
+			gv, err := schema.ParseGroupVersion(owner.APIVersion)
+			if err != nil {
+				return result
+			}
+			result.Controller = resourcemodel.NewResourceRef(
+				meta.ClusterID,
+				gv.Group, gv.Version, owner.Kind, cronjob.Identity.Resource,
+				job.Namespace, owner.Name, string(owner.UID),
+			)
+			return result
+		}
+	}
+	return result
+}
 
 // workloadProjectionError is the typed guard error a workload projector returns when the
 // reflector decodes the wrong object type into its store; the ProjectingStore logs it
@@ -146,6 +181,7 @@ func NewJobIngestProjector(meta ClusterMeta) ingest.ProjectFunc {
 		var metaObj metav1.Object = job
 		return ingest.Bundle{
 			Table:     summary,
+			Aggregate: projectJobControllerOwner(meta, job),
 			Catalog:   catalogProject(metaObj),
 			ObjectMap: nodeProject(meta.ClusterID, metaObj),
 		}, nil

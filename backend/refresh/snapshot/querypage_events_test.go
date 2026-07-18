@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"testing"
 )
@@ -34,11 +35,10 @@ func makeEventSummaryRows(n int) []EventSummary {
 	return rows
 }
 
-// makeClusterEventRows builds varied ClusterEventEntry rows. Cluster events are
-// cluster-scoped (no namespace), so the adapter keys/searches/sorts without a
-// namespace dimension; this still exercises kind/type/source/reason/object/message
-// sorts and searches plus the age tiebreak.
+// makeClusterEventRows builds varied ClusterEventEntry rows. These Events involve
+// cluster-scoped objects, but the Event resources themselves remain namespaced.
 func makeClusterEventRows(n int) []ClusterEventEntry {
+	namespaces := []string{"default", "kube-system"}
 	types := []string{"Normal", "Warning"}
 	sources := []string{"node-controller", "kubelet", "scheduler"}
 	reasons := []string{"RegisteredNode", "NodeNotReady", "Rebooted", "Starting"}
@@ -47,6 +47,7 @@ func makeClusterEventRows(n int) []ClusterEventEntry {
 		rows[i] = ClusterEventEntry{
 			Kind:         "Event",
 			Name:         fmt.Sprintf("cevt-%03d", i), // unique -> unique row key
+			Namespace:    namespaces[i%len(namespaces)],
 			Type:         types[i%len(types)],
 			Source:       sources[i%len(sources)],
 			Reason:       reasons[i%len(reasons)],
@@ -57,6 +58,117 @@ func makeClusterEventRows(n int) []ClusterEventEntry {
 		}
 	}
 	return rows
+}
+
+func TestClusterEventQueryIdentityIncludesEventNamespace(t *testing.T) {
+	adapter := clusterEventTableQueryAdapter()
+	first := ClusterEventEntry{Kind: "Event", Namespace: "default", Name: "node-ready.123"}
+	second := ClusterEventEntry{Kind: "Event", Namespace: "kube-system", Name: "node-ready.123"}
+
+	if adapter.Key(first) == adapter.Key(second) {
+		t.Fatalf("cluster Event row keys collapse namespaces: %q", adapter.Key(first))
+	}
+	if got := adapter.Namespace(first); got != "default" {
+		t.Fatalf("cluster Event adapter namespace = %q, want default", got)
+	}
+	if got := adapter.AnchorKey("Event", first.Namespace, first.Name); got != adapter.Key(first) {
+		t.Fatalf("cluster Event anchor key = %q, want row key %q", got, adapter.Key(first))
+	}
+}
+
+func TestNamespaceEventsQueryFacetsFilterAndKeepStructuralScopeOptions(t *testing.T) {
+	items := []EventSummary{
+		{Name: "normal", Namespace: "team-a", Kind: "Pod", Type: "Normal", Reason: "Started", Source: "kubelet"},
+		{Name: "warning", Namespace: "team-a", Kind: "Pod", Type: "Warning", Reason: "BackOff", Source: "node-controller"},
+	}
+	page := applyTypedTableQueryViaStore(
+		items,
+		typedTableQuery{
+			Enabled: true,
+			Request: ResourceQueryRequest{
+				ClusterID: "cluster-a",
+				Limit:     50,
+				Facets:    map[string][]string{"types": {"Warning"}},
+			},
+		},
+		namespacedEventTableQueryAdapter(),
+		namespaceEventsQuerypageSchema(),
+	)
+
+	if got := len(page.Rows); got != 1 || page.Rows[0].Name != "warning" {
+		t.Fatalf("type facet rows = %+v, want only warning", page.Rows)
+	}
+	if got := testFacetOptionValues(page.FacetValues, "types"); !slices.Equal(got, []string{"Normal", "Warning"}) {
+		t.Fatalf("type options = %v, want full structural scope", got)
+	}
+	if got := testFacetOptionValues(page.FacetValues, "reasons"); !slices.Equal(got, []string{"BackOff", "Started"}) {
+		t.Fatalf("reason options = %v, want full structural scope", got)
+	}
+	if got := testFacetOptionValues(page.FacetValues, "sources"); !slices.Equal(got, []string{"kubelet", "node-controller"}) {
+		t.Fatalf("source options = %v, want full structural scope", got)
+	}
+}
+
+func TestClusterEventsQueryFacetsFilterAndKeepStructuralScopeOptions(t *testing.T) {
+	items := []ClusterEventEntry{
+		{Name: "normal", Kind: "Event", Type: "Normal", Reason: "RegisteredNode", Source: "node-controller"},
+		{Name: "warning", Kind: "Event", Type: "Warning", Reason: "NodeNotReady", Source: "kubelet"},
+	}
+	page := applyTypedTableQueryViaStore(
+		items,
+		typedTableQuery{
+			Enabled: true,
+			Request: ResourceQueryRequest{
+				ClusterID: "cluster-a",
+				Limit:     50,
+				Facets:    map[string][]string{"reasons": {"NodeNotReady"}},
+			},
+		},
+		clusterEventTableQueryAdapter(),
+		clusterEventsQuerypageSchema(),
+	)
+
+	if got := len(page.Rows); got != 1 || page.Rows[0].Name != "warning" {
+		t.Fatalf("reason facet rows = %+v, want only warning", page.Rows)
+	}
+	if got := testFacetOptionValues(page.FacetValues, "types"); !slices.Equal(got, []string{"Normal", "Warning"}) {
+		t.Fatalf("type options = %v, want full structural scope", got)
+	}
+	if got := testFacetOptionValues(page.FacetValues, "reasons"); !slices.Equal(got, []string{"NodeNotReady", "RegisteredNode"}) {
+		t.Fatalf("reason options = %v, want full structural scope", got)
+	}
+	if got := testFacetOptionValues(page.FacetValues, "sources"); !slices.Equal(got, []string{"kubelet", "node-controller"}) {
+		t.Fatalf("source options = %v, want full structural scope", got)
+	}
+}
+
+func TestEventQueryFacetsPublishExactEmptyOptionSets(t *testing.T) {
+	namespaced := applyTypedTableQueryViaStore(
+		[]EventSummary{},
+		typedTableQuery{Enabled: true, Request: ResourceQueryRequest{ClusterID: "cluster-a", Limit: 50}},
+		namespacedEventTableQueryAdapter(),
+		namespaceEventsQuerypageSchema(),
+	)
+	cluster := applyTypedTableQueryViaStore(
+		[]ClusterEventEntry{},
+		typedTableQuery{Enabled: true, Request: ResourceQueryRequest{ClusterID: "cluster-a", Limit: 50}},
+		clusterEventTableQueryAdapter(),
+		clusterEventsQuerypageSchema(),
+	)
+
+	for label, facets := range map[string][]ResourceQueryFacetValues{
+		"namespace": namespaced.FacetValues,
+		"cluster":   cluster.FacetValues,
+	} {
+		if len(facets) != 3 {
+			t.Fatalf("%s event facets = %v, want three empty option sets", label, facets)
+		}
+		for _, facet := range facets {
+			if !facet.Exact || len(facet.Options) != 0 {
+				t.Fatalf("%s event facet = %+v, want exact empty options", label, facet)
+			}
+		}
+	}
 }
 
 // TestNamespaceEventsQueryViaStoreEquivalent is the namespace-events cutover gate:
@@ -95,6 +207,7 @@ func TestNamespaceEventsQueryViaStoreEquivalent(t *testing.T) {
 		ns     []string
 		kinds  []string
 		search string
+		facets map[string][]string
 	}
 	sorts := []string{"", "name", "kind", "namespace", "type", "source", "reason", "object", "objectType", "objectName", "message", "age"}
 	dirs := []string{"asc", "desc"}
@@ -107,6 +220,8 @@ func TestNamespaceEventsQueryViaStoreEquivalent(t *testing.T) {
 		{search: "evt-01"},
 		{search: "warning"},
 		{search: "kubelet"},
+		{facets: map[string][]string{"types": {"Warning"}}},
+		{facets: map[string][]string{"reasons": {"BackOff", "Started"}, "sources": {"kubelet"}}},
 	}
 
 	for _, sf := range sorts {
@@ -116,7 +231,7 @@ func TestNamespaceEventsQueryViaStoreEquivalent(t *testing.T) {
 					Enabled: true,
 					Request: ResourceQueryRequest{
 						ClusterID: "c", SortField: sf, SortDirection: d, Limit: 17,
-						Namespaces: f.ns, Kinds: f.kinds, Search: f.search,
+						Namespaces: f.ns, Kinds: f.kinds, Search: f.search, Facets: f.facets,
 					},
 				}
 				liveKeys, liveFirst := paginate(func(q typedTableQuery) typedTableQueryPage[EventSummary] {
@@ -126,7 +241,7 @@ func TestNamespaceEventsQueryViaStoreEquivalent(t *testing.T) {
 					return applyTypedTableQueryViaStore(items, q, adapter, namespaceEventsQuerypageSchema())
 				}, base)
 
-				label := fmt.Sprintf("sort=%q dir=%s ns=%v kinds=%v search=%q", sf, d, f.ns, f.kinds, f.search)
+				label := fmt.Sprintf("sort=%q dir=%s ns=%v kinds=%v search=%q facets=%v", sf, d, f.ns, f.kinds, f.search, f.facets)
 				if !slices.Equal(liveKeys, engineKeys) {
 					t.Fatalf("%s: row sequence differs (live=%d engine=%d rows)", label, len(liveKeys), len(engineKeys))
 				}
@@ -141,6 +256,9 @@ func TestNamespaceEventsQueryViaStoreEquivalent(t *testing.T) {
 				}
 				if !slices.Equal(liveFirst.Kinds, engineFirst.Kinds) {
 					t.Fatalf("%s: kind facets live=%v engine=%v", label, liveFirst.Kinds, engineFirst.Kinds)
+				}
+				if !reflect.DeepEqual(liveFirst.FacetValues, engineFirst.FacetValues) {
+					t.Fatalf("%s: provider facets live=%v engine=%v", label, liveFirst.FacetValues, engineFirst.FacetValues)
 				}
 			}
 		}
@@ -181,6 +299,7 @@ func TestClusterEventsQueryViaStoreEquivalent(t *testing.T) {
 	type filt struct {
 		kinds  []string
 		search string
+		facets map[string][]string
 	}
 	sorts := []string{"", "name", "kind", "type", "source", "reason", "object", "objectType", "objectName", "message", "age"}
 	dirs := []string{"asc", "desc"}
@@ -190,6 +309,8 @@ func TestClusterEventsQueryViaStoreEquivalent(t *testing.T) {
 		{search: "cevt-01"},
 		{search: "warning"},
 		{search: "node"},
+		{facets: map[string][]string{"types": {"Warning"}}},
+		{facets: map[string][]string{"reasons": {"NodeNotReady"}, "sources": {"kubelet"}}},
 	}
 
 	for _, sf := range sorts {
@@ -199,7 +320,7 @@ func TestClusterEventsQueryViaStoreEquivalent(t *testing.T) {
 					Enabled: true,
 					Request: ResourceQueryRequest{
 						ClusterID: "c", SortField: sf, SortDirection: d, Limit: 17,
-						Kinds: f.kinds, Search: f.search,
+						Kinds: f.kinds, Search: f.search, Facets: f.facets,
 					},
 				}
 				liveKeys, liveFirst := paginate(func(q typedTableQuery) typedTableQueryPage[ClusterEventEntry] {
@@ -209,7 +330,7 @@ func TestClusterEventsQueryViaStoreEquivalent(t *testing.T) {
 					return applyTypedTableQueryViaStore(items, q, adapter, clusterEventsQuerypageSchema())
 				}, base)
 
-				label := fmt.Sprintf("sort=%q dir=%s kinds=%v search=%q", sf, d, f.kinds, f.search)
+				label := fmt.Sprintf("sort=%q dir=%s kinds=%v search=%q facets=%v", sf, d, f.kinds, f.search, f.facets)
 				if !slices.Equal(liveKeys, engineKeys) {
 					t.Fatalf("%s: row sequence differs (live=%d engine=%d rows)", label, len(liveKeys), len(engineKeys))
 				}
@@ -224,6 +345,9 @@ func TestClusterEventsQueryViaStoreEquivalent(t *testing.T) {
 				}
 				if !slices.Equal(liveFirst.Kinds, engineFirst.Kinds) {
 					t.Fatalf("%s: kind facets live=%v engine=%v", label, liveFirst.Kinds, engineFirst.Kinds)
+				}
+				if !reflect.DeepEqual(liveFirst.FacetValues, engineFirst.FacetValues) {
+					t.Fatalf("%s: provider facets live=%v engine=%v", label, liveFirst.FacetValues, engineFirst.FacetValues)
 				}
 			}
 		}

@@ -14,6 +14,7 @@ import {
   parseWorkloadKeyValue,
   type WorkloadData,
 } from '@modules/namespace/components/NsViewWorkloads.helpers';
+
 import { describe, expect, it } from 'vitest';
 
 describe('NsViewWorkloads helpers', () => {

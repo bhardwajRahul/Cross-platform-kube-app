@@ -9,6 +9,7 @@ import ClusterViewNodes from '@modules/cluster/components/ClusterViewNodes';
 import { OBJECT_ACTION_IDS } from '@shared/actions/objectActionContract';
 import type ResourceLoadingBoundary from '@shared/components/ResourceLoadingBoundary';
 import type { GridTableProps } from '@shared/components/tables/GridTable';
+import { getTextContent } from '@shared/components/tables/GridTable.utils';
 import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -327,6 +328,52 @@ describe('ClusterViewNodes', () => {
     expect(preActions.some((item) => 'id' in item && item.id === 'include-metadata')).toBe(true);
   });
 
+  it('omits the advertised Node Status query facet', async () => {
+    const response = {
+      status: 'executed',
+      data: {
+        status: 'ready',
+        data: {
+          rows: [baseNode],
+          total: 1,
+          totalIsExact: true,
+          kinds: ['Node'],
+          facetValues: [
+            {
+              key: 'statuses',
+              options: [
+                { value: 'NotReady', label: 'NotReady' },
+                { value: 'Ready', label: 'Ready' },
+              ],
+              exact: true,
+            },
+          ],
+          facetsExact: true,
+          capabilities: {
+            queryFacets: [
+              {
+                key: 'statuses',
+                label: 'Status',
+                placeholder: 'All statuses',
+                searchable: false,
+                bulkActions: true,
+              },
+            ],
+          },
+        },
+      },
+    };
+    requestRefreshDomainStateMock.mockResolvedValue(response);
+
+    await act(async () => {
+      root.render(<ClusterViewNodes />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(gridTablePropsRef.current.filters?.options?.queryFacets).toBeUndefined();
+  });
+
   it('places the favorite with the filter pre-actions (left), not the export cluster', async () => {
     await renderNodes([baseNode]);
 
@@ -387,6 +434,19 @@ describe('ClusterViewNodes', () => {
     ).toBeGreaterThan(
       Number(ageColumn?.sortValue?.({ ...baseNode, ageTimestamp: 1_700_003_600_000 }))
     );
+  });
+
+  it('renders zero node restarts as no value without changing numeric sorting', async () => {
+    await renderNodes([baseNode]);
+
+    const column = requireValue(
+      gridTablePropsRef.current.columns.find(({ key }) => key === 'restarts'),
+      'expected node restarts column'
+    );
+    expect(getTextContent(column.render(baseNode))).toBe('-');
+    expect(getTextContent(column.render({ ...baseNode, restarts: 4 }))).toBe('4');
+    expect(column.sortValue?.(baseNode)).toBe(0);
+    expect(column.sortValue?.({ ...baseNode, restarts: 4 })).toBe(4);
   });
 
   it('renders the backend node status without reinterpreting cordon state', async () => {

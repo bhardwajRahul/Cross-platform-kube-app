@@ -113,21 +113,46 @@ vi.mock('@modules/namespace/contexts/NamespaceContext', () => ({
 
 // Mock Dropdown to render a simple <select> so we can drive view changes.
 vi.mock('@shared/components/dropdowns/Dropdown', () => ({
-  Dropdown: ({ options, value, onChange, placeholder, disabled }: DropdownProps) => {
+  Dropdown: ({
+    options,
+    value,
+    onChange,
+    placeholder,
+    disabled,
+    searchable,
+    showBulkActions,
+    displayValue,
+  }: DropdownProps) => {
     const opts = options.filter((option) => !option.group);
     return (
-      <select
-        data-testid={`dropdown-${placeholder ?? 'select'}`}
-        value={Array.isArray(value) ? value.join(',') : (value ?? '')}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        {opts.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      <>
+        <select
+          data-testid={`dropdown-${placeholder ?? 'select'}`}
+          value={Array.isArray(value) ? value.join(',') : (value ?? '')}
+          disabled={disabled}
+          data-searchable={searchable ? 'true' : 'false'}
+          data-bulk-actions={showBulkActions ? 'true' : 'false'}
+          data-display-value={typeof displayValue === 'string' ? displayValue : undefined}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          {opts.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        {showBulkActions ? (
+          <button
+            type="button"
+            data-testid={`select-all-${placeholder ?? 'select'}`}
+            onClick={() =>
+              onChange(opts.filter((option) => !option.disabled).map((option) => option.value))
+            }
+          >
+            Select all
+          </button>
+        ) : null}
+      </>
     );
   },
 }));
@@ -177,8 +202,13 @@ import FavSaveModal from './FavSaveModal';
 
 const defaultFilters: FavoriteFilters = {
   search: '',
-  kinds: [],
-  namespaces: [],
+  kinds: { mode: 'all' },
+  namespaces: { mode: 'all' },
+  clusters: { mode: 'all' },
+  queryFacets: {
+    apiGroups: { mode: 'some', values: ['apps'] },
+    resourceScopes: { mode: 'some', values: ['Namespace'] },
+  },
   caseSensitive: false,
   includeMetadata: false,
 };
@@ -196,8 +226,9 @@ const makeFavorite = (overrides: Partial<Favorite> = {}): Favorite => ({
   viewType: 'namespace',
   view: 'pods',
   namespace: 'default',
-  filters: { ...defaultFilters },
-  tableState: { ...defaultTableState },
+  panes: {
+    main: { filters: { ...defaultFilters }, tableState: { ...defaultTableState } },
+  },
   order: 0,
   ...overrides,
 });
@@ -272,6 +303,171 @@ describe('FavSaveModal', () => {
     expect(container.querySelector('.modal-header h2')?.textContent).toBe('Save Favorite');
   });
 
+  it('renders and saves all declared filters for both Workloads panes', async () => {
+    const onSave = vi.fn();
+    await renderComponent(
+      makeProps({
+        onSave,
+        panes: [
+          {
+            id: 'workloads',
+            label: 'Workloads',
+            filters: defaultFilters,
+            tableState: defaultTableState,
+            filterOptions: { showKindDropdown: true, kinds: ['Deployment'] },
+          },
+          {
+            id: 'pods',
+            label: 'Pods',
+            filters: {
+              ...defaultFilters,
+              clusters: { mode: 'some', values: ['cluster-a'] },
+              queryFacets: { owners: { mode: 'some', values: ['Deployment/api'] } },
+            },
+            tableState: { ...defaultTableState, sortColumn: 'node' },
+            filterOptions: {
+              showClusterDropdown: true,
+              clusters: [{ value: 'cluster-a', label: 'Production' }],
+              queryFacets: [
+                {
+                  key: 'owners',
+                  label: 'Owners',
+                  placeholder: 'All owners',
+                  options: [
+                    { value: 'Deployment/api', label: 'Deployment/api' },
+                    { value: 'StatefulSet/db', label: 'StatefulSet/db' },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      })
+    );
+
+    expect(container.textContent).toContain('Workloads Filters');
+    expect(container.textContent).toContain('Pods Filters');
+    expect(container.textContent).toContain('Clusters');
+    expect(container.textContent).toContain('Owners');
+
+    await act(async () => {
+      const owners = container.querySelector<HTMLSelectElement>(
+        '[data-testid="dropdown-All owners"]'
+      );
+      requireValue(owners, 'expected Owners filter in FavSaveModal.test.tsx').value =
+        'StatefulSet/db';
+      requireValue(owners, 'expected Owners filter in FavSaveModal.test.tsx').dispatchEvent(
+        new Event('change', { bubbles: true })
+      );
+      await Promise.resolve();
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button.save')?.click();
+      await Promise.resolve();
+    });
+
+    const saved = onSave.mock.calls[0]?.[0] as Favorite;
+    expect(saved.panes.pods.filters.clusters).toEqual({
+      mode: 'some',
+      values: ['cluster-a'],
+    });
+    expect(saved.panes.pods.filters.queryFacets?.owners).toEqual({
+      mode: 'some',
+      values: ['StatefulSet/db'],
+    });
+    expect(saved.panes.pods.tableState.sortColumn).toBe('node');
+  });
+
+  it('saves Select all as a semantic all selection for provider facets', async () => {
+    const onSave = vi.fn();
+    await renderComponent(
+      makeProps({
+        onSave,
+        panes: [
+          {
+            id: 'main',
+            label: 'Pods',
+            filters: {
+              ...defaultFilters,
+              queryFacets: { owners: { mode: 'some', values: ['Deployment/api'] } },
+            },
+            tableState: defaultTableState,
+            filterOptions: {
+              queryFacets: [
+                {
+                  key: 'owners',
+                  label: 'Owners',
+                  placeholder: 'All owners',
+                  options: [
+                    { value: 'Deployment/api', label: 'Deployment/api' },
+                    { value: 'StatefulSet/db', label: 'StatefulSet/db' },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      })
+    );
+
+    const selectAll = container.querySelector<HTMLButtonElement>(
+      '[data-testid="select-all-All owners"]'
+    );
+    expect(selectAll).toBeTruthy();
+    await act(async () => {
+      selectAll?.click();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button.save')?.click();
+      await Promise.resolve();
+    });
+
+    const saved = onSave.mock.calls[0]?.[0] as Favorite;
+    expect(saved.panes.main.filters.queryFacets?.owners).toEqual({ mode: 'all' });
+  });
+
+  it('enables search and bulk actions for the Kinds dropdown', async () => {
+    await renderComponent(makeProps({ availableKinds: ['Pod', 'Deployment'] }));
+
+    const kinds = container.querySelector('[data-testid="dropdown-All kinds"]');
+    expect(kinds?.getAttribute('data-searchable')).toBe('true');
+    expect(kinds?.getAttribute('data-bulk-actions')).toBe('true');
+  });
+
+  it('summarizes semantic all and none selections instead of listing option values', async () => {
+    await renderComponent(
+      makeProps({
+        filters: {
+          ...defaultFilters,
+          namespaces: { mode: 'none' },
+        },
+        availableKinds: ['Pod', 'Deployment'],
+        availableFilterNamespaces: ['default', 'kube-system'],
+      })
+    );
+
+    const kinds = container.querySelector('[data-testid="dropdown-All kinds"]');
+    const namespaces = container.querySelector('[data-testid="dropdown-All namespaces"]');
+    expect(kinds?.getAttribute('data-display-value')).toBe('All');
+    expect(namespaces?.getAttribute('data-display-value')).toBe('None');
+  });
+
+  it('summarizes explicit selections with their count', async () => {
+    await renderComponent(
+      makeProps({
+        filters: {
+          ...defaultFilters,
+          kinds: { mode: 'some', values: ['Pod', 'Deployment'] },
+        },
+        availableKinds: ['Pod', 'Deployment', 'StatefulSet'],
+      })
+    );
+
+    const kinds = container.querySelector('[data-testid="dropdown-All kinds"]');
+    expect(kinds?.getAttribute('data-display-value')).toBe('2 selected');
+  });
+
   it('does not close when overlay is clicked', async () => {
     const onClose = vi.fn();
     const props = makeProps({ isOpen: true, onClose });
@@ -308,6 +504,57 @@ describe('FavSaveModal', () => {
     );
   });
 
+  it('preserves an edited name when live pane props refresh while open', async () => {
+    const pane = {
+      id: 'main',
+      label: 'Pods',
+      filters: defaultFilters,
+      tableState: defaultTableState,
+      filterOptions: { showKindDropdown: true, kinds: ['Pod', 'Deployment'] },
+    };
+    const props = makeProps({ panes: [pane] });
+    await renderComponent(props);
+
+    const input = requireValue(
+      container.querySelector<HTMLInputElement>('[id$="-fav-name"]'),
+      'expected favorite name input in FavSaveModal.test.tsx'
+    );
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value'
+      )?.set;
+      setValue?.call(input, 'My custom favorite');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    await renderComponent({
+      ...props,
+      panes: [
+        {
+          ...pane,
+          filterOptions: { ...pane.filterOptions, kinds: [...pane.filterOptions.kinds] },
+        },
+      ],
+    });
+
+    expect(input.value).toBe('My custom favorite');
+  });
+
+  it('starts a new draft from current props after the modal reopens', async () => {
+    const props = makeProps({ defaultName: 'Initial name' });
+    await renderComponent(props);
+    await renderComponent({ ...props, isOpen: false, defaultName: 'Updated name' });
+    await renderComponent({ ...props, isOpen: true, defaultName: 'Updated name' });
+
+    const input = requireValue(
+      container.querySelector<HTMLInputElement>('[id$="-fav-name"]'),
+      'expected reopened favorite name input in FavSaveModal.test.tsx'
+    );
+    expect(input.value).toBe('Updated name');
+  });
+
   // -----------------------------------------------------------------------
   // 4. Clicking Save calls onSave with correct favorite data
   // -----------------------------------------------------------------------
@@ -335,8 +582,69 @@ describe('FavSaveModal', () => {
     expect(savedFav.clusterSelection).toBe('/home/user/.kube/config:prod-cluster');
     expect(savedFav.clusterId).toBe('config:prod-cluster');
     expect(savedFav.clusterName).toBe('prod-cluster');
+    expect(savedFav.panes.main.filters.queryFacets).toEqual(defaultFilters.queryFacets);
     expect(savedFav.id).toBe(''); // New favorite has empty id.
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the modal open and reports a rejected save', async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error('Favorites use a newer schema'));
+    const onClose = vi.fn();
+    await renderComponent(makeProps({ onSave, onClose }));
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button.save')?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'Favorites use a newer schema'
+    );
+  });
+
+  it('saves Event provider facet selections in favorites', async () => {
+    const onSave = vi.fn();
+    const filters: FavoriteFilters = {
+      ...defaultFilters,
+      queryFacets: {
+        types: { mode: 'some', values: ['Warning'] },
+        reasons: { mode: 'some', values: ['BackOff'] },
+        sources: { mode: 'some', values: ['kubelet'] },
+        statuses: { mode: 'some', values: ['Needs attention'] },
+      },
+    };
+    await renderComponent(makeProps({ onSave, filters, viewLabel: 'Events' }));
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button.save')?.click();
+      await Promise.resolve();
+    });
+
+    const saved = onSave.mock.calls[0]?.[0] as Favorite;
+    expect(saved.panes.main.filters.queryFacets).toEqual(filters.queryFacets);
+    expect(saved.clusterId).toBe('config:prod-cluster');
+  });
+
+  it('preserves cluster filter selections in favorites', async () => {
+    const onSave = vi.fn();
+    const filters: FavoriteFilters = {
+      ...defaultFilters,
+      clusters: { mode: 'some', values: ['cluster-a', 'cluster-b'] },
+    };
+    await renderComponent(makeProps({ onSave, filters, viewLabel: 'Namespaces' }));
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button.save')?.click();
+      await Promise.resolve();
+    });
+
+    const saved = onSave.mock.calls[0]?.[0] as Favorite;
+    expect(saved.panes.main.filters.clusters).toEqual({
+      mode: 'some',
+      values: ['cluster-a', 'cluster-b'],
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -401,7 +709,7 @@ describe('FavSaveModal', () => {
       viewType: existingFav.viewType,
       viewLabel: 'Pods',
       namespace: existingFav.namespace,
-      filters: requireValue(existingFav.filters, 'expected test value in FavSaveModal.test.tsx'),
+      filters: existingFav.panes.main.filters,
     });
     await renderComponent(props);
 
@@ -416,7 +724,7 @@ describe('FavSaveModal', () => {
   // 8. View dropdown changes update the scope correctly
   // -----------------------------------------------------------------------
 
-  it('view dropdown changes update the scope', async () => {
+  it('does not allow retargeting saved pane state to a different view', async () => {
     const onSave = vi.fn();
     const props = makeProps({ onSave });
     await renderComponent(props);
@@ -426,22 +734,9 @@ describe('FavSaveModal', () => {
       'select[data-testid="dropdown-Select view..."]'
     );
     expect(viewSelect).toBeTruthy();
-
-    await act(async () => {
-      // Change to cluster:nodes
-      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLSelectElement.prototype,
-        'value'
-      )?.set;
-      nativeInputValueSetter?.call(
-        requireValue(viewSelect, 'expected test value in FavSaveModal.test.tsx'),
-        'cluster:nodes'
-      );
-      requireValue(viewSelect, 'expected test value in FavSaveModal.test.tsx').dispatchEvent(
-        new Event('change', { bubbles: true })
-      );
-      await Promise.resolve();
-    });
+    expect(requireValue(viewSelect, 'expected test value in FavSaveModal.test.tsx').disabled).toBe(
+      true
+    );
 
     // Save and verify the scope changed to cluster.
     const saveBtn = container.querySelector<HTMLButtonElement>('button.save');
@@ -452,10 +747,78 @@ describe('FavSaveModal', () => {
 
     expect(onSave).toHaveBeenCalledTimes(1);
     const savedFav = onSave.mock.calls[0][0] as Favorite;
-    expect(savedFav.viewType).toBe('cluster');
-    expect(savedFav.view).toBe('nodes');
-    // Cluster views don't have a namespace.
-    expect(savedFav.namespace).toBe('');
+    expect(savedFav.viewType).toBe('namespace');
+    expect(savedFav.view).toBe('pods');
+    expect(savedFav.namespace).toBe('default');
+    expect(savedFav.panes).toEqual({
+      main: { filters: defaultFilters, tableState: defaultTableState },
+    });
+  });
+
+  it('offers every registered global, cluster, and namespace view', async () => {
+    await renderComponent(makeProps());
+
+    const viewSelect = requireValue(
+      container.querySelector<HTMLSelectElement>('select[data-testid="dropdown-Select view..."]'),
+      'expected view dropdown in FavSaveModal.test.tsx'
+    );
+
+    expect(Array.from(viewSelect.options, (option) => option.value)).toEqual([
+      'global:fleet',
+      'global:global-namespaces',
+      'cluster:attention',
+      'cluster:namespaces',
+      'cluster:browse',
+      'cluster:events',
+      'cluster:nodes',
+      'cluster:config',
+      'cluster:storage',
+      'cluster:crds',
+      'cluster:custom',
+      'cluster:rbac',
+      'namespace:browse',
+      'namespace:map',
+      'namespace:events',
+      'namespace:workloads',
+      'namespace:autoscaling',
+      'namespace:helm',
+      'namespace:config',
+      'namespace:network',
+      'namespace:storage',
+      'namespace:custom',
+      'namespace:quotas',
+      'namespace:rbac',
+    ]);
+    expect(viewSelect.options[0]?.textContent).toBe('Clusters');
+    expect(viewSelect.options[1]?.textContent).toBe('Namespaces');
+  });
+
+  it('saves Global favorites without an active-cluster binding', async () => {
+    const onSave = vi.fn();
+    await renderComponent(
+      makeProps({
+        onSave,
+        viewType: 'global',
+        viewLabel: 'Clusters',
+        namespace: '',
+      })
+    );
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button.save')?.click();
+      await Promise.resolve();
+    });
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clusterSelection: '',
+        clusterId: '',
+        clusterName: '',
+        viewType: 'global',
+        view: 'fleet',
+        namespace: '',
+      })
+    );
   });
 
   // -----------------------------------------------------------------------

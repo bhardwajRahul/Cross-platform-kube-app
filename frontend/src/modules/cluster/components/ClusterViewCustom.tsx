@@ -8,6 +8,7 @@
 import './ClusterViewCustom.css';
 import CatalogPaginationFooter, {
   catalogPaginationPageKeyProps,
+  shouldRenderCatalogPaginationFooter,
 } from '@modules/browse/components/CatalogPaginationFooter';
 import {
   type CatalogBackedCustomResourceRow,
@@ -226,8 +227,6 @@ const ClusterViewCustom: React.FC<ClusterCustomViewProps> = React.memo(
         kinds: catalogFilterOptions.kinds,
         namespaces: undefined,
         showKindDropdown: true,
-        kindDropdownSearchable: true,
-        kindDropdownBulkActions: true,
         totalCount,
         unfilteredTotal,
         totalIsExact,
@@ -259,13 +258,14 @@ const ClusterViewCustom: React.FC<ClusterCustomViewProps> = React.memo(
       [error]
     );
     const paginationControls = useMemo(
-      () => (
-        <CatalogPaginationFooter
-          idPrefix="cluster-custom"
-          visibleItemCount={rows.length}
-          pagination={pagination}
-        />
-      ),
+      () =>
+        shouldRenderCatalogPaginationFooter(pagination) ? (
+          <CatalogPaginationFooter
+            idPrefix="cluster-custom"
+            visibleItemCount={rows.length}
+            pagination={pagination}
+          />
+        ) : null,
       [pagination, rows.length]
     );
 

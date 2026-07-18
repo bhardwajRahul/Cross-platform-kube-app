@@ -33,12 +33,18 @@ import {
   RefreshIcon,
   ResetFiltersIcon,
   SettingsIcon,
+  WarningIcon,
 } from '@shared/components/icons/SharedIcons';
 import { clearAllGridTableState } from '@shared/components/tables/persistence/gridTablePersistenceReset';
 import { navigateToFavorite } from '@ui/favorites/navigateToFavorite';
 import { type ReactNode, useCallback, useMemo } from 'react';
 import { requestContextRefresh } from '@/core/data-access';
 import { eventBus } from '@/core/events';
+import {
+  CLUSTER_VIEW_DESCRIPTORS,
+  GLOBAL_VIEW_DESCRIPTORS,
+  NAMESPACE_VIEW_DESCRIPTORS,
+} from '@/core/navigation/viewRegistry';
 import { useAutoRefresh } from '@/core/refresh';
 import {
   setDimInactiveNamespaces,
@@ -102,7 +108,17 @@ export function useCommandPaletteCommands() {
     [viewState]
   );
 
+  const openGlobalView = useCallback(
+    (view: (typeof GLOBAL_VIEW_DESCRIPTORS)[number]['id']) => {
+      viewState.navigateToGlobal(view);
+    },
+    [viewState]
+  );
+
   const closeCurrentClusterTab = useCallback(() => {
+    if (viewState.viewType === 'global') {
+      return;
+    }
     const active = selectedKubeconfig;
     if (!active) {
       return;
@@ -113,7 +129,7 @@ export function useCommandPaletteCommands() {
     void closeKubeconfig(active).catch((err) => {
       console.warn('Failed to close cluster:', err);
     });
-  }, [closeKubeconfig, selectedKubeconfig, selectedKubeconfigs]);
+  }, [closeKubeconfig, selectedKubeconfig, selectedKubeconfigs, viewState.viewType]);
 
   const selectNamespace = useCallback(
     (scope: string) => {
@@ -425,83 +441,37 @@ export function useCommandPaletteCommands() {
         keywords: ['namespace', 'change', 'select'],
         shortcut: selectNamespaceShortcut,
       },
-      {
-        id: 'cluster-browse',
-        label: 'Cluster - Browse',
-        icon: <CategoryIcon width={16} height={16} />,
-        description: 'Browse all catalogued Kubernetes objects',
+      ...(selectedKubeconfigs.length > 1
+        ? GLOBAL_VIEW_DESCRIPTORS.map((view) => ({
+            id: `global-${view.id}`,
+            label: `Global - ${view.label}`,
+            icon: <CategoryIcon width={16} height={16} />,
+            description: view.description,
+            category: 'Navigation',
+            action: () => openGlobalView(view.id),
+            keywords: [...view.keywords],
+          }))
+        : []),
+      ...CLUSTER_VIEW_DESCRIPTORS.map((view) => ({
+        id: `cluster-${view.id}`,
+        label: `Cluster - ${view.label}`,
+        icon:
+          view.id === 'attention' ? (
+            <WarningIcon width={16} height={16} />
+          ) : (
+            <CategoryIcon width={16} height={16} />
+          ),
+        description: view.description,
         category: 'Navigation',
-        action: () => openClusterTab('browse'),
-        keywords: ['cluster', 'browse', 'catalog', 'objects'],
-      },
-      {
-        id: 'cluster-nodes',
-        label: 'Cluster - Nodes',
-        icon: <CategoryIcon width={16} height={16} />,
-        description: 'View nodes',
-        category: 'Navigation',
-        action: () => openClusterTab('nodes'),
-        keywords: ['cluster', 'nodes', 'servers', 'machines'],
-      },
-      {
-        id: 'cluster-config',
-        label: 'Cluster - Config',
-        icon: <CategoryIcon width={16} height={16} />,
-        description: 'View cluster configuration resources',
-        category: 'Navigation',
-        action: () => openClusterTab('config'),
-        keywords: ['cluster', 'config', 'ingress', 'classes'],
-      },
-      {
-        id: 'cluster-storage',
-        label: 'Cluster - Storage',
-        icon: <CategoryIcon width={16} height={16} />,
-        description: 'View persistent volumes and storage classes',
-        category: 'Navigation',
-        action: () => openClusterTab('storage'),
-        keywords: ['cluster', 'storage', 'volumes', 'pvs', 'persistent', 'classes'],
-      },
-      {
-        id: 'cluster-rbac',
-        label: 'Cluster - RBAC',
-        icon: <CategoryIcon width={16} height={16} />,
-        description: 'View cluster RBAC resources',
-        category: 'Navigation',
-        action: () => openClusterTab('rbac'),
-        keywords: ['cluster', 'security', 'rbac', 'roles', 'bindings', 'admission'],
-      },
-      {
-        id: 'cluster-crds',
-        label: 'Cluster - CRDs',
-        icon: <CategoryIcon width={16} height={16} />,
-        description: 'View custom resource definitions',
-        category: 'Navigation',
-        action: () => openClusterTab('crds'),
-        keywords: ['cluster', 'crds', 'custom', 'resources', 'definitions'],
-      },
-      {
-        id: 'cluster-custom',
-        label: 'Cluster - Custom Resources',
-        icon: <CategoryIcon width={16} height={16} />,
-        description: 'View cluster-scoped custom resources',
-        category: 'Navigation',
-        action: () => openClusterTab('custom'),
-        keywords: ['cluster', 'custom resources', 'crs'],
-      },
-      {
-        id: 'cluster-events',
-        label: 'Cluster - Events',
-        icon: <CategoryIcon width={16} height={16} />,
-        description: 'View cluster events',
-        category: 'Navigation',
-        action: () => openClusterTab('events'),
-        keywords: ['cluster', 'events', 'logs', 'history'],
-      },
+        action: () => openClusterTab(view.id),
+        keywords: [...view.keywords],
+      })),
     ],
     [
       viewState,
       mode,
       openClusterTab,
+      openGlobalView,
       closeCurrentClusterTab,
       closeTabShortcut,
       selectNamespaceShortcut,
@@ -516,6 +486,7 @@ export function useCommandPaletteCommands() {
       zoomOut,
       resetZoom,
       zoomLevel,
+      selectedKubeconfigs.length,
     ]
   );
 
@@ -532,115 +503,15 @@ export function useCommandPaletteCommands() {
       return [];
     }
 
-    return [
-      {
-        id: 'namespace-workloads',
-        label: 'Namespace - Workloads',
-        icon: <NamespaceIcon width={16} height={16} />,
-        description: 'View deployments, statefulsets, daemonsets',
-        category: 'Navigation',
-        action: () => openNamespaceTab('workloads'),
-        keywords: [
-          'workloads',
-          'deployments',
-          'statefulsets',
-          'daemonsets',
-          'cronjobs',
-          'jobs',
-          'pods',
-        ],
-      },
-      {
-        id: 'namespace-pods',
-        label: 'Namespace - Pods',
-        icon: <NamespaceIcon width={16} height={16} />,
-        description: 'View pods and their current status',
-        category: 'Navigation',
-        action: () => openNamespaceTab('pods'),
-        keywords: ['pods', 'containers', 'workloads'],
-      },
-      {
-        id: 'namespace-config',
-        label: 'Namespace - Config',
-        icon: <NamespaceIcon width={16} height={16} />,
-        description: 'View configmaps and secrets',
-        category: 'Navigation',
-        action: () => openNamespaceTab('config'),
-        keywords: ['config', 'configmaps', 'secrets'],
-      },
-      {
-        id: 'namespace-storage',
-        label: 'Namespace - Storage',
-        icon: <NamespaceIcon width={16} height={16} />,
-        description: 'View persistent volume claims',
-        category: 'Navigation',
-        action: () => openNamespaceTab('storage'),
-        keywords: ['namespace', 'storage', 'pvcs', 'claims'],
-      },
-      {
-        id: 'namespace-network',
-        label: 'Namespace - Network',
-        icon: <NamespaceIcon width={16} height={16} />,
-        description: 'View services and ingresses',
-        category: 'Navigation',
-        action: () => openNamespaceTab('network'),
-        keywords: ['network', 'services', 'ingress'],
-      },
-      {
-        id: 'namespace-rbac',
-        label: 'Namespace - RBAC',
-        icon: <NamespaceIcon width={16} height={16} />,
-        description: 'View roles and bindings',
-        category: 'Navigation',
-        action: () => openNamespaceTab('rbac'),
-        keywords: ['namespace', 'security', 'rbac', 'roles', 'bindings'],
-      },
-      {
-        id: 'namespace-autoscaling',
-        label: 'Namespace - Autoscaling',
-        icon: <NamespaceIcon width={16} height={16} />,
-        description: 'View horizontal pod autoscalers',
-        category: 'Navigation',
-        action: () => openNamespaceTab('autoscaling'),
-        keywords: ['autoscaling', 'hpa', 'scaling'],
-      },
-      {
-        id: 'namespace-quotas',
-        label: 'Namespace - Quotas',
-        icon: <NamespaceIcon width={16} height={16} />,
-        description: 'View resource quotas and limits',
-        category: 'Navigation',
-        action: () => openNamespaceTab('quotas'),
-        keywords: ['quotas', 'limits', 'resources'],
-      },
-      {
-        id: 'namespace-custom',
-        label: 'Namespace - Custom',
-        icon: <NamespaceIcon width={16} height={16} />,
-        description: 'View custom resources',
-        category: 'Navigation',
-        action: () => openNamespaceTab('custom'),
-        keywords: ['custom', 'resources', 'crs'],
-      },
-      {
-        id: 'namespace-helm',
-        label: 'Namespace - Helm',
-        icon: <NamespaceIcon width={16} height={16} />,
-        description: 'View Helm releases',
-        category: 'Navigation',
-        action: () => openNamespaceTab('helm'),
-        keywords: ['helm', 'charts', 'releases'],
-      },
-      {
-        id: 'namespace-events',
-        label: 'Namespace - Events',
-        icon: <NamespaceIcon width={16} height={16} />,
-        description: 'View namespace events',
-        category: 'Navigation',
-        action: () => openNamespaceTab('events'),
-        keywords: ['namespace', 'events', 'logs'],
-      },
-    ];
+    return NAMESPACE_VIEW_DESCRIPTORS.map((view) => ({
+      id: `namespace-${view.id}`,
+      label: `Namespace - ${view.label}`,
+      icon: <NamespaceIcon width={16} height={16} />,
+      description: view.description,
+      category: 'Navigation',
+      action: () => openNamespaceTab(view.id),
+      keywords: [...view.keywords],
+    }));
   }, [viewState, openNamespaceTab]);
 
   // Add namespace-specific commands dynamically

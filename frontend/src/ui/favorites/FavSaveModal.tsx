@@ -9,58 +9,244 @@
 import { useKubeconfig } from '@modules/kubernetes/config/KubeconfigContext';
 import { ALL_NAMESPACES_SCOPE } from '@modules/namespace/constants';
 import { useNamespace } from '@modules/namespace/contexts/NamespaceContext';
-import { Dropdown } from '@shared/components/dropdowns/Dropdown';
+import { Dropdown, type DropdownOption } from '@shared/components/dropdowns/Dropdown';
+import {
+  ALL_MULTISELECT_FILTER,
+  filterSelectionFromDropdownValues,
+  filterSelectionToDropdownValues,
+  filterSelectionValues,
+  type MultiSelectFilterSelection,
+} from '@shared/components/dropdowns/multiSelectFilterSelection';
 import { FavoriteGenericIcon } from '@shared/components/icons/FavoriteIcons';
 import ConfirmationModal from '@shared/components/modals/ConfirmationModal';
 import ModalHeader from '@shared/components/modals/ModalHeader';
 import ModalSurface from '@shared/components/modals/ModalSurface';
 import { useModalFocusTrap } from '@shared/components/modals/useModalFocusTrap';
 import Tooltip from '@shared/components/Tooltip';
+import type { GridTableFilterOptions } from '@shared/components/tables/GridTable.types';
+import { areGridTableFilterStatesEqual } from '@shared/components/tables/gridTableFilterState';
 import type React from 'react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { Favorite, FavoriteFilters, FavoriteTableState } from '@/core/persistence/favorites';
+import { type FavoriteRouteScope, resolveFavoriteRoute } from '@/core/navigation/favoriteRoute';
+import {
+  CLUSTER_VIEW_DESCRIPTORS,
+  GLOBAL_VIEW_DESCRIPTORS,
+  NAMESPACE_VIEW_DESCRIPTORS,
+} from '@/core/navigation/viewRegistry';
+import type {
+  Favorite,
+  FavoriteFilters,
+  FavoritePaneState,
+  FavoriteTableState,
+} from '@/core/persistence/favorites';
 import '@shared/components/KubeconfigSelector.css';
 import './FavSaveModal.css';
 
 // ---------------------------------------------------------------------------
-// View lists — mirrors the Sidebar navigation tabs.
+// View list derived from the same registry as shell navigation.
 // ---------------------------------------------------------------------------
 
 // Combined view list with scope prefix to avoid value collisions.
 // The value format is "scope:view" (e.g. "cluster:nodes", "namespace:pods").
 const ALL_VIEWS = [
+  { value: '__global_header__', label: 'Global', group: 'header' as const },
+  ...GLOBAL_VIEW_DESCRIPTORS.map(({ id, label }) => ({
+    value: `global:${id}`,
+    label,
+  })),
   { value: '__cluster_header__', label: 'Cluster', group: 'header' as const },
-  { value: 'cluster:browse', label: 'Browse' },
-  { value: 'cluster:nodes', label: 'Nodes' },
-  { value: 'cluster:config', label: 'Config' },
-  { value: 'cluster:crds', label: 'CRDs' },
-  { value: 'cluster:custom', label: 'Custom' },
-  { value: 'cluster:events', label: 'Events' },
-  { value: 'cluster:rbac', label: 'RBAC' },
-  { value: 'cluster:storage', label: 'Storage' },
+  ...CLUSTER_VIEW_DESCRIPTORS.map(({ scope, id, label }) => ({
+    value: `${scope}:${id}`,
+    label,
+  })),
   { value: '__namespace_header__', label: 'Namespaced', group: 'header' as const },
-  { value: 'namespace:browse', label: 'Browse' },
-  { value: 'namespace:workloads', label: 'Workloads' },
-  { value: 'namespace:pods', label: 'Pods' },
-  { value: 'namespace:autoscaling', label: 'Autoscaling' },
-  { value: 'namespace:config', label: 'Config' },
-  { value: 'namespace:custom', label: 'Custom' },
-  { value: 'namespace:events', label: 'Events' },
-  { value: 'namespace:helm', label: 'Helm' },
-  { value: 'namespace:network', label: 'Network' },
-  { value: 'namespace:quotas', label: 'Quotas' },
-  { value: 'namespace:rbac', label: 'RBAC' },
-  { value: 'namespace:storage', label: 'Storage' },
+  ...NAMESPACE_VIEW_DESCRIPTORS.map(({ scope, id, label }) => ({
+    value: `${scope}:${id}`,
+    label,
+  })),
 ];
 
 /** Parse a combined view value into scope and view. */
-const parseViewValue = (combined: string): { scope: 'cluster' | 'namespace'; view: string } => {
+const parseViewValue = (combined: string): { scope: FavoriteRouteScope; view: string } => {
   const [scope, view] = combined.split(':');
-  return { scope: scope as 'cluster' | 'namespace', view };
+  return { scope: scope as FavoriteRouteScope, view };
 };
 
 /** Build a combined view value from scope and view. */
 const buildViewValue = (scope: string, view: string): string => `${scope}:${view}`;
+
+const mergeSavedOptions = (
+  options: DropdownOption[],
+  selection: MultiSelectFilterSelection
+): DropdownOption[] => {
+  const values = new Set(options.map((option) => option.value));
+  return [
+    ...options,
+    ...filterSelectionValues(selection)
+      .filter((value) => !values.has(value))
+      .map((value) => ({ value, label: value })),
+  ];
+};
+
+const semanticSelectionDisplayValue = (
+  selection: MultiSelectFilterSelection
+): string | undefined => {
+  if (selection.mode === 'all') {
+    return 'All';
+  }
+  if (selection.mode === 'none') {
+    return 'None';
+  }
+  return `${selection.values.length} selected`;
+};
+
+interface FavoritePaneFiltersProps {
+  elementIdPrefix: string;
+  pane: FavoriteModalPane;
+  state: FavoritePaneState;
+  showPaneLabel: boolean;
+  onChange: (filters: FavoriteFilters) => void;
+}
+
+const FavoritePaneFilters: React.FC<FavoritePaneFiltersProps> = ({
+  elementIdPrefix,
+  pane,
+  state,
+  showPaneLabel,
+  onChange,
+}) => {
+  const definitions = [
+    ...(pane.filterOptions.showKindDropdown
+      ? [
+          {
+            key: 'kinds',
+            label: 'Kinds',
+            placeholder: 'All kinds',
+            options: (pane.filterOptions.kinds ?? []).map((value) => ({ value, label: value })),
+            searchable: true,
+          },
+        ]
+      : []),
+    ...(pane.filterOptions.showNamespaceDropdown
+      ? [
+          {
+            key: 'namespaces',
+            label: 'Namespaces',
+            placeholder: 'All namespaces',
+            options: (pane.filterOptions.namespaces ?? []).map((value) => ({
+              value,
+              label: value,
+            })),
+            searchable: pane.filterOptions.namespaceDropdownSearchable,
+          },
+        ]
+      : []),
+    ...(pane.filterOptions.showClusterDropdown
+      ? [
+          {
+            key: 'clusters',
+            label: 'Clusters',
+            placeholder: 'All clusters',
+            options: pane.filterOptions.clusters ?? [],
+            searchable: pane.filterOptions.clusterDropdownSearchable,
+          },
+        ]
+      : []),
+    ...(pane.filterOptions.queryFacets ?? []).map((facet) => ({
+      key: `query:${facet.key}`,
+      label: facet.label,
+      placeholder: facet.placeholder,
+      options: facet.options,
+      searchable: facet.searchable,
+    })),
+  ];
+
+  return (
+    <div className="modal-form-section">
+      <h3>{showPaneLabel ? `${pane.label} Filters` : 'Filters'}</h3>
+      <div className="modal-form-items">
+        {definitions.map((definition) => {
+          const queryKey = definition.key.startsWith('query:')
+            ? definition.key.slice('query:'.length)
+            : null;
+          const selection = queryKey
+            ? (state.filters.queryFacets?.[queryKey] ?? ALL_MULTISELECT_FILTER)
+            : state.filters[definition.key as 'kinds' | 'namespaces' | 'clusters'];
+          const options = mergeSavedOptions(definition.options, selection);
+          return (
+            <div
+              className="modal-form-field modal-form-field-inline fav-save-inline-row"
+              key={definition.key}
+            >
+              <label htmlFor={`${elementIdPrefix}-${pane.id}-${definition.key}`}>
+                {definition.label}
+              </label>
+              <Dropdown
+                id={`${elementIdPrefix}-${pane.id}-${definition.key}`}
+                dropdownClassName="fav-save-dropdown-menu"
+                options={options}
+                value={filterSelectionToDropdownValues(selection, options)}
+                displayValue={semanticSelectionDisplayValue(selection)}
+                onChange={(value) => {
+                  const next = filterSelectionFromDropdownValues(
+                    Array.isArray(value) ? value : value ? [value] : [],
+                    options
+                  );
+                  if (queryKey) {
+                    onChange({
+                      ...state.filters,
+                      queryFacets: { ...state.filters.queryFacets, [queryKey]: next },
+                    });
+                    return;
+                  }
+                  onChange({ ...state.filters, [definition.key]: next });
+                }}
+                placeholder={definition.placeholder}
+                multiple
+                searchable={definition.searchable}
+                showBulkActions
+              />
+            </div>
+          );
+        })}
+        <div className="modal-form-field modal-form-field-inline fav-save-inline-row">
+          <label htmlFor={`${elementIdPrefix}-${pane.id}-filter-text`}>Filter Text</label>
+          <input
+            id={`${elementIdPrefix}-${pane.id}-filter-text`}
+            type="text"
+            className="modal-input"
+            value={state.filters.search}
+            onChange={(event) => onChange({ ...state.filters, search: event.target.value })}
+          />
+        </div>
+        <div className="modal-form-field">
+          <label className="modal-checkbox-label">
+            <input
+              type="checkbox"
+              checked={state.filters.caseSensitive}
+              onChange={(event) =>
+                onChange({ ...state.filters, caseSensitive: event.target.checked })
+              }
+            />
+            Match case
+          </label>
+        </div>
+        <div className="modal-form-field">
+          <label className="modal-checkbox-label">
+            <input
+              type="checkbox"
+              checked={state.filters.includeMetadata}
+              onChange={(event) =>
+                onChange({ ...state.filters, includeMetadata: event.target.checked })
+              }
+            />
+            Include metadata
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // ---------------------------------------------------------------------------
 // Props
@@ -91,10 +277,18 @@ export interface FavSaveModalProps {
   availableKinds?: string[];
   /** Available namespace values for the namespace filter dropdown. */
   availableFilterNamespaces?: string[];
+  /** Named table panes. Multi-table views supply every pane in route order. */
+  panes?: FavoriteModalPane[];
   /** Called to save (add or update) the favorite. */
-  onSave: (fav: Favorite) => void;
+  onSave: (fav: Favorite) => void | Promise<void>;
   /** Called to delete the favorite (only when editing an existing one). */
   onDelete: (id: string) => void;
+}
+
+export interface FavoriteModalPane extends FavoritePaneState {
+  id: string;
+  label: string;
+  filterOptions: GridTableFilterOptions;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,44 +309,49 @@ const resolveViewId = (label: string, viewType: string): string => {
 };
 
 /** Compare current form state against an existing favorite to detect changes. */
-const arraysEqual = (a: string[], b: string[]): boolean =>
-  a.length === b.length && a.every((v, i) => v === b[i]);
-
-/** Compare current form state against an existing favorite to detect changes. */
 interface FavoriteFormState {
   name: string;
   clusterSpecific: boolean;
   clusterSelection: string;
-  scope: 'cluster' | 'namespace';
+  scope: FavoriteRouteScope;
   view: string;
   namespace: string;
-  filterText: string;
-  filterKinds: string[];
-  filterNamespaces: string[];
-  caseSensitive: boolean;
-  includeMetadata: boolean;
+  panes: Record<string, FavoritePaneState>;
 }
+
+const favoritePaneMapsEqual = (
+  left: Record<string, FavoritePaneState>,
+  right: Record<string, FavoritePaneState>
+): boolean => {
+  const keys = Object.keys(left).sort();
+  if (JSON.stringify(keys) !== JSON.stringify(Object.keys(right).sort())) {
+    return false;
+  }
+  return keys.every((key) => {
+    const leftPane = left[key];
+    const rightPane = right[key];
+    return (
+      Boolean(leftPane) &&
+      Boolean(rightPane) &&
+      areGridTableFilterStatesEqual(leftPane.filters, rightPane.filters) &&
+      leftPane.tableState.sortColumn === rightPane.tableState.sortColumn &&
+      leftPane.tableState.sortDirection === rightPane.tableState.sortDirection &&
+      JSON.stringify(Object.entries(leftPane.tableState.columnVisibility).sort()) ===
+        JSON.stringify(Object.entries(rightPane.tableState.columnVisibility).sort())
+    );
+  });
+};
 
 const hasFormChanges = (
   existing: Favorite,
-  {
-    name,
-    clusterSpecific,
-    clusterSelection,
-    scope,
-    view,
-    namespace,
-    filterText,
-    filterKinds,
-    filterNamespaces,
-    caseSensitive,
-    includeMetadata,
-  }: FavoriteFormState
+  { name, clusterSpecific, clusterSelection, scope, view, namespace, panes }: FavoriteFormState
 ): boolean => {
   if (name !== existing.name) {
     return true;
   }
-  const existingIsClusterSpecific = existing.clusterSelection !== '';
+  const existingRoute = resolveFavoriteRoute(existing.viewType, existing.view);
+  const existingIsClusterSpecific =
+    existingRoute.scope !== 'global' && existing.clusterSelection !== '';
   if (clusterSpecific !== existingIsClusterSpecific) {
     return true;
   }
@@ -168,22 +367,8 @@ const hasFormChanges = (
   if (scope === 'namespace' && namespace !== existing.namespace) {
     return true;
   }
-  if (existing.filters) {
-    if (filterText !== (existing.filters.search ?? '')) {
-      return true;
-    }
-    if (!arraysEqual(filterKinds, existing.filters.kinds ?? [])) {
-      return true;
-    }
-    if (!arraysEqual(filterNamespaces, existing.filters.namespaces ?? [])) {
-      return true;
-    }
-    if (caseSensitive !== (existing.filters.caseSensitive ?? false)) {
-      return true;
-    }
-    if (includeMetadata !== (existing.filters.includeMetadata ?? false)) {
-      return true;
-    }
+  if (!favoritePaneMapsEqual(panes, existing.panes)) {
+    return true;
   }
   return false;
 };
@@ -206,6 +391,7 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
   includeMetadata,
   availableKinds,
   availableFilterNamespaces,
+  panes,
   onSave,
   onDelete,
 }) => {
@@ -214,6 +400,8 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
   const { kubeconfigs, getClusterMeta } = useKubeconfig();
   const { namespaces } = useNamespace();
   const modalRef = useRef<HTMLDivElement>(null);
+  // Live table snapshots may change while the modal is open; only reopening starts a new draft.
+  const draftOpenRef = useRef(false);
 
   // ----- Form state -----
   const [name, setName] = useState('');
@@ -222,42 +410,64 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
   // Combined "scope:view" value (e.g. "cluster:nodes", "namespace:pods").
   const [selectedView, setSelectedView] = useState('cluster:browse');
   const [selectedNamespace, setSelectedNamespace] = useState(ALL_NAMESPACES_SCOPE);
-  const [filterText, setFilterText] = useState('');
-  const [filterKinds, setFilterKinds] = useState<string[]>([]);
-  const [filterNamespaces, setFilterNamespaces] = useState<string[]>([]);
-  const [caseSensitive, setCaseSensitive] = useState(false);
-  const [includeMetadataState, setIncludeMetadataState] = useState(false);
+  const [paneStates, setPaneStates] = useState<Record<string, FavoritePaneState>>({});
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   // ----- Initialize form when modal opens -----
   useEffect(() => {
     if (!isOpen) {
+      draftOpenRef.current = false;
       return;
     }
+    if (draftOpenRef.current) {
+      return;
+    }
+    draftOpenRef.current = true;
     if (existingFavorite) {
+      const existingRoute = resolveFavoriteRoute(existingFavorite.viewType, existingFavorite.view);
       setName(existingFavorite.name);
-      setClusterSpecific(existingFavorite.clusterSelection !== '');
+      setClusterSpecific(
+        existingRoute.scope !== 'global' && existingFavorite.clusterSelection !== ''
+      );
       setClusterSelection(existingFavorite.clusterSelection || kubeconfigSelection);
-      setSelectedView(buildViewValue(existingFavorite.viewType, existingFavorite.view));
+      setSelectedView(buildViewValue(existingRoute.scope, existingRoute.view));
       setSelectedNamespace(existingFavorite.namespace || ALL_NAMESPACES_SCOPE);
-      setFilterText(existingFavorite.filters?.search ?? '');
-      setFilterKinds(existingFavorite.filters?.kinds ?? []);
-      setFilterNamespaces(existingFavorite.filters?.namespaces ?? []);
-      setCaseSensitive(existingFavorite.filters?.caseSensitive ?? false);
-      setIncludeMetadataState(existingFavorite.filters?.includeMetadata ?? false);
+      setPaneStates(existingFavorite.panes);
     } else {
+      const initialRoute = resolveFavoriteRoute(viewType, resolveViewId(viewLabel, viewType));
       setName(defaultName);
-      setClusterSpecific(true);
+      setClusterSpecific(initialRoute.scope !== 'global');
       setClusterSelection(kubeconfigSelection);
-      setSelectedView(buildViewValue(viewType, resolveViewId(viewLabel, viewType)));
+      setSelectedView(buildViewValue(initialRoute.scope, initialRoute.view));
       setSelectedNamespace(namespace || ALL_NAMESPACES_SCOPE);
-      setFilterText(filters.search);
-      setFilterKinds(filters.kinds ?? []);
-      setFilterNamespaces(filters.namespaces ?? []);
-      setCaseSensitive(filters.caseSensitive);
-      setIncludeMetadataState(includeMetadata);
+      const configuredPanes = panes ?? [
+        {
+          id: 'main',
+          label: viewLabel,
+          filters: { ...filters, includeMetadata },
+          tableState,
+          filterOptions: {
+            kinds: availableKinds,
+            namespaces: availableFilterNamespaces,
+            showKindDropdown: Boolean(availableKinds?.length),
+            showNamespaceDropdown: Boolean(availableFilterNamespaces?.length),
+          },
+        },
+      ];
+      setPaneStates(
+        Object.fromEntries(
+          configuredPanes.map((pane) => [
+            pane.id,
+            { filters: pane.filters, tableState: pane.tableState },
+          ])
+        )
+      );
     }
     setShowDeleteConfirm(false);
+    setSaving(false);
+    setSaveError('');
   }, [
     isOpen,
     existingFavorite,
@@ -268,13 +478,17 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
     namespace,
     filters,
     includeMetadata,
+    panes,
+    tableState,
+    availableKinds,
+    availableFilterNamespaces,
   ]);
 
   useModalFocusTrap({
     ref: modalRef,
     disabled: !isOpen || showDeleteConfirm,
     onEscape: () => {
-      if (!isOpen || showDeleteConfirm) {
+      if (!isOpen || showDeleteConfirm || saving) {
         return false;
       }
       onClose();
@@ -319,27 +533,45 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
     return opts;
   }, [namespaces]);
 
-  // Kind filter dropdown: merge available kinds with any saved kinds not in the list.
-  const kindDropdownOptions = useMemo(() => {
-    const all = new Set(availableKinds ?? []);
-    filterKinds.forEach((k) => {
-      all.add(k);
-    });
-    return Array.from(all)
-      .sort()
-      .map((k) => ({ value: k, label: k }));
-  }, [availableKinds, filterKinds]);
+  const modalPanes = useMemo<FavoriteModalPane[]>(
+    () =>
+      panes ?? [
+        {
+          id: 'main',
+          label: viewLabel,
+          filters: { ...filters, includeMetadata },
+          tableState,
+          filterOptions: {
+            kinds: availableKinds,
+            namespaces: availableFilterNamespaces,
+            showKindDropdown: Boolean(availableKinds?.length),
+            showNamespaceDropdown: Boolean(availableFilterNamespaces?.length),
+          },
+        },
+      ],
+    [
+      availableFilterNamespaces,
+      availableKinds,
+      filters,
+      includeMetadata,
+      panes,
+      tableState,
+      viewLabel,
+    ]
+  );
 
-  // Namespace filter dropdown: merge available filter namespaces with saved ones.
-  const nsFilterDropdownOptions = useMemo(() => {
-    const all = new Set(availableFilterNamespaces ?? []);
-    filterNamespaces.forEach((ns) => {
-      all.add(ns);
+  const updatePaneFilters = (
+    paneId: string,
+    update: (current: FavoriteFilters) => FavoriteFilters
+  ) => {
+    setPaneStates((current) => {
+      const pane = current[paneId];
+      if (!pane) {
+        return current;
+      }
+      return { ...current, [paneId]: { ...pane, filters: update(pane.filters) } };
     });
-    return Array.from(all)
-      .sort()
-      .map((ns) => ({ value: ns, label: ns }));
-  }, [availableFilterNamespaces, filterNamespaces]);
+  };
 
   // ----- Derived state -----
 
@@ -357,6 +589,13 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
   // Derive scope and view from the combined selectedView value.
   const { scope, view: activeView } = parseViewValue(selectedView);
   const isNamespaceScope = scope === 'namespace';
+  const isGlobalScope = scope === 'global';
+
+  useEffect(() => {
+    if (isGlobalScope) {
+      setClusterSpecific(false);
+    }
+  }, [isGlobalScope]);
 
   // Detect whether Save should be enabled when editing.
   const changesDetected =
@@ -368,39 +607,40 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
           scope,
           view: activeView,
           namespace: selectedNamespace,
-          filterText,
-          filterKinds,
-          filterNamespaces,
-          caseSensitive,
-          includeMetadata: includeMetadataState,
+          panes: paneStates,
         })
       : true;
 
   // ----- Handlers -----
 
-  const handleSave = () => {
-    const selectedClusterMeta = clusterSpecific ? getClusterMeta(clusterSelection) : null;
+  const handleSave = async () => {
+    if (saving) {
+      return;
+    }
+    const bindsCluster = !isGlobalScope && clusterSpecific;
+    const selectedClusterMeta = bindsCluster ? getClusterMeta(clusterSelection) : null;
     const fav: Favorite = {
       id: existingFavorite?.id ?? '',
       name: name.trim() || defaultName,
-      clusterSelection: clusterSpecific ? clusterSelection : '',
-      clusterId: clusterSpecific ? (selectedClusterMeta?.id ?? '') : '',
-      clusterName: clusterSpecific ? (selectedClusterMeta?.name ?? '') : '',
+      clusterSelection: bindsCluster ? clusterSelection : '',
+      clusterId: bindsCluster ? (selectedClusterMeta?.id ?? '') : '',
+      clusterName: bindsCluster ? (selectedClusterMeta?.name ?? '') : '',
       viewType: scope,
       view: activeView,
       namespace: scope === 'namespace' ? selectedNamespace : '',
-      filters: {
-        search: filterText,
-        kinds: filterKinds,
-        namespaces: filterNamespaces,
-        caseSensitive,
-        includeMetadata: includeMetadataState,
-      },
-      tableState: existingFavorite?.tableState ?? tableState,
+      panes: paneStates,
       order: existingFavorite?.order ?? 0,
     };
-    onSave(fav);
-    onClose();
+    setSaving(true);
+    setSaveError('');
+    try {
+      await onSave(fav);
+      setSaving(false);
+      onClose();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error));
+      setSaving(false);
+    }
   };
 
   const handleDelete = () => {
@@ -432,6 +672,7 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
           titleId="fav-save-modal-title"
           icon={FavoriteGenericIcon}
           onClose={onClose}
+          closeDisabled={saving}
         />
 
         <div className="modal-content modal-form">
@@ -481,12 +722,14 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
                     name="cluster-type"
                     checked={clusterSpecific}
                     onChange={() => handleTypeChange(true)}
+                    disabled={isGlobalScope}
                   />
                   Cluster
                   <Tooltip content="Opens the saved view in a specific cluster, and will activate that cluster if needed." />
                 </label>
                 <Dropdown
                   options={clusterOptions}
+                  dropdownClassName="fav-save-dropdown-menu"
                   value={clusterSelection}
                   onChange={(val) => setClusterSelection(val as string)}
                   placeholder="Select cluster..."
@@ -523,10 +766,12 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
                 <label htmlFor={`${elementIdPrefix}-favorite-view`}>View</label>
                 <Dropdown
                   id={`${elementIdPrefix}-favorite-view`}
+                  dropdownClassName="fav-save-dropdown-menu"
                   options={ALL_VIEWS}
                   value={selectedView}
                   onChange={(val) => setSelectedView(val as string)}
                   placeholder="Select view..."
+                  disabled
                 />
               </div>
               {isNamespaceScope && (
@@ -534,6 +779,7 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
                   <label htmlFor={`${elementIdPrefix}-favorite-namespace`}>Namespace</label>
                   <Dropdown
                     id={`${elementIdPrefix}-favorite-namespace`}
+                    dropdownClassName="fav-save-dropdown-menu"
                     options={namespaceOptions}
                     value={selectedNamespace}
                     onChange={(val) => setSelectedNamespace(val as string)}
@@ -543,98 +789,19 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
             </div>
           </div>
 
-          {/* Filters */}
-          <div className="modal-form-section">
-            <h3>Filters</h3>
-            <div className="modal-form-items">
-              {kindDropdownOptions.length > 0 && (
-                <div className="modal-form-field modal-form-field-inline fav-save-inline-row">
-                  <label htmlFor={`${elementIdPrefix}-favorite-kinds`}>Kinds</label>
-                  <Dropdown
-                    id={`${elementIdPrefix}-favorite-kinds`}
-                    options={kindDropdownOptions}
-                    value={filterKinds}
-                    onChange={(val) => setFilterKinds(Array.isArray(val) ? val : val ? [val] : [])}
-                    placeholder="All kinds"
-                    multiple
-                    renderValue={(val) => {
-                      const count = Array.isArray(val) ? val.length : val ? 1 : 0;
-                      if (count === 0) {
-                        return 'All kinds';
-                      }
-                      if (count === 1) {
-                        return Array.isArray(val) ? val[0] : val;
-                      }
-                      return `${count} selected`;
-                    }}
-                  />
-                </div>
-              )}
-              {nsFilterDropdownOptions.length > 0 && (
-                <div className="modal-form-field modal-form-field-inline fav-save-inline-row">
-                  <label htmlFor={`${elementIdPrefix}-favorite-filter-namespaces`}>
-                    Namespaces
-                  </label>
-                  <Dropdown
-                    id={`${elementIdPrefix}-favorite-filter-namespaces`}
-                    options={nsFilterDropdownOptions}
-                    value={filterNamespaces}
-                    onChange={(val) =>
-                      setFilterNamespaces(Array.isArray(val) ? val : val ? [val] : [])
-                    }
-                    placeholder="All namespaces"
-                    multiple
-                    renderValue={(val) => {
-                      const count = Array.isArray(val) ? val.length : val ? 1 : 0;
-                      if (count === 0) {
-                        return 'All namespaces';
-                      }
-                      if (count === 1) {
-                        return Array.isArray(val) ? val[0] : val;
-                      }
-                      return `${count} selected`;
-                    }}
-                  />
-                </div>
-              )}
-              <div className="modal-form-field modal-form-field-inline fav-save-inline-row">
-                <label htmlFor={`${elementIdPrefix}-fav-filter-text`}>Filter Text</label>
-                <input
-                  id={`${elementIdPrefix}-fav-filter-text`}
-                  type="text"
-                  className="modal-input"
-                  value={filterText}
-                  onChange={(e) => setFilterText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
-                      e.preventDefault();
-                      (e.target as HTMLInputElement).select();
-                    }
-                  }}
-                />
-              </div>
-              <div className="modal-form-field">
-                <label className="modal-checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={caseSensitive}
-                    onChange={(e) => setCaseSensitive(e.target.checked)}
-                  />
-                  Match case
-                </label>
-              </div>
-              <div className="modal-form-field">
-                <label className="modal-checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={includeMetadataState}
-                    onChange={(e) => setIncludeMetadataState(e.target.checked)}
-                  />
-                  Include metadata
-                </label>
-              </div>
-            </div>
-          </div>
+          {modalPanes.map((pane) => {
+            const paneState = paneStates[pane.id];
+            return paneState ? (
+              <FavoritePaneFilters
+                key={pane.id}
+                elementIdPrefix={elementIdPrefix}
+                pane={pane}
+                state={paneState}
+                showPaneLabel={modalPanes.length > 1}
+                onChange={(next) => updatePaneFilters(pane.id, () => next)}
+              />
+            ) : null;
+          })}
         </div>
 
         <div className="modal-footer">
@@ -643,17 +810,22 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
               Delete
             </button>
           )}
+          {saveError ? (
+            <div className="fav-save-error" role="alert">
+              {saveError}
+            </div>
+          ) : null}
           <div className="fav-save-footer-spacer" />
-          <button type="button" className="button cancel" onClick={onClose}>
+          <button type="button" className="button cancel" onClick={onClose} disabled={saving}>
             Cancel
           </button>
           <button
             type="button"
             className="button save"
             onClick={handleSave}
-            disabled={isEditing && !changesDetected}
+            disabled={saving || (isEditing && !changesDetected)}
           >
-            Save
+            {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
       </ModalSurface>

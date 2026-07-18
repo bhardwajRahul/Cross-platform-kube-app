@@ -154,12 +154,14 @@ export interface BuildCatalogScopeParams {
   search: string;
   kinds: string[];
   namespaces: string[];
+  apiGroups?: string[];
   sort?: string;
   sortDirection?: string;
   continueToken?: string | null;
   /** Numbered page jump: 0-based start rank; mutually exclusive with continueToken. */
   startRank?: number | null;
   customOnly?: boolean;
+  matchNone?: boolean;
 }
 
 /**
@@ -171,6 +173,9 @@ export const buildCatalogScope = (params: BuildCatalogScopeParams): string => {
   query.set('limit', String(params.limit));
   if (params.customOnly) {
     query.set('customOnly', 'true');
+  }
+  if (params.matchNone) {
+    query.set('matchNone', 'true');
   }
   if (params.resourceScope) {
     query.set('resourceScope', params.resourceScope);
@@ -197,6 +202,14 @@ export const buildCatalogScope = (params: BuildCatalogScopeParams): string => {
     .sort()
     .forEach((kind) => {
       query.append('kind', kind);
+    });
+
+  (params.apiGroups ?? [])
+    .map((group) => group.trim())
+    .filter(Boolean)
+    .sort()
+    .forEach((group) => {
+      query.append('apiGroup', group);
     });
 
   params.namespaces
@@ -274,8 +287,10 @@ export const normalizeCatalogScope = (
         ? Number(startRankRaw)
         : undefined;
     const customOnly = params.get('customOnly') === 'true';
+    const matchNone = params.get('matchNone') === 'true';
     const resourceScope = params.get('resourceScope');
     const kinds = params.getAll('kind');
+    const apiGroups = params.getAll('apiGroup');
     // Use pinned namespaces if provided, otherwise use namespaces from the scope.
     const namespaces = pinnedNamespaces.length > 0 ? pinnedNamespaces : params.getAll('namespace');
     const scopeNamespaces =
@@ -289,11 +304,13 @@ export const normalizeCatalogScope = (
       search,
       kinds,
       namespaces,
+      apiGroups,
       sort,
       sortDirection,
       continueToken,
       startRank,
       customOnly,
+      matchNone,
     });
     if (prefix) {
       return `${prefix}|${normalized}`;

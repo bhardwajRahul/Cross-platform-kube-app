@@ -36,6 +36,16 @@ const { useTableSortMock, requestRefreshDomainStateMock } = vi.hoisted(() => ({
   requestRefreshDomainStateMock: vi.fn(),
 }));
 
+const podsViewPropsRef = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
+const namespaceClusterIdRef = vi.hoisted(() => ({ current: 'path:context' }));
+
+vi.mock('@modules/namespace/components/NsViewPods', () => ({
+  default: (props: Record<string, unknown>) => {
+    podsViewPropsRef.current = props;
+    return <div data-testid="pods-view" />;
+  },
+}));
+
 vi.mock('@modules/namespace/components/useNamespaceColumnLink', () => ({
   useNamespaceColumnLink: () => ({
     onClick: vi.fn(),
@@ -43,6 +53,15 @@ vi.mock('@modules/namespace/components/useNamespaceColumnLink', () => ({
     isInteractive: () => true,
   }),
 }));
+
+vi.mock('@modules/namespace/contexts/NamespaceContext', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@modules/namespace/contexts/NamespaceContext')>();
+  return {
+    ...actual,
+    useNamespace: () => ({ selectedNamespaceClusterId: namespaceClusterIdRef.current }),
+  };
+});
 
 import NsViewWorkloads from '@modules/namespace/components/NsViewWorkloads';
 
@@ -59,13 +78,17 @@ vi.mock('@core/contexts/FavoritesContext', () => ({
 }));
 
 vi.mock('@ui/favorites/FavToggle', () => ({
+  FavoritePaneGroup: ({ children }: { children: React.ReactNode }) => children,
   useFavToggle: () => ({
-    type: 'toggle',
-    id: 'favorite',
-    icon: null,
-    active: false,
-    onClick: () => undefined,
-    title: 'Save as favorite',
+    item: {
+      type: 'toggle',
+      id: 'favorite',
+      icon: null,
+      active: false,
+      onClick: () => undefined,
+      title: 'Save as favorite',
+    },
+    modal: null,
   }),
 }));
 
@@ -225,6 +248,8 @@ describe('NsViewWorkloads', () => {
     navigateToViewMock.mockReset();
     useTableSortMock.mockClear();
     requestRefreshDomainStateMock.mockReset();
+    podsViewPropsRef.current = null;
+    namespaceClusterIdRef.current = 'path:context';
     requestRefreshDomainStateMock.mockResolvedValue({
       status: 'executed',
       data: {
@@ -266,6 +291,177 @@ describe('NsViewWorkloads', () => {
     });
     expect(props.columnVisibility).toBe(null);
     expect(props.columnWidths).toBe(null);
+  });
+
+  it('queries the cluster bound to the namespace selection when it differs from the active tab', async () => {
+    namespaceClusterIdRef.current = 'namespace:context';
+
+    await act(async () => {
+      root.render(<NsViewWorkloads namespace="team-a" metrics={null} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(requestRefreshDomainStateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: 'namespace:context|namespace:team-a?limit=50&sort=name&sortDirection=asc',
+      })
+    );
+  });
+
+  it('selects a workload row by populating the Pods table filters without opening the object', async () => {
+    const workload: WorkloadData = {
+      kind: 'Deployment',
+      name: 'api',
+      namespace: 'team-a',
+      status: 'Running',
+      clusterId: 'path:context',
+      clusterName: 'ctx',
+    };
+    requestRefreshDomainStateMock.mockResolvedValue({
+      status: 'executed',
+      data: {
+        status: 'ready',
+        data: {
+          rows: [workload],
+          total: 1,
+          totalIsExact: true,
+          namespaces: ['team-a'],
+          kinds: ['Deployment'],
+          facetsExact: true,
+        },
+      },
+    });
+
+    await act(async () => {
+      root.render(<NsViewWorkloads namespace="team-a" metrics={null} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    act(() => gridTablePropsRef.current.onRowPointerClick?.(workload));
+
+    expect(openWithObjectMock).not.toHaveBeenCalled();
+    expect(podsViewPropsRef.current).toMatchObject({
+      namespace: 'team-a',
+      workloadFilterRequest: {
+        type: 'set',
+        workload: {
+          clusterId: 'path:context',
+          group: 'apps',
+          version: 'v1',
+          kind: 'Deployment',
+          namespace: 'team-a',
+          name: 'api',
+        },
+      },
+    });
+    expect(gridTablePropsRef.current.getRowClassName?.(workload, 0)).toContain(
+      'gridtable-row--selected'
+    );
+
+    act(() => {
+      const onWorkloadFilterMismatch = podsViewPropsRef.current?.onWorkloadFilterMismatch;
+      if (typeof onWorkloadFilterMismatch !== 'function') {
+        throw new Error('Expected the Pods filter mismatch callback');
+      }
+      onWorkloadFilterMismatch();
+    });
+    expect(podsViewPropsRef.current?.workloadFilterRequest).toBeUndefined();
+    expect(gridTablePropsRef.current.getRowClassName?.(workload, 0)).not.toContain(
+      'gridtable-row--selected'
+    );
+
+    act(() => gridTablePropsRef.current.onRowPointerClick?.(workload));
+
+    const structuralActions = (
+      gridTablePropsRef.current.filters?.options as
+        | { beforeNamespaceActions?: Array<{ title: string; onClick: () => void }> }
+        | undefined
+    )?.beforeNamespaceActions;
+    const clearAction = structuralActions?.find(
+      (action) => action.title === 'Clear selected workload'
+    );
+    expect(clearAction).toBeTruthy();
+    act(() => clearAction?.onClick());
+    expect(podsViewPropsRef.current).toMatchObject({
+      namespace: 'team-a',
+      workloadFilterRequest: { type: 'clear' },
+    });
+    expect(gridTablePropsRef.current.getRowClassName?.(workload, 0)).not.toContain(
+      'gridtable-row--selected'
+    );
+
+    act(() => gridTablePropsRef.current.onRowPointerClick?.(workload));
+    expect(
+      gridTablePropsRef.current.filters?.options?.beforeNamespaceActions?.find(
+        (action) => action.type !== 'separator' && action.title === 'Collapse Pods'
+      )
+    ).toBeUndefined();
+    expect(podsViewPropsRef.current).toMatchObject({
+      collapsed: false,
+      onPodsCollapsedChange: expect.any(Function),
+    });
+    act(() => {
+      const onPodsCollapsedChange = podsViewPropsRef.current?.onPodsCollapsedChange;
+      if (typeof onPodsCollapsedChange !== 'function') {
+        throw new Error('Expected the Pods collapse callback');
+      }
+      onPodsCollapsedChange(true);
+    });
+    expect(podsViewPropsRef.current).toMatchObject({ collapsed: true });
+    act(() => gridTablePropsRef.current.onRowPointerClick?.(workload));
+    expect(podsViewPropsRef.current).toMatchObject({ collapsed: false });
+  });
+
+  it('clears a workload-owned Pods filter when the namespace scope changes', async () => {
+    const workload: WorkloadData = {
+      kind: 'Deployment',
+      name: 'api',
+      namespace: 'team-a',
+      status: 'Running',
+      clusterId: 'path:context',
+      clusterName: 'ctx',
+    };
+    requestRefreshDomainStateMock.mockResolvedValue({
+      status: 'executed',
+      data: {
+        status: 'ready',
+        data: {
+          rows: [workload],
+          total: 1,
+          totalIsExact: true,
+          namespaces: ['team-a'],
+          kinds: ['Deployment'],
+          facetsExact: true,
+        },
+      },
+    });
+
+    await act(async () => {
+      root.render(<NsViewWorkloads namespace="team-a" metrics={null} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    act(() => gridTablePropsRef.current.onRowPointerClick?.(workload));
+    expect(podsViewPropsRef.current?.workloadFilterRequest).toMatchObject({ type: 'set' });
+
+    await act(async () => {
+      root.render(<NsViewWorkloads namespace="team-b" metrics={null} />);
+      await Promise.resolve();
+    });
+
+    expect(podsViewPropsRef.current).toMatchObject({
+      namespace: 'team-b',
+      workloadFilterRequest: { type: 'clear' },
+    });
+
+    await act(async () => {
+      root.render(<NsViewWorkloads namespace="team-a" metrics={null} />);
+      await Promise.resolve();
+    });
+
+    expect(podsViewPropsRef.current?.workloadFilterRequest).toEqual({ type: 'clear' });
   });
 
   it('issues a namespace-scoped typed query for a single namespace and renders the query rows', async () => {
@@ -317,6 +513,53 @@ describe('NsViewWorkloads', () => {
     );
   });
 
+  it('omits the advertised workload Status query facet', async () => {
+    requestRefreshDomainStateMock.mockResolvedValue({
+      status: 'executed',
+      data: {
+        status: 'ready',
+        data: {
+          rows: [],
+          total: 0,
+          totalIsExact: true,
+          namespaces: ['team-a'],
+          kinds: ['Deployment'],
+          facetValues: [
+            {
+              key: 'statuses',
+              options: [
+                { value: 'Degraded', label: 'Degraded' },
+                { value: 'Running', label: 'Running' },
+              ],
+              exact: true,
+            },
+          ],
+          facetsExact: true,
+          capabilities: {
+            filterableFields: ['kinds', 'namespaces'],
+            queryFacets: [
+              {
+                key: 'statuses',
+                label: 'Status',
+                placeholder: 'All statuses',
+                searchable: false,
+                bulkActions: true,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    await act(async () => {
+      root.render(<NsViewWorkloads namespace="team-a" metrics={null} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(gridTablePropsRef.current.filters?.options?.queryFacets).toBeUndefined();
+  });
+
   it('uses the typed query result for all-namespaces workloads on first render', async () => {
     const localWorkload = {
       kind: 'Deployment',
@@ -362,14 +605,7 @@ describe('NsViewWorkloads', () => {
     });
 
     expect(gridTablePropsRef.current?.data).toEqual([queryWorkload]);
-    expect(gridTablePropsRef.current?.paginationControls?.props).toMatchObject({
-      pageIndex: 1,
-      pageSize: 50,
-      totalCount: 1,
-      totalIsExact: true,
-      hasPrevious: false,
-      hasNext: false,
-    });
+    expect(gridTablePropsRef.current?.paginationControls).toBeNull();
     expect(requestRefreshDomainStateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         domain: 'namespace-workloads',
@@ -562,6 +798,38 @@ describe('NsViewWorkloads', () => {
       'namespace-workloads',
       'clusters=path:context,other:context|namespace:team-a',
     ]);
+  });
+
+  it('keeps metrics availability out of the Workloads table surface', async () => {
+    requestRefreshDomainStateMock.mockResolvedValue({
+      status: 'executed',
+      data: {
+        status: 'ready',
+        data: {
+          rows: [],
+          total: 0,
+          totalIsExact: true,
+          namespaces: ['team-a'],
+          kinds: ['Deployment'],
+          facetsExact: true,
+          metrics: {
+            stale: false,
+            lastError: 'metrics api unavailable',
+            collectedAt: 1700000000,
+            successCount: 0,
+            failureCount: 1,
+          },
+        },
+      },
+    });
+
+    await act(async () => {
+      root.render(<NsViewWorkloads namespace="team-a" metrics={null} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('.metrics-warning-banner')).toBeNull();
   });
 
   it('preserves the column definitions across rerenders with unchanged inputs', async () => {

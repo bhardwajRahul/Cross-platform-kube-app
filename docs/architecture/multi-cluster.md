@@ -46,6 +46,55 @@ validation errors. Frontend refresh code should not produce them.
 - Frontend cluster selection: `frontend/src/modules/kubernetes/config/KubeconfigContext.tsx`
 - Refresh scope helpers: `frontend/src/core/refresh/clusterScope.ts`
 - Cluster tab UI state: `frontend/src/ui/layout/ClusterTabs.tsx`
+- Global/per-cluster workspace navigation:
+  `frontend/src/core/contexts/ViewStateContext.tsx`
+
+## Global Clusters View
+
+Global is an independent app workspace, not a route owned by the foreground
+cluster. It retains its last Global view while every open cluster independently
+retains its last Cluster/Namespace/Overview route. The foreground kubeconfig is
+still used for backend foreground priority, but its tab is not visually active
+while Global is selected. When fewer than two clusters remain, the app restores
+the remaining foreground cluster's retained route.
+
+Clusters is a Global-scope view that compares only open clusters. The frontend
+fans out the existing `cluster-overview` domain over one `clusterId|` scope per
+eligible cluster; it does not introduce a cross-cluster refresh scope or cache
+entry. Each row keeps the originating `clusterId` as its identity and uses
+overview-owned readiness, capacity, workload, metrics, and
+unavailable-resource projections.
+
+Each eligible cluster has its own keyed refresh lease owner. Adding or removing
+one cluster must acquire or release only that cluster's lease; it must not cycle
+the leases or startup fetches of surviving clusters. Global table persistence,
+pagination, and replay-cache identities are fixed per Global view and must never
+be derived from the changing open-cluster membership.
+
+Lifecycle and confirmed authentication failures remain per cluster. Clusters may
+show ready, loading, reconnecting, disconnected, and authentication-required
+rows together, and it does not start overview refresh for a cluster whose
+lifecycle cannot activate that domain.
+
+The Cluster link in a Clusters row prepares the destination cluster's navigation
+and sidebar state before activating its kubeconfig selection and opening that
+cluster's Overview. The rest of the row is non-interactive. The Needs Attention
+cell summarizes not-ready nodes and failing pods without becoming a separate
+navigation target.
+
+The user-facing scope and label are **Global → Clusters**. The internal `fleet`
+Global route and `cluster-fleet` table-persistence id remain compatibility
+identities. Legacy favorites that encoded `fleet` or `global-namespaces` as a
+cluster route are normalized at the favorite navigation boundary.
+
+**Global → Namespaces** reads the existing per-cluster `namespaces` refresh
+entries for every open cluster; it does not introduce an aggregate refresh
+scope. Its columns match **Cluster → Namespaces** and add the originating
+cluster name. Each row retains the namespace object's full canonical identity,
+including `clusterId`, and navigating a row stages that cluster's namespace,
+namespace Browse view, and sidebar selection before activating the cluster.
+When one or more open clusters have no namespace snapshot (including permission
+denial or an unavailable lifecycle), the table labels the union as partial.
 
 ## Change Checklist
 

@@ -5,9 +5,10 @@
  * Covers key behaviors and edge cases for CommandPaletteCommands.
  */
 
+import { WarningIcon } from '@shared/components/icons/SharedIcons';
 import { DockablePanelProvider } from '@ui/dockable/DockablePanelProvider';
 import type { types } from '@wailsjs/go/models';
-import { act } from 'react';
+import { act, isValidElement } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -32,11 +33,14 @@ const { mocks } = vi.hoisted(() => ({
       loadKubeconfigs: vi.fn(),
     },
     viewState: {
+      viewType: 'cluster' as 'cluster' | 'global',
+      sidebarSelection: undefined as { type: 'namespace'; value: string } | undefined,
       setIsAboutOpen: vi.fn(),
       setIsSettingsOpen: vi.fn(),
       setIsObjectDiffOpen: vi.fn(),
       onClusterObjectsClick: vi.fn(),
       setActiveClusterView: vi.fn(),
+      navigateToGlobal: vi.fn(),
       navigateToNamespace: vi.fn(),
       setActiveNamespaceTab: vi.fn(),
       onNamespaceSelect: vi.fn(),
@@ -168,6 +172,8 @@ describe('CommandPaletteCommands', () => {
     mocks.kubeconfig.openKubeconfig.mockResolvedValue(undefined);
     mocks.kubeconfig.closeKubeconfig.mockReset();
     mocks.kubeconfig.closeKubeconfig.mockResolvedValue(undefined);
+    mocks.viewState.viewType = 'cluster';
+    mocks.viewState.sidebarSelection = undefined;
     mocks.kubeconfig.loadKubeconfigs.mockReset();
     mocks.kubeconfig.loadKubeconfigs.mockResolvedValue(undefined);
     mocks.autoRefresh.enabled = true;
@@ -201,6 +207,113 @@ describe('CommandPaletteCommands', () => {
     expect(command).toBeTruthy();
     const isMac = /Mac/i.test((navigator.platform || '') + (navigator.userAgent || ''));
     expect(command?.shortcut).toEqual(isMac ? ['⌘', 'O'] : ['Ctrl', 'O']);
+
+    unmount();
+  });
+
+  it('offers navigation commands for every registered cluster and namespace view', () => {
+    mocks.viewState.sidebarSelection = { type: 'namespace', value: 'default' };
+    mocks.kubeconfig.selectedKubeconfigs = ['/kube/alpha:dev', '/kube/beta:prod'];
+
+    const { getCommands, unmount } = renderHook();
+    const navigationViewIds = getCommands()
+      .filter(
+        (command) =>
+          command.id.startsWith('global-') ||
+          command.id.startsWith('cluster-') ||
+          command.id.startsWith('namespace-')
+      )
+      .map((command) => command.id);
+
+    expect(navigationViewIds).toEqual([
+      'global-fleet',
+      'global-global-namespaces',
+      'cluster-attention',
+      'cluster-namespaces',
+      'cluster-browse',
+      'cluster-events',
+      'cluster-nodes',
+      'cluster-config',
+      'cluster-storage',
+      'cluster-crds',
+      'cluster-custom',
+      'cluster-rbac',
+      'namespace-browse',
+      'namespace-map',
+      'namespace-events',
+      'namespace-workloads',
+      'namespace-autoscaling',
+      'namespace-helm',
+      'namespace-config',
+      'namespace-network',
+      'namespace-storage',
+      'namespace-custom',
+      'namespace-quotas',
+      'namespace-rbac',
+    ]);
+
+    const globalClusters = getCommands().find((command) => command.id === 'global-fleet');
+    expect(globalClusters?.label).toBe('Global - Clusters');
+    const globalNamespaces = getCommands().find(
+      (command) => command.id === 'global-global-namespaces'
+    );
+    expect(globalNamespaces?.label).toBe('Global - Namespaces');
+
+    unmount();
+  });
+
+  it('uses the Attention warning icon for the Cluster Attention command', () => {
+    const { getCommands, unmount } = renderHook();
+    const command = getCommands().find((entry) => entry.id === 'cluster-attention');
+
+    expect(isValidElement(command?.icon)).toBe(true);
+    if (!isValidElement(command?.icon)) {
+      throw new Error('expected Cluster Attention command icon');
+    }
+    expect(command.icon.type).toBe(WarningIcon);
+
+    unmount();
+  });
+
+  it('hides Global navigation commands when fewer than two clusters are open', () => {
+    mocks.kubeconfig.selectedKubeconfigs = ['/kube/alpha:dev'];
+
+    const { getCommands, unmount } = renderHook();
+    const commandIds = getCommands().map((command) => command.id);
+
+    expect(commandIds).not.toContain('global-fleet');
+    expect(commandIds).not.toContain('global-global-namespaces');
+    expect(commandIds).toContain('cluster-namespaces');
+
+    unmount();
+  });
+
+  it('opens Global commands through the Global workspace action', () => {
+    mocks.kubeconfig.selectedKubeconfigs = ['/kube/alpha:dev', '/kube/beta:prod'];
+    const { getCommands, unmount } = renderHook();
+
+    act(() => {
+      getCommands()
+        .find((command) => command.id === 'global-global-namespaces')
+        ?.action();
+    });
+
+    expect(mocks.viewState.navigateToGlobal).toHaveBeenCalledWith('global-namespaces');
+    expect(mocks.viewState.onClusterObjectsClick).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('searches existing navigation commands by the target lens vocabulary', () => {
+    mocks.viewState.sidebarSelection = { type: 'namespace', value: 'default' };
+
+    const { getCommands, unmount } = renderHook();
+    const commandsById = new Map(getCommands().map((command) => [command.id, command]));
+
+    expect(commandsById.get('cluster-browse')?.keywords).toContain('inventory');
+    expect(commandsById.get('namespace-browse')?.keywords).toContain('inventory');
+    expect(commandsById.get('cluster-nodes')?.keywords).toContain('capacity');
+    expect(commandsById.get('cluster-events')?.keywords).toContain('change');
+    expect(commandsById.get('namespace-events')?.keywords).toContain('change');
 
     unmount();
   });
@@ -364,6 +477,23 @@ describe('CommandPaletteCommands', () => {
     expect(mocks.kubeconfig.closeKubeconfig).toHaveBeenCalledWith('/kube/beta:prod');
     expect(mocks.kubeconfig.loadKubeconfigs).not.toHaveBeenCalled();
     expect(mocks.kubeconfig.setSelectedKubeconfigs).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('does not close the foreground cluster while the Global workspace is active', async () => {
+    mocks.kubeconfig.selectedKubeconfigs = ['/kube/alpha:dev', '/kube/beta:prod'];
+    mocks.kubeconfig.selectedKubeconfig = '/kube/beta:prod';
+    mocks.viewState.viewType = 'global';
+
+    const { getCommands, unmount } = renderHook();
+    const command = getCommands().find((entry) => entry.id === 'close-cluster-tab');
+
+    await act(async () => {
+      command?.action();
+      await Promise.resolve();
+    });
+
+    expect(mocks.kubeconfig.closeKubeconfig).not.toHaveBeenCalled();
     unmount();
   });
 

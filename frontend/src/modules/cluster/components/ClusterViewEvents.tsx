@@ -2,8 +2,8 @@
  * frontend/src/modules/cluster/components/ClusterViewEvents.tsx
  *
  * Renders cluster-scoped Kubernetes Events. It displays event rows, links
- * involved objects through ResourceLink-aware navigation, and wires event
- * context menu actions into the shared object action controller.
+ * Event details through the object panel, links involved objects through
+ * ResourceLink-aware navigation, and wires both into shared object actions.
  */
 
 import './ClusterViewEvents.css';
@@ -16,14 +16,17 @@ import { useQueryBackedClusterResourceGridTable } from '@modules/resource-grid/u
 import type { ContextMenuItem } from '@shared/components/ContextMenu';
 import * as cf from '@shared/components/tables/columnFactories';
 import type { GridColumnDefinition } from '@shared/components/tables/GridTable';
+import { createEventTypeColumn } from '@shared/events/eventColumns';
 import {
   clusterEventRowIdentity,
   eventGridActionReference,
   eventGridCanOpenRelatedObject,
+  eventGridObjectReference,
   eventGridSearchText,
   eventGridStableKey,
   resolveEventGridRelatedObject,
 } from '@shared/events/eventGridModel';
+import { EVENT_LABELS } from '@shared/events/eventPresentation';
 import { useNavigateToView } from '@shared/hooks/useNavigateToView';
 import { useObjectActionController } from '@shared/hooks/useObjectActionController';
 import { splitEventObjectTarget } from '@shared/utils/eventObjectIdentity';
@@ -36,6 +39,8 @@ interface EventData {
   kind: string;
   kindAlias?: string;
   name: string;
+  uid: string;
+  resourceVersion: string;
   namespace: string;
   clusterId: string;
   clusterName?: string;
@@ -67,12 +72,12 @@ const ClusterEventsView: React.FC<EventViewProps> = React.memo(({ error }) => {
   const useShortResourceNames = useShortNames();
   const getSearchText = useCallback((event: EventData): string[] => eventGridSearchText(event), []);
 
-  const canOpenEventObject = useCallback(
+  const canOpenInvolvedObject = useCallback(
     (event: EventData) => eventGridCanOpenRelatedObject(event, { selectedClusterId }),
     [selectedClusterId]
   );
 
-  const handleEventClick = useCallback(
+  const openInvolvedObject = useCallback(
     async (event: EventData) => {
       const ref = await resolveEventGridRelatedObject(event, { selectedClusterId });
       if (ref) {
@@ -82,12 +87,26 @@ const ClusterEventsView: React.FC<EventViewProps> = React.memo(({ error }) => {
     [openWithObject, selectedClusterId]
   );
 
-  const handleEventAltClick = useCallback(
+  const navigateToInvolvedObject = useCallback(
     async (event: EventData) => {
       const ref = await resolveEventGridRelatedObject(event, { selectedClusterId });
       if (ref) {
         navigateToView(ref);
       }
+    },
+    [navigateToView, selectedClusterId]
+  );
+
+  const openEvent = useCallback(
+    (event: EventData) => {
+      openWithObject(eventGridObjectReference(event, selectedClusterId));
+    },
+    [openWithObject, selectedClusterId]
+  );
+
+  const navigateToEvent = useCallback(
+    (event: EventData) => {
+      navigateToView(eventGridObjectReference(event, selectedClusterId));
     },
     [navigateToView, selectedClusterId]
   );
@@ -108,36 +127,38 @@ const ClusterEventsView: React.FC<EventViewProps> = React.memo(({ error }) => {
       cf.createKindColumn<EventData>({
         getKind: () => 'Event',
         getDisplayText: () => getDisplayKind('Event', useShortResourceNames),
+        onClick: openEvent,
+        onAltClick: navigateToEvent,
+        allowRowClick: false,
       }),
-      cf.createTextColumn<EventData>('type', 'Type', (event) => event.type || 'Normal', {
-        getClassName: (event) => `event-badge ${(event.type || 'normal').toLowerCase()}`,
-      }),
-      cf.createTextColumn('source', 'Source', (event) => event.source || '-'),
-      cf.createTextColumn<EventData>('objectType', 'Object Type', (event) => {
+      createEventTypeColumn<EventData>(),
+      cf.createTextColumn('source', EVENT_LABELS.source, (event) => event.source || '-'),
+      cf.createTextColumn<EventData>('objectType', EVENT_LABELS.objectType, (event) => {
         const parsed = splitEventObjectTarget(event.object);
         return parsed.objectType;
       }),
       cf.createTextColumn<EventData>(
         'objectName',
-        'Object Name',
+        EVENT_LABELS.objectName,
         (event) => {
           const parsed = splitEventObjectTarget(event.object);
           return parsed.objectName;
         },
         {
           onClick: (event) => {
-            void handleEventClick(event);
+            void openInvolvedObject(event);
           },
           onAltClick: (event) => {
-            void handleEventAltClick(event);
+            void navigateToInvolvedObject(event);
           },
           getClassName: () => 'object-panel-link',
-          isInteractive: canOpenEventObject,
+          isInteractive: canOpenInvolvedObject,
+          allowRowClick: false,
         }
       ),
-      cf.createTextColumn('reason', 'Reason', (event) => event.reason || '-'),
-      cf.createTextColumn('message', 'Message', (event) => event.message || '-'),
-      cf.createAgeColumn<EventData>('age', 'Age', (event) => event.age),
+      cf.createTextColumn('reason', EVENT_LABELS.reason, (event) => event.reason || '-'),
+      cf.createTextColumn('message', EVENT_LABELS.message, (event) => event.message || '-'),
+      cf.createAgeColumn<EventData>('age', EVENT_LABELS.lastSeen, (event) => event.age),
     ];
 
     const sizing: cf.ColumnSizingMap = {
@@ -153,7 +174,14 @@ const ClusterEventsView: React.FC<EventViewProps> = React.memo(({ error }) => {
     cf.applyColumnSizing(baseColumns, sizing);
 
     return baseColumns;
-  }, [canOpenEventObject, handleEventAltClick, handleEventClick, useShortResourceNames]);
+  }, [
+    canOpenInvolvedObject,
+    navigateToEvent,
+    navigateToInvolvedObject,
+    openEvent,
+    openInvolvedObject,
+    useShortResourceNames,
+  ]);
 
   const { gridTableProps, favModal, source } = useQueryBackedClusterResourceGridTable<
     ClusterEventsSnapshotPayload,
@@ -179,6 +207,7 @@ const ClusterEventsView: React.FC<EventViewProps> = React.memo(({ error }) => {
   const objectActions = useObjectActionController({
     context: 'gridtable',
     useDefaultHandlers: false,
+    onOpen: (object) => openWithObject(object),
     onViewInvolvedObject: (object) => {
       const event = source.rows.find(
         (candidate) =>
@@ -188,7 +217,7 @@ const ClusterEventsView: React.FC<EventViewProps> = React.memo(({ error }) => {
           candidate.object === object.involvedObject
       );
       if (event) {
-        void handleEventClick(event);
+        void openInvolvedObject(event);
       }
     },
   });
@@ -197,18 +226,19 @@ const ClusterEventsView: React.FC<EventViewProps> = React.memo(({ error }) => {
   const getContextMenuItems = useCallback(
     (event: EventData): ContextMenuItem[] => {
       const parsed = splitEventObjectTarget(event.object);
-      if (!parsed.isLinkable || !canOpenEventObject(event)) {
-        return [];
-      }
+      const involvedObjectExtras =
+        parsed.isLinkable && canOpenInvolvedObject(event)
+          ? {
+              involvedObject: event.object,
+              involvedObjectRef: event.involvedObject,
+            }
+          : {};
 
       return objectActions.getMenuItems(
-        eventGridActionReference(event, event.name, selectedClusterId, {
-          involvedObject: event.object,
-          involvedObjectRef: event.involvedObject,
-        })
+        eventGridActionReference(event, selectedClusterId, involvedObjectExtras)
       );
     },
-    [canOpenEventObject, objectActions, selectedClusterId]
+    [canOpenInvolvedObject, objectActions, selectedClusterId]
   );
 
   // Resolve empty state message
@@ -227,7 +257,8 @@ const ClusterEventsView: React.FC<EventViewProps> = React.memo(({ error }) => {
         columns={columns}
         diagnosticsLabel="Cluster Events"
         diagnosticsMode="live"
-        onRowClick={handleEventClick}
+        onRowClick={openEvent}
+        onRowPointerClick={openEvent}
         tableClassName="gridtable-cluster-events"
         enableContextMenu={true}
         getCustomContextMenuItems={getContextMenuItems}

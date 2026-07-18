@@ -51,6 +51,8 @@ type ResourceQueryRequest struct {
 	Scope      ResourceQueryScope    `json:"scope,omitempty"`
 	Namespaces []string              `json:"namespaces,omitempty"`
 	Kinds      []string              `json:"kinds,omitempty"`
+	Facets     map[string][]string   `json:"facets,omitempty"`
+	MatchNone  bool                  `json:"matchNone,omitempty"`
 	Search     string                `json:"search,omitempty"`
 	// IncludeMetadata extends Search to also match each row's labels and annotations.
 	IncludeMetadata bool                     `json:"includeMetadata,omitempty"`
@@ -206,6 +208,31 @@ type ResourceQueryDynamicRef struct {
 	Policy   string `json:"policy"`
 }
 
+// ResourceQueryFacetDescriptor is provider-owned metadata for one query facet.
+// Key is the stable selection/persistence identity; the remaining fields tell
+// every frontend surface how to render the control without key-specific logic.
+type ResourceQueryFacetDescriptor struct {
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Placeholder string `json:"placeholder"`
+	Searchable  bool   `json:"searchable"`
+	BulkActions bool   `json:"bulkActions"`
+}
+
+// ResourceQueryFacetOption is one stable wire selection plus its display label.
+type ResourceQueryFacetOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// ResourceQueryFacetValues carries the current structural-scope option set for
+// one provider-declared facet and whether that option set is exact.
+type ResourceQueryFacetValues struct {
+	Key     string                     `json:"key"`
+	Options []ResourceQueryFacetOption `json:"options"`
+	Exact   bool                       `json:"exact"`
+}
+
 // ResourceQueryCapabilities is the provider-published source of truth for what
 // table behavior is globally supported. The frontend must not infer global
 // capability from the visible row slice.
@@ -220,6 +247,9 @@ type ResourceQueryCapabilities struct {
 	// dropdown options. Families with an open kind set (events: involved-object
 	// kinds) publish none and must not render a kind dropdown.
 	KindVocabulary []string `json:"kindVocabulary,omitempty"`
+	// QueryFacets owns the stable keys and display behavior for provider-specific
+	// query dimensions. Dynamic option values travel on the result envelope.
+	QueryFacets []ResourceQueryFacetDescriptor `json:"queryFacets,omitempty"`
 }
 
 // ResourceQueryEnvelope is the one canonical metadata envelope shared by every
@@ -229,9 +259,9 @@ type ResourceQueryCapabilities struct {
 // projected rows. This is the "one backend query result envelope" target: one
 // envelope type, not one row DTO.
 //
-// Facet fields (kinds/namespaces/statuses/nodes/facetsExact) are flat to match
-// the existing typed payload wire format the frontend already reads, so a domain
-// migrates by embedding this envelope without any shared frontend helper change.
+// Structural kind/namespace facets remain flat. Provider-owned facets use the
+// generic FacetValues collection and are paired by stable key with capability
+// descriptors; frontend code does not branch on provider facet names.
 type ResourceQueryEnvelope struct {
 	Provider      ResourceQueryProvider `json:"provider"`
 	Table         string                `json:"table"`
@@ -254,28 +284,28 @@ type ResourceQueryEnvelope struct {
 	Total         int  `json:"total"`
 	// UnfilteredTotal is the in-scope item count before the request's filters, so the
 	// frontend can render "showing {Total} of {UnfilteredTotal} items due to filters".
-	UnfilteredTotal int                       `json:"unfilteredTotal"`
-	TotalIsExact    bool                      `json:"totalIsExact"`
-	Kinds           []string                  `json:"kinds,omitempty"`
-	Namespaces      []string                  `json:"namespaces,omitempty"`
-	Statuses        []string                  `json:"statuses,omitempty"`
-	Nodes           []string                  `json:"nodes,omitempty"`
-	FacetsExact     bool                      `json:"facetsExact"`
-	Completeness    ResourceQueryCompleteness `json:"completeness,omitempty"`
-	Issues          []ResourceQueryIssue      `json:"issues,omitempty"`
-	Dynamic         *ResourceQueryDynamicRef  `json:"dynamic,omitempty"`
-	Capabilities    ResourceQueryCapabilities `json:"capabilities"`
+	UnfilteredTotal int                        `json:"unfilteredTotal"`
+	TotalIsExact    bool                       `json:"totalIsExact"`
+	Kinds           []string                   `json:"kinds,omitempty"`
+	Namespaces      []string                   `json:"namespaces,omitempty"`
+	FacetValues     []ResourceQueryFacetValues `json:"facetValues,omitempty"`
+	FacetsExact     bool                       `json:"facetsExact"`
+	Completeness    ResourceQueryCompleteness  `json:"completeness,omitempty"`
+	Issues          []ResourceQueryIssue       `json:"issues,omitempty"`
+	Dynamic         *ResourceQueryDynamicRef   `json:"dynamic,omitempty"`
+	Capabilities    ResourceQueryCapabilities  `json:"capabilities"`
 }
 
 // newTypedResourceCapabilities builds capabilities for a typed-resource table:
 // the query surface (sortable/filterable/searchable fields) the frontend reads,
 // plus the family's closed kind vocabulary (nil for open kind sets).
-func newTypedResourceCapabilities(sortable, filterable, searchable, kindVocabulary []string) ResourceQueryCapabilities {
+func newTypedResourceCapabilities(sortable, filterable, searchable, kindVocabulary []string, queryFacets ...ResourceQueryFacetDescriptor) ResourceQueryCapabilities {
 	return ResourceQueryCapabilities{
 		SortableFields:   sortable,
 		FilterableFields: filterable,
 		SearchableFields: searchable,
 		KindVocabulary:   kindVocabulary,
+		QueryFacets:      queryFacets,
 	}
 }
 
@@ -296,6 +326,8 @@ func resourceQueryRequestFromValues(clusterID, table string, values url.Values, 
 	request.IncludeMetadata = strings.TrimSpace(values.Get("includeMetadata")) == "true"
 	request.Namespaces = resourceQueryListValues(values, "namespaces", "namespace")
 	request.Kinds = resourceQueryListValues(values, "kinds", "kind")
+	request.Facets = resourceQueryFacetSelections(values)
+	request.MatchNone = strings.TrimSpace(values.Get("matchNone")) == "true"
 	request.SortField = strings.TrimSpace(values.Get("sort"))
 	if request.SortField == "" {
 		request.SortField = defaults.SortField
@@ -327,6 +359,25 @@ func resourceQueryRequestFromValues(clusterID, table string, values url.Values, 
 	return request
 }
 
+func resourceQueryFacetSelections(values url.Values) map[string][]string {
+	result := map[string][]string{}
+	for rawKey := range values {
+		key, ok := strings.CutPrefix(rawKey, "facet.")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			continue
+		}
+		selected := normalizeResourceQueryValues(values[rawKey])
+		if len(selected) > 0 {
+			result[key] = selected
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
 // resourceQueryAnchorFromValues builds the anchor object reference from the
 // anchor.* query params — the same scope-string channel the continue token
 // rides. Returns nil when no anchor.name/anchor.kind param is present;
@@ -353,7 +404,16 @@ func resourceQueryListValues(values url.Values, pluralKey, singularKey string) [
 	for _, value := range values[pluralKey] {
 		raw = append(raw, strings.Split(value, ",")...)
 	}
-	raw = append(raw, values[singularKey]...)
+	if singularKey != "" {
+		raw = append(raw, values[singularKey]...)
+	}
+	return normalizeResourceQueryValues(raw)
+}
+
+// Provider-owned facet values are opaque. Unlike structural namespace/kind
+// lists, they must not be comma-split: a value may itself be a structured
+// identity containing commas. Multiple selections use repeated query keys.
+func normalizeResourceQueryValues(raw []string) []string {
 	if len(raw) == 0 {
 		return nil
 	}

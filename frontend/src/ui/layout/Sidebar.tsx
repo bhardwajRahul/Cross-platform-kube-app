@@ -25,44 +25,24 @@ import {
   WarningIcon,
 } from '@shared/components/icons/SharedIcons';
 import LoadingSpinner from '@shared/components/LoadingSpinner';
+import { StatusChip, type StatusChipVariant } from '@shared/components/StatusChip';
+import { useRefreshDomainHandle } from '@/core/data-access';
 import { eventBus } from '@/core/events';
+import {
+  CLUSTER_VIEW_DESCRIPTORS,
+  GLOBAL_VIEW_DESCRIPTORS,
+  NAMESPACE_VIEW_DESCRIPTORS,
+} from '@/core/navigation/viewRegistry';
 import { buildClusterScope } from '@/core/refresh/clusterScope';
 import { useAutoRefreshLoadingState } from '@/core/refresh/hooks/useAutoRefreshLoadingState';
+import { useStreamSignalRefetch } from '@/core/refresh/hooks/useStreamSignalRefetch';
+import type { AttentionSeverity } from '@/core/refresh/types';
 import { useDimInactiveNamespaces } from '@/hooks/useDimInactiveNamespaces';
 import { useExclusiveNamespaces } from '@/hooks/useExclusiveNamespaces';
-import type { ClusterViewType, NamespaceViewType } from '@/types/navigation/views';
+import type { ClusterViewType, GlobalViewType, NamespaceViewType } from '@/types/navigation/views';
 import { isMacPlatform } from '@/utils/platform';
 import { NamespaceScopeAddRow, useNamespaceScope } from './NamespaceScopeEditor';
 import { type SidebarCursorTarget, useSidebarKeyboardControls } from './SidebarKeys';
-
-// Static cluster view list to avoid re-creating the array each render.
-const RESOURCE_VIEWS: Array<{ id: ClusterViewType; label: string }> = [
-  { id: 'browse', label: 'Browse' },
-  { id: 'nodes', label: 'Nodes' },
-  { id: 'config', label: 'Config' },
-  { id: 'crds', label: 'CRDs' },
-  { id: 'custom', label: 'Custom' },
-  { id: 'events', label: 'Events' },
-  { id: 'rbac', label: 'RBAC' },
-  { id: 'storage', label: 'Storage' },
-];
-
-// Static namespace view list to avoid re-creating the array each render.
-const NAMESPACE_VIEWS: Array<{ id: NamespaceViewType; label: string }> = [
-  { id: 'browse', label: 'Browse' },
-  { id: 'map', label: 'Map' },
-  { id: 'workloads', label: 'Workloads' },
-  { id: 'pods', label: 'Pods' },
-  { id: 'autoscaling', label: 'Autoscaling' },
-  { id: 'config', label: 'Config' },
-  { id: 'custom', label: 'Custom' },
-  { id: 'events', label: 'Events' },
-  { id: 'helm', label: 'Helm' },
-  { id: 'network', label: 'Network' },
-  { id: 'quotas', label: 'Quotas' },
-  { id: 'rbac', label: 'RBAC' },
-  { id: 'storage', label: 'Storage' },
-];
 
 const toNamespaceKey = (clusterId: string | undefined, scope: string): string => {
   const scoped = buildClusterScope(clusterId, scope);
@@ -71,6 +51,12 @@ const toNamespaceKey = (clusterId: string | undefined, scope: string): string =>
 
 const escapeAttributeSelectorValue = (value: string): string =>
   value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+const attentionBadgeVariants = {
+  info: 'info',
+  warning: 'warning',
+  error: 'unhealthy',
+} satisfies Record<AttentionSeverity, StatusChipVariant>;
 
 function Sidebar() {
   const elementIdPrefix = useId();
@@ -83,7 +69,7 @@ function Sidebar() {
     selectedNamespaceClusterId,
   } = useNamespace();
   const { suppressPassiveLoading } = useAutoRefreshLoadingState();
-  const { selectedClusterId } = useKubeconfig();
+  const { selectedClusterId, selectedClusterIds } = useKubeconfig();
   // The active cluster's "accessible namespaces" scope
   // (docs/plans/namespace-scope.md): the namespaces section doubles as its
   // inline editor when a scope is set or the cluster-wide list is denied.
@@ -95,12 +81,22 @@ function Sidebar() {
   // the sidebar renders the permission message — no catalog inference (manual
   // namespace entry is future work, docs/todo.md).
   const viewState = useViewState();
+  const showGlobalViews = selectedClusterIds.length > 1 && viewState.viewType === 'global';
   const [expandedNamespaceKeys, setExpandedNamespaceKeys] = useState<Set<string>>(() => new Set());
   const [lastExpandedNamespaceKey, setLastExpandedNamespaceKey] = useState<string | null>(null);
   const [clusterResourcesExpanded, setClusterResourcesExpanded] = useState<boolean>(true);
 
   const width = viewState.isSidebarVisible ? viewState.sidebarWidth : 50;
   const isCollapsed = !viewState.isSidebarVisible;
+  const attentionScope = buildClusterScope(selectedClusterId, '');
+  const attentionBadgesEnabled = Boolean(attentionScope) && viewState.viewType !== 'global';
+  const { data: attentionData } = useRefreshDomainHandle({
+    domain: 'cluster-attention',
+    scope: attentionScope,
+    enabled: attentionBadgesEnabled,
+    preserveState: true,
+  });
+  useStreamSignalRefetch('cluster-attention', attentionBadgesEnabled ? [attentionScope] : []);
   const sidebarSelection = viewState.sidebarSelection;
   const selectedNamespaceRef = useRef<HTMLButtonElement>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
@@ -129,6 +125,9 @@ function Sidebar() {
     if (sidebarSelection?.type === 'overview') {
       return { kind: 'overview' };
     }
+    if (viewState.viewType === 'global') {
+      return { kind: 'global-view', view: viewState.activeGlobalTab };
+    }
     if (viewState.viewType === 'cluster' && viewState.activeClusterTab) {
       return { kind: 'cluster-view', view: viewState.activeClusterTab };
     }
@@ -148,6 +147,7 @@ function Sidebar() {
   }, [
     sidebarSelection,
     viewState.activeClusterTab,
+    viewState.activeGlobalTab,
     viewState.activeNamespaceTab,
     viewState.viewType,
     selectedNamespaceKey,
@@ -169,7 +169,8 @@ function Sidebar() {
     });
 
   // Cluster view items (always visible)
-  const resourceViews = RESOURCE_VIEWS;
+  const attentionView = CLUSTER_VIEW_DESCRIPTORS.find((view) => view.id === 'attention');
+  const resourceViews = CLUSTER_VIEW_DESCRIPTORS.filter((view) => view.id !== 'attention');
 
   // Scroll selected namespace into view when it changes
   useEffect(() => {
@@ -266,6 +267,11 @@ function Sidebar() {
     viewState.setSidebarSelection({ type: 'cluster', value: 'cluster' });
   };
 
+  const handleGlobalViewSelect = (view: GlobalViewType) => {
+    setPendingSelection({ kind: 'global-view', view });
+    viewState.navigateToGlobal(view);
+  };
+
   const handleNamespaceSelect = (selectedNamespaceScope: string, clusterId?: string) => {
     const namespaceKey = toNamespaceKey(clusterId, selectedNamespaceScope);
     // Toggle expansion only; namespace selection happens when a view is chosen.
@@ -354,7 +360,44 @@ function Sidebar() {
         </button>
         {!isCollapsed && (
           <>
-            <div className="sidebar-section">
+            {showGlobalViews ? (
+              <div className="sidebar-section">
+                <h3>Global</h3>
+                <div className="cluster-items">
+                  {GLOBAL_VIEW_DESCRIPTORS.map((view) => (
+                    <button
+                      type="button"
+                      key={view.id}
+                      className={buildSidebarItemClassName(['sidebar-item'], {
+                        kind: 'global-view',
+                        view: view.id,
+                      })}
+                      onClick={() => {
+                        if (!keyboardActivationRef.current) {
+                          clearKeyboardPreview();
+                        }
+                        handleGlobalViewSelect(view.id);
+                      }}
+                      data-sidebar-focusable="true"
+                      data-sidebar-scope="global"
+                      data-sidebar-target-kind="global-view"
+                      data-sidebar-target-view={view.id}
+                      tabIndex={-1}
+                      aria-current={
+                        isTargetSelected({ kind: 'global-view', view: view.id })
+                          ? 'page'
+                          : undefined
+                      }
+                    >
+                      <CategoryIcon width={14} height={14} />
+                      <span>{view.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="sidebar-section" hidden={viewState.viewType === 'global'}>
               <h3>Cluster</h3>
               <div className="cluster-items">
                 <button
@@ -376,6 +419,60 @@ function Sidebar() {
                   <ClusterOverviewIcon width={14} height={14} />
                   <span>Overview</span>
                 </button>
+                {attentionView ? (
+                  <button
+                    type="button"
+                    className={buildSidebarItemClassName(['sidebar-item'], {
+                      kind: 'cluster-view',
+                      view: attentionView.id,
+                    })}
+                    onClick={() => handleClusterViewSelect(attentionView.id)}
+                    data-sidebar-focusable="true"
+                    data-sidebar-target-kind="cluster-view"
+                    data-sidebar-target-view={attentionView.id}
+                    tabIndex={-1}
+                    aria-label={
+                      attentionData?.severityCounts
+                        ? `${attentionView.label}: ${attentionData.severityCounts.info} info, ${attentionData.severityCounts.warning} warning${attentionData.severityCounts.warning === 1 ? '' : 's'}, ${attentionData.severityCounts.error} error${attentionData.severityCounts.error === 1 ? '' : 's'}`
+                        : attentionView.label
+                    }
+                    aria-current={
+                      isTargetSelected({ kind: 'cluster-view', view: attentionView.id })
+                        ? 'page'
+                        : undefined
+                    }
+                  >
+                    <WarningIcon width={14} height={14} />
+                    <span className="sidebar-attention-label">{attentionView.label}</span>
+                    {attentionData?.severityCounts ? (
+                      <span className="sidebar-attention-badges">
+                        {(
+                          [
+                            ['info', attentionData.severityCounts.info],
+                            ['warning', attentionData.severityCounts.warning],
+                            ['error', attentionData.severityCounts.error],
+                          ] as const
+                        ).map(([severity, count]) =>
+                          count > 0 ? (
+                            <span
+                              key={severity}
+                              className="sidebar-attention-badge-wrapper"
+                              aria-hidden="true"
+                              title={`${count} ${severity} finding${count === 1 ? '' : 's'}`}
+                            >
+                              <StatusChip
+                                variant={attentionBadgeVariants[severity]}
+                                className={`sidebar-attention-badge sidebar-attention-badge--${severity}`}
+                              >
+                                {count}
+                              </StatusChip>
+                            </span>
+                          ) : null
+                        )}
+                      </span>
+                    ) : null}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className={buildSidebarItemClassName(['sidebar-item', 'header', 'clickable'], {
@@ -432,7 +529,10 @@ function Sidebar() {
               </div>
             </div>
 
-            <div className="sidebar-section namespaces-section">
+            <div
+              className="sidebar-section namespaces-section"
+              hidden={viewState.viewType === 'global'}
+            >
               <h3>
                 Namespaces
                 <button
@@ -475,8 +575,8 @@ function Sidebar() {
                     const namespaceViewsId = `sidebar-namespace-${encodeURIComponent(namespaceKey)}-views`;
                     const namespaceViews =
                       scope === ALL_NAMESPACES_SCOPE
-                        ? NAMESPACE_VIEWS.filter((view) => view.id !== 'map')
-                        : NAMESPACE_VIEWS;
+                        ? NAMESPACE_VIEW_DESCRIPTORS.filter((view) => view.supportsAllNamespaces)
+                        : NAMESPACE_VIEW_DESCRIPTORS;
 
                     return (
                       <div key={namespaceKey}>
@@ -563,51 +663,45 @@ function Sidebar() {
                         </div>
                         {!!isExpanded && (
                           <div className="sidebar-views" id={namespaceViewsId}>
-                            {namespaceViews.map((view) => {
-                              const label = view.label;
-                              return (
-                                <button
-                                  type="button"
-                                  key={view.id}
-                                  className={buildSidebarItemClassName(
-                                    ['sidebar-item', 'indented'],
-                                    {
-                                      kind: 'namespace-view',
-                                      namespace: namespaceKey,
-                                      view: view.id,
-                                    }
-                                  )}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (!keyboardActivationRef.current) {
-                                      clearKeyboardPreview();
-                                    }
-                                    handleNamespaceViewSelect(
-                                      scope,
-                                      view.id,
-                                      selectedClusterId || undefined
-                                    );
-                                  }}
-                                  data-sidebar-focusable="true"
-                                  data-sidebar-target-kind="namespace-view"
-                                  data-sidebar-target-namespace={namespaceKey}
-                                  data-sidebar-target-view={view.id}
-                                  tabIndex={-1}
-                                  aria-current={
-                                    isTargetSelected({
-                                      kind: 'namespace-view',
-                                      namespace: namespaceKey,
-                                      view: view.id,
-                                    })
-                                      ? 'page'
-                                      : undefined
+                            {namespaceViews.map((view) => (
+                              <button
+                                type="button"
+                                key={view.id}
+                                className={buildSidebarItemClassName(['sidebar-item', 'indented'], {
+                                  kind: 'namespace-view',
+                                  namespace: namespaceKey,
+                                  view: view.id,
+                                })}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!keyboardActivationRef.current) {
+                                    clearKeyboardPreview();
                                   }
-                                >
-                                  <CategoryIcon width={14} height={14} />
-                                  <span>{label}</span>
-                                </button>
-                              );
-                            })}
+                                  handleNamespaceViewSelect(
+                                    scope,
+                                    view.id,
+                                    selectedClusterId || undefined
+                                  );
+                                }}
+                                data-sidebar-focusable="true"
+                                data-sidebar-target-kind="namespace-view"
+                                data-sidebar-target-namespace={namespaceKey}
+                                data-sidebar-target-view={view.id}
+                                tabIndex={-1}
+                                aria-current={
+                                  isTargetSelected({
+                                    kind: 'namespace-view',
+                                    namespace: namespaceKey,
+                                    view: view.id,
+                                  })
+                                    ? 'page'
+                                    : undefined
+                                }
+                              >
+                                <CategoryIcon width={14} height={14} />
+                                <span>{view.label}</span>
+                              </button>
+                            ))}
                           </div>
                         )}
                       </div>

@@ -100,6 +100,7 @@ func applyTypedTableQuery[T any](items []T, query typedTableQuery, adapter typed
 			FacetsExact:     true,
 			Namespaces:      collectTypedTableFacet(items, adapter.Namespace),
 			Kinds:           collectTypedTableFacet(items, adapter.Kind),
+			FacetValues:     collectTypedTableFacetValues(items, adapter.Facets, true),
 			Dynamic:         query.dynamicRef(),
 		}
 	}
@@ -123,6 +124,12 @@ func applyTypedTableQuery[T any](items []T, query typedTableQuery, adapter typed
 		return typedTableSortedItemLess(filtered[i], filtered[j], desc)
 	})
 	total := len(filtered)
+	if query.Request.MatchNone {
+		for _, item := range items {
+			addTypedTableFacetValue(namespaceFacets, adapter.Namespace(item))
+			addTypedTableFacetValue(kindFacets, adapter.Kind(item))
+		}
+	}
 
 	start := 0
 	cursorInvalid := false
@@ -158,6 +165,7 @@ func applyTypedTableQuery[T any](items []T, query typedTableQuery, adapter typed
 		FacetsExact:     true,
 		Namespaces:      typedTableFacetMapValues(namespaceFacets),
 		Kinds:           typedTableFacetMapValues(kindFacets),
+		FacetValues:     collectTypedTableFacetValues(items, adapter.Facets, true),
 		Dynamic:         query.dynamicRef(),
 		SortField:       query.Request.SortField,
 	}

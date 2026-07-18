@@ -326,12 +326,34 @@ func helmTableQueryAdapter() typedTableQueryAdapter[NamespaceHelmSummary] {
 	}
 }
 
+func eventQueryFacets[T any](eventType, reason, source func(T) string) []typedTableQueryFacet[T] {
+	return []typedTableQueryFacet[T]{
+		{
+			Descriptor: ResourceQueryFacetDescriptor{Key: "types", Label: "Type", Placeholder: "All types", BulkActions: true},
+			Value:      eventType,
+		},
+		{
+			Descriptor: ResourceQueryFacetDescriptor{Key: "reasons", Label: "Reason", Placeholder: "All reasons", Searchable: true, BulkActions: true},
+			Value:      reason,
+		},
+		{
+			Descriptor: ResourceQueryFacetDescriptor{Key: "sources", Label: "Source", Placeholder: "All sources", Searchable: true, BulkActions: true},
+			Value:      source,
+		},
+	}
+}
+
 func namespacedEventTableQueryAdapter() typedTableQueryAdapter[EventSummary] {
 	return typedTableQueryAdapter[EventSummary]{
 		Key:       func(row EventSummary) string { return namespacedTableKey("Event", row.Namespace, row.Name) },
 		AnchorKey: func(_, namespace, name string) string { return namespacedTableKey("Event", namespace, name) },
 		Namespace: func(row EventSummary) string { return row.Namespace },
 		Kind:      func(row EventSummary) string { return row.Kind },
+		Facets: eventQueryFacets(
+			func(row EventSummary) string { return row.Type },
+			func(row EventSummary) string { return row.Reason },
+			func(row EventSummary) string { return row.Source },
+		),
 		SearchText: func(row EventSummary) []string {
 			return []string{row.Kind, row.Name, row.Namespace, row.Type, row.Source, row.Reason, row.Object, row.Message}
 		},
@@ -376,10 +398,15 @@ func namespacedEventTableQueryAdapter() typedTableQueryAdapter[EventSummary] {
 
 func clusterEventTableQueryAdapter() typedTableQueryAdapter[ClusterEventEntry] {
 	return typedTableQueryAdapter[ClusterEventEntry]{
-		Key:       func(row ClusterEventEntry) string { return clusterTableKey("Event", row.Name) },
-		AnchorKey: func(_, _, name string) string { return clusterTableKey("Event", name) },
-		Namespace: func(ClusterEventEntry) string { return "" },
+		Key:       func(row ClusterEventEntry) string { return namespacedTableKey("Event", row.Namespace, row.Name) },
+		AnchorKey: func(_, namespace, name string) string { return namespacedTableKey("Event", namespace, name) },
+		Namespace: func(row ClusterEventEntry) string { return row.Namespace },
 		Kind:      func(row ClusterEventEntry) string { return row.Kind },
+		Facets: eventQueryFacets(
+			func(row ClusterEventEntry) string { return row.Type },
+			func(row ClusterEventEntry) string { return row.Reason },
+			func(row ClusterEventEntry) string { return row.Source },
+		),
 		SearchText: func(row ClusterEventEntry) []string {
 			return []string{row.Kind, row.Name, row.Type, row.Source, row.Reason, row.Object, row.Message}
 		},
@@ -440,6 +467,7 @@ func nodeTableQueryAdapter() typedTableQueryAdapter[NodeSummary] {
 		AnchorKey: func(_, _, name string) string { return clusterTableKey(nodespkg.Identity.Kind, name) },
 		Namespace: func(NodeSummary) string { return "" },
 		Kind:      func(NodeSummary) string { return nodespkg.Identity.Kind },
+		Facets:    nodeQueryFacets(),
 		SearchText: func(row NodeSummary) []string {
 			return []string{row.Name, row.Status, row.Roles, row.Version, row.InternalIP, row.ExternalIP}
 		},

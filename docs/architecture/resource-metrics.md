@@ -64,7 +64,7 @@ successful collections and would otherwise freeze the overview's
 object-derived counts on metrics-less clusters.
 
 Backend metrics-poller demand is any active lease on `cluster-overview`,
-`nodes`, `pods`, or `namespace-workloads`
+`namespaces`, `nodes`, `pods`, or `namespace-workloads`
 (`frontend/src/core/refresh/orchestrator.ts` `isMetricsDemandActive`).
 
 ## Design history and trade-offs
@@ -114,20 +114,27 @@ row-key round-trips.
   never stale or zero numbers.
 - Staleness is evaluated CLIENT-SIDE: the payloads' `metrics` block ships
   `staleAfterSeconds` alongside `collectedAt`, and `useMetricsBannerInfo`
-  flips the stale banner at that boundary on a local timer — never via a
-  refetch. This matters because the poller rings no doorbell on failure: a
-  dead metrics-server on a quiet cluster produces no refetch, so a
-  server-computed stale flag would never reach the screen. The server's
-  `stale` flag stays authoritative when set (the cluster-overview payload
-  carries no threshold and keeps server-stale-only behavior).
+  updates the app-level metrics status (and Cluster Overview's contextual
+  presentation) at that boundary on a local timer — never via a refetch. This
+  matters because the poller rings no doorbell on failure: a dead
+  metrics-server on a quiet cluster produces no refetch, so a server-computed
+  stale flag would never reach the screen. The server's `stale` flag stays
+  authoritative when set (the cluster-overview payload carries no threshold
+  and keeps server-stale-only behavior).
+- Metric-bearing table surfaces do not render availability banners. The app
+  header's metrics status is the single persistent availability indicator;
+  table CPU/memory cells still receive freshness, error, and last-updated
+  metadata for their value-level presentation. Cluster Overview may render its
+  own contextual metrics message because it summarizes cluster state rather
+  than duplicating a table-level warning.
 - The PRISTINE first-collection window has its own state: a payload with
   `successCount == 0`, no failures, and no error means the demand-driven
-  poller has started but nothing has been collected yet — the UI shows
-  "Collecting metrics…" (never zero gauges with no indication). Builders MUST
-  omit `collectedAt` for the zero time (`IsZero` guard) — serializing Go's
-  zero time as a Unix stamp (-62135596800) reads as "present" downstream and
-  suppresses the indication; the frontend additionally treats non-positive
-  `collectedAt` as absent.
+  poller has started but nothing has been collected yet — the metrics status
+  reports "Collecting metrics…" (never zero gauges with no indication).
+  Builders MUST omit `collectedAt` for the zero time (`IsZero` guard) —
+  serializing Go's zero time as a Unix stamp (-62135596800) reads as "present"
+  downstream and suppresses the indication; the frontend additionally treats
+  non-positive `collectedAt` as absent.
 - Object age is computed from timestamps by the frontend live-age contract and
   must not participate in metric refresh.
 
@@ -141,12 +148,17 @@ row-key round-trips.
 | ReplicaSet utilization | object-detail DTO exception |
 | Node utilization | `nodes` scoped payload rows |
 | Cluster aggregate utilization | `cluster-overview` scoped payload; out of scope for table metrics |
+| Namespace aggregate utilization | `namespaces` payload rows: usage joined from one poller sample at serve; requests and limits summed from active pod aggregate rows |
 | Pod / workload / node tables | ONE base-domain query per table; CPU/memory sorts run server-side on the joined usage |
 
 Tables read the freshness block from the query payload (`queryPayload.metrics`).
 The object panel's `useResourceMetrics` leases one scoped base domain per kind
 (`pods` namespace scope, `namespace-workloads` namespace scope, `nodes` cluster
 scope) and selects the object's row by full identity.
+
+Namespace request and limit totals sum regular-container values from
+non-terminal pods. Init-container values stay separate in the pod aggregate and
+are not included, matching the pod and namespace-workload table semantics.
 
 ## ReplicaSet Exception
 

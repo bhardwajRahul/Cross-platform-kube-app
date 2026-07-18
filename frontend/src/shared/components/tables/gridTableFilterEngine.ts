@@ -5,6 +5,7 @@ import type {
   GridTableFilterState,
   InternalFilterOptions,
 } from '@shared/components/tables/GridTable.types';
+import { isTableNoValueText } from '@shared/components/tables/tableNoValue';
 
 interface ResolveGridTableFilterAccessorsOptions<T> {
   accessors?: GridTableFilterAccessors<T>;
@@ -20,6 +21,7 @@ export function resolveGridTableFilterAccessors<T>({
   defaultGetSearchText,
 }: ResolveGridTableFilterAccessorsOptions<T>): GridTableFilterAccessors<T> {
   return {
+    getCluster: accessors?.getCluster,
     getKind: accessors?.getKind ?? ((row: T) => defaultGetKind(row) ?? null),
     getNamespace: accessors?.getNamespace ?? ((row: T) => defaultGetNamespace(row) ?? null),
     getSearchText: accessors?.getSearchText ?? ((row: T) => defaultGetSearchText(row)),
@@ -46,10 +48,12 @@ export function buildGridTableFilterOptions<T>({
   const baseOptions = {
     searchBehavior: options?.searchBehavior ?? 'local',
     searchPlaceholder: options?.searchPlaceholder,
-    kindDropdownSearchable: options?.kindDropdownSearchable ?? false,
-    kindDropdownBulkActions: options?.kindDropdownBulkActions ?? false,
     namespaceDropdownSearchable: options?.namespaceDropdownSearchable ?? false,
     namespaceDropdownBulkActions: options?.namespaceDropdownBulkActions ?? false,
+    clusterDropdownSearchable: options?.clusterDropdownSearchable ?? false,
+    clusterDropdownBulkActions: options?.clusterDropdownBulkActions ?? false,
+    beforeNamespaceActions: options?.beforeNamespaceActions,
+    queryFacets: options?.searchBehavior === 'query' ? (options.queryFacets ?? []) : [],
     preActions: options?.preActions,
     postActions: options?.postActions,
     customActions: options?.customActions,
@@ -62,6 +66,8 @@ export function buildGridTableFilterOptions<T>({
       ...baseOptions,
       kinds: [],
       namespaces: [],
+      clusters: [],
+      queryFacets: [],
     };
   }
 
@@ -115,8 +121,26 @@ export function buildGridTableFilterOptions<T>({
   const namespaces = collectOptions(
     options?.namespaces,
     (row) => accessors.getNamespace?.(row) ?? defaultGetNamespace(row),
-    (value) => (value === '—' ? '' : value)
+    (value) => (isTableNoValueText(value) ? '' : value)
   );
+  const clusterMap = new Map<string, DropdownOption>();
+  if (!queryBacked && options?.clusters?.length) {
+    for (const option of options.clusters) {
+      const value = option.value.trim();
+      if (!value) {
+        continue;
+      }
+      const key = value;
+      if (!clusterMap.has(key)) {
+        clusterMap.set(key, { ...option, value, label: option.label.trim() || value });
+      }
+    }
+  } else if (!queryBacked) {
+    for (const row of data) {
+      addOption(clusterMap, accessors.getCluster?.(row), (value) => value);
+    }
+  }
+  const clusters = Array.from(clusterMap.values()).sort((a, b) => a.label.localeCompare(b.label));
   const namespaceSeparator =
     clusterScopedOption && namespaces.length > 0
       ? ({
@@ -138,6 +162,7 @@ export function buildGridTableFilterOptions<T>({
     ...baseOptions,
     kinds,
     namespaces: namespaceOptions,
+    clusters,
   };
 }
 
@@ -170,16 +195,42 @@ export function applyGridTableFilters<T>({
     return data;
   }
 
+  if (
+    activeFilters.kinds.mode === 'none' ||
+    activeFilters.namespaces.mode === 'none' ||
+    activeFilters.clusters.mode === 'none'
+  ) {
+    return [];
+  }
+
   const searchNeedle = activeFilters.caseSensitive
     ? activeFilters.search.trim()
     : activeFilters.search.trim().toLowerCase();
   const shouldFilterSearch = searchNeedle.length > 0;
-  const kindSet = new Set(activeFilters.kinds.map((value) => value.toLowerCase()));
-  const namespaceSet = new Set(activeFilters.namespaces.map((value) => value.toLowerCase()));
-  const shouldFilterKinds = kindSet.size > 0;
-  const shouldFilterNamespaces = namespaceSet.size > 0;
+  const kindSet = new Set(
+    activeFilters.kinds.mode === 'some'
+      ? activeFilters.kinds.values.map((value) => value.toLowerCase())
+      : []
+  );
+  const namespaceSet = new Set(
+    activeFilters.namespaces.mode === 'some'
+      ? activeFilters.namespaces.values.map((value) => value.toLowerCase())
+      : []
+  );
+  const clusterSet = new Set(
+    activeFilters.clusters.mode === 'some' ? activeFilters.clusters.values : []
+  );
+  const shouldFilterKinds = activeFilters.kinds.mode === 'some';
+  const shouldFilterNamespaces = activeFilters.namespaces.mode === 'some';
+  const shouldFilterClusters = activeFilters.clusters.mode === 'some';
 
   return data.filter((row) => {
+    const clusterValueRaw = accessors.getCluster?.(row);
+    const clusterValue = typeof clusterValueRaw === 'string' ? clusterValueRaw.trim() : '';
+    if (shouldFilterClusters && (!clusterValue || !clusterSet.has(clusterValue))) {
+      return false;
+    }
+
     const kindValueRaw = accessors.getKind?.(row) ?? defaultGetKind(row);
     const kindValue = typeof kindValueRaw === 'string' ? kindValueRaw.trim() : '';
     if (shouldFilterKinds && (!kindValue || !kindSet.has(kindValue.toLowerCase()))) {
@@ -189,7 +240,7 @@ export function applyGridTableFilters<T>({
     const namespaceValueRaw = accessors.getNamespace?.(row) ?? defaultGetNamespace(row);
     const namespaceCandidate =
       typeof namespaceValueRaw === 'string' ? namespaceValueRaw.trim() : '';
-    const normalizedNamespace = namespaceCandidate === '—' ? '' : namespaceCandidate;
+    const normalizedNamespace = isTableNoValueText(namespaceCandidate) ? '' : namespaceCandidate;
 
     if (shouldFilterNamespaces && !namespaceSet.has(normalizedNamespace.toLowerCase())) {
       return false;

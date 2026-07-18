@@ -481,7 +481,7 @@ func (b *ClusterOverviewListBuilder) Build(ctx context.Context, scope string) (*
 		if pod == nil {
 			continue
 		}
-		podAggregates = append(podAggregates, projectPodAggregate(pod, rsLister))
+		podAggregates = append(podAggregates, projectPodAggregate(pod, PodOwnerSources{ReplicaSets: rsLister}))
 		if v := resourceVersionOrTimestamp(pod); v > podVersion {
 			podVersion = v
 		}
@@ -663,9 +663,7 @@ func buildClusterOverviewSnapshot(
 		overview.TotalInitContainers += agg.InitContainerCount
 
 		countPodStatusPresentation(&overview, agg.StatusPresentation)
-		// Not-ready signal: an unfinished pod (not Succeeded) whose containers are
-		// not all ready. Mirrors the prior podCountsAsNotReadySignal check.
-		if agg.Phase != string(corev1.PodSucceeded) && agg.TotalContainers > 0 && agg.ReadyContainers < agg.TotalContainers {
+		if podCountsAsNotReadySignal(agg.Phase, agg.ReadyContainers, agg.TotalContainers) {
 			overview.NotReadyPods++
 		}
 

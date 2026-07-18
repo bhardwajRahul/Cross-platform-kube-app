@@ -9,7 +9,8 @@ import type { BrowseTableRow } from '@modules/browse/hooks/useBrowseColumns';
 import { ALL_NAMESPACES_SCOPE } from '@modules/namespace/constants';
 import type { NamespaceGridTablePersistenceParams } from '@modules/namespace/hooks/useNamespaceGridTablePersistence';
 import { OBJECT_ACTION_IDS } from '@shared/actions/objectActionContract';
-import type { GridTableProps } from '@shared/components/tables/GridTable';
+import { ALL_MULTISELECT_FILTER } from '@shared/components/dropdowns/multiSelectFilterSelection';
+import type { GridTableFilterState, GridTableProps } from '@shared/components/tables/GridTable';
 import type { UseGridTablePersistenceParams } from '@shared/components/tables/persistence/useGridTablePersistence';
 import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
@@ -70,10 +71,20 @@ const persistenceArgsRef: {
   cluster: null,
   namespace: null,
 };
-const persistenceFiltersRef: {
-  current: { search: string; kinds: string[]; namespaces: string[]; caseSensitive: boolean };
-} = {
-  current: { search: '', kinds: [], namespaces: [], caseSensitive: false },
+const makePersistenceFilters = (
+  overrides: Partial<GridTableFilterState> = {}
+): GridTableFilterState => ({
+  search: '',
+  kinds: ALL_MULTISELECT_FILTER,
+  namespaces: ALL_MULTISELECT_FILTER,
+  clusters: ALL_MULTISELECT_FILTER,
+  caseSensitive: false,
+  includeMetadata: false,
+  ...overrides,
+});
+
+const persistenceFiltersRef: { current: GridTableFilterState } = {
+  current: makePersistenceFilters(),
 };
 
 vi.mock('@shared/components/tables/GridTable', async () => {
@@ -182,7 +193,9 @@ const persistenceMocks = vi.hoisted(() => ({
     } | null,
   },
   clusterSetSortConfig: vi.fn(),
+  clusterSetFilters: vi.fn(),
   namespaceOnSortChange: vi.fn(),
+  namespaceSetFilters: vi.fn(),
 }));
 
 vi.mock('@/core/refresh', () => ({
@@ -202,7 +215,7 @@ vi.mock('@shared/components/tables/persistence/useGridTablePersistence', () => (
       columnVisibility: null,
       setColumnVisibility: vi.fn(),
       filters: persistenceFiltersRef.current,
-      setFilters: vi.fn(),
+      setFilters: persistenceMocks.clusterSetFilters,
       pageSize: null,
       setPageSize: vi.fn(),
       resetState: vi.fn(),
@@ -225,7 +238,7 @@ vi.mock('@modules/namespace/hooks/useNamespaceGridTablePersistence', () => ({
       columnVisibility: null,
       setColumnVisibility: vi.fn(),
       filters: persistenceFiltersRef.current,
-      setFilters: vi.fn(),
+      setFilters: persistenceMocks.namespaceSetFilters,
       pageSize: null,
       setPageSize: vi.fn(),
       resetState: vi.fn(),
@@ -322,8 +335,10 @@ describe('BrowseView', () => {
     persistenceArgsRef.namespace = null;
     persistenceMocks.clusterSortConfig.current = { key: 'kind', direction: 'asc' };
     persistenceMocks.clusterSetSortConfig.mockReset();
+    persistenceMocks.clusterSetFilters.mockReset();
     persistenceMocks.namespaceOnSortChange.mockReset();
-    persistenceFiltersRef.current = { search: '', kinds: [], namespaces: [], caseSensitive: false };
+    persistenceMocks.namespaceSetFilters.mockReset();
+    persistenceFiltersRef.current = makePersistenceFilters();
   });
 
   afterEach(() => {
@@ -413,6 +428,40 @@ describe('BrowseView', () => {
       expect(sortableKeys()).toEqual(['age', 'kind', 'name']);
     });
 
+    it('shows API identity and available status alongside object identity', async () => {
+      const deployment = catalogItem({
+        kind: 'Deployment',
+        group: 'apps',
+        version: 'v1',
+        resource: 'deployments',
+        namespace: undefined,
+        name: 'api',
+        scope: 'Cluster',
+        actionFacts: { status: 'Available' },
+      });
+      refreshMocks.catalogDomain.status = 'ready';
+      refreshMocks.catalogDomain.scope =
+        'cluster-1|limit=50&resourceScope=cluster&namespace=cluster';
+      refreshMocks.catalogDomain.data = catalogPayload([deployment]);
+
+      await act(async () => {
+        root.render(<BrowseView />);
+        await Promise.resolve();
+      });
+
+      expect(gridTablePropsRef.current.data[0]).toEqual(
+        expect.objectContaining({ apiDisplay: 'apps/v1', statusDisplay: 'Available' })
+      );
+      expect(gridTablePropsRef.current.columns.map((column) => column.key)).toEqual([
+        'kind',
+        'name',
+        'api',
+        'status',
+        'age',
+      ]);
+      expect(sortableKeys()).toEqual(['age', 'kind', 'name']);
+    });
+
     it('renders Age from creationTimestamp and updates without catalog row replacement', async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date('2026-01-01T00:00:10Z'));
@@ -490,15 +539,6 @@ describe('BrowseView', () => {
 
       // Cluster scope only shows cluster-scoped objects, so namespace dropdown is hidden
       expect(gridTablePropsRef.current?.filters?.options?.showNamespaceDropdown).toBe(false);
-    });
-
-    it('enables kind dropdown bulk actions for browse filters', async () => {
-      await act(async () => {
-        root.render(<BrowseView namespace={undefined} />);
-        await Promise.resolve();
-      });
-
-      expect(gridTablePropsRef.current?.filters?.options?.kindDropdownBulkActions).toBe(true);
     });
 
     it('uses the cluster browse persistence id', async () => {
@@ -683,13 +723,92 @@ describe('BrowseView', () => {
       expect(gridTablePropsRef.current?.filters?.options?.showNamespaceDropdown).toBe(true);
     });
 
+    it('publishes API groups without a redundant resource-scope control or hidden filter', async () => {
+      persistenceFiltersRef.current = makePersistenceFilters({
+        queryFacets: { resourceScopes: { mode: 'some', values: ['Cluster'] } },
+      });
+      refreshMocks.catalogDomain.status = 'ready';
+      refreshMocks.catalogDomain.data = catalogPayload([], {
+        groups: ['(core)', 'apps'],
+        resourceScopes: ['Namespace'],
+      });
+
+      await act(async () => {
+        root.render(<BrowseView namespace={ALL_NAMESPACES_SCOPE} />);
+        await Promise.resolve();
+      });
+
+      expect(gridTablePropsRef.current?.filters?.options?.queryFacets).toEqual([
+        {
+          key: 'apiGroups',
+          label: 'API groups',
+          placeholder: 'All API groups',
+          options: [
+            { value: '(core)', label: 'core' },
+            { value: 'apps', label: 'apps' },
+          ],
+          searchable: true,
+          bulkActions: true,
+          placement: 'before-kinds',
+          invalidates: ['kinds'],
+        },
+      ]);
+      expect(persistenceArgsRef.cluster?.filterOptions?.queryFacets).toEqual({ apiGroups: [] });
+      expect(refreshMocks.orchestrator.fetchScopedDomain).toHaveBeenCalled();
+      for (const [, scope] of refreshMocks.orchestrator.fetchScopedDomain.mock.calls) {
+        expect(scope).not.toContain('resourceScopeFilter');
+      }
+    });
+
+    it('prunes a persisted Kind that is unavailable in the selected API groups', async () => {
+      persistenceFiltersRef.current = makePersistenceFilters({
+        kinds: { mode: 'some', values: ['Pod'] },
+        queryFacets: { apiGroups: { mode: 'some', values: ['apps'] } },
+      });
+      refreshMocks.catalogDomain.status = 'ready';
+      refreshMocks.catalogDomain.data = catalogPayload([], {
+        kinds: [{ kind: 'Deployment', namespaced: true }],
+        groups: ['(core)', 'apps'],
+      });
+
+      await act(async () => {
+        root.render(<BrowseView namespace={ALL_NAMESPACES_SCOPE} />);
+        await Promise.resolve();
+      });
+
+      expect(persistenceMocks.clusterSetFilters).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kinds: ALL_MULTISELECT_FILTER,
+          queryFacets: { apiGroups: { mode: 'some', values: ['apps'] } },
+        })
+      );
+    });
+
+    it('retains a persisted Kind that is available in the selected API groups', async () => {
+      persistenceFiltersRef.current = makePersistenceFilters({
+        kinds: { mode: 'some', values: ['Deployment'] },
+        queryFacets: { apiGroups: { mode: 'some', values: ['apps'] } },
+      });
+      refreshMocks.catalogDomain.status = 'ready';
+      refreshMocks.catalogDomain.data = catalogPayload([], {
+        kinds: [{ kind: 'Deployment', namespaced: true }],
+        groups: ['(core)', 'apps'],
+      });
+
+      await act(async () => {
+        root.render(<BrowseView namespace={ALL_NAMESPACES_SCOPE} />);
+        await Promise.resolve();
+      });
+
+      expect(persistenceMocks.clusterSetFilters).not.toHaveBeenCalled();
+    });
+
     it('keeps kind and namespace filter options stable while active browse filters change', async () => {
-      persistenceFiltersRef.current = {
+      persistenceFiltersRef.current = makePersistenceFilters({
         search: 'api',
-        kinds: ['Pod'],
-        namespaces: ['default'],
-        caseSensitive: false,
-      };
+        kinds: { mode: 'some', values: ['Pod'] },
+        namespaces: { mode: 'some', values: ['default'] },
+      });
       refreshMocks.scopedDomains.set(
         'cluster-1|limit=50&resourceScope=namespace&search=api&kind=Pod&namespace=default',
         {
@@ -729,6 +848,39 @@ describe('BrowseView', () => {
   });
 
   describe('Row cap UI', () => {
+    it('omits the pagination footer when the exact result has 25 items', async () => {
+      refreshMocks.catalogDomain.scope =
+        'cluster-1|limit=50&resourceScope=cluster&namespace=cluster';
+      refreshMocks.catalogDomain.data = {
+        items: [
+          {
+            uid: '1',
+            kind: 'Node',
+            name: 'node-a',
+            namespace: null,
+            scope: 'Cluster',
+            resource: 'nodes',
+            group: '',
+            version: 'v1',
+            resourceVersion: '1',
+            creationTimestamp: new Date().toISOString(),
+            clusterId: 'cluster-1',
+          },
+        ],
+        continue: '',
+        batchSize: 25,
+        total: 25,
+      };
+      refreshMocks.catalogDomain.status = 'ready';
+
+      await act(async () => {
+        root.render(<BrowseView namespace={undefined} />);
+        await Promise.resolve();
+      });
+
+      expect(gridTablePropsRef.current.paginationControls).toBeNull();
+    });
+
     it('renders query pagination in the table footer with the filter-feedback banner enabled', async () => {
       refreshMocks.catalogDomain.scope =
         'cluster-1|limit=50&resourceScope=cluster&namespace=cluster';
@@ -766,7 +918,7 @@ describe('BrowseView', () => {
         )
       ).toBe(false);
       expect(gridTablePropsRef.current.filters.options.customActions).toBeUndefined();
-      // Pagination totals live in the footer; the filter bar's "showing N of M due to filters"
+      // Pagination totals live in the footer; the filter chip's "Showing N of M items"
       // banner renders only while a narrowing filter is active (complementary, not
       // a duplicate top count) — consistent with every other view.
       expect(gridTablePropsRef.current.paginationControls?.props).toMatchObject({

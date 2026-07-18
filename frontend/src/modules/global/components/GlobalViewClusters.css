@@ -1,0 +1,14 @@
+.global-clusters {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.global-clusters .gridtable-container {
+  position: relative;
+  inset: auto;
+  flex: 1;
+  min-height: 0;
+}

@@ -36,6 +36,12 @@ export type ResourceQueryCompleteness = 'complete' | 'partial';
 
 export type NamespaceScopeStatus = 'not-found' | 'no-access';
 
+export type NamespaceSignalState = 'available' | 'loading' | 'unavailable';
+
+export type NamespaceQuotaPressure = '' | 'warning' | 'critical';
+
+export type AttentionSeverity = 'info' | 'warning' | 'error';
+
 export type ResourceQueryAnchorReason = 'filtered' | 'not-found';
 
 export type ResourceSource = 'kubernetes' | 'synthetic';
@@ -62,13 +68,48 @@ export const RESOURCE_STREAM_MESSAGE_TYPES = [
 
 export type ResourceStreamMessageType = (typeof RESOURCE_STREAM_MESSAGE_TYPES)[number];
 
-export const RESOURCE_STREAM_SOURCES = ['object', 'metric', 'event', 'catalog'] as const;
+export const RESOURCE_STREAM_SOURCES = [
+  'object',
+  'metric',
+  'event',
+  'catalog',
+  'attention',
+] as const;
 
 export type ResourceStreamSource = (typeof RESOURCE_STREAM_SOURCES)[number];
 
 export const RESOURCE_STREAM_SIGNALS = ['changed', 'reset', 'error'] as const;
 
 export type ResourceStreamSignal = (typeof RESOURCE_STREAM_SIGNALS)[number];
+
+export interface AttentionCause {
+  type: string;
+  label: string;
+  message: string;
+  severity: AttentionSeverity;
+}
+
+export interface AttentionFindingTypeDefinition {
+  id: string;
+  label: string;
+}
+
+export interface AttentionIgnoreRules {
+  objectFindings: Array<AttentionObjectFindingIgnore> | null;
+  clusterFindingTypes: Array<string> | null;
+  globalFindingTypes: Array<string> | null;
+}
+
+export interface AttentionObjectFindingIgnore {
+  ref: ResourceRef;
+  findingType: string;
+}
+
+export interface AttentionSeverityCounts {
+  info: number;
+  warning: number;
+  error: number;
+}
 
 export interface CatalogActionFacts {
   status?: string;
@@ -121,6 +162,8 @@ export interface CatalogSnapshotPayload {
   resourceCount: number;
   kinds?: Array<KindInfo>;
   namespaces?: Array<string>;
+  groups?: Array<string>;
+  resourceScopes?: Array<CatalogItemScope>;
   facetsExact: boolean;
   issues?: Array<ResourceQueryIssue>;
   hasNext: boolean;
@@ -131,6 +174,49 @@ export interface CatalogSnapshotPayload {
   totalBatches: number;
   isFinal: boolean;
   firstBatchLatencyMs?: number;
+}
+
+export interface ClusterAttentionFinding {
+  clusterId: string;
+  clusterName: string;
+  ref: ResourceRef;
+  kind: string;
+  name: string;
+  namespace?: string;
+  severity: AttentionSeverity;
+  status: string;
+  causes: Array<AttentionCause> | null;
+  age: string;
+  ageTimestamp?: number;
+}
+
+export interface ClusterAttentionSnapshot {
+  clusterId: string;
+  clusterName: string;
+  provider: ResourceQueryProvider;
+  table: string;
+  queryIdentity?: string;
+  continue?: string;
+  previous?: string;
+  self?: string;
+  cursorInvalid?: boolean;
+  anchor?: ResourceQueryAnchorResult;
+  pageStartRank?: number;
+  total: number;
+  unfilteredTotal: number;
+  totalIsExact: boolean;
+  kinds?: Array<string>;
+  namespaces?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
+  facetsExact: boolean;
+  completeness?: ResourceQueryCompleteness;
+  issues?: Array<ResourceQueryIssue>;
+  dynamic?: ResourceQueryDynamicRef;
+  capabilities: ResourceQueryCapabilities;
+  severityCounts: AttentionSeverityCounts;
+  ignoreRules: AttentionIgnoreRules;
+  findingTypes: Array<AttentionFindingTypeDefinition> | null;
+  rows: Array<ClusterAttentionFinding> | null;
 }
 
 export interface ClusterCRDEntry {
@@ -165,8 +251,7 @@ export interface ClusterCRDSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -203,8 +288,7 @@ export interface ClusterConfigSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -277,8 +361,7 @@ export interface ClusterEventsSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -342,8 +425,7 @@ export interface ClusterNodeSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -443,8 +525,7 @@ export interface ClusterRBACSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -487,8 +568,7 @@ export interface ClusterStorageSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -569,8 +649,7 @@ export interface NamespaceAutoscalingSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -611,8 +690,7 @@ export interface NamespaceConfigSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -698,8 +776,7 @@ export interface NamespaceEventsSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -725,8 +802,7 @@ export interface NamespaceHelmSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -770,8 +846,7 @@ export interface NamespaceNetworkSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -822,8 +897,7 @@ export interface NamespaceQuotasSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -849,8 +923,7 @@ export interface NamespaceRBACSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -874,6 +947,8 @@ export interface NamespaceSnapshotPayload {
   clusterId: string;
   clusterName: string;
   namespaces: Array<NamespaceSummary> | null;
+  metrics: PodMetricsInfo;
+  metricsState: NamespaceSignalState;
 }
 
 export interface NamespaceStorageSnapshotPayload {
@@ -893,8 +968,7 @@ export interface NamespaceStorageSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -933,6 +1007,19 @@ export interface NamespaceSummary {
   creationTimestamp: number;
   hasWorkloads: boolean;
   workloadsUnknown?: boolean;
+  unhealthyWorkloads?: number;
+  warningEvents?: number;
+  warningEventsState: NamespaceSignalState;
+  cpuUsageMilli?: number;
+  cpuRequestsMilli?: number;
+  cpuLimitsMilli?: number;
+  memoryUsageBytes?: number;
+  memoryRequestsBytes?: number;
+  memoryLimitsBytes?: number;
+  quotaCount?: number;
+  quotaHighestUsedPercentage?: number;
+  quotaPressure?: NamespaceQuotaPressure;
+  quotaPressureState: NamespaceSignalState;
   scopeStatus?: NamespaceScopeStatus;
 }
 
@@ -953,8 +1040,7 @@ export interface NamespaceWorkloadSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -1213,8 +1299,7 @@ export interface PodSnapshotPayload {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
@@ -1309,6 +1394,7 @@ export interface ResourceQueryCapabilities {
   filterableFields?: Array<string>;
   searchableFields?: Array<string>;
   kindVocabulary?: Array<string>;
+  queryFacets?: Array<ResourceQueryFacetDescriptor>;
 }
 
 export interface ResourceQueryDynamicRef {
@@ -1332,13 +1418,31 @@ export interface ResourceQueryEnvelopeFields {
   totalIsExact: boolean;
   kinds?: Array<string>;
   namespaces?: Array<string>;
-  statuses?: Array<string>;
-  nodes?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
   facetsExact: boolean;
   completeness?: ResourceQueryCompleteness;
   issues?: Array<ResourceQueryIssue>;
   dynamic?: ResourceQueryDynamicRef;
   capabilities: ResourceQueryCapabilities;
+}
+
+export interface ResourceQueryFacetDescriptor {
+  key: string;
+  label: string;
+  placeholder: string;
+  searchable: boolean;
+  bulkActions: boolean;
+}
+
+export interface ResourceQueryFacetOption {
+  value: string;
+  label: string;
+}
+
+export interface ResourceQueryFacetValues {
+  key: string;
+  options: Array<ResourceQueryFacetOption> | null;
+  exact: boolean;
 }
 
 export interface ResourceQueryIssue {
@@ -1359,6 +1463,8 @@ export interface ResourceQueryRequest {
   scope?: ResourceQueryScope;
   namespaces?: Array<string>;
   kinds?: Array<string>;
+  facets?: Record<string, Array<string> | null>;
+  matchNone?: boolean;
   search?: string;
   includeMetadata?: boolean;
   predicates?: Array<ResourceQueryPredicate>;
@@ -1566,6 +1672,7 @@ export type ClusterNodeRow = ClusterNodeSnapshotEntry;
 export const REFRESH_DOMAINS = [
   'namespaces',
   'cluster-overview',
+  'cluster-attention',
   'catalog',
   'catalog-diff',
   'nodes',
@@ -1823,6 +1930,7 @@ export function assertTelemetrySummary(value: unknown): asserts value is Telemet
 export interface BackendDomainPayloadMap {
   namespaces: NamespaceSnapshotPayload;
   'cluster-overview': ClusterOverviewSnapshotPayload;
+  'cluster-attention': ClusterAttentionSnapshot;
   catalog: CatalogSnapshotPayload;
   'catalog-diff': CatalogSnapshotPayload;
   nodes: ClusterNodeSnapshotPayload;

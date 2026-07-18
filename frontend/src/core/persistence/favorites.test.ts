@@ -27,8 +27,7 @@ const makeFavorite = (overrides: Partial<Favorite> = {}): Favorite => ({
   viewType: 'namespace',
   view: 'workloads',
   namespace: 'default',
-  filters: null,
-  tableState: null,
+  panes: {},
   order: 0,
   ...overrides,
 });
@@ -70,6 +69,65 @@ describe('favorites persistence', () => {
     expect(mockApp.GetFavorites).toHaveBeenCalledTimes(1);
     expect(result).toEqual(favs);
     expect(getFavorites()).toEqual(favs);
+  });
+
+  it('preserves explicit empty filter selections across the backend adapter', async () => {
+    const favorite = makeFavorite({
+      panes: {
+        main: {
+          filters: {
+            search: '',
+            kinds: { mode: 'none' },
+            namespaces: { mode: 'all' },
+            clusters: { mode: 'some', values: ['cluster-a'] },
+            queryFacets: { apiGroups: { mode: 'none' } },
+            caseSensitive: false,
+            includeMetadata: false,
+          },
+          tableState: { sortColumn: 'name', sortDirection: 'asc', columnVisibility: {} },
+        },
+      },
+    });
+    mockApp.GetFavorites.mockResolvedValue([favorite]);
+
+    const hydratedFavorites = await hydrateFavorites();
+
+    expect(hydratedFavorites[0]?.panes).toEqual(favorite.panes);
+  });
+
+  it('preserves both Workloads panes across the backend adapter', async () => {
+    const favorite = makeFavorite({
+      panes: {
+        workloads: {
+          filters: {
+            search: 'api',
+            kinds: { mode: 'some', values: ['Deployment'] },
+            namespaces: { mode: 'all' },
+            clusters: { mode: 'all' },
+            caseSensitive: true,
+            includeMetadata: false,
+          },
+          tableState: { sortColumn: 'name', sortDirection: 'asc', columnVisibility: {} },
+        },
+        pods: {
+          filters: {
+            search: '',
+            kinds: { mode: 'all' },
+            namespaces: { mode: 'all' },
+            clusters: { mode: 'all' },
+            queryFacets: { owners: { mode: 'none' } },
+            caseSensitive: false,
+            includeMetadata: false,
+          },
+          tableState: { sortColumn: 'node', sortDirection: 'desc', columnVisibility: {} },
+        },
+      },
+    });
+    mockApp.GetFavorites.mockResolvedValue([favorite]);
+
+    const hydratedFavorites = await hydrateFavorites();
+
+    expect(hydratedFavorites[0]?.panes).toEqual(favorite.panes);
   });
 
   // Test 2: second hydrateFavorites call returns cached data without re-fetching
@@ -119,9 +177,7 @@ describe('favorites persistence', () => {
 
     const result = await addFavorite(input);
 
-    expect(mockApp.AddFavorite).toHaveBeenCalledWith(
-      new backend.Favorite({ ...input, filters: undefined, tableState: undefined })
-    );
+    expect(mockApp.AddFavorite).toHaveBeenCalledWith(new backend.Favorite({ ...input }));
     expect(result).toEqual(created);
     expect(getFavorites()).toEqual([created]);
   });
@@ -151,9 +207,7 @@ describe('favorites persistence', () => {
 
     await updateFavorite(updated);
 
-    expect(mockApp.UpdateFavorite).toHaveBeenCalledWith(
-      new backend.Favorite({ ...updated, filters: undefined, tableState: undefined })
-    );
+    expect(mockApp.UpdateFavorite).toHaveBeenCalledWith(new backend.Favorite({ ...updated }));
     expect(getFavorites()[0].name).toBe('New Name');
   });
 

@@ -15,7 +15,12 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 
+	"github.com/luxury-yacht/app/backend/kind/objectmap"
+	"github.com/luxury-yacht/app/backend/kind/objectmapnode"
+	"github.com/luxury-yacht/app/backend/kind/streamrows"
+	"github.com/luxury-yacht/app/backend/objectcatalog"
 	"github.com/luxury-yacht/app/backend/refresh/domain"
+	"github.com/luxury-yacht/app/backend/refresh/metrics"
 	"github.com/luxury-yacht/app/backend/testsupport"
 	"github.com/stretchr/testify/require"
 )
@@ -52,6 +57,190 @@ func TestNamespaceBuilderSortsByName(t *testing.T) {
 			t.Fatalf("expected namespace status projection for %s, got state=%q presentation=%q", ns.Name, ns.StatusState, ns.StatusPresentation)
 		}
 	}
+}
+
+func TestNamespaceBuilderRollsUpWarningEventsByNamespace(t *testing.T) {
+	nsAlpha := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha", ResourceVersion: "1"}}
+	nsBeta := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta", ResourceVersion: "2"}}
+	builder := &NamespaceBuilder{
+		namespaces: testsupport.NewNamespaceLister(t, nsAlpha, nsBeta),
+		eventLister: testsupport.NewEventLister(t,
+			&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "warning-alpha"}, InvolvedObject: corev1.ObjectReference{Namespace: "alpha"}, Type: corev1.EventTypeWarning},
+			&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "normal-alpha"}, InvolvedObject: corev1.ObjectReference{Namespace: "alpha"}, Type: corev1.EventTypeNormal},
+			&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "warning-beta"}, InvolvedObject: corev1.ObjectReference{Namespace: "beta"}, Type: corev1.EventTypeWarning},
+			&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "warning-cluster"}, Type: corev1.EventTypeWarning},
+		),
+		eventsExpected: true,
+		eventsSynced:   func() bool { return true },
+	}
+
+	snap, err := builder.Build(context.Background(), "")
+	require.NoError(t, err)
+	payload := snap.Payload.(NamespaceSnapshot)
+	require.Len(t, payload.Namespaces, 2)
+	require.Equal(t, 1, payload.Namespaces[0].WarningEvents)
+	require.Equal(t, NamespaceSignalAvailable, payload.Namespaces[0].WarningEventsState)
+	require.Equal(t, 1, payload.Namespaces[1].WarningEvents)
+	require.Equal(t, NamespaceSignalAvailable, payload.Namespaces[1].WarningEventsState)
+}
+
+func TestNamespaceBuilderWarningEventStateDistinguishesWarmingAndUnavailable(t *testing.T) {
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha", ResourceVersion: "1"}}
+	synced := false
+	builder := &NamespaceBuilder{
+		namespaces:     testsupport.NewNamespaceLister(t, namespace),
+		eventLister:    testsupport.NewEventLister(t),
+		eventsExpected: true,
+		eventsSynced:   func() bool { return synced },
+	}
+
+	warming, err := builder.Build(context.Background(), "")
+	require.NoError(t, err)
+	warmingPayload := warming.Payload.(NamespaceSnapshot)
+	require.Equal(t, NamespaceSignalLoading, warmingPayload.Namespaces[0].WarningEventsState)
+
+	synced = true
+	available, err := builder.Build(context.Background(), "")
+	require.NoError(t, err)
+	availablePayload := available.Payload.(NamespaceSnapshot)
+	require.Equal(t, NamespaceSignalAvailable, availablePayload.Namespaces[0].WarningEventsState)
+	require.NotEqual(t, warming.SourceVersions["warning-events"], available.SourceVersions["warning-events"])
+
+	builder.eventsExpected = false
+	unavailable, err := builder.Build(context.Background(), "")
+	require.NoError(t, err)
+	unavailablePayload := unavailable.Payload.(NamespaceSnapshot)
+	require.Equal(t, NamespaceSignalUnavailable, unavailablePayload.Namespaces[0].WarningEventsState)
+}
+
+func TestNamespaceBuilderRollsUpUtilizationAndQuotaPressure(t *testing.T) {
+	nsAlpha := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha", ResourceVersion: "1"}}
+	nsBeta := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta", ResourceVersion: "2"}}
+	collectedAt := time.Unix(1700000000, 42)
+	ingestSource := fakePodAggregateSource{}.withQuotaAggregates(
+		streamrows.ResourceQuotaAggregate{Namespace: "alpha", HighestUsedPercentage: 75},
+		streamrows.ResourceQuotaAggregate{Namespace: "alpha", HighestUsedPercentage: 92},
+		streamrows.ResourceQuotaAggregate{Namespace: "beta", HighestUsedPercentage: 110},
+	)
+	builder := &NamespaceBuilder{
+		namespaces: testsupport.NewNamespaceLister(t, nsAlpha, nsBeta),
+		ingest:     ingestSource,
+		metrics: fakeMetricsProvider{
+			podUsage: map[string]metrics.PodUsage{
+				"alpha/api-0": {CPUUsageMilli: 125, MemoryUsageBytes: 64 * 1024 * 1024},
+				"alpha/api-1": {CPUUsageMilli: 75, MemoryUsageBytes: 32 * 1024 * 1024},
+				"beta/job-0":  {CPUUsageMilli: 50, MemoryUsageBytes: 16 * 1024 * 1024},
+			},
+			metadata: metrics.Metadata{CollectedAt: collectedAt, SuccessCount: 1},
+		},
+	}
+
+	snap, err := builder.Build(context.Background(), "")
+	require.NoError(t, err)
+	payload := snap.Payload.(NamespaceSnapshot)
+	require.Equal(t, NamespaceSignalAvailable, payload.MetricsState)
+	require.Equal(t, collectedAt.Unix(), payload.Metrics.CollectedAt)
+	require.Equal(t, "1700000000000000042", snap.SourceVersions["metric"])
+	require.Equal(t, "alpha", payload.Namespaces[0].Name)
+	require.Equal(t, int64(200), payload.Namespaces[0].CPUUsageMilli)
+	require.Equal(t, int64(96*1024*1024), payload.Namespaces[0].MemoryUsageBytes)
+	require.Equal(t, 2, payload.Namespaces[0].QuotaCount)
+	require.Equal(t, 92, payload.Namespaces[0].QuotaHighestUsedPercentage)
+	require.Equal(t, NamespaceQuotaPressureWarning, payload.Namespaces[0].QuotaPressure)
+	require.Equal(t, NamespaceSignalAvailable, payload.Namespaces[0].QuotaPressureState)
+	require.Equal(t, NamespaceQuotaPressureCritical, payload.Namespaces[1].QuotaPressure)
+}
+
+func TestNamespaceBuilderRollsUpActivePodReservationsByNamespace(t *testing.T) {
+	nsAlpha := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha", ResourceVersion: "1"}}
+	nsBeta := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta", ResourceVersion: "2"}}
+	builder := &NamespaceBuilder{
+		namespaces: testsupport.NewNamespaceLister(t, nsAlpha, nsBeta),
+		ingest: fakePodAggregateSource{aggregates: []streamrows.PodAggregate{
+			{
+				Namespace:           "alpha",
+				Name:                "api-0",
+				Phase:               string(corev1.PodRunning),
+				CPURequestMilli:     100,
+				CPULimitMilli:       250,
+				MemRequestBytes:     64 * 1024 * 1024,
+				MemLimitBytes:       128 * 1024 * 1024,
+				InitCPURequestMilli: 900,
+				InitCPULimitMilli:   900,
+				InitMemRequestBytes: 900 * 1024 * 1024,
+				InitMemLimitBytes:   900 * 1024 * 1024,
+			},
+			{
+				Namespace:       "alpha",
+				Name:            "api-1",
+				Phase:           string(corev1.PodPending),
+				CPURequestMilli: 200,
+				CPULimitMilli:   400,
+				MemRequestBytes: 96 * 1024 * 1024,
+				MemLimitBytes:   256 * 1024 * 1024,
+			},
+			{
+				Namespace:       "alpha",
+				Name:            "completed",
+				Phase:           string(corev1.PodSucceeded),
+				CPURequestMilli: 10_000,
+				CPULimitMilli:   10_000,
+				MemRequestBytes: 10_000 * 1024 * 1024,
+				MemLimitBytes:   10_000 * 1024 * 1024,
+			},
+			{
+				Namespace:       "beta",
+				Name:            "worker",
+				Phase:           string(corev1.PodRunning),
+				CPURequestMilli: 50,
+				CPULimitMilli:   75,
+				MemRequestBytes: 32 * 1024 * 1024,
+				MemLimitBytes:   48 * 1024 * 1024,
+			},
+		}},
+	}
+
+	snap, err := builder.Build(context.Background(), "")
+	require.NoError(t, err)
+	payload := snap.Payload.(NamespaceSnapshot)
+	require.Equal(t, int64(300), payload.Namespaces[0].CPURequestsMilli)
+	require.Equal(t, int64(650), payload.Namespaces[0].CPULimitsMilli)
+	require.Equal(t, int64(160*1024*1024), payload.Namespaces[0].MemoryRequestsBytes)
+	require.Equal(t, int64(384*1024*1024), payload.Namespaces[0].MemoryLimitsBytes)
+	require.Equal(t, int64(50), payload.Namespaces[1].CPURequestsMilli)
+	require.Equal(t, int64(75), payload.Namespaces[1].CPULimitsMilli)
+	require.Equal(t, int64(32*1024*1024), payload.Namespaces[1].MemoryRequestsBytes)
+	require.Equal(t, int64(48*1024*1024), payload.Namespaces[1].MemoryLimitsBytes)
+}
+
+func TestNamespaceBuilderAggregateStatesDistinguishLoadingAndUnavailable(t *testing.T) {
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha", ResourceVersion: "1"}}
+	quotaSource := fakePodAggregateSource{quotaTracked: true}
+	builder := &NamespaceBuilder{
+		namespaces: testsupport.NewNamespaceLister(t, namespace),
+		ingest:     quotaSource,
+		metrics:    fakeMetricsProvider{},
+	}
+
+	warming, err := builder.Build(context.Background(), "")
+	require.NoError(t, err)
+	warmingPayload := warming.Payload.(NamespaceSnapshot)
+	require.Equal(t, NamespaceSignalLoading, warmingPayload.MetricsState)
+	require.Equal(t, NamespaceSignalLoading, warmingPayload.Namespaces[0].QuotaPressureState)
+
+	builder.metrics = fakeMetricsProvider{metadata: metrics.Metadata{FailureCount: 1, LastError: "metrics request failed"}}
+	failed, err := builder.Build(context.Background(), "")
+	require.NoError(t, err)
+	failedPayload := failed.Payload.(NamespaceSnapshot)
+	require.Equal(t, NamespaceSignalUnavailable, failedPayload.MetricsState)
+
+	builder.metrics = fakeMetricsProvider{metadata: metrics.Metadata{Disabled: true, LastError: "metrics unavailable"}}
+	builder.ingest = quotaSource.withPermissionSkipped(ResourceQuotaGVR)
+	unavailable, err := builder.Build(context.Background(), "")
+	require.NoError(t, err)
+	unavailablePayload := unavailable.Payload.(NamespaceSnapshot)
+	require.Equal(t, NamespaceSignalUnavailable, unavailablePayload.MetricsState)
+	require.Equal(t, NamespaceSignalUnavailable, unavailablePayload.Namespaces[0].QuotaPressureState)
 }
 
 func TestNamespaceBuilderScopePayloadIdentityAndCatalogProjectionContract(t *testing.T) {
@@ -145,6 +334,70 @@ func TestNamespaceBuilderReportsWorkloadsFromSyncedIngestStore(t *testing.T) {
 	if summary.Status != "Active" || summary.StatusState != "Active" || summary.StatusPresentation != "ready" {
 		t.Fatalf("expected shared namespace status projection, got %#v", summary)
 	}
+}
+
+func TestNamespaceBuilderReportsUnhealthyWorkloadsWithoutDoubleCountingOwnedPods(t *testing.T) {
+	tracker := newNamespaceWorkloadTracker()
+	tracker.synced.Store(true)
+
+	source := fakePodAggregateSource{
+		aggregates: []streamrows.PodAggregate{
+			{Namespace: "alpha", Name: "standalone-bad", Phase: string(corev1.PodRunning), StatusPresentation: "warning"},
+			{Namespace: "alpha", Name: "owned-bad", Phase: string(corev1.PodRunning), OwnerKey: "Deployment/alpha/web", StatusPresentation: "error"},
+			{Namespace: "alpha", Name: "terminal-bad", Phase: string(corev1.PodFailed), StatusPresentation: "error"},
+			{Namespace: "beta", Name: "standalone-good", Phase: string(corev1.PodRunning), StatusPresentation: "ready"},
+		},
+		workloadObjects: map[schema.GroupVersionResource][]objectmapnode.Node{
+			DeploymentGVR: {
+				{Namespace: "alpha", Name: "web", Status: &objectmap.Status{Presentation: "warning"}},
+			},
+			StatefulSetGVR: {
+				{Namespace: "alpha", Name: "db", Status: &objectmap.Status{Presentation: "ready"}},
+			},
+			JobGVR: {
+				{Namespace: "beta", Name: "import", Status: &objectmap.Status{Presentation: "error"}},
+			},
+		},
+	}
+	builder := &NamespaceBuilder{
+		namespaces: testsupport.NewNamespaceLister(t,
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha", ResourceVersion: "1"}},
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta", ResourceVersion: "2"}},
+		),
+		ingest:  source,
+		tracker: tracker,
+	}
+
+	snap, err := builder.Build(context.Background(), "")
+	require.NoError(t, err)
+	payload := snap.Payload.(NamespaceSnapshot)
+	require.Equal(t, 2, payload.Namespaces[0].UnhealthyWorkloads)
+	require.Equal(t, 1, payload.Namespaces[1].UnhealthyWorkloads)
+}
+
+func TestNamespaceBuilderWorkloadHealthChangesSourceVersion(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha", ResourceVersion: "1"}}
+	buildVersion := func(presentation string) string {
+		tracker := newNamespaceWorkloadTracker()
+		tracker.synced.Store(true)
+		builder := &NamespaceBuilder{
+			namespaces: testsupport.NewNamespaceLister(t, ns),
+			ingest: fakePodAggregateSource{
+				workloadCatalog: map[schema.GroupVersionResource][]interface{}{
+					DeploymentGVR: {objectcatalog.Summary{Namespace: "alpha", Name: "web"}},
+				},
+				workloadObjects: map[schema.GroupVersionResource][]objectmapnode.Node{
+					DeploymentGVR: {{Namespace: "alpha", Name: "web", Status: &objectmap.Status{Presentation: presentation}}},
+				},
+			},
+			tracker: tracker,
+		}
+		snap, err := builder.Build(context.Background(), "")
+		require.NoError(t, err)
+		return snap.SourceVersions["workloads"]
+	}
+
+	require.NotEqual(t, buildVersion("ready"), buildVersion("warning"))
 }
 
 func TestNamespaceBuilderDoesNotDimWhenTrackerMissesButIngestHasWorkloads(t *testing.T) {
@@ -322,6 +575,26 @@ func TestNamespaceBuilderWorkloadPresenceChangesSourceVersion(t *testing.T) {
 	}
 }
 
+func TestNamespaceBuilderPodReservationChangesSourceVersion(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha", ResourceVersion: "1"}}
+	workloadsSourceVersion := func(cpuRequestMilli int64) string {
+		builder := &NamespaceBuilder{
+			namespaces: testsupport.NewNamespaceLister(t, ns),
+			ingest: fakePodAggregateSource{aggregates: []streamrows.PodAggregate{{
+				Namespace:       "alpha",
+				Name:            "api-0",
+				Phase:           string(corev1.PodRunning),
+				CPURequestMilli: cpuRequestMilli,
+			}}},
+		}
+		snap, err := builder.Build(context.Background(), "")
+		require.NoError(t, err)
+		return snap.SourceVersions["workloads"]
+	}
+
+	require.NotEqual(t, workloadsSourceVersion(100), workloadsSourceVersion(200))
+}
+
 func TestNamespaceBuilderWorkloadSyncReadinessChangesSourceVersion(t *testing.T) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha", ResourceVersion: "1"}}
 	workloadsSourceVersion := func(source fakePodAggregateSource, cancelBeforeBuild bool) string {
@@ -438,7 +711,7 @@ func TestRegisterNamespaceDomainScopedDoesNotTouchNamespaceInformer(t *testing.T
 	// the scoped registration must never instantiate the namespaces informer.
 	// Passing a nil factory proves it: any touch would panic.
 	reg := domain.New()
-	notifier, err := RegisterNamespaceDomain(reg, nil, nil, []string{"prod"}, nil)
+	notifier, err := RegisterNamespaceDomain(reg, nil, nil, nil, []string{"prod"}, nil, false)
 	require.NoError(t, err)
 	require.NotNil(t, notifier)
 }

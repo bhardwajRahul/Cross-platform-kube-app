@@ -6,8 +6,14 @@
  * preference persistence.
  */
 
+import ActiveFilterChips, { type ActiveFilterChip } from '@shared/components/ActiveFilterChips';
 import ClusterDataPausedState from '@shared/components/ClusterDataPausedState';
 import { Dropdown, type DropdownOption } from '@shared/components/dropdowns/Dropdown';
+import {
+  ALL_MULTISELECT_FILTER,
+  filterSelectionValues,
+  isNarrowingFilterSelection,
+} from '@shared/components/dropdowns/multiSelectFilterSelection';
 import IconBar, { type IconBarItem } from '@shared/components/IconBar/IconBar';
 import {
   AnsiColorIcon,
@@ -65,6 +71,16 @@ import { setContainerLogsStreamScopeParams } from './containerLogsStreamScopePar
 import { useLogScrollRestoration } from './hooks/useLogScrollRestoration';
 import { useTerminalTheme } from './hooks/useTerminalTheme';
 import { buildCsv } from './logExport';
+import {
+  logFilterBackendValues,
+  logFilterSelectionForOnlyContainer,
+  logFilterSelectionForOnlyPod,
+  logFilterSelectionFromDropdownValues,
+  logFilterSelectionLabel,
+  logFilterSelectionMatchesNone,
+  logFilterSelectionToDropdownValues,
+  pruneLogFilterSelectionToOptions,
+} from './logFilterSelection';
 import { buildLogSearchRegex, isValidRegexPattern } from './logSearch';
 import {
   getLogViewerPrefs,
@@ -441,58 +457,56 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
   const resourceKindKey = resourceKind?.toLowerCase() ?? '';
   const isWorkload = resourceKindKey !== 'pod';
   const supportsPreviousContainerLogs = resourceKindKey === 'pod';
+  const selectedFilterValues = useMemo(
+    () => filterSelectionValues(selectedFilters),
+    [selectedFilters]
+  );
   const selectedInitContainers = useMemo(
     () =>
       new Set(
-        selectedFilters
+        selectedFilterValues
           .filter((filterValue) => filterValue.startsWith(INIT_FILTER_PREFIX))
           .map((filterValue) => filterValue.substring(INIT_FILTER_PREFIX.length))
       ),
-    [selectedFilters]
+    [selectedFilterValues]
   );
   const selectedRegularContainers = useMemo(
     () =>
       new Set(
-        selectedFilters
+        selectedFilterValues
           .filter((filterValue) => filterValue.startsWith(CONTAINER_FILTER_PREFIX))
           .map((filterValue) => filterValue.substring(CONTAINER_FILTER_PREFIX.length))
       ),
-    [selectedFilters]
+    [selectedFilterValues]
   );
   const selectedEphemeralContainers = useMemo(
     () =>
       new Set(
-        selectedFilters
+        selectedFilterValues
           .filter((filterValue) => filterValue.startsWith(DEBUG_FILTER_PREFIX))
           .map((filterValue) => filterValue.substring(DEBUG_FILTER_PREFIX.length))
       ),
-    [selectedFilters]
+    [selectedFilterValues]
   );
   const selectedContainerFilterCount =
     selectedInitContainers.size + selectedRegularContainers.size + selectedEphemeralContainers.size;
   const handleSelectPodFilter = useCallback(
     (pod: string) => {
-      const preservedContainerFilters = selectedFilters.filter(
-        (filterValue) => !filterValue.startsWith(POD_FILTER_PREFIX)
-      );
       dispatch({
         type: 'SET_SELECTED_FILTERS',
-        payload: [toPodFilterValue(pod), ...preservedContainerFilters],
+        payload: logFilterSelectionForOnlyPod(selectedFilters, pod),
       });
     },
     [selectedFilters]
   );
   const handleSelectContainerFilter = useCallback(
     (container: string, isInit: boolean, isEphemeral: boolean) => {
-      const preservedPodFilters = selectedFilters.filter((filterValue) =>
-        filterValue.startsWith(POD_FILTER_PREFIX)
-      );
       dispatch({
         type: 'SET_SELECTED_FILTERS',
-        payload: [
-          ...preservedPodFilters,
-          toContainerFilterValueForKind(container, isInit, isEphemeral),
-        ],
+        payload: logFilterSelectionForOnlyContainer(
+          selectedFilters,
+          toContainerFilterValueForKind(container, isInit, isEphemeral)
+        ),
       });
     },
     [selectedFilters]
@@ -511,7 +525,8 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       container: '',
       includeInit: true,
       includeEphemeral: true,
-      selectedFilters,
+      selectedFilters: logFilterBackendValues(selectedFilters),
+      matchNone: logFilterSelectionMatchesNone(selectedFilters),
     };
   }, [selectedFilters]);
 
@@ -702,6 +717,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
         const request: types.ContainerLogsFetchRequest = {
           scope: containerLogsScope,
           selectedFilters: backendLogSelection.selectedFilters,
+          matchNone: backendLogSelection.matchNone,
           container: backendLogSelection.container,
           includeInit: backendLogSelection.includeInit,
           includeEphemeral: backendLogSelection.includeEphemeral,
@@ -768,6 +784,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       backendLogSelection.includeEphemeral,
       backendLogSelection.includeInit,
       backendLogSelection.selectedFilters,
+      backendLogSelection.matchNone,
       resolvedClusterId,
     ]
   );
@@ -1074,12 +1091,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     [regexMatches, textFilter]
   );
   const activeFilterChips = useMemo(() => {
-    const chips: Array<{
-      key: string;
-      label: string;
-      title: string;
-      onRemove: () => void;
-    }> = [];
+    const chips: ActiveFilterChip[] = [];
 
     const trimmedTextFilter = textFilter.trim();
     if (trimmedTextFilter) {
@@ -1091,7 +1103,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
             : regexMatches
               ? `Regex: ${trimmedTextFilter}`
               : `Text: ${trimmedTextFilter}`,
-        title: 'Clear text filter',
+        removeLabel: 'Clear text filter',
         onRemove: () => dispatch({ type: 'SET_TEXT_FILTER', payload: '' }),
       });
     }
@@ -1100,7 +1112,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       chips.push({
         key: 'previous-logs',
         label: 'Showing previous logs',
-        title: 'Return to live logs',
+        removeLabel: 'Return to live logs',
         onRemove: () => {
           dispatch({ type: 'STOP_PREVIOUS_LOGS' });
           hasPrimedScopeRef.current = false;
@@ -1108,16 +1120,21 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       });
     }
 
-    selectedFilters.forEach((filterValue) => {
-      const label = formatSelectedFilterLabel(filterValue, selectorOptionLabelsByValue);
+    selectedFilterValues.forEach((filterValue) => {
+      const label =
+        logFilterSelectionLabel(filterValue) ??
+        formatSelectedFilterLabel(filterValue, selectorOptionLabelsByValue);
       chips.push({
         key: `selected-filter:${filterValue}`,
         label,
-        title: `Remove filter ${label}`,
+        removeLabel: `Remove filter ${label}`,
         onRemove: () =>
           dispatch({
             type: 'SET_SELECTED_FILTERS',
-            payload: selectedFilters.filter((value) => value !== filterValue),
+            payload: (() => {
+              const values = selectedFilterValues.filter((value) => value !== filterValue);
+              return values.length > 0 ? { mode: 'some' as const, values } : ALL_MULTISELECT_FILTER;
+            })(),
           }),
       });
     });
@@ -1126,7 +1143,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       chips.push({
         key: 'highlight',
         label: 'Highlight',
-        title: 'Disable highlight matches',
+        removeLabel: 'Disable highlight matches',
         onRemove: () => dispatch({ type: 'TOGGLE_HIGHLIGHT_MATCHES' }),
       });
     }
@@ -1135,7 +1152,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       chips.push({
         key: 'invert',
         label: 'Invert',
-        title: 'Disable invert filter',
+        removeLabel: 'Disable invert filter',
         onRemove: () => dispatch({ type: 'TOGGLE_INVERSE_MATCHES' }),
       });
     }
@@ -1144,7 +1161,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       chips.push({
         key: 'case-sensitive',
         label: 'Match case',
-        title: 'Disable case-sensitive matching',
+        removeLabel: 'Disable case-sensitive matching',
         onRemove: () => dispatch({ type: 'TOGGLE_CASE_SENSITIVE_MATCHES' }),
       });
     }
@@ -1153,7 +1170,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       chips.push({
         key: 'regex',
         label: 'Regex',
-        title: 'Disable regex matching',
+        removeLabel: 'Disable regex matching',
         onRemove: () => dispatch({ type: 'TOGGLE_REGEX_MATCHES' }),
       });
     }
@@ -1165,14 +1182,14 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     highlightMatches,
     inverseMatches,
     regexMatches,
-    selectedFilters,
+    selectedFilterValues,
     selectorOptionLabelsByValue,
     showPreviousContainerLogs,
     textFilter,
   ]);
   const handleClearAllFilters = useCallback(() => {
     dispatch({ type: 'SET_TEXT_FILTER', payload: '' });
-    dispatch({ type: 'SET_SELECTED_FILTERS', payload: [] });
+    dispatch({ type: 'SET_SELECTED_FILTERS', payload: ALL_MULTISELECT_FILTER });
     if (showPreviousContainerLogs) {
       dispatch({ type: 'STOP_PREVIOUS_LOGS' });
       hasPrimedScopeRef.current = false;
@@ -1198,10 +1215,10 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
   ]);
 
   useEffect(() => {
-    if (selectedFilters.length === 0) {
+    if (selectedFilters.mode !== 'some') {
       return;
     }
-    const hasSelectedContainerFilters = selectedFilters.some(
+    const hasSelectedContainerFilters = selectedFilters.values.some(
       (filterValue) =>
         filterValue.startsWith(INIT_FILTER_PREFIX) ||
         filterValue.startsWith(CONTAINER_FILTER_PREFIX)
@@ -1215,11 +1232,9 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     if (validFilterValues.size === 0) {
       return;
     }
-    const nextSelectedFilters = selectedFilters.filter((filterValue) =>
-      validFilterValues.has(filterValue)
-    );
-    if (nextSelectedFilters.length !== selectedFilters.length) {
-      dispatch({ type: 'SET_SELECTED_FILTERS', payload: nextSelectedFilters });
+    const nextSelection = pruneLogFilterSelectionToOptions(selectedFilters, selectorOptions);
+    if (nextSelection !== selectedFilters) {
+      dispatch({ type: 'SET_SELECTED_FILTERS', payload: nextSelection });
     }
   }, [containers.length, selectedFilters, selectorOptions]);
 
@@ -1242,7 +1257,10 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     if (showPreviousContainerLogs) {
       return 'no_previous_logs';
     }
-    if ((textFilter.trim().length > 0 || selectedFilters.length > 0) && logEntries.length > 0) {
+    if (
+      (textFilter.trim().length > 0 || isNarrowingFilterSelection(selectedFilters)) &&
+      logEntries.length > 0
+    ) {
       return 'no_filter_matches';
     }
     return 'no_logs_yet';
@@ -1250,7 +1268,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     filteredEntries.length,
     isPendingLogs,
     logEntries.length,
-    selectedFilters.length,
+    selectedFilters,
     showPreviousContainerLogs,
     textFilter,
     unavailableLogMessage,
@@ -1358,7 +1376,8 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     () => rawLogEntries.some((entry) => containsAnsi(entry.line)),
     [rawLogEntries]
   );
-  const hasActiveResultFilter = selectedFilters.length > 0 || textFilter.trim().length > 0;
+  const hasActiveResultFilter =
+    isNarrowingFilterSelection(selectedFilters) || textFilter.trim().length > 0;
   const displayedLogCount = filteredEntries.length;
   const countLabel = `${displayedLogCount} matching log${
     displayedLogCount === 1 ? '' : 's'
@@ -2000,11 +2019,14 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
                 <div className="logs-viewer-control-group">
                   <Dropdown
                     options={selectorOptions}
-                    value={selectedFilters}
+                    value={logFilterSelectionToDropdownValues(selectedFilters, selectorOptions)}
                     onChange={(value) =>
                       dispatch({
                         type: 'SET_SELECTED_FILTERS',
-                        payload: Array.isArray(value) ? value : [value],
+                        payload: logFilterSelectionFromDropdownValues(
+                          Array.isArray(value) ? value : value ? [value] : [],
+                          selectorOptions
+                        ),
                       })
                     }
                     multiple
@@ -2215,36 +2237,12 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
             </div>
           </div>
 
-          {activeFilterChips.length > 0 && (
-            <fieldset className="logs-viewer-active-filters" aria-label="Active log filters">
-              <legend className="logs-viewer-active-filters__legend">Active log filters</legend>
-              {activeFilterChips.length > 0 && (
-                <button
-                  type="button"
-                  className="logs-viewer-filter-chip logs-viewer-filter-chip--clear-all"
-                  onClick={handleClearAllFilters}
-                  aria-label="Clear all filters"
-                  title="Clear all filters"
-                >
-                  Clear all
-                </button>
-              )}
-              {activeFilterChips.map((chip) => (
-                <span key={chip.key} className="logs-viewer-filter-chip">
-                  <span className="logs-viewer-filter-chip-label">{chip.label}</span>
-                  <button
-                    type="button"
-                    className="logs-viewer-filter-chip-remove"
-                    onClick={chip.onRemove}
-                    aria-label={chip.title}
-                    title={chip.title}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-            </fieldset>
-          )}
+          <ActiveFilterChips
+            ariaLabel="Active log filters"
+            chips={activeFilterChips}
+            onClearAll={handleClearAllFilters}
+            className="logs-viewer-active-filters"
+          />
 
           {visibleLogWarnings.length > 0 && (
             <div className="logs-viewer-warning-bar" role="status" aria-label="Log warnings">

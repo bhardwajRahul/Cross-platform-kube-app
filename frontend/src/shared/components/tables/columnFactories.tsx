@@ -7,7 +7,11 @@
 
 import { formatLiveAgeText, LiveAgeText } from '@shared/components/LiveAgeText';
 import ResourceBar from '@shared/components/ResourceBar';
-import type { ColumnWidthInput, GridColumnDefinition } from '@shared/components/tables/GridTable';
+import type {
+  ColumnWidthInput,
+  GridColumnAlignmentOptions,
+  GridColumnDefinition,
+} from '@shared/components/tables/GridTable';
 import type React from 'react';
 import { getUseShortResourceNames } from '@/core/settings/appPreferences';
 
@@ -28,6 +32,8 @@ export const createAgeColumn = <T extends AgeColumnRow>(
 ): GridColumnDefinition<T> => ({
   key,
   header,
+  alignHeader: 'right',
+  alignData: 'right',
   render: (item) => {
     const fallback = getValue(item) || '-';
     if (typeof item.ageTimestamp === 'number' && Number.isFinite(item.ageTimestamp)) {
@@ -48,7 +54,7 @@ export const createAgeColumn = <T extends AgeColumnRow>(
       : getValue(item),
 });
 
-export interface CreateResourceBarColumnOptions<T> {
+export interface CreateResourceBarColumnOptions<T> extends GridColumnAlignmentOptions {
   key?: string;
   header: string;
   type: 'cpu' | 'memory';
@@ -89,6 +95,8 @@ export function createResourceBarColumn<T>(
     getAnimationKey,
     getShowEmptyState,
     className,
+    alignHeader,
+    alignData,
     sortable,
     sortValue,
   } = options;
@@ -168,6 +176,8 @@ export function createResourceBarColumn<T>(
     key,
     header,
     className,
+    alignHeader,
+    alignData,
     sortable: sortable ?? false,
     sortValue,
     render: (item: T) => {
@@ -242,7 +252,7 @@ export const applyColumnSizing = <T,>(
 /**
  * Creates a simple text column (optionally interactive)
  */
-export interface CreateTextColumnOptions<T> {
+export interface CreateTextColumnOptions<T> extends GridColumnAlignmentOptions {
   className?: string;
   sortable?: boolean;
   sortValue?: (item: T) => string | number | undefined;
@@ -253,6 +263,8 @@ export interface CreateTextColumnOptions<T> {
   getClassName?: (item: T) => string | undefined;
   isInteractive?: (item: T) => boolean;
   disableShortcuts?: boolean | ((item: T) => boolean);
+  /** Whether activating the interactive cell may also activate its row. Defaults to true. */
+  allowRowClick?: boolean;
 }
 
 export function createTextColumn<T extends { name?: string }>(
@@ -304,6 +316,8 @@ export function createTextColumn<T>(
     key,
     header,
     className: options?.className,
+    alignHeader: options?.alignHeader,
+    alignData: options?.alignData,
     sortable: options?.sortable ?? true,
     sortValue: options?.sortValue ?? accessor,
     disableShortcuts: options?.disableShortcuts,
@@ -335,7 +349,7 @@ export function createTextColumn<T>(
           className={className}
           title={title}
           data-gridtable-shortcut-optout="true"
-          data-gridtable-rowclick="allow"
+          data-gridtable-rowclick={options?.allowRowClick === false ? 'suppress' : 'allow'}
           onClick={(event) => {
             if (event.altKey && options?.onAltClick) {
               event.preventDefault();
@@ -393,7 +407,7 @@ export function upsertNamespaceColumn<T>(
  */
 type KindColumnClickHandler<T> = (item: T) => void;
 
-export interface CreateKindColumnOptions<T> {
+export interface CreateKindColumnOptions<T> extends GridColumnAlignmentOptions {
   key?: string;
   header?: string;
   getKind: (item: T) => string;
@@ -407,6 +421,8 @@ export interface CreateKindColumnOptions<T> {
   sortValue?: (item: T) => string | number;
   className?: string;
   disableShortcuts?: boolean | ((item: T) => boolean);
+  /** Whether activating the Kind badge may also activate its row. Defaults to true. */
+  allowRowClick?: boolean;
 }
 
 export const createKindColumn = <T,>(
@@ -423,7 +439,10 @@ export const createKindColumn = <T,>(
     sortable = true,
     sortValue,
     className,
+    alignHeader,
+    alignData,
     disableShortcuts,
+    allowRowClick = true,
   } = options;
   const resolveDisplayText = (item: T) => {
     if (getDisplayText) {
@@ -440,6 +459,8 @@ export const createKindColumn = <T,>(
     header,
     sortable,
     className,
+    alignHeader,
+    alignData,
     disableShortcuts,
     sortValue:
       sortValue ??
@@ -474,7 +495,7 @@ export const createKindColumn = <T,>(
           data-kind-value={kindValue}
           data-kind-interactive="true"
           data-gridtable-shortcut-optout="true"
-          data-gridtable-rowclick="allow"
+          data-gridtable-rowclick={allowRowClick ? 'allow' : 'suppress'}
           onClick={handleClick}
         >
           {displayText}

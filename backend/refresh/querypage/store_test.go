@@ -3,14 +3,49 @@ package querypage
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 )
+
+func TestFacetNormalizerRunsAtIngestAndOncePerQueryValue(t *testing.T) {
+	normalizeCalls := 0
+	schema := podSchema()
+	schema.FacetNormalizers = map[string]func(string) string{
+		"status": func(value string) string {
+			normalizeCalls++
+			return strings.ToLower(value)
+		},
+	}
+	s := NewStore(schema)
+	for i := 0; i < 3; i++ {
+		s.Upsert(podRow{uid: fmt.Sprintf("u%d", i), name: fmt.Sprintf("pod-%d", i), status: "Running"})
+	}
+	normalizeCalls = 0
+
+	page, err := s.Query(Query{
+		ClusterID: "c",
+		Signature: "sig",
+		Sort:      "name",
+		Direction: Ascending,
+		Filters:   map[string][]string{"status": {"RUNNING"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(page.Rows))
+	}
+	if normalizeCalls != 1 {
+		t.Fatalf("normalizer calls during query = %d, want 1", normalizeCalls)
+	}
+}
 
 type podRow struct {
 	uid       string
 	namespace string
 	name      string
 	status    string
+	findings  []string
 	cpu       int64
 }
 
@@ -25,6 +60,9 @@ func podSchema() Schema[podRow] {
 		Facets: map[string]func(podRow) string{
 			"namespace": func(p podRow) string { return p.namespace },
 			"status":    func(p podRow) string { return p.status },
+		},
+		MultiFacets: map[string]func(podRow) []string{
+			"findings": func(p podRow) []string { return p.findings },
 		},
 		SearchText: func(p podRow) string { return p.name },
 	}
@@ -201,6 +239,30 @@ func TestFilterByFacet(t *testing.T) {
 		if r.namespace != "kube-system" {
 			t.Fatalf("filter leaked row in namespace %q", r.namespace)
 		}
+	}
+}
+
+func TestFilterByMultiValuedFacet(t *testing.T) {
+	s := NewStore(podSchema())
+	s.Upsert(podRow{uid: "crash", namespace: "default", name: "crash", status: "Running", findings: []string{"error", "restarts"}})
+	s.Upsert(podRow{uid: "restart", namespace: "default", name: "restart", status: "Running", findings: []string{"restarts"}})
+	s.Upsert(podRow{uid: "healthy", namespace: "default", name: "healthy", status: "Running"})
+
+	page, err := s.Query(Query{
+		ClusterID: "c", Signature: "multi-facet", Sort: "name", Direction: Ascending, Limit: 10,
+		Filters: map[string][]string{"findings": {"restarts"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{page.Rows[0].name, page.Rows[1].name}; fmt.Sprint(got) != fmt.Sprint([]string{"crash", "restart"}) {
+		t.Fatalf("multi-valued facet rows = %v, want [crash restart]", got)
+	}
+	if got := page.Facets["findings"]["restarts"]; got != 2 {
+		t.Fatalf("facet findings=restarts = %d, want 2", got)
+	}
+	if got := page.Facets["findings"]["error"]; got != 1 {
+		t.Fatalf("facet findings=error = %d, want 1", got)
 	}
 }
 

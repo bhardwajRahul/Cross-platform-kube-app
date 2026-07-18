@@ -10,6 +10,7 @@
 
 import { useClusterLifecycle } from '@core/contexts/ClusterLifecycleContext';
 import type { ClusterLifecycleState } from '@core/contexts/clusterLifecycleState';
+import { namespaceAggregateUsageDisplay } from '@core/resource-metrics';
 import { useKubeconfig } from '@modules/kubernetes/config/KubeconfigContext';
 import {
   ALL_NAMESPACES_DETAILS,
@@ -18,6 +19,7 @@ import {
   ALL_NAMESPACES_SCOPE,
   isAllNamespaces,
 } from '@modules/namespace/constants';
+import { useMetricsBannerInfo } from '@shared/hooks/useMetricsBannerInfo';
 import { formatAge } from '@utils/ageFormatter';
 import { errorHandler } from '@utils/errorHandler';
 import type React from 'react';
@@ -35,10 +37,15 @@ import {
 import { queryNamespacePermissions } from '@/core/capabilities';
 import { requestRefreshDomain, setRefreshDomainEnabled } from '@/core/data-access';
 import { eventBus } from '@/core/events';
-import { refreshOrchestrator, useRefreshScopedDomain } from '@/core/refresh';
+import {
+  refreshOrchestrator,
+  useRefreshScopedDomain,
+  useRefreshScopedDomainStates,
+} from '@/core/refresh';
 import { buildClusterScope } from '@/core/refresh/clusterScope';
 import { useAutoRefreshLoadingState } from '@/core/refresh/hooks/useAutoRefreshLoadingState';
 import { useStreamSignalRefetch } from '@/core/refresh/hooks/useStreamSignalRefetch';
+import type { NamespaceSignalState, NamespaceSummary } from '@/core/refresh/types';
 
 export interface NamespaceListItem {
   name: string;
@@ -48,6 +55,16 @@ export interface NamespaceListItem {
   age: string;
   hasWorkloads: boolean;
   workloadsUnknown: boolean;
+  unhealthyWorkloads: number;
+  warningEvents: number;
+  warningEventsState: 'available' | 'loading' | 'unavailable';
+  cpuUsageMilli: number;
+  memoryUsageBytes: number;
+  utilizationState: 'available' | 'loading' | 'unavailable';
+  quotaCount: number;
+  quotaHighestUsedPercentage: number;
+  quotaPressure: '' | 'warning' | 'critical';
+  quotaPressureState: 'available' | 'loading' | 'unavailable';
   resourceVersion: string;
   scopeStatus?: 'not-found' | 'no-access';
   isSynthetic?: boolean;
@@ -58,6 +75,9 @@ export interface NamespaceListItem {
 
 interface NamespaceContextType {
   namespaces: NamespaceListItem[];
+  namespaceSummaries: NamespaceSummary[];
+  namespaceMetricsState: NamespaceSignalState;
+  namespaceError: string | null;
   selectedNamespace?: string;
   selectedNamespaceClusterId?: string;
   namespaceLoading: boolean;
@@ -85,11 +105,16 @@ export const useNamespace = () => {
   return context;
 };
 
+// Cross-cluster namespace consumers share NamespaceProvider's scope leases and
+// signal-refetch wiring, then read the same scoped store entries through this
+// module so data access and doorbell freshness stay one contract.
+export const useNamespaceStatesByScope = () => useRefreshScopedDomainStates('namespaces');
+
 interface NamespaceProviderProps {
   children: ReactNode;
 }
 
-const isNamespaceRefreshAvailable = (state: ClusterLifecycleState | undefined): boolean =>
+export const isNamespaceRefreshAvailable = (state: ClusterLifecycleState | undefined): boolean =>
   state === 'loading' || state === 'loading_slow' || state === 'ready';
 
 export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }) => {
@@ -131,6 +156,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
   }, [refreshAvailableClusterIds]);
 
   const namespaceDomain = useRefreshScopedDomain('namespaces', namespacesScope);
+  const namespaceMetricsBanner = useMetricsBannerInfo(namespaceDomain.data?.metrics ?? null);
   // Doorbell refetch: the namespaces stream signal only bumps the scoped
   // sourceVersion — the snapshot itself must be refetched. The shared hook
   // covers every leased cluster scope so background cluster tabs stay fresh.
@@ -173,6 +199,16 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
       age: '—',
       hasWorkloads: true,
       workloadsUnknown: false,
+      unhealthyWorkloads: 0,
+      warningEvents: 0,
+      warningEventsState: 'unavailable',
+      cpuUsageMilli: 0,
+      memoryUsageBytes: 0,
+      utilizationState: 'unavailable',
+      quotaCount: 0,
+      quotaHighestUsedPercentage: 0,
+      quotaPressure: '',
+      quotaPressureState: 'unavailable',
       resourceVersion: ALL_NAMESPACES_RESOURCE_VERSION,
       isSynthetic: true,
     }),
@@ -216,15 +252,56 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
         : ns.hasWorkloads
           ? 'Workloads: Present'
           : 'Workloads: None';
+      const unhealthyWorkloads = ns.unhealthyWorkloads ?? 0;
+      const warningEvents = ns.warningEvents ?? 0;
+      const warningEventsState = ns.warningEventsState ?? 'unavailable';
+      const warningEventSummary =
+        warningEventsState === 'available'
+          ? String(warningEvents)
+          : warningEventsState === 'loading'
+            ? 'Loading'
+            : 'Unavailable';
+      const cpuUsageMilli = ns.cpuUsageMilli ?? 0;
+      const memoryUsageBytes = ns.memoryUsageBytes ?? 0;
+      const utilizationState = namespaceDomain.data?.metricsState ?? 'unavailable';
+      const usageDisplay = namespaceAggregateUsageDisplay(cpuUsageMilli, memoryUsageBytes);
+      const utilizationSummary =
+        utilizationState === 'available'
+          ? `${usageDisplay.cpu} CPU, ${usageDisplay.memory} memory${namespaceMetricsBanner ? ` (${namespaceMetricsBanner.message})` : ''}`
+          : utilizationState === 'loading'
+            ? (namespaceMetricsBanner?.message ?? 'Collecting')
+            : (namespaceDomain.data?.metrics?.lastError?.trim() ?? 'Unavailable');
+      const quotaCount = ns.quotaCount ?? 0;
+      const quotaHighestUsedPercentage = ns.quotaHighestUsedPercentage ?? 0;
+      const quotaPressure = ns.quotaPressure ?? '';
+      const quotaPressureState = ns.quotaPressureState ?? 'unavailable';
+      const quotaSummary =
+        quotaPressureState === 'available'
+          ? quotaCount > 0
+            ? `${quotaHighestUsedPercentage}%`
+            : 'No quotas'
+          : quotaPressureState === 'loading'
+            ? 'Loading'
+            : 'Unavailable';
 
       return {
         name: ns.name,
         scope: ns.name,
         status: ns.status || ns.phase,
-        details: `Status: ${ns.status || ns.phase} • ${workloadSummary}`,
+        details: `Status: ${ns.status || ns.phase} • ${workloadSummary} • Unhealthy workloads: ${unhealthyWorkloads} • Warning events: ${warningEventSummary} • Utilization: ${utilizationSummary} • Quota pressure: ${quotaSummary}`,
         age,
         hasWorkloads: ns.hasWorkloads ?? false,
         workloadsUnknown,
+        unhealthyWorkloads,
+        warningEvents,
+        warningEventsState,
+        cpuUsageMilli,
+        memoryUsageBytes,
+        utilizationState,
+        quotaCount,
+        quotaHighestUsedPercentage,
+        quotaPressure,
+        quotaPressureState,
         resourceVersion: ns.resourceVersion,
         scopeStatus: ns.scopeStatus,
         clusterId: ns.clusterId,
@@ -239,6 +316,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
     allNamespaceItem,
     namespaceDomain.status,
     namespaceDomain.data,
+    namespaceMetricsBanner,
     scopedNamespaces,
     updateNamespaces,
   ]);
@@ -574,6 +652,9 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
   const contextValue = useMemo(
     () => ({
       namespaces,
+      namespaceSummaries: scopedNamespaces,
+      namespaceMetricsState: namespaceDomain.data?.metricsState ?? 'unavailable',
+      namespaceError: namespaceDomain.error ?? null,
       selectedNamespace,
       selectedNamespaceClusterId,
       namespaceLoading,
@@ -587,6 +668,9 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
     }),
     [
       namespaces,
+      scopedNamespaces,
+      namespaceDomain.data?.metricsState,
+      namespaceDomain.error,
       selectedNamespace,
       selectedNamespaceClusterId,
       namespaceLoading,

@@ -20,10 +20,25 @@ import (
 // identity chain — never an arbitrary identifier like the Kubernetes object UID.
 // Pinned by TestTiedSortValuesOrderByHumanKey.
 type Schema[R any] struct {
-	UID        func(R) string
-	SortKeys   map[string]func(R) string
-	Facets     map[string]func(R) string
-	SearchText func(R) string
+	UID              func(R) string
+	SortKeys         map[string]func(R) string
+	Facets           map[string]func(R) string
+	MultiFacets      map[string]func(R) []string
+	FacetNormalizers map[string]func(string) string
+	SearchText       func(R) string
+}
+
+func uniqueFacetValues(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	return unique
 }
 
 // Query is one page request against a kind's store.
@@ -35,6 +50,7 @@ type Query struct {
 	Limit     int
 	Search    string              // case-insensitive substring filter over SearchText
 	Filters   map[string][]string // facet filters: facet name -> allowed values (set membership; OR within, AND across facets)
+	MatchNone bool                // explicit empty multiselect: no row can match
 	Cursor    string              // opaque continueToken from a previous Page
 }
 
@@ -168,7 +184,7 @@ func NewStore[R any](schema Schema[R]) *Store[R] {
 		rows:   newColumnStore[R](newRowCodec[R]()),
 		match:  make(map[uint32]matchValues),
 		idx:    make(map[string]*sortIndex, len(schema.SortKeys)),
-		facets: make(map[string]map[string]int, len(schema.Facets)),
+		facets: make(map[string]map[string]int, len(schema.Facets)+len(schema.MultiFacets)),
 		tri:    newTrigramIndex(0),
 	}
 	for name := range schema.SortKeys {
@@ -178,6 +194,12 @@ func NewStore[R any](schema Schema[R]) *Store[R] {
 		}
 	}
 	for name := range schema.Facets {
+		s.facets[name] = make(map[string]int)
+	}
+	for name := range schema.MultiFacets {
+		if _, exists := s.facets[name]; exists {
+			panic(fmt.Sprintf("querypage: facet %q is both single- and multi-valued", name))
+		}
 		s.facets[name] = make(map[string]int)
 	}
 	return s
@@ -245,8 +267,11 @@ func (s *Store[R]) replaceAllLocked(rows []R) {
 			desc: btree.NewG[indexEntry](32, descLess),
 		}
 	}
-	s.facets = make(map[string]map[string]int, len(s.schema.Facets))
+	s.facets = make(map[string]map[string]int, len(s.schema.Facets)+len(s.schema.MultiFacets))
 	for name := range s.schema.Facets {
+		s.facets[name] = make(map[string]int)
+	}
+	for name := range s.schema.MultiFacets {
 		s.facets[name] = make(map[string]int)
 	}
 	if s.tri != nil {
@@ -304,6 +329,11 @@ func (s *Store[R]) reindex(uid string, row R) {
 	for name, get := range s.schema.Facets {
 		s.facets[name][get(row)]++
 	}
+	for name, get := range s.schema.MultiFacets {
+		for _, value := range uniqueFacetValues(get(row)) {
+			s.facets[name][value]++
+		}
+	}
 }
 
 func (s *Store[R]) deindex(uid string, row R) {
@@ -316,6 +346,15 @@ func (s *Store[R]) deindex(uid string, row R) {
 			delete(s.facets[name], v)
 		} else {
 			s.facets[name][v]--
+		}
+	}
+	for name, get := range s.schema.MultiFacets {
+		for _, value := range uniqueFacetValues(get(row)) {
+			if s.facets[name][value] <= 1 {
+				delete(s.facets[name], value)
+			} else {
+				s.facets[name][value]--
+			}
 		}
 	}
 }
@@ -341,10 +380,30 @@ func (s *Store[R]) searchCandidates(searchLower string) (set map[uint32]struct{}
 // gate from searchCandidates (narrow=false ⇒ linear scan). It mirrors the previous
 // rowMatches semantics exactly: the trigram set only narrows which rows get the Contains
 // verify, the verify still decides membership.
-func (s *Store[R]) matchValuesMatches(rowID uint32, mv matchValues, q Query, searchLower string, candidates map[uint32]struct{}, narrow bool) bool {
+func (s *Store[R]) matchValuesMatches(rowID uint32, mv matchValues, filters map[string][]string, searchLower string, candidates map[uint32]struct{}, narrow bool) bool {
 	// Query's filters + search are exactly a scope base + search, so the two share one
 	// matcher (scopeMatchesBase) and can never diverge.
-	return s.scopeMatchesBase(rowID, mv, q.Filters, searchLower, candidates, narrow)
+	return s.scopeMatchesBase(rowID, mv, filters, searchLower, candidates, narrow)
+}
+
+func (s *Store[R]) normalizeFacetFilters(filters map[string][]string) map[string][]string {
+	if len(filters) == 0 || len(s.schema.FacetNormalizers) == 0 {
+		return filters
+	}
+	normalized := make(map[string][]string, len(filters))
+	for name, allowed := range filters {
+		normalize := s.schema.FacetNormalizers[name]
+		if normalize == nil {
+			normalized[name] = allowed
+			continue
+		}
+		values := make([]string, len(allowed))
+		for i, value := range allowed {
+			values[i] = normalize(value)
+		}
+		normalized[name] = uniqueFacetValues(values)
+	}
+	return normalized
 }
 
 // scopeMatchesBase tests a row's cached match values against a base filter set +
@@ -359,15 +418,38 @@ func (s *Store[R]) scopeMatchesBase(rowID uint32, mv matchValues, base map[strin
 		if len(allowed) == 0 {
 			continue
 		}
-		if _, isFacet := s.schema.Facets[fname]; !isFacet {
+		_, isSingleFacet := s.schema.Facets[fname]
+		_, isMultiFacet := s.schema.MultiFacets[fname]
+		if !isSingleFacet && !isMultiFacet {
 			return false
 		}
-		v := mv.facets[fname]
 		matched := false
-		for _, a := range allowed {
-			if v == a {
-				matched = true
-				break
+		if isSingleFacet {
+			value := mv.facets[fname]
+			if normalized, ok := mv.normalizedFacets[fname]; ok {
+				value = normalized
+			}
+			for _, candidate := range allowed {
+				if value == candidate {
+					matched = true
+					break
+				}
+			}
+		} else {
+			values := mv.multiFacets[fname]
+			if normalized, ok := mv.normalizedMultiFacets[fname]; ok {
+				values = normalized
+			}
+			for _, value := range values {
+				for _, candidate := range allowed {
+					if value == candidate {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
+				}
 			}
 		}
 		if !matched {
@@ -405,9 +487,10 @@ func (s *Store[R]) Scope(base map[string][]string, search string) (map[string]ma
 	defer s.mu.RUnlock()
 
 	searchLower := strings.ToLower(search)
+	base = s.normalizeFacetFilters(base)
 	candidates, narrow := s.searchCandidates(searchLower)
-	counts := make(map[string]map[string]int, len(s.schema.Facets))
-	for name := range s.schema.Facets {
+	counts := make(map[string]map[string]int, len(s.facets))
+	for name := range s.facets {
 		counts[name] = make(map[string]int)
 	}
 	total := 0
@@ -418,6 +501,11 @@ func (s *Store[R]) Scope(base map[string][]string, search string) (map[string]ma
 		total++
 		for name, value := range mv.facets {
 			counts[name][value]++
+		}
+		for name, values := range mv.multiFacets {
+			for _, value := range values {
+				counts[name][value]++
+			}
 		}
 	}
 	return counts, total
@@ -454,7 +542,7 @@ func (s *Store[R]) Query(q Query) (Page[R], error) {
 	backward := hasPivot && cur.Backward
 	pivot := indexEntry{val: cur.Position, uid: cur.UID}
 
-	matchesUID, searchLower, candidates, narrow := s.matcherFor(q)
+	matchesUID, filters, searchLower, candidates, narrow := s.matcherFor(q)
 
 	// Collect up to limit+1 matching entries from the pivot, in walk order, so the
 	// limit+1th tells us whether a further page exists on the walked side.
@@ -531,7 +619,7 @@ func (s *Store[R]) Query(q Query) (Page[R], error) {
 		}
 	}
 
-	facets, total := s.facetsAndTotal(q, searchLower, candidates, narrow)
+	facets, total := s.facetsAndTotal(q, filters, searchLower, candidates, narrow)
 
 	return Page[R]{Rows: rows, NextCursor: next, PrevCursor: prev, Facets: facets, Total: total, CursorInvalid: cursorInvalid, PageStartRank: -1}, nil
 }
@@ -547,29 +635,35 @@ func (s *Store[R]) Query(q Query) (Page[R], error) {
 // <3-char terms or read-only stores ⇒ the per-row check falls back to the
 // linear Contains verify. A uid present in a sort index always has a cached
 // match entry (maintained in lockstep by Upsert/Delete).
-func (s *Store[R]) matcherFor(q Query) (matchesUID func(string) bool, searchLower string, candidates map[uint32]struct{}, narrow bool) {
+func (s *Store[R]) matcherFor(q Query) (matchesUID func(string) bool, filters map[string][]string, searchLower string, candidates map[uint32]struct{}, narrow bool) {
+	filters = s.normalizeFacetFilters(q.Filters)
 	searchLower = strings.ToLower(q.Search)
 	candidates, narrow = s.searchCandidates(searchLower)
 	matchesUID = func(uid string) bool {
+		if q.MatchNone {
+			return false
+		}
 		rowID, ok := s.rows.rowID(uid)
 		if !ok {
 			return false
 		}
-		return s.matchValuesMatches(rowID, s.match[rowID], q, searchLower, candidates, narrow)
+		return s.matchValuesMatches(rowID, s.match[rowID], filters, searchLower, candidates, narrow)
 	}
-	return matchesUID, searchLower, candidates, narrow
+	return matchesUID, filters, searchLower, candidates, narrow
 }
 
 // facetsAndTotal returns the unfiltered facet counter copy and the query's exact
 // total — the unfiltered live count, or a column-only scan over the cached match
 // values when filters/search are present (no row reconstruction). The Page tail
 // shared by every serve entry point. Callers must hold s.mu.
-func (s *Store[R]) facetsAndTotal(q Query, searchLower string, candidates map[uint32]struct{}, narrow bool) (map[string]map[string]int, int) {
+func (s *Store[R]) facetsAndTotal(q Query, filters map[string][]string, searchLower string, candidates map[uint32]struct{}, narrow bool) (map[string]map[string]int, int) {
 	total := s.rows.len()
-	if len(q.Filters) > 0 || q.Search != "" {
+	if q.MatchNone {
+		total = 0
+	} else if len(q.Filters) > 0 || q.Search != "" {
 		total = 0
 		for rowID, mv := range s.match {
-			if s.matchValuesMatches(rowID, mv, q, searchLower, candidates, narrow) {
+			if s.matchValuesMatches(rowID, mv, filters, searchLower, candidates, narrow) {
 				total++
 			}
 		}
@@ -632,14 +726,14 @@ func (s *Store[R]) QueryAround(q Query, anchorKey string) (Page[R], AnchorOutcom
 	if limit <= 0 {
 		limit = 100
 	}
-	matchesUID, searchLower, candidates, narrow := s.matcherFor(q)
+	matchesUID, filters, searchLower, candidates, narrow := s.matcherFor(q)
 
 	// Resolve the anchor BEFORE walking: an O(1) presence + match check under
 	// the same RLock as the walk (no found-then-vanished race within a serve),
 	// and an absent anchor skips the counted walk entirely.
 	outcome := AnchorOutcome{Rank: -1}
 	if rowID, present := s.rows.rowID(anchorKey); present {
-		if s.matchValuesMatches(rowID, s.match[rowID], q, searchLower, candidates, narrow) {
+		if !q.MatchNone && s.matchValuesMatches(rowID, s.match[rowID], filters, searchLower, candidates, narrow) {
 			outcome.Found = true
 		} else {
 			outcome.Filtered = true
@@ -659,7 +753,7 @@ func (s *Store[R]) QueryAround(q Query, anchorKey string) (Page[R], AnchorOutcom
 	}
 
 	page := s.buildCountedPage(q, limit, window, pageStart, overflow, selfPivot, hasSelfPivot)
-	page.Facets, page.Total = s.facetsAndTotal(q, searchLower, candidates, narrow)
+	page.Facets, page.Total = s.facetsAndTotal(q, filters, searchLower, candidates, narrow)
 	return page, outcome, nil
 }
 
@@ -680,11 +774,11 @@ func (s *Store[R]) QueryAt(q Query, startRank int) (Page[R], error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	matchesUID, searchLower, candidates, narrow := s.matcherFor(q)
+	matchesUID, filters, searchLower, candidates, narrow := s.matcherFor(q)
 
 	// The exact filtered total is needed for the Page tail anyway; computing it
 	// first lets the clamp use it without a second scan.
-	facets, total := s.facetsAndTotal(q, searchLower, candidates, narrow)
+	facets, total := s.facetsAndTotal(q, filters, searchLower, candidates, narrow)
 	if startRank < 0 || total == 0 {
 		startRank = 0
 	} else if last := ((total - 1) / limit) * limit; startRank > last {

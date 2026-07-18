@@ -54,6 +54,8 @@ export const STREAM_MODE_BY_NAME: Record<StreamTelemetryName, 'streaming' | 'wat
 const OVERVIEW_FEATURES = [PERMISSION_FEATURES.clusterOverview] as const;
 
 const CLUSTER_FEATURE_MAP: Record<ClusterViewType, readonly PermissionFeatureKey[]> = {
+  attention: [],
+  namespaces: [], // The view is backed by the permission-gated namespaces domain.
   nodes: [PERMISSION_FEATURES.clusterNodes, PERMISSION_FEATURES.nodeActions],
   rbac: [PERMISSION_FEATURES.clusterRBAC],
   storage: [PERMISSION_FEATURES.storageView, PERMISSION_FEATURES.storageActions],
@@ -67,8 +69,7 @@ const CLUSTER_FEATURE_MAP: Record<ClusterViewType, readonly PermissionFeatureKey
 const NAMESPACE_FEATURE_MAP: Record<NamespaceViewType, readonly PermissionFeatureKey[]> = {
   browse: [], // Empty = show all namespace-scoped permissions (browse spans all resource types).
   map: [PERMISSION_FEATURES.objectMapResources],
-  pods: [PERMISSION_FEATURES.namespacePods],
-  workloads: [PERMISSION_FEATURES.namespaceWorkloads],
+  workloads: [PERMISSION_FEATURES.namespaceWorkloads, PERMISSION_FEATURES.namespacePods],
   config: [PERMISSION_FEATURES.namespaceConfig],
   network: [PERMISSION_FEATURES.namespaceNetwork],
   rbac: [PERMISSION_FEATURES.namespaceRBAC],
@@ -87,6 +88,11 @@ export const getScopedFeaturesForView = (
 ): readonly PermissionFeatureKey[] => {
   if (viewType === 'overview') {
     return OVERVIEW_FEATURES;
+  }
+  if (viewType === 'global') {
+    // Global views aggregate independently permission-gated per-cluster scopes;
+    // selected-cluster permission rows would not describe that workspace.
+    return [];
   }
   if (viewType === 'cluster') {
     return clusterTab ? (CLUSTER_FEATURE_MAP[clusterTab] ?? []) : [];

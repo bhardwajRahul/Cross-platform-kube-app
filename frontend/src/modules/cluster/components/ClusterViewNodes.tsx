@@ -9,12 +9,16 @@ import './ClusterViewNodes.css';
 import { useKubeconfig } from '@modules/kubernetes/config/KubeconfigContext';
 import { useObjectPanel } from '@modules/object-panel/hooks/useObjectPanel';
 import ResourceInventoryTable from '@modules/resource-grid/ResourceInventoryTable';
-import { selectPayloadRows } from '@modules/resource-grid/typedResourceQueryScope';
+import {
+  RESOURCE_STATUS_QUERY_FACET_KEYS,
+  selectPayloadRows,
+} from '@modules/resource-grid/typedResourceQueryScope';
 import { useQueryBackedClusterResourceGridTable } from '@modules/resource-grid/useQueryBackedResourceGridTable';
 import type { ContextMenuItem } from '@shared/components/ContextMenu';
 import { DrainIcon } from '@shared/components/icons/SharedIcons';
 import * as cf from '@shared/components/tables/columnFactories';
 import type { GridColumnDefinition } from '@shared/components/tables/GridTable';
+import { formatRestartCount } from '@shared/components/tables/restartCount';
 import { useNavigateToView } from '@shared/hooks/useNavigateToView';
 import { useNodeMaintenanceActions } from '@shared/hooks/useNodeMaintenanceActions';
 import { useObjectActionController } from '@shared/hooks/useObjectActionController';
@@ -142,7 +146,7 @@ const NodesViewGrid: React.FC<NodesViewProps> = React.memo(({ error }) => {
       const restartCount = node.restarts ?? 0;
       const className = restartCount > 0 ? 'status-text warning' : 'status-text';
       return {
-        text: String(restartCount),
+        text: formatRestartCount(restartCount),
         className,
       };
     };
@@ -230,6 +234,8 @@ const NodesViewGrid: React.FC<NodesViewProps> = React.memo(({ error }) => {
         },
       },
       cf.createTextColumn<ClusterNodeRow>('pods', 'Pods', (row) => row.pods || '—', {
+        alignHeader: 'center',
+        alignData: 'center',
         sortValue: (row) => parseNodePodsUsed(row.pods),
       }),
       (() => {
@@ -238,6 +244,8 @@ const NodesViewGrid: React.FC<NodesViewProps> = React.memo(({ error }) => {
           'Restarts',
           (row) => resolveNodeRestarts(row).text,
           {
+            alignHeader: 'center',
+            alignData: 'center',
             getClassName: (row) => resolveNodeRestarts(row).className,
           }
         );
@@ -342,6 +350,7 @@ const NodesViewGrid: React.FC<NodesViewProps> = React.memo(({ error }) => {
     queryTableMode: 'Query Backed Dynamic',
     clusterId: selectedClusterId,
     domain: 'nodes',
+    excludedQueryFacetKeys: RESOURCE_STATUS_QUERY_FACET_KEYS,
     label: 'Cluster Nodes',
     selectRows: selectPayloadRows,
     viewId: 'cluster-nodes',

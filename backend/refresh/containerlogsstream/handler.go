@@ -349,7 +349,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			f.Flush()
 		case <-heartbeat.C:
-			if time.Since(lastDelivery) > config.StreamHeartbeatTimeout {
+			if shouldRecordHeartbeatTimeout(opts.MatchNone, lastDelivery, time.Now()) {
 				if h.telemetry != nil {
 					h.telemetry.RecordStreamErrorForDomain(streamName, target, fmt.Errorf("containerlogsstream heartbeat timeout"))
 				}
@@ -377,6 +377,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+func shouldRecordHeartbeatTimeout(matchNone bool, lastDelivery, now time.Time) bool {
+	return !matchNone && now.Sub(lastDelivery) > config.StreamHeartbeatTimeout
 }
 
 func composeStreamWarnings(selectionWarnings []string, transportDropObserved bool) []string {
@@ -443,6 +447,7 @@ func parseOptions(r *http.Request) (Options, error) {
 	podInclude := strings.TrimSpace(r.URL.Query().Get("podInclude"))
 	podExclude := strings.TrimSpace(r.URL.Query().Get("podExclude"))
 	selectedFilters := trimQueryValues(r.URL.Query()["selectedFilter"])
+	matchNone := strings.TrimSpace(r.URL.Query().Get("matchNone")) == "true"
 	container := strings.TrimSpace(r.URL.Query().Get("container"))
 	includeInit := parseBoolQueryWithDefault(r, "includeInit", true)
 	includeEphemeral := parseBoolQueryWithDefault(r, "includeEphemeral", true)
@@ -483,6 +488,7 @@ func parseOptions(r *http.Request) (Options, error) {
 		PodInclude:       podInclude,
 		PodExclude:       podExclude,
 		SelectedFilters:  selectedFilters,
+		MatchNone:        matchNone,
 		Selection:        selection,
 		Container:        container,
 		IncludeInit:      includeInit,

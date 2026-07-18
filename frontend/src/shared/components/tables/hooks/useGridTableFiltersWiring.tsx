@@ -62,6 +62,8 @@ type UseGridTableFiltersWiringOptions<T> = {
   fetchAllRows?: () => Promise<T[]>;
   /** Default filename offered by the file Export action. */
   exportFilename?: string;
+  /** The local data contains every filter match before presentation pagination. */
+  hasAllLocalMatches?: boolean;
   /** IconBar items rendered before the built-in Reset action. */
   preActions?: IconBarItem[];
   /** IconBar items rendered after a separator following Reset. */
@@ -83,6 +85,7 @@ export function useGridTableFiltersWiring<T>({
   getTextContent,
   fetchAllRows,
   exportFilename,
+  hasAllLocalMatches,
   preActions,
   postActions,
 }: UseGridTableFiltersWiringOptions<T>) {
@@ -98,6 +101,9 @@ export function useGridTableFiltersWiring<T>({
     handleFilterSearchChange,
     handleFilterKindsChange,
     handleFilterNamespacesChange,
+    handleFilterClustersChange,
+    handleFilterQueryFacetChange,
+    handleFiltersChange,
     handleFilterReset,
     toggleCaseSensitive,
   } = useGridTableFilters({
@@ -133,13 +139,30 @@ export function useGridTableFiltersWiring<T>({
     [handleFilterNamespacesChange, normalizeDropdownValue]
   );
 
+  const handleClusterDropdownChange = useCallback(
+    (value: string | string[]) => {
+      handleFilterClustersChange(normalizeDropdownValue(value));
+    },
+    [handleFilterClustersChange, normalizeDropdownValue]
+  );
+
+  const handleQueryFacetDropdownChange = useCallback(
+    (key: string, value: string | string[]) => {
+      handleFilterQueryFacetChange(key, normalizeDropdownValue(value));
+    },
+    [handleFilterQueryFacetChange, normalizeDropdownValue]
+  );
+
   const searchInputId = useId();
   const kindDropdownId = useId();
   const namespaceDropdownId = useId();
+  const clusterDropdownId = useId();
+  const queryFacetDropdownIdPrefix = useId();
   const columnsDropdownId = useId();
 
   const showKindDropdown = filters?.options?.showKindDropdown ?? false;
   const showNamespaceDropdown = filters?.options?.showNamespaceDropdown ?? false;
+  const showClusterDropdown = filters?.options?.showClusterDropdown ?? false;
 
   const renderFilterOption = useCallback(
     (option: DropdownOption, isSelected: boolean): ReactNode => (
@@ -157,18 +180,30 @@ export function useGridTableFiltersWiring<T>({
     []
   );
 
-  const renderKindsValue = useCallback((value: string | string[], _options: DropdownOption[]) => {
-    // Include the selected count so multi-select status is visible at a glance.
-    const count = Array.isArray(value) ? value.length : value ? 1 : 0;
-    return count > 0 ? `Kinds (${count})` : 'Kinds';
-  }, []);
+  const renderKindsValue = useCallback(
+    (_value: string | string[], _options: DropdownOption[]) => {
+      const count = activeFilters.kinds.mode === 'some' ? activeFilters.kinds.values.length : 0;
+      return count > 0 ? `Kinds (${count})` : 'Kinds';
+    },
+    [activeFilters.kinds]
+  );
   const renderNamespacesValue = useCallback(
     (value: string | string[], _options: DropdownOption[]) => {
-      // Include the selected count so multi-select status is visible at a glance.
-      const count = Array.isArray(value) ? value.length : value ? 1 : 0;
+      void value;
+      const count =
+        activeFilters.namespaces.mode === 'some' ? activeFilters.namespaces.values.length : 0;
       return count > 0 ? `Namespaces (${count})` : 'Namespaces';
     },
-    []
+    [activeFilters.namespaces]
+  );
+  const renderClustersValue = useCallback(
+    (value: string | string[], _options: DropdownOption[]) => {
+      void value;
+      const count =
+        activeFilters.clusters.mode === 'some' ? activeFilters.clusters.values.length : 0;
+      return count > 0 ? `Clusters (${count})` : 'Clusters';
+    },
+    [activeFilters.clusters]
   );
   const renderColumnsValue = useCallback(
     (_value: string | string[], _options: DropdownOption[]) => 'Columns',
@@ -181,9 +216,9 @@ export function useGridTableFiltersWiring<T>({
   const resolvedPreActions = preActions ?? resolvedFilterOptions.preActions;
   const resolvedCustomActions = resolvedFilterOptions.customActions;
 
-  // Copy and Export always act on EVERY matching row when the view can fetch all pages
-  // (the active filters are part of the fetch scope). Views without a fetcher keep the
-  // page-only Copy — on those non-paginated tables the visible rows ARE the full set.
+  // Copy and Export act on every matching row when the view can fetch all pages.
+  // Local presentation pagination also supplies every filtered row here because
+  // pagination is applied downstream of this hook.
   const supportsExportAll = Boolean(fetchAllRows);
 
   const fetchAllRowsOrEmpty = useCallback(
@@ -195,8 +230,9 @@ export function useGridTableFiltersWiring<T>({
     data: tableData,
     columns: exportColumns,
     getTextContent,
-    // Pass the real (possibly undefined) fetcher: when absent, Copy takes the visible rows.
+    // Pass the real (possibly undefined) fetcher: when absent, Copy takes this local row set.
     fetchAllRows,
+    hasAllLocalMatches,
   });
 
   const csvExportFileAction = useGridTableCsvFileExportAction({
@@ -276,6 +312,8 @@ export function useGridTableFiltersWiring<T>({
       searchInputId,
       kindDropdownId,
       namespaceDropdownId,
+      clusterDropdownId,
+      queryFacetDropdownIdPrefix,
       columnsDropdownId,
       resolvedFilterOptions,
       containerRef: filtersContainerRef,
@@ -283,13 +321,18 @@ export function useGridTableFiltersWiring<T>({
       onSearchChange: handleFilterSearchChange,
       onKindsChange: handleKindDropdownChange,
       onNamespacesChange: handleNamespaceDropdownChange,
+      onClustersChange: handleClusterDropdownChange,
+      onQueryFacetChange: handleQueryFacetDropdownChange,
+      onFiltersChange: handleFiltersChange,
       onReset: handleFilterReset,
       onToggleCaseSensitive: toggleCaseSensitive,
       showKindDropdown,
       showNamespaceDropdown,
+      showClusterDropdown,
       renderOption: renderFilterOption,
       renderKindsValue,
       renderNamespacesValue,
+      renderClustersValue,
       renderColumnsValue: columnsDropdown?.renderValue ?? renderColumnsValue,
       columnOptions: columnsDropdown?.options,
       columnValue: columnsDropdown?.value,
@@ -306,19 +349,26 @@ export function useGridTableFiltersWiring<T>({
       searchInputId,
       kindDropdownId,
       namespaceDropdownId,
+      clusterDropdownId,
+      queryFacetDropdownIdPrefix,
       columnsDropdownId,
       resolvedFilterOptions,
       activeFilters,
       handleFilterSearchChange,
       handleKindDropdownChange,
       handleNamespaceDropdownChange,
+      handleClusterDropdownChange,
+      handleQueryFacetDropdownChange,
+      handleFiltersChange,
       handleFilterReset,
       toggleCaseSensitive,
       showKindDropdown,
       showNamespaceDropdown,
+      showClusterDropdown,
       renderFilterOption,
       renderKindsValue,
       renderNamespacesValue,
+      renderClustersValue,
       columnsDropdown,
       renderColumnsValue,
       showColumnsDropdown,
@@ -341,8 +391,6 @@ export function useGridTableFiltersWiring<T>({
     resolvedFilterOptions,
     filtersContainerRef,
     filterFocusIndexRef,
-    showKindDropdown,
-    showNamespaceDropdown,
     filtersBarProps,
     filtersNode,
     handleFilterReset,

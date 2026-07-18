@@ -7,6 +7,7 @@
 
 import CatalogPaginationFooter, {
   catalogPaginationPageKeyProps,
+  shouldRenderCatalogPaginationFooter,
 } from '@modules/browse/components/CatalogPaginationFooter';
 import {
   type CatalogBackedCustomResourceRow,
@@ -232,8 +233,6 @@ const CustomViewGrid: React.FC<CustomViewProps> = React.memo(
         namespaces: showNamespaceFilter ? catalogFilterOptions.namespaces : undefined,
         showKindDropdown: true,
         showNamespaceDropdown: showNamespaceFilter,
-        kindDropdownSearchable: true,
-        kindDropdownBulkActions: true,
         namespaceDropdownSearchable: showNamespaceFilter,
         namespaceDropdownBulkActions: showNamespaceFilter,
         totalCount,
@@ -269,13 +268,14 @@ const CustomViewGrid: React.FC<CustomViewProps> = React.memo(
       [namespace]
     );
     const paginationControls = useMemo(
-      () => (
-        <CatalogPaginationFooter
-          idPrefix="namespace-custom"
-          visibleItemCount={rows.length}
-          pagination={pagination}
-        />
-      ),
+      () =>
+        shouldRenderCatalogPaginationFooter(pagination) ? (
+          <CatalogPaginationFooter
+            idPrefix="namespace-custom"
+            visibleItemCount={rows.length}
+            pagination={pagination}
+          />
+        ) : null,
       [pagination, rows.length]
     );
 

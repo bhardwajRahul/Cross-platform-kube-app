@@ -16,11 +16,19 @@ export interface BrowseFilters {
   search: string;
   kinds: string[];
   namespaces: string[];
+  apiGroups?: string[];
+  matchNone?: boolean;
+}
+
+export interface BrowseFacetOption {
+  value: string;
+  label: string;
 }
 
 export interface BrowseFilterOptions {
   kinds: string[];
   namespaces: string[];
+  apiGroups: BrowseFacetOption[];
   isNamespaceScoped: boolean;
   partialDataLabel?: string;
 }
@@ -97,10 +105,12 @@ export const buildBrowseCatalogPlan = ({
     scopeNamespaces,
     search: filters.search ?? '',
     kinds: filters.kinds ?? [],
+    apiGroups: filters.apiGroups ?? [],
     namespaces: namespacesToQuery,
     sort: sortScope.sort,
     sortDirection: sortScope.sortDirection,
     customOnly,
+    matchNone: filters.matchNone,
   });
   const catalogScope =
     normalizeCatalogScope(baseScope, pageLimit, pinnedNamespaces, clusterId) ??
@@ -117,8 +127,10 @@ export const buildBrowseCatalogPlan = ({
     scopeNamespaces,
     search: '',
     kinds: [],
+    apiGroups: filters.apiGroups ?? [],
     namespaces: metadataNamespaces,
     customOnly,
+    matchNone: filters.matchNone,
   });
   const metadataScope =
     normalizeCatalogScope(metadataBaseScope, 1, pinnedNamespaces, clusterId) ??
@@ -157,12 +169,14 @@ export const buildBrowseCatalogPageScope = (
     scopeNamespaces: plan.scopeNamespaces,
     search: input.filters.search ?? '',
     kinds: input.filters.kinds ?? [],
+    apiGroups: input.filters.apiGroups ?? [],
     namespaces: plan.namespacesToQuery,
     sort: catalogSortScope(input.sort).sort,
     sortDirection: catalogSortScope(input.sort).sortDirection,
     continueToken,
     startRank,
     customOnly: input.customOnly ?? false,
+    matchNone: input.filters.matchNone,
   });
   return (
     normalizeCatalogScope(pageScope, input.pageLimit, input.pinnedNamespaces, input.clusterId) ??
@@ -269,6 +283,10 @@ export const deriveBrowseFilterOptions = ({
   return {
     kinds: filteredKinds.map((kind) => kind.kind).sort(),
     namespaces: isNamespaceScoped ? [] : (payload?.namespaces ?? []).slice().sort(),
+    apiGroups: (payload?.groups ?? [])
+      .slice()
+      .sort()
+      .map((value) => ({ value, label: value === '(core)' ? 'core' : value })),
     isNamespaceScoped,
     partialDataLabel: [issueLabel, facetsLabel, totalLabel].filter(Boolean).join('\n') || undefined,
   };

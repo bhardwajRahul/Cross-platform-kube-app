@@ -2,9 +2,9 @@ import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
-import QueryPaginationControls from './QueryPaginationControls';
+import TablePaginationControls from './TablePaginationControls';
 
-describe('QueryPaginationControls', () => {
+describe('TablePaginationControls', () => {
   let container: HTMLDivElement;
   let root: ReactDOM.Root;
 
@@ -25,12 +25,84 @@ describe('QueryPaginationControls', () => {
     container.remove();
   });
 
+  it.each([0, 1, 25])('hides controls for an exact total of %i items', (totalCount) => {
+    act(() => {
+      root.render(
+        <TablePaginationControls
+          idPrefix="small-table"
+          pageIndex={1}
+          pageSize={50}
+          visibleItemCount={totalCount}
+          pageSizeOptions={[25, 50, 100, 250, 500, 1000]}
+          totalCount={totalCount}
+          totalIsExact
+          hasPrevious={false}
+          hasNext={false}
+          loading={false}
+          onPrevious={vi.fn()}
+          onNext={vi.fn()}
+          onPageSizeChange={vi.fn()}
+        />
+      );
+    });
+
+    expect(container.querySelector('.table-pagination-controls')).toBeNull();
+  });
+
+  it('shows controls when an exact total exceeds the smallest page size', () => {
+    act(() => {
+      root.render(
+        <TablePaginationControls
+          idPrefix="larger-table"
+          pageIndex={1}
+          pageSize={50}
+          visibleItemCount={26}
+          pageSizeOptions={[25, 50, 100, 250, 500, 1000]}
+          totalCount={26}
+          totalIsExact
+          hasPrevious={false}
+          hasNext={false}
+          loading={false}
+          onPrevious={vi.fn()}
+          onNext={vi.fn()}
+          onPageSizeChange={vi.fn()}
+        />
+      );
+    });
+
+    expect(container.querySelector('.table-pagination-controls')).not.toBeNull();
+  });
+
+  it('shows controls when navigation proves an approximate result has another page', () => {
+    act(() => {
+      root.render(
+        <TablePaginationControls
+          idPrefix="approximate-table"
+          pageIndex={1}
+          pageSize={50}
+          visibleItemCount={25}
+          pageSizeOptions={[25, 50, 100, 250, 500, 1000]}
+          totalCount={25}
+          totalIsExact={false}
+          hasPrevious={false}
+          hasNext
+          loading={false}
+          onPrevious={vi.fn()}
+          onNext={vi.fn()}
+          onPageSizeChange={vi.fn()}
+        />
+      );
+    });
+
+    expect(container.querySelector('.table-pagination-controls')).not.toBeNull();
+  });
+
   it('opens the rows-per-page dropdown and dispatches a supported page size', () => {
     const onPageSizeChange = vi.fn();
 
     act(() => {
       root.render(
-        <QueryPaginationControls
+        <TablePaginationControls
           idPrefix="typed"
           pageIndex={1}
           pageSize={50}
@@ -52,10 +124,12 @@ describe('QueryPaginationControls', () => {
       container.querySelector<HTMLElement>('[role="combobox"]')?.click();
     });
 
-    expect(container.querySelector('[role="listbox"]')).not.toBeNull();
+    const menu = document.body.querySelector('[role="listbox"]');
+    expect(menu).not.toBeNull();
+    expect(menu?.classList.contains('table-pagination-page-size-menu')).toBe(true);
 
     act(() => {
-      Array.from(container.querySelectorAll<HTMLElement>('[role="option"]'))
+      Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'))
         .find((option) => option.textContent?.includes('250'))
         ?.click();
     });
@@ -68,7 +142,7 @@ describe('QueryPaginationControls', () => {
 
     act(() => {
       root.render(
-        <QueryPaginationControls
+        <TablePaginationControls
           idPrefix="typed"
           pageIndex={2}
           pageSize={100}
@@ -103,7 +177,7 @@ describe('QueryPaginationControls', () => {
   const renderWithJump = (onPageJump: (page: number) => void) => {
     act(() => {
       root.render(
-        <QueryPaginationControls
+        <TablePaginationControls
           idPrefix="typed"
           pageIndex={2}
           pageSize={250}
@@ -122,7 +196,7 @@ describe('QueryPaginationControls', () => {
       );
     });
     return requireValue(
-      container.querySelector<HTMLInputElement>('.query-pagination-page-jump-input'),
+      container.querySelector<HTMLInputElement>('.table-pagination-page-jump-input'),
       'Expected the page-jump input after rendering pagination controls'
     );
   };

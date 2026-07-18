@@ -25,15 +25,6 @@
    2. Utility Helpers
    ============================================ */
 
-/* Utility Classes */
-.text-right {
-  text-align: right;
-}
-
-.text-center {
-  text-align: center;
-}
-
 .text-muted {
   color: var(--grid-text-secondary);
 }
@@ -245,9 +236,21 @@ body.dockable-panel-resizing .content-body .gridtable-header-container {
 .header-content {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   flex: 1;
   line-height: inherit;
   overflow: hidden;
+  text-align: left;
+}
+
+.grid-cell-header[data-align="center"] .header-content {
+  justify-content: center;
+  text-align: center;
+}
+
+.grid-cell-header[data-align="right"] .header-content {
+  justify-content: flex-end;
+  text-align: right;
 }
 
 .header-content > span,
@@ -463,6 +466,14 @@ body.gridtable-disable-hover .gridtable-hover-overlay {
   display: block;
 }
 
+.grid-cell[data-align="center"] .grid-cell-content {
+  text-align: center;
+}
+
+.grid-cell[data-align="right"] .grid-cell-content {
+  text-align: right;
+}
+
 /* Type column - no ellipsis for badge display */
 .grid-cell[data-column="kind"],
 .grid-cell[data-column="type"] {
@@ -583,9 +594,8 @@ body.gridtable-disable-hover .gridtable-hover-overlay {
   justify-content: flex-end;
   gap: var(--grid-spacing-md);
   min-height: 1rem;
-  padding: 0.15rem var(--grid-spacing-cell-x);
+  padding: 0.25rem var(--grid-spacing-cell-x);
   border-top: 1px solid var(--grid-border-color);
-  background-color: var(--color-bg-secondary);
   overflow: visible;
   box-sizing: border-box;
 }
@@ -764,15 +774,6 @@ body.dockable-panel-resizing .content-body .gridtable-pagination {
   display: flex;
   align-items: center;
   margin-left: var(--spacing-lg);
-}
-
-.gridtable-filter-result-count {
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
 }
 
 .gridtable-filter-result-tooltip-paragraph {

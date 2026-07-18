@@ -25,7 +25,9 @@ without an explicit cap or pagination model.
 - Query-backed pagination controls belong together in the table footer. Show
   page size and visible range. Show exact totals and page counts only when the
   backend result says the total is exact; otherwise make the count approximate
-  and avoid random page-jump UI.
+  and avoid random page-jump UI. Do not render the footer for an exact result at
+  or below the smallest supported page size unless previous or next navigation
+  is available.
 - Browse page size is user-selectable only from bounded options. Changing page
   size starts a new backend query scope and invalidates prior page cursors.
 - Make truncation, load-more, degraded data, stale data, unavailable metrics,
@@ -279,20 +281,51 @@ refetching — never from mutating displayed rows in place. The contract:
 Pods: `backend/refresh/snapshot/pods.go` feeds namespace and all-namespaces pod
 tables. It carries pod identity, status, restart, readiness, node, owner, and
 metrics projection state. All-namespaces Pods are `Query Backed Dynamic`:
-search, namespace filters, health predicates, pagination, and CPU/memory sort
-are backend-owned for the current metrics snapshot. Pod rows are served from a
-maintained `querypage` store fed by the owned-reflector ingest path (a keyset
-range scan with exact facet/total counters; metrics are overlaid at serve, never
-stored) — see [data-layer.md](./data-layer.md).
+search, namespace/status/node filters, health predicates, pagination, and
+CPU/memory sort are backend-owned for the current metrics snapshot. Status and
+node dropdown options describe the full structural scope rather than the current
+page or selected subset. Pod rows are served from a maintained `querypage` store
+fed by the owned-reflector ingest path (a keyset range scan with exact
+facet/total counters; metrics are overlaid at serve, never stored) — see
+[data-layer.md](./data-layer.md).
 
 Workloads: `backend/refresh/snapshot/namespace_workloads.go` feeds namespace
 workload tables. Both single-namespace and all-namespaces workload tables are
 `Query Backed Dynamic` (single-namespace runs a namespace-scoped query page):
-kind and namespace filters, search, pagination, and CPU/memory aggregate sorts
-are backend-owned for the current metrics snapshot. Like Pods, workload rows
-serve from a maintained `querypage` store fed by the workload GVRs' ingest
-reflectors, with the pod-aggregate / HPA / metrics join applied at serve — see
+kind, namespace, and status filters, search, pagination, and CPU/memory aggregate
+sorts are backend-owned for the current metrics snapshot. Status options cover
+the full structural namespace scope and remain available when a Status selection
+or fixed health predicate narrows the result set. Like Pods, workload rows serve
+from a maintained `querypage` store fed by the workload GVRs' ingest reflectors,
+with the pod-aggregate / HPA / metrics join applied at serve — see
 [data-layer.md](./data-layer.md).
+
+The namespace Workloads destination composes two independent query-backed
+tables: Workloads above and Pods below. Each table retains its own filter,
+sort, cursor pagination, page size, diagnostics, and persisted GridTable state.
+The split starts at 50% and supports pointer and keyboard resizing through a
+handle directly on the pane boundary; it has no separate divider band. The Pods
+pane boundary retains a one-pixel separator so the drag handle remains visible;
+hovering or dragging thickens it to the shared resize highlight. The Pods pane
+can be collapsed from the left edge of its own GridTable filter bar. While
+collapsed, the one-pixel boundary remains and the Pods row becomes a compact
+header containing only the expand control and `Show Pods`; expanding restores
+the full filter bar and table. Pointer resizing cancels native selection at
+gesture start and disables both standard and WebKit text selection for the
+gesture, including while the pointer crosses the native app-window boundary.
+Selecting a Workloads row writes the normal Pods GridTable filters: Namespace
+when the table spans all namespaces, plus the provider-owned Owner facet. Owner
+values carry cluster, group, version, kind, namespace, and name. Deployments
+resolve through ReplicaSets, CronJobs resolve through Jobs, direct owners match
+directly, and an ownerless Pod uses its own core/v1 identity. The projected Pod
+row retains both direct-controller and resolved-ancestor identities; no
+generated name parsing is part of the descendant contract. Manually changing
+Namespace or Owner clears the Workloads row highlight without restoring the
+previous filters. Changing the cluster or pinned namespace while a workload row
+is selected clears that selection's Owner filter before querying the new scope;
+an Owner filter with no active workload selection remains ordinary persisted
+table state. The former standalone Pods navigation value is parsed as Workloads
+for persisted-state compatibility.
 
 Custom resources: cluster and namespace custom table row universes come from
 the object catalog query path with `customOnly=true`. Search, kind filters,
@@ -314,7 +347,15 @@ recent/capped windows and are visibly `Local Partial`.
 Nodes: `backend/refresh/snapshot/nodes.go` feeds a `Query Backed Dynamic`
 cluster table. Search, pagination, status filters, age sort, and CPU/memory
 metric sorts are backend-owned for the current resource and metric projection
-state.
+state. Node Status options cover the full cluster scope rather than the current
+page or active Status selection.
+
+Status, Owner, and Node are provider-owned query facets, not fixed typed-query fields.
+Pods, Workloads, and Nodes publish generic facet descriptors in capabilities;
+their responses pair those descriptors with full-structural-scope option values
+and exactness. The shared request path serializes every selection as
+`facet.<key>`, so adding another provider facet does not require a new GridTable
+state field or view-local filter implementation.
 
 Config, RBAC, storage, network, quotas, autoscaling, and Helm: these snapshot
 producers expose typed backend query pages for cluster, all-namespaces, and

@@ -142,9 +142,11 @@ export interface UseBrowseCatalogResult {
   handleLoadPrevious: () => void;
   /** Filter options derived from the catalog snapshot */
   filterOptions: BrowseFilterOptions;
+  /** True once catalog metadata has resolved for the current scope. */
+  filterOptionsResolved: boolean;
   /** Total count of items matching the current query (before pagination) */
   totalCount: number;
-  /** In-scope count before filters — the "of M" in "showing N of M items due to filters". */
+  /** In-scope count before filters — the "of M" in "Showing N of M items". */
   unfilteredTotal: number;
   /** Whether totalCount is exact for the current backend query */
   totalIsExact: boolean;
@@ -173,6 +175,7 @@ export interface BrowseCatalogQueryDescriptor {
   namespaces: string[];
   hasUserNamespaceScope: boolean;
   kinds: string[];
+  apiGroups: string[];
   search: string;
   sortField: string;
   sortDirection: string;
@@ -298,6 +301,7 @@ export function useBrowseCatalog({
       namespaces: plan.namespacesToQuery,
       hasUserNamespaceScope: plan.hasUserNamespaceScope,
       kinds: queryFilters.kinds ?? [],
+      apiGroups: queryFilters.apiGroups ?? [],
       search: queryFilters.search ?? '',
       sortField: activeSort.sortField,
       sortDirection: activeSort.sortDirection,
@@ -313,6 +317,7 @@ export function useBrowseCatalog({
       plan.hasUserNamespaceScope,
       plan.namespacesToQuery,
       queryFilters.kinds,
+      queryFilters.apiGroups,
       queryFilters.search,
     ]
   );
@@ -663,21 +668,22 @@ export function useBrowseCatalog({
   // them mid-interaction). A real payload always wins, including a genuinely
   // empty one; the ref clears on structural scope changes (see the reset
   // effect) so cluster/namespace switches never leak stale options.
+  const filterOptionsPayload = (
+    metadataUsesActiveScope ? domain.data : (metadataDomain.data ?? domain.data)
+  ) as CatalogSnapshotPayload | null;
+  const filterOptionsResolved = Boolean(filterOptionsPayload);
   const filterOptions = useMemo<BrowseFilterOptions>(() => {
-    const payload = (
-      metadataUsesActiveScope ? domain.data : (metadataDomain.data ?? domain.data)
-    ) as CatalogSnapshotPayload | null;
-    if (!payload && lastFilterOptionsRef.current) {
+    if (!filterOptionsPayload && lastFilterOptionsRef.current) {
       return lastFilterOptionsRef.current;
     }
     const derived = deriveBrowseFilterOptions({
-      payload,
+      payload: filterOptionsPayload,
       clusterScopedOnly,
       isNamespaceScoped: plan.isNamespaceScoped,
     });
     lastFilterOptionsRef.current = derived;
     return derived;
-  }, [clusterScopedOnly, domain.data, metadataDomain.data, metadataUsesActiveScope, plan]);
+  }, [clusterScopedOnly, filterOptionsPayload, plan.isNamespaceScoped]);
 
   // Update available namespaces when the snapshot includes them.
   // This enables querying all namespaces when no filter is selected in all-namespaces mode.
@@ -818,6 +824,7 @@ export function useBrowseCatalog({
     handleLoadMore,
     handleLoadPrevious,
     filterOptions,
+    filterOptionsResolved,
     totalCount,
     unfilteredTotal,
     totalIsExact,

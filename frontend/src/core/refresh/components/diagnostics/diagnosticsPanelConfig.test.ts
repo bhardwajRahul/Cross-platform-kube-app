@@ -7,6 +7,7 @@
 
 import { describe, expect, test } from 'vitest';
 import {
+  getScopedFeaturesForView,
   PAUSE_POLLING_WHEN_STREAMING_DOMAINS,
   STREAM_ONLY_DOMAINS,
 } from './diagnosticsPanelConfig';
@@ -25,6 +26,7 @@ describe('diagnosticsPanelConfig domain behavior sets', () => {
     // client-side metrics polling remains.
     expect(sortedDomains(PAUSE_POLLING_WHEN_STREAMING_DOMAINS)).toEqual([
       'catalog',
+      'cluster-attention',
       'cluster-config',
       'cluster-crds',
       'cluster-custom',
@@ -46,5 +48,9 @@ describe('diagnosticsPanelConfig domain behavior sets', () => {
       'object-events',
       'pods',
     ]);
+  });
+
+  test('does not project selected-cluster permissions onto the Global workspace', () => {
+    expect(getScopedFeaturesForView('global', null, 'workloads')).toEqual([]);
   });
 });

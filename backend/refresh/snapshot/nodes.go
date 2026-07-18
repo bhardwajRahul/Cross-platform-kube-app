@@ -79,7 +79,14 @@ func nodeQueryCapabilities() ResourceQueryCapabilities {
 		nil,
 		[]string{"name", "status", "roles", "version", "internalIP", "externalIP"},
 		nil, // no kind filtering
+		typedTableFacetDescriptors(nodeQueryFacets())...,
 	)
+}
+
+func nodeQueryFacets() []typedTableQueryFacet[NodeSummary] {
+	return []typedTableQueryFacet[NodeSummary]{
+		statusQueryFacet(func(row NodeSummary) string { return row.Status }),
+	}
 }
 
 // nodesQuerypageSchema derives the querypage Schema for the nodes table from its
@@ -255,7 +262,7 @@ func (b *NodeListBuilder) Build(ctx context.Context, scope string) (*refresh.Sna
 		if pod == nil {
 			continue
 		}
-		aggregates = append(aggregates, projectPodAggregate(pod, nil))
+		aggregates = append(aggregates, projectPodAggregate(pod, PodOwnerSources{}))
 		if v := parsePodResourceVersion(pod); v > podsVersion {
 			podsVersion = v
 		}

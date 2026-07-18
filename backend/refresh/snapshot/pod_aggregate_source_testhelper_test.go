@@ -3,6 +3,7 @@ package snapshot
 import (
 	"strconv"
 
+	"github.com/luxury-yacht/app/backend/kind/objectmapnode"
 	"github.com/luxury-yacht/app/backend/kind/streamrows"
 	"github.com/luxury-yacht/app/backend/objectcatalog"
 	"github.com/luxury-yacht/app/backend/refresh/ingest"
@@ -20,9 +21,13 @@ import (
 // test drive the cluster-overview workload counts (len of catalog rows, gated on synced).
 type fakePodAggregateSource struct {
 	aggregates      []streamrows.PodAggregate
+	quotaAggregates []streamrows.ResourceQuotaAggregate
+	quotaTracked    bool
+	quotaSynced     bool
 	resourceVersion string
 	podSynced       *bool
 	workloadCatalog map[schema.GroupVersionResource][]interface{}
+	workloadObjects map[schema.GroupVersionResource][]objectmapnode.Node
 	workloadSynced  map[schema.GroupVersionResource]bool
 	// nodeBundles are the cut node kind's projected bundles (Table=NodeSummary own-row,
 	// Aggregate=nodeOverviewFact), returned for NodeGVR via Rows. nodeSynced gates the
@@ -37,6 +42,13 @@ type fakePodAggregateSource struct {
 }
 
 func (s fakePodAggregateSource) AggregateRows(gvr schema.GroupVersionResource) []interface{} {
+	if gvr == ResourceQuotaGVR {
+		out := make([]interface{}, 0, len(s.quotaAggregates))
+		for _, aggregate := range s.quotaAggregates {
+			out = append(out, aggregate)
+		}
+		return out
+	}
 	if gvr != PodGVR {
 		return nil
 	}
@@ -78,6 +90,15 @@ func (s fakePodAggregateSource) CatalogRows(gvr schema.GroupVersionResource) []i
 	return s.workloadCatalog[gvr]
 }
 
+func (s fakePodAggregateSource) ObjectMapRows(gvr schema.GroupVersionResource) []interface{} {
+	rows := s.workloadObjects[gvr]
+	out := make([]interface{}, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row)
+	}
+	return out
+}
+
 // HasSyncedFor reports the per-GVR synced flag for a cut workload GVR (default false), so a
 // test can gate the cluster-overview workload counts on store readiness; the pod GVR
 // reports true so pod-aggregate reads are never gated out in unit tests.
@@ -90,9 +111,15 @@ func (s fakePodAggregateSource) HasSyncedFor(gvr schema.GroupVersionResource) bo
 		return true
 	case NodeGVR:
 		return s.nodeSynced
+	case ResourceQuotaGVR:
+		return s.quotaSynced
 	default:
 		return s.workloadSynced[gvr]
 	}
+}
+
+func (s fakePodAggregateSource) RawHasSyncedFor(gvr schema.GroupVersionResource) bool {
+	return s.HasSyncedFor(gvr)
 }
 
 func (s fakePodAggregateSource) withPodSynced(synced bool) fakePodAggregateSource {
@@ -137,9 +164,18 @@ func (s fakePodAggregateSource) Tracks(gvr schema.GroupVersionResource) bool {
 	switch gvr {
 	case DeploymentGVR, StatefulSetGVR, DaemonSetGVR, JobGVR, CronJobGVR, PodGVR:
 		return true
+	case ResourceQuotaGVR:
+		return s.quotaTracked
 	default:
 		return false
 	}
+}
+
+func (s fakePodAggregateSource) withQuotaAggregates(aggregates ...streamrows.ResourceQuotaAggregate) fakePodAggregateSource {
+	s.quotaAggregates = append([]streamrows.ResourceQuotaAggregate(nil), aggregates...)
+	s.quotaTracked = true
+	s.quotaSynced = true
+	return s
 }
 
 // withWorkloadCatalog returns a copy of the source carrying `count` projected catalog rows
@@ -196,7 +232,7 @@ func newFakePodAggregateSource(rsLister appslisters.ReplicaSetLister, pods ...*c
 		if pod == nil {
 			continue
 		}
-		aggregates = append(aggregates, projectPodAggregate(pod, rsLister))
+		aggregates = append(aggregates, projectPodAggregate(pod, PodOwnerSources{ReplicaSets: rsLister}))
 	}
 	return fakePodAggregateSource{aggregates: aggregates}
 }
@@ -260,9 +296,9 @@ func newFakePodWorkloadsIngestSource(meta ClusterMeta, rsLister appslisters.Repl
 		if pod == nil {
 			continue
 		}
-		aggregate := projectPodAggregate(pod, rsLister)
+		aggregate := projectPodAggregate(pod, PodOwnerSources{ReplicaSets: rsLister})
 		bundles = append(bundles, ingest.Bundle{
-			Table:     podSummaryWithoutMetrics(podres.BuildStreamSummary(streamMeta, pod, 0, 0, rsLister)),
+			Table:     podSummaryWithoutMetrics(podres.BuildStreamSummary(streamMeta, pod, 0, 0, rsLister, nil)),
 			Aggregate: aggregate,
 			Indexes:   podAggregateBundleIndexes(aggregate),
 		})

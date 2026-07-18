@@ -126,7 +126,14 @@ func namespaceWorkloadsQueryCapabilities() ResourceQueryCapabilities {
 		[]string{"kinds", "namespaces"},
 		[]string{"kind", "name", "namespace", "status", "ready"},
 		[]string{podres.Identity.Kind, deployment.Identity.Kind, statefulset.Identity.Kind, daemonset.Identity.Kind, jobres.Identity.Kind, cronjob.Identity.Kind},
+		typedTableFacetDescriptors(workloadQueryFacets())...,
 	)
+}
+
+func workloadQueryFacets() []typedTableQueryFacet[WorkloadSummary] {
+	return []typedTableQueryFacet[WorkloadSummary]{
+		statusQueryFacet(func(row WorkloadSummary) string { return row.Status }),
+	}
 }
 
 // WorkloadSummary lives in the streamrows leaf so every streaming row type has
@@ -537,6 +544,7 @@ func workloadTableQueryAdapter() typedTableQueryAdapter[WorkloadSummary] {
 		AnchorKey: namespacedTableKey,
 		Namespace: func(row WorkloadSummary) string { return row.Namespace },
 		Kind:      func(row WorkloadSummary) string { return row.Kind },
+		Facets:    workloadQueryFacets(),
 		SearchText: func(row WorkloadSummary) []string {
 			return []string{
 				row.Kind,
@@ -556,8 +564,7 @@ func workloadTableQueryAdapter() typedTableQueryAdapter[WorkloadSummary] {
 					ready, total, ok := parseReadyPair(row.Ready)
 					return ok && total > 0 && ready < total
 				case "unhealthy":
-					presentation := strings.ToLower(strings.TrimSpace(row.StatusPresentation))
-					return presentation == "warning" || presentation == "error" || presentation == "not-ready"
+					return isUnhealthyStatusPresentation(row.StatusPresentation)
 				default:
 					return true
 				}
@@ -609,6 +616,15 @@ func workloadTableQueryAdapter() typedTableQueryAdapter[WorkloadSummary] {
 				return 0, false
 			}
 		},
+	}
+}
+
+func isUnhealthyStatusPresentation(presentation string) bool {
+	switch strings.ToLower(strings.TrimSpace(presentation)) {
+	case "warning", "error", "not-ready":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -832,7 +848,7 @@ func (b *NamespaceWorkloadsBuilder) buildCronJobSummary(
 }
 
 func buildStandalonePodSummary(clusterID string, pod *corev1.Pod, usage map[string]metrics.PodUsage) WorkloadSummary {
-	resources := aggregateWorkloadPodResources([]streamrows.PodAggregate{projectPodAggregate(pod, nil)}, usage)
+	resources := aggregateWorkloadPodResources([]streamrows.PodAggregate{projectPodAggregate(pod, PodOwnerSources{})}, usage)
 	ready := podReadyStatus(pod)
 	model := podres.BuildResourceModel(clusterID, pod)
 
@@ -971,7 +987,7 @@ func podReadyStatus(pod *corev1.Pod) string {
 	if pod == nil {
 		return "0/0"
 	}
-	agg := projectPodAggregate(pod, nil)
+	agg := projectPodAggregate(pod, PodOwnerSources{})
 	return fmt.Sprintf("%d/%d", agg.ReadyContainers, agg.TotalContainers)
 }
 

@@ -8,6 +8,7 @@
  * navigation is handled by the FavoritesContext effect once the cluster is ready.
  */
 
+import { resolveFavoriteRoute } from '@/core/navigation/favoriteRoute';
 import type { Favorite } from '@/core/persistence/favorites';
 
 export interface NavigationContexts {
@@ -45,8 +46,10 @@ export function navigateToFavorite(
 
   setPendingFavorite(favorite);
 
+  const route = resolveFavoriteRoute(favorite.viewType, favorite.view);
   const favoriteClusterId = favorite.clusterId?.trim() ?? '';
-  const isClusterSpecific = favorite.clusterSelection !== '' || favoriteClusterId !== '';
+  const isClusterSpecific =
+    route.scope !== 'global' && (favorite.clusterSelection !== '' || favoriteClusterId !== '');
 
   if (isClusterSpecific) {
     const clusterSelection =
@@ -62,9 +65,12 @@ export function navigateToFavorite(
     const alreadyActive =
       favoriteClusterId && selectedClusterId ? selectedClusterId === favoriteClusterId : false;
     const alreadyOpen = selectedKubeconfigs.includes(clusterSelection);
-    if (!alreadyOpen) {
+    if (alreadyActive) {
+      // The same logical cluster can be open under a different kubeconfig path.
+      // Cluster identity wins over the persisted path.
+    } else if (!alreadyOpen) {
       void openKubeconfig(clusterSelection);
-    } else if (!alreadyActive) {
+    } else {
       setActiveKubeconfig(clusterSelection);
     }
   }

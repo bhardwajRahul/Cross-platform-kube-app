@@ -46,6 +46,35 @@ type typedQueryTestRow struct {
 	cpu       float64
 }
 
+func TestTypedTableQueryMatchNoneReturnsNoRowsAndRetainsOptions(t *testing.T) {
+	query := typedTableQuery{
+		Enabled: true,
+		Request: ResourceQueryRequest{
+			ClusterID: "cluster-a",
+			Table:     "pods",
+			Limit:     50,
+			MatchNone: true,
+		},
+	}
+	page := applyTypedTableQuery([]typedQueryTestRow{
+		{key: "default/a", name: "a", namespace: "default", kind: "Pod"},
+		{key: "platform/b", name: "b", namespace: "platform", kind: "Deployment"},
+	}, query, typedQueryTestAdapter())
+
+	if len(page.Rows) != 0 || page.Total != 0 {
+		t.Fatalf("match-none page must be empty, got total=%d rows=%+v", page.Total, page.Rows)
+	}
+	if !equalStringSlices(page.Namespaces, []string{"default", "platform"}) {
+		t.Fatalf("match-none namespaces = %v", page.Namespaces)
+	}
+	if !equalStringSlices(page.Kinds, []string{"Deployment", "Pod"}) {
+		t.Fatalf("match-none kinds = %v", page.Kinds)
+	}
+	if page.UnfilteredTotal != 2 || !page.TotalIsExact {
+		t.Fatalf("match-none totals = %d/%d exact=%v", page.Total, page.UnfilteredTotal, page.TotalIsExact)
+	}
+}
+
 func TestTypedTableQueryReportsInvalidCursor(t *testing.T) {
 	query := typedTableQuery{
 		Enabled: true,
@@ -336,7 +365,7 @@ func TestTypedTableQueryInvalidatesCursorWhenPageSizeChanges(t *testing.T) {
 
 func TestResourceQueryRequestFromValuesAcceptsCatalogAndTypedListKeys(t *testing.T) {
 	values := mapValues(
-		"kinds=Pod,Deployment&kind=StatefulSet&namespaces=apps,default&namespace=kube-system&sort=cpu&sortDirection=desc&limit=500&predicate.health=unhealthy&includeMetadata=true",
+		"kinds=Pod,Deployment&kind=StatefulSet&namespaces=apps,default&namespace=kube-system&facet.statuses=Running&facet.statuses=Pending&facet.statuses=Completed&facet.nodes=node-b&facet.nodes=node-a&facet.nodes=node-c&sort=cpu&sortDirection=desc&limit=500&predicate.health=unhealthy&includeMetadata=true",
 	)
 
 	request := resourceQueryRequestFromValues("cluster-a", "pods", values, ResourceQueryRequest{
@@ -350,6 +379,8 @@ func TestResourceQueryRequestFromValuesAcceptsCatalogAndTypedListKeys(t *testing
 	}
 	assertStringSlicesEqual(t, []string{"Deployment", "Pod", "StatefulSet"}, request.Kinds)
 	assertStringSlicesEqual(t, []string{"apps", "default", "kube-system"}, request.Namespaces)
+	assertStringSlicesEqual(t, []string{"Completed", "Pending", "Running"}, request.Facets["statuses"])
+	assertStringSlicesEqual(t, []string{"node-a", "node-b", "node-c"}, request.Facets["nodes"])
 	if request.SortField != "cpu" || request.SortDirection != "desc" || request.Limit != 500 {
 		t.Fatalf("unexpected sort/limit: %+v", request)
 	}
@@ -358,6 +389,17 @@ func TestResourceQueryRequestFromValuesAcceptsCatalogAndTypedListKeys(t *testing
 	}
 	if !request.IncludeMetadata {
 		t.Fatal("expected includeMetadata=true to parse into request.IncludeMetadata")
+	}
+}
+
+func TestResourceQueryRequestPreservesOpaqueFacetValues(t *testing.T) {
+	owner := `["owner","Deployment","metrics-server","cluster-a","apps","v1","kube-system"]`
+	values := url.Values{"facet.owners": {owner}}
+
+	request := resourceQueryRequestFromValues("cluster-a", "pods", values, ResourceQueryRequest{})
+
+	if selected := request.Facets["owners"]; len(selected) != 1 || selected[0] != owner {
+		t.Fatalf("owner facet = %q, want one opaque value %q", selected, owner)
 	}
 }
 

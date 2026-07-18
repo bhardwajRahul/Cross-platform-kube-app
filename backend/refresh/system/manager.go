@@ -42,6 +42,7 @@ import (
 	"github.com/luxury-yacht/app/backend/refresh/resourcestream"
 	"github.com/luxury-yacht/app/backend/refresh/snapshot"
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
+	"github.com/luxury-yacht/app/backend/resourcemodel"
 	"github.com/luxury-yacht/app/backend/resources/common"
 )
 
@@ -54,24 +55,26 @@ type PermissionIssue struct {
 
 // Config contains the dependencies required to initialise the refresh manager.
 type Config struct {
-	KubernetesClient           kubernetes.Interface                     // Kubernetes client for API interactions.
-	MetricsClient              *metricsclient.Clientset                 // Metrics client for collecting cluster metrics.
-	RestConfig                 *rest.Config                             // REST configuration for Kubernetes client.
-	ResyncInterval             time.Duration                            // Interval for resyncing informers.
-	MetricsInterval            time.Duration                            // Interval for collecting metrics.
-	APIExtensionsClient        apiextensionsclientset.Interface         // Client for API extensions.
-	GatewayClient              gatewayversioned.Interface               // Gateway API client for direct Gateway API resource access.
-	GatewayInformerFactory     gatewayinformers.SharedInformerFactory   // Informers for Gateway API resources.
-	GatewayAPIPresence         common.GatewayAPIPresence                // Installed Gateway API kind set.
-	DynamicClient              dynamic.Interface                        // Dynamic client for interacting with Kubernetes resources.
-	ObjectDetailsProvider      snapshot.ObjectDetailProvider            // Provider for detailed object information.
-	Logger                     containerlogsstream.Logger               // Logger for recording refresh operations.
-	ObjectCatalogEnabled       func() bool                              // Function to check if the object catalog is enabled.
-	ObjectCatalogService       func() *objectcatalog.Service            // Function to get the object catalog service.
-	ObjectCatalogNamespaces    func() []snapshot.CatalogNamespaceGroup  // Function to get the object catalog namespaces.
-	ContainerLogsTargetLimiter *containerlogsstream.GlobalTargetLimiter // Shared global limiter for container logs stream targets.
-	ClusterID                  string                                   // stable identifier for cluster-scoped keys
-	ClusterName                string                                   // display name for cluster in payloads
+	KubernetesClient             kubernetes.Interface                     // Kubernetes client for API interactions.
+	MetricsClient                *metricsclient.Clientset                 // Metrics client for collecting cluster metrics.
+	RestConfig                   *rest.Config                             // REST configuration for Kubernetes client.
+	ResyncInterval               time.Duration                            // Interval for resyncing informers.
+	MetricsInterval              time.Duration                            // Interval for collecting metrics.
+	APIExtensionsClient          apiextensionsclientset.Interface         // Client for API extensions.
+	GatewayClient                gatewayversioned.Interface               // Gateway API client for direct Gateway API resource access.
+	GatewayInformerFactory       gatewayinformers.SharedInformerFactory   // Informers for Gateway API resources.
+	GatewayAPIPresence           common.GatewayAPIPresence                // Installed Gateway API kind set.
+	DynamicClient                dynamic.Interface                        // Dynamic client for interacting with Kubernetes resources.
+	ObjectDetailsProvider        snapshot.ObjectDetailProvider            // Provider for detailed object information.
+	Logger                       containerlogsstream.Logger               // Logger for recording refresh operations.
+	ObjectCatalogEnabled         func() bool                              // Function to check if the object catalog is enabled.
+	ObjectCatalogService         func() *objectcatalog.Service            // Function to get the object catalog service.
+	ObjectCatalogNamespaces      func() []snapshot.CatalogNamespaceGroup  // Function to get the object catalog namespaces.
+	ContainerLogsTargetLimiter   *containerlogsstream.GlobalTargetLimiter // Shared global limiter for container logs stream targets.
+	ClusterID                    string                                   // stable identifier for cluster-scoped keys
+	ClusterName                  string                                   // display name for cluster in payloads
+	AttentionIgnoreRules         snapshot.AttentionIgnoreRules
+	AttentionIgnoredObjectPruner func(resourcemodel.ResourceRef)
 	// AllowedNamespaces is the cluster's namespace scope
 	// (docs/plans/namespace-scope.md). Empty means cluster-wide. Enforced by
 	// the permission checker's scope fan-out, the scoped namespaces domain,
@@ -100,6 +103,7 @@ type Subsystem struct {
 	// into the torn-down stream manager.
 	NamespaceNotifier    *snapshot.NamespaceChangeNotifier
 	ObjectEventsNotifier *snapshot.ObjectEventsChangeNotifier
+	AttentionIndex       *snapshot.ClusterAttentionIndex
 	// NamespacesDoorbell is the post-broadcast observer slot on the namespaces
 	// doorbell; the app attaches the cluster-Ready self-build hook here (see
 	// app_refresh_setup) once the aggregate service exists.
@@ -188,11 +192,22 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 	// the shared factory's RS lister — the RS informer stays registered (only pods is
 	// cut). Registered BEFORE the hub starts so the pod reflector launches with the
 	// rest and the initial relist is sync-gated.
-	registerPodReflector(ingestManager, informerFactory, snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName})
+	jobControllerOwners := snapshot.NewJobControllerOwnerIndex()
+	registerPodReflector(
+		ingestManager,
+		informerFactory,
+		snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName},
+		jobControllerOwners.Lookup,
+	)
 	// The five workload kinds (Deployment/StatefulSet/DaemonSet/Job/CronJob) have no Stream
 	// descriptor either (their table is the bespoke cross-kind WorkloadSummary), so they too
 	// are wired with explicit bespoke projectors. ReplicaSet stays on its typed informer.
-	registerWorkloadReflectors(ingestManager, snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName})
+	if err := registerWorkloadReflectors(ingestManager, snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName}); err != nil {
+		return nil, err
+	}
+	if !ingestManager.AddBundleSink(snapshot.JobGVR, jobControllerOwners) {
+		return nil, fmt.Errorf("register Job owner sink: Job ingest store is unavailable")
+	}
 	// Service and EndpointSlice have no Stream descriptor either (a Service row is the bespoke
 	// Service↔EndpointSlice join), so they are wired with explicit bespoke projectors. Ingress
 	// and NetworkPolicy ARE Stream-backed and handled by the generic loop above.
@@ -299,6 +314,7 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 
 	var namespaceNotifier *snapshot.NamespaceChangeNotifier
 	var objectEventsNotifier *snapshot.ObjectEventsChangeNotifier
+	var attentionIndex *snapshot.ClusterAttentionIndex
 	deps := registrationDeps{
 		registry:        registry,
 		informerFactory: informerFactory,
@@ -312,6 +328,9 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 		},
 		noteObjectEventsNotifier: func(notifier *snapshot.ObjectEventsChangeNotifier) {
 			objectEventsNotifier = notifier
+		},
+		noteAttentionIndex: func(index *snapshot.ClusterAttentionIndex) {
+			attentionIndex = index
 		},
 	}
 
@@ -375,7 +394,7 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 		if observable, ok := metricsPoller.(interface {
 			SetCollectionObserver(func(metrics.Metadata))
 		}); ok {
-			observable.SetCollectionObserver(metricsSignalObserver(resourceManager))
+			observable.SetCollectionObserver(metricsSignalObserver(resourceManager, namespaceNotifier))
 		}
 	}
 	// Namespaces doorbell: namespace object changes and workload-presence flips
@@ -391,6 +410,9 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 	// (the poll remains only as the stream-down fallback).
 	if resourceManager != nil && objectEventsNotifier != nil {
 		wireObjectEventsDoorbell(snapshotService, objectEventsNotifier, resourceManager)
+	}
+	if resourceManager != nil && attentionIndex != nil {
+		wireClusterAttentionDoorbell(snapshotService, attentionIndex, resourceManager)
 	}
 
 	return &Subsystem{
@@ -409,12 +431,13 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 		ClusterMeta:          clusterMeta,
 		NamespaceNotifier:    namespaceNotifier,
 		ObjectEventsNotifier: objectEventsNotifier,
+		AttentionIndex:       attentionIndex,
 		NamespacesDoorbell:   namespacesDoorbellObserver,
 	}, nil
 }
 
 // StopDoorbellNotifiers silences every doorbell notifier (namespaces,
-// object-events); nil-safe for subsystems built without them (tests, failed
+// object-events, cluster-attention); nil-safe for subsystems built without them (tests, failed
 // registration). Every teardown/cool path must call this or the notifiers'
 // debounce/rearm timers keep broadcasting into the dead stream manager.
 func (s *Subsystem) StopDoorbellNotifiers() {
@@ -427,13 +450,16 @@ func (s *Subsystem) StopDoorbellNotifiers() {
 	if s.ObjectEventsNotifier != nil {
 		s.ObjectEventsNotifier.Stop()
 	}
+	if s.AttentionIndex != nil {
+		s.AttentionIndex.Stop()
+	}
 }
 
-// metricsSignalObserver maps a successful poller collection to a SourceMetric
-// doorbell on the resource stream. The version is the collection revision
-// (CollectedAt nanos) — identical to the snapshot builders' metric source clock
-// (metricRevisionFromMetadata), so the doorbell and the snapshot ETag advance
-// together. A zero CollectedAt means no sample exists yet; nothing to announce.
+// metricsSignalObserver sends every completed attempt to the namespace health
+// notifier, while only successful samples ring the shared SourceMetric
+// doorbell. This preserves polling for poll-augmented domains while allowing a
+// first failure to move Namespaces out of loading. An empty revision means no
+// attempt has completed yet.
 // wireNamespacesDoorbell and wireObjectEventsDoorbell attach a notifier's
 // broadcast with the ORDERING CONTRACT every doorbell must honor: invalidate
 // the domain's snapshot cache FIRST, then broadcast. The doorbell-triggered
@@ -494,9 +520,35 @@ func wireObjectEventsDoorbell(
 	})
 }
 
-func metricsSignalObserver(resourceManager *resourcestream.Manager) func(metrics.Metadata) {
+type attentionDoorbellNotifier interface {
+	SetBroadcast(func(version string))
+}
+
+func wireClusterAttentionDoorbell(
+	service *snapshot.Service,
+	notifier attentionDoorbellNotifier,
+	resourceManager *resourcestream.Manager,
+) {
+	notifier.SetBroadcast(func(version string) {
+		service.InvalidateDomainCache("cluster-attention")
+		resourceManager.BroadcastClusterAttentionRefresh(version)
+	})
+}
+
+type metricsChangeNotifier interface {
+	MetricsChanged()
+}
+
+func metricsSignalObserver(resourceManager *resourcestream.Manager, namespaceNotifier metricsChangeNotifier) func(metrics.Metadata) {
 	return func(metadata metrics.Metadata) {
-		if resourceManager == nil || metadata.CollectedAt.IsZero() {
+		revision := metrics.Revision(metadata)
+		if revision == "" {
+			return
+		}
+		if namespaceNotifier != nil {
+			namespaceNotifier.MetricsChanged()
+		}
+		if resourceManager == nil || metadata.CollectedAt.IsZero() || metadata.ConsecutiveFailures > 0 || metadata.LastError != "" {
 			return
 		}
 		resourceManager.BroadcastMetricsRefresh(strconv.FormatInt(metadata.CollectedAt.UnixNano(), 10))

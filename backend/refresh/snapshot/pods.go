@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -192,10 +193,76 @@ func podSummaryUnhealthy(pod PodSummary) bool {
 func podQueryCapabilities() ResourceQueryCapabilities {
 	return newTypedResourceCapabilities(
 		[]string{"name", "namespace", "status", "ready", "restarts", "owner", "node", "cpu", "memory", "age"},
-		[]string{"kinds", "namespaces", "statuses", "nodes"},
+		[]string{"kinds", "namespaces"},
 		[]string{"name", "namespace", "status", "ready", "owner", "node"},
 		[]string{podres.Identity.Kind},
+		typedTableFacetDescriptors(podQueryFacets())...,
 	)
+}
+
+func podQueryFacets() []typedTableQueryFacet[PodSummary] {
+	return []typedTableQueryFacet[PodSummary]{
+		statusQueryFacet(func(pod PodSummary) string { return pod.Status }),
+		podOwnerQueryFacet(),
+		nodeQueryFacet(func(pod PodSummary) string { return pod.Node }),
+	}
+}
+
+func podOwnerQueryFacet() typedTableQueryFacet[PodSummary] {
+	return typedTableQueryFacet[PodSummary]{
+		Descriptor: ResourceQueryFacetDescriptor{
+			Key:         "owners",
+			Label:       "Owner",
+			Placeholder: "All owners",
+			Searchable:  true,
+			BulkActions: true,
+		},
+		Values: podOwnerFacetValues,
+		Label:  podOwnerFacetLabel,
+	}
+}
+
+// Pod Owner facet values carry complete object identities in stable JSON
+// tuples: [scope, kind, name, clusterId, group, version, namespace]. A standalone
+// Pod uses its own identity so selecting that row in Workloads isolates exactly
+// that Pod instead of every ownerless Pod in the namespace.
+func podOwnerFacetValues(pod PodSummary) []string {
+	if strings.EqualFold(strings.TrimSpace(pod.OwnerKind), "none") || strings.TrimSpace(pod.OwnerName) == "" {
+		return []string{encodePodOwnerFacetValue("pod", podres.Identity.Kind, pod.Name, pod.ClusterID, podres.Identity.Group, podres.Identity.Version, pod.Namespace)}
+	}
+	gv, err := schema.ParseGroupVersion(strings.TrimSpace(pod.OwnerAPIVersion))
+	if err != nil || strings.TrimSpace(pod.OwnerKind) == "" {
+		return nil
+	}
+	values := []string{encodePodOwnerFacetValue("owner", pod.OwnerKind, pod.OwnerName, pod.ClusterID, gv.Group, gv.Version, pod.Namespace)}
+	if pod.DirectOwnerKind == "" || pod.DirectOwnerName == "" {
+		return values
+	}
+	directGV, err := schema.ParseGroupVersion(strings.TrimSpace(pod.DirectOwnerAPIVersion))
+	if err != nil {
+		return values
+	}
+	direct := encodePodOwnerFacetValue("owner", pod.DirectOwnerKind, pod.DirectOwnerName, pod.ClusterID, directGV.Group, directGV.Version, pod.Namespace)
+	if direct != values[0] {
+		values = append(values, direct)
+	}
+	return values
+}
+
+func encodePodOwnerFacetValue(scope, kind, name, clusterID, group, version, namespace string) string {
+	encoded, _ := json.Marshal([]string{scope, kind, name, clusterID, group, version, namespace})
+	return string(encoded)
+}
+
+func podOwnerFacetLabel(value string) string {
+	var identity []string
+	if err := json.Unmarshal([]byte(value), &identity); err != nil || len(identity) != 7 {
+		return value
+	}
+	if identity[0] == "pod" {
+		return "No owner: " + identity[2]
+	}
+	return identity[1] + "/" + identity[2]
 }
 
 // podQuerypageSchema derives the querypage Schema for the pods table from its
@@ -231,6 +298,7 @@ type PodMetricsInfo struct {
 const (
 	podDomainName     = "pods"
 	workloadScopeKey  = "workload"
+	objectScopeKey    = "object"
 	nodeScopeKey      = "node"
 	namespaceScopeKey = "namespace"
 	podNodeIndexName  = "pods:node"
@@ -435,6 +503,14 @@ func filterPodRowsByScope(rows []PodSummary, scope string) ([]PodSummary, error)
 			return nil, err
 		}
 		return filterPodRows(rows, func(row PodSummary) bool { return podRowMatchesWorkload(row, parsed) }), nil
+	case objectScopeKey:
+		parsed, err := parsePodObjectScope(value)
+		if err != nil {
+			return nil, err
+		}
+		return filterPodRows(rows, func(row PodSummary) bool {
+			return row.Namespace == parsed.namespace && row.Name == parsed.name
+		}), nil
 	case namespaceScopeKey:
 		namespace := strings.TrimSpace(value)
 		if namespace == "" {
@@ -566,6 +642,7 @@ func podTableQueryAdapter() typedTableQueryAdapter[PodSummary] {
 		},
 		Namespace: func(pod PodSummary) string { return pod.Namespace },
 		Kind:      func(PodSummary) string { return podres.Identity.Kind },
+		Facets:    podQueryFacets(),
 		SearchText: func(pod PodSummary) []string {
 			return []string{
 				pod.Name,
@@ -699,6 +776,19 @@ func (b *PodBuilder) collectPods(scope string) ([]*corev1.Pod, error) {
 			}
 		}
 		return filtered, nil
+	case objectScopeKey:
+		parsed, err := parsePodObjectScope(value)
+		if err != nil {
+			return nil, err
+		}
+		pod, err := b.podLister.Pods(parsed.namespace).Get(parsed.name)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return []*corev1.Pod{}, nil
+			}
+			return nil, err
+		}
+		return []*corev1.Pod{pod}, nil
 	case namespaceScopeKey:
 		namespace := strings.TrimSpace(value)
 		if namespace == "" {
@@ -719,6 +809,33 @@ type workloadScope struct {
 	version   string
 	kind      string
 	name      string
+}
+
+type podObjectScope struct {
+	namespace string
+	name      string
+}
+
+// parsePodObjectScope accepts the complete Kubernetes identity encoded by the
+// frontend selection. Pods are core/v1, so the group segment is intentionally
+// empty in object:<namespace>::v1:Pod:<name>.
+func parsePodObjectScope(value string) (podObjectScope, error) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 5 {
+		return podObjectScope{}, fmt.Errorf("invalid object scope: %s", value)
+	}
+	namespace := strings.TrimSpace(parts[0])
+	group := strings.TrimSpace(parts[1])
+	version := strings.TrimSpace(parts[2])
+	kind := strings.TrimSpace(parts[3])
+	name := strings.TrimSpace(parts[4])
+	if namespace == "" || version == "" || kind == "" || name == "" {
+		return podObjectScope{}, fmt.Errorf("invalid object scope: %s", value)
+	}
+	if group != podres.Identity.Group || version != podres.Identity.Version || kind != podres.Identity.Kind {
+		return podObjectScope{}, fmt.Errorf("unsupported object scope: %s", value)
+	}
+	return podObjectScope{namespace: namespace, name: name}, nil
 }
 
 func parseWorkloadScope(value string) (workloadScope, error) {

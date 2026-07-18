@@ -7,6 +7,7 @@
 
 import type { ContextMenuItem } from '@shared/components/ContextMenu';
 import type { DropdownOption } from '@shared/components/dropdowns/Dropdown';
+import type { MultiSelectFilterSelection } from '@shared/components/dropdowns/multiSelectFilterSelection';
 import type { IconBarItem } from '@shared/components/IconBar/IconBar';
 import type React from 'react';
 
@@ -26,7 +27,14 @@ export interface ColumnWidthState {
   updatedAt: number;
 }
 
-export interface GridColumnDefinition<T> {
+export type GridColumnAlignment = 'left' | 'center' | 'right';
+
+export interface GridColumnAlignmentOptions {
+  alignHeader?: GridColumnAlignment;
+  alignData?: GridColumnAlignment;
+}
+
+export interface GridColumnDefinition<T> extends GridColumnAlignmentOptions {
   key: string;
   header: string;
   render: (item: T) => React.ReactNode;
@@ -64,16 +72,34 @@ export const GRIDTABLE_VIRTUALIZATION_DEFAULT: GridTableVirtualizationOptions = 
 
 export interface GridTableFilterState {
   search: string;
-  kinds: string[];
-  namespaces: string[];
+  kinds: MultiSelectFilterSelection;
+  namespaces: MultiSelectFilterSelection;
+  /** Selected cluster IDs for multi-cluster local tables. */
+  clusters: MultiSelectFilterSelection;
+  /** Backend-owned query facet selections keyed by the provider's facet name. */
+  queryFacets?: Record<string, MultiSelectFilterSelection>;
   caseSensitive: boolean;
   includeMetadata: boolean;
+}
+
+export interface GridTableQueryFacetDefinition {
+  key: string;
+  label: string;
+  placeholder: string;
+  options: DropdownOption[];
+  searchable?: boolean;
+  bulkActions?: boolean;
+  /** Position relative to GridTable's built-in structural filters. */
+  placement?: 'before-kinds' | 'after-structural';
+  /** Structural selections made invalid when this facet changes. */
+  invalidates?: ReadonlyArray<'kinds' | 'namespaces' | 'clusters'>;
 }
 
 export interface GridTableFilterAccessors<T> {
   getSearchText?: (row: T) => string | string[] | null | undefined;
   getKind?: (row: T) => string | null | undefined;
   getNamespace?: (row: T) => string | null | undefined;
+  getCluster?: (row: T) => string | null | undefined;
 }
 
 export interface GridTableFilterOptions {
@@ -81,13 +107,20 @@ export interface GridTableFilterOptions {
   searchPlaceholder?: string;
   kinds?: string[];
   namespaces?: string[];
+  /** Cluster IDs and their user-facing context names. */
+  clusters?: DropdownOption[];
+  /** Additional backend-owned facet controls for query-backed tables. */
+  queryFacets?: GridTableQueryFacetDefinition[];
   showKindDropdown?: boolean;
   showNamespaceDropdown?: boolean;
-  kindDropdownSearchable?: boolean;
-  kindDropdownBulkActions?: boolean;
+  showClusterDropdown?: boolean;
   namespaceDropdownSearchable?: boolean;
   namespaceDropdownBulkActions?: boolean;
+  clusterDropdownSearchable?: boolean;
+  clusterDropdownBulkActions?: boolean;
   includeClusterScopedSyntheticNamespace?: boolean;
+  /** Icon actions rendered with structural filters immediately before Namespace. */
+  beforeNamespaceActions?: IconBarItem[];
   /** IconBar items rendered before the built-in Reset action (e.g. Favorite toggle). */
   preActions?: IconBarItem[];
   /** IconBar items rendered after a separator following Reset (e.g. Load More). */
@@ -98,7 +131,7 @@ export interface GridTableFilterOptions {
   /** Override the total item count shown in the filter bar (e.g. server-side total for paginated views). */
   totalCount?: number;
   /**
-   * Items in scope before the active filters (the "of M" in "showing N of M items due to filters").
+   * Items in scope before the active filters (the "of M" in "Showing N of M items").
    * Server-paginated views supply it from the backend; local tables derive it from their row count.
    */
   unfilteredTotal?: number;
@@ -128,6 +161,13 @@ export interface GridTableFilterConfig<T> {
  */
 export type GridTableDiagnosticsMode = 'local' | 'query' | 'live';
 
+export interface GridTableLocalPaginationConfig {
+  idPrefix: string;
+  pageSize: number;
+  pageSizeOptions: readonly number[];
+  onPageSizeChange: (value: number) => void;
+}
+
 export interface GridTableProps<T> {
   data: T[];
   columns: GridColumnDefinition<T>[];
@@ -150,6 +190,8 @@ export interface GridTableProps<T> {
   onRowClick?: (item: T) => void;
   /** Called for pointer row activation after interactive descendants are excluded. */
   onRowPointerClick?: (item: T) => void;
+  /** When supplied, Space applies this selection action to the focused row. */
+  onRowSelectionToggle?: (item: T) => void;
   onSort?: (key: string, targetDirection?: 'asc' | 'desc' | null) => void;
   sortConfig?: { key: string; direction: 'asc' | 'desc' | null };
   embedded?: boolean;
@@ -171,6 +213,8 @@ export interface GridTableProps<T> {
   emptyMessage?: string;
   /** Rendered in the table's pagination footer (e.g. cursor pagination controls). */
   paginationControls?: React.ReactNode;
+  /** Client-side pagination applied after local table filters and sorting. */
+  localPagination?: GridTableLocalPaginationConfig;
   /** Ctrl+ArrowLeft (Command+ArrowLeft on macOS) pages back while the table has focus. */
   onPagePrevious?: () => void;
   /** Ctrl+ArrowRight (Command+ArrowRight on macOS) pages forward while the table has focus. */
@@ -199,11 +243,14 @@ export interface InternalFilterOptions {
   searchBehavior?: 'local' | 'query';
   kinds: DropdownOption[];
   namespaces: DropdownOption[];
+  clusters?: DropdownOption[];
+  queryFacets?: GridTableQueryFacetDefinition[];
   searchPlaceholder?: string;
-  kindDropdownSearchable?: boolean;
-  kindDropdownBulkActions?: boolean;
   namespaceDropdownSearchable?: boolean;
   namespaceDropdownBulkActions?: boolean;
+  clusterDropdownSearchable?: boolean;
+  clusterDropdownBulkActions?: boolean;
+  beforeNamespaceActions?: IconBarItem[];
   preActions?: IconBarItem[];
   postActions?: IconBarItem[];
   customActions?: React.ReactNode;

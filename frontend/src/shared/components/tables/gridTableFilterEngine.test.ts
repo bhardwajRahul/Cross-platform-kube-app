@@ -1,5 +1,8 @@
+import {
+  ALL_MULTISELECT_FILTER,
+  NONE_MULTISELECT_FILTER,
+} from '@shared/components/dropdowns/multiSelectFilterSelection';
 import type { GridTableFilterState } from '@shared/components/tables/GridTable.types';
-
 import {
   applyGridTableFilters,
   buildGridTableFilterOptions,
@@ -9,6 +12,8 @@ import { describe, expect, it } from 'vitest';
 
 interface Row {
   id: string;
+  clusterId: string;
+  clusterName: string;
   kind: string;
   namespace: string | null;
   name: string;
@@ -16,11 +21,37 @@ interface Row {
 }
 
 const rows: Row[] = [
-  { id: '1', kind: 'Deployment', namespace: 'default', name: 'frontend', description: 'web app' },
-  { id: '2', kind: 'Pod', namespace: 'default', name: 'frontend-1', description: 'pod instance' },
-  { id: '3', kind: 'Deployment', namespace: 'platform', name: 'gateway', description: 'edge' },
+  {
+    id: '1',
+    clusterId: 'cluster-a',
+    clusterName: 'alpha',
+    kind: 'Deployment',
+    namespace: 'default',
+    name: 'frontend',
+    description: 'web app',
+  },
+  {
+    id: '2',
+    clusterId: 'cluster-a',
+    clusterName: 'alpha',
+    kind: 'Pod',
+    namespace: 'default',
+    name: 'frontend-1',
+    description: 'pod instance',
+  },
+  {
+    id: '3',
+    clusterId: 'cluster-b',
+    clusterName: 'beta',
+    kind: 'Deployment',
+    namespace: 'platform',
+    name: 'gateway',
+    description: 'edge',
+  },
   {
     id: '4',
+    clusterId: 'cluster-b',
+    clusterName: 'beta',
     kind: 'ConfigMap',
     namespace: null,
     name: 'global-config',
@@ -34,8 +65,9 @@ const defaultGetSearchText = (row: Row) => [row.name, row.description];
 
 const defaultState: GridTableFilterState = {
   search: '',
-  kinds: [],
-  namespaces: [],
+  kinds: ALL_MULTISELECT_FILTER,
+  namespaces: ALL_MULTISELECT_FILTER,
+  clusters: ALL_MULTISELECT_FILTER,
   caseSensitive: false,
   includeMetadata: false,
 };
@@ -65,12 +97,69 @@ describe('gridTableFilterEngine', () => {
     ]);
   });
 
+  it('builds labeled cluster options and filters locally by cluster ID', () => {
+    const clusterAccessors = resolveGridTableFilterAccessors({
+      accessors: {
+        getCluster: (row) => row.clusterId,
+      },
+      defaultGetKind,
+      defaultGetNamespace,
+      defaultGetSearchText,
+    });
+    const options = buildGridTableFilterOptions({
+      filteringEnabled: true,
+      options: {
+        clusters: [
+          { value: 'cluster-a', label: 'alpha' },
+          { value: 'cluster-b', label: 'beta' },
+        ],
+      },
+      data: rows,
+      accessors: clusterAccessors,
+      defaultGetKind,
+      defaultGetNamespace,
+    });
+
+    expect(options.clusters).toEqual([
+      { value: 'cluster-a', label: 'alpha' },
+      { value: 'cluster-b', label: 'beta' },
+    ]);
+
+    const filtered = applyGridTableFilters({
+      filteringEnabled: true,
+      data: rows,
+      activeFilters: {
+        ...defaultState,
+        clusters: { mode: 'some', values: ['cluster-b'] },
+      },
+      accessors: clusterAccessors,
+      defaultGetKind,
+      defaultGetNamespace,
+      defaultGetSearchText,
+    });
+
+    expect(filtered.map((row) => row.id)).toEqual(['3', '4']);
+
+    const caseVariantFiltered = applyGridTableFilters({
+      filteringEnabled: true,
+      data: rows,
+      activeFilters: {
+        ...defaultState,
+        clusters: { mode: 'some', values: ['CLUSTER-B'] },
+      },
+      accessors: clusterAccessors,
+      defaultGetKind,
+      defaultGetNamespace,
+      defaultGetSearchText,
+    });
+    expect(caseVariantFiltered).toEqual([]);
+  });
+
   it('returns empty option lists when filtering is disabled', () => {
     const options = buildGridTableFilterOptions({
       filteringEnabled: false,
       options: {
         searchPlaceholder: 'Find resources',
-        kindDropdownSearchable: true,
       },
       data: rows,
       accessors,
@@ -79,7 +168,6 @@ describe('gridTableFilterEngine', () => {
     });
 
     expect(options.searchPlaceholder).toBe('Find resources');
-    expect(options.kindDropdownSearchable).toBe(true);
     expect(options.kinds).toEqual([]);
     expect(options.namespaces).toEqual([]);
   });
@@ -117,7 +205,7 @@ describe('gridTableFilterEngine', () => {
       data: rows,
       activeFilters: {
         ...defaultState,
-        namespaces: [''],
+        namespaces: { mode: 'some', values: [''] },
       },
       accessors: clusterScopedAccessors,
       defaultGetKind,
@@ -136,8 +224,8 @@ describe('gridTableFilterEngine', () => {
       activeFilters: {
         ...defaultState,
         search: 'frontend',
-        kinds: ['Pod'],
-        namespaces: ['default'],
+        kinds: { mode: 'some', values: ['Pod'] },
+        namespaces: { mode: 'some', values: ['default'] },
       },
       accessors,
       defaultGetKind,
@@ -146,5 +234,22 @@ describe('gridTableFilterEngine', () => {
     });
 
     expect(filtered).toBe(rows);
+  });
+
+  it('returns no local rows when any structural multiselect is explicitly none', () => {
+    const filtered = applyGridTableFilters({
+      filteringEnabled: true,
+      data: rows,
+      activeFilters: {
+        ...defaultState,
+        kinds: NONE_MULTISELECT_FILTER,
+      },
+      accessors,
+      defaultGetKind,
+      defaultGetNamespace,
+      defaultGetSearchText,
+    });
+
+    expect(filtered).toEqual([]);
   });
 });

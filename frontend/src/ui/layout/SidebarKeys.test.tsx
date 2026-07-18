@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
 import {
   describeElementTarget,
+  getFocusableSidebarItems,
   type SidebarCursorTarget,
   targetsAreEqual,
   useSidebarKeyboardControls,
@@ -29,8 +30,8 @@ describe('Sidebar keyboard helpers', () => {
   it('compares cursor targets correctly', () => {
     expect(
       targetsAreEqual(
-        { kind: 'namespace-view', namespace: 'dev', view: 'pods' },
-        { kind: 'namespace-view', namespace: 'dev', view: 'pods' }
+        { kind: 'namespace-view', namespace: 'dev', view: 'workloads' },
+        { kind: 'namespace-view', namespace: 'dev', view: 'workloads' }
       )
     ).toBe(true);
     expect(
@@ -39,6 +40,12 @@ describe('Sidebar keyboard helpers', () => {
         { kind: 'cluster-view', view: 'storage' }
       )
     ).toBe(false);
+    expect(
+      targetsAreEqual(
+        { kind: 'global-view', view: 'fleet' },
+        { kind: 'global-view', view: 'fleet' }
+      )
+    ).toBe(true);
     expect(
       targetsAreEqual(
         { kind: 'cluster-toggle', id: 'resources' },
@@ -63,12 +70,20 @@ describe('Sidebar keyboard helpers', () => {
     expect(
       describeElementTarget(
         buildTargetElement({
-          'data-sidebar-target-kind': 'namespace-view',
-          'data-sidebar-target-namespace': 'dev',
-          'data-sidebar-target-view': 'pods',
+          'data-sidebar-target-kind': 'global-view',
+          'data-sidebar-target-view': 'global-namespaces',
         })
       )
-    ).toEqual({ kind: 'namespace-view', namespace: 'dev', view: 'pods' });
+    ).toEqual({ kind: 'global-view', view: 'global-namespaces' });
+    expect(
+      describeElementTarget(
+        buildTargetElement({
+          'data-sidebar-target-kind': 'namespace-view',
+          'data-sidebar-target-namespace': 'dev',
+          'data-sidebar-target-view': 'workloads',
+        })
+      )
+    ).toEqual({ kind: 'namespace-view', namespace: 'dev', view: 'workloads' });
     expect(
       describeElementTarget(
         buildTargetElement({
@@ -101,12 +116,34 @@ describe('Sidebar keyboard helpers', () => {
     expect(
       describeElementTarget(
         buildTargetElement({
+          'data-sidebar-target-kind': 'global-view',
+          'data-sidebar-target-view': 'nodes',
+        })
+      )
+    ).toBeNull();
+    expect(
+      describeElementTarget(
+        buildTargetElement({
           'data-sidebar-target-kind': 'namespace-view',
           'data-sidebar-target-namespace': 'dev',
           'data-sidebar-target-view': 'not-a-view',
         })
       )
     ).toBeNull();
+  });
+
+  it('excludes items inside hidden sidebar sections from keyboard navigation', () => {
+    const sidebar = document.createElement('div');
+    const visibleItem = document.createElement('button');
+    visibleItem.dataset.sidebarFocusable = 'true';
+    const hiddenSection = document.createElement('section');
+    hiddenSection.hidden = true;
+    const hiddenItem = document.createElement('button');
+    hiddenItem.dataset.sidebarFocusable = 'true';
+    hiddenSection.appendChild(hiddenItem);
+    sidebar.append(visibleItem, hiddenSection);
+
+    expect(getFocusableSidebarItems(sidebar)).toEqual([visibleItem]);
   });
 });
 
@@ -214,11 +251,11 @@ const TestHarness = ({
       )}
       {buildItem(
         ['sidebar-item'],
-        { kind: 'namespace-view', namespace: 'dev', view: 'pods' },
+        { kind: 'namespace-view', namespace: 'dev', view: 'workloads' },
         {
           'data-sidebar-target-kind': 'namespace-view',
           'data-sidebar-target-namespace': 'dev',
-          'data-sidebar-target-view': 'pods',
+          'data-sidebar-target-view': 'workloads',
         },
         onNamespaceViewClick
       )}
@@ -440,10 +477,10 @@ describe('useSidebarKeyboardControls', () => {
   });
 
   it('focuses selected items and bubbles pending selection', async () => {
-    const podsTarget: SidebarCursorTarget = {
+    const workloadsTarget: SidebarCursorTarget = {
       kind: 'namespace-view',
       namespace: 'dev',
-      view: 'pods',
+      view: 'workloads',
     };
     const { ref, container, cleanup } = renderHarness({
       selectionTarget: { kind: 'overview' },
@@ -484,15 +521,15 @@ describe('useSidebarKeyboardControls', () => {
     await fireKey('Home');
     expect(overview.className).toContain('keyboard-preview');
 
-    const podsElement = container.querySelector(
-      '[data-sidebar-target-kind="namespace-view"][data-sidebar-target-view="pods"]'
+    const workloadsElement = container.querySelector(
+      '[data-sidebar-target-kind="namespace-view"][data-sidebar-target-view="workloads"]'
     ) as HTMLElement;
     await act(async () => {
-      podsElement.focus();
+      workloadsElement.focus();
       await Promise.resolve();
     });
     await fireKey('Enter');
-    expect(ref.current?.getDisplaySelectionTarget()).toEqual(podsTarget);
+    expect(ref.current?.getDisplaySelectionTarget()).toEqual(workloadsTarget);
 
     cleanup();
   });
@@ -550,7 +587,7 @@ describe('useSidebarKeyboardControls', () => {
     const selection = {
       kind: 'namespace-view',
       namespace: 'dev',
-      view: 'pods',
+      view: 'workloads',
     } as SidebarCursorTarget;
     const { ref, cleanup } = renderHarness({
       selectionTarget: selection,

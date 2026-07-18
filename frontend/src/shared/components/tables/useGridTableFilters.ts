@@ -5,6 +5,11 @@
  * Encapsulates state and side effects for the shared components.
  */
 
+import {
+  ALL_MULTISELECT_FILTER,
+  filterSelectionFromDropdownValues,
+  filterSelectionFromDropdownValuesExact,
+} from '@shared/components/dropdowns/multiSelectFilterSelection';
 import type {
   GridTableFilterConfig,
   GridTableFilterState,
@@ -42,6 +47,9 @@ export interface UseGridTableFiltersResult<T> {
   handleFilterSearchChange: (value: string) => void;
   handleFilterKindsChange: (values: string[]) => void;
   handleFilterNamespacesChange: (values: string[]) => void;
+  handleFilterClustersChange: (values: string[]) => void;
+  handleFilterQueryFacetChange: (key: string, values: string[]) => void;
+  handleFiltersChange: (changes: Partial<GridTableFilterState>) => void;
   handleFilterReset: () => void;
   /** Whether the built-in case-sensitive search toggle is active. */
   caseSensitive: boolean;
@@ -239,16 +247,52 @@ export function useGridTableFilters<T>({
 
   const handleFilterKindsChange = useCallback(
     (next: string[]) => {
-      updateFilters({ kinds: next });
+      updateFilters({
+        kinds: filterSelectionFromDropdownValues(next, resolvedFilterOptions.kinds),
+      });
     },
-    [updateFilters]
+    [resolvedFilterOptions.kinds, updateFilters]
   );
 
   const handleFilterNamespacesChange = useCallback(
     (next: string[]) => {
-      updateFilters({ namespaces: next });
+      updateFilters({
+        namespaces: filterSelectionFromDropdownValues(next, resolvedFilterOptions.namespaces),
+      });
     },
-    [updateFilters]
+    [resolvedFilterOptions.namespaces, updateFilters]
+  );
+
+  const handleFilterClustersChange = useCallback(
+    (next: string[]) => {
+      updateFilters({
+        clusters: filterSelectionFromDropdownValuesExact(
+          next,
+          resolvedFilterOptions.clusters ?? []
+        ),
+      });
+    },
+    [resolvedFilterOptions.clusters, updateFilters]
+  );
+
+  const handleFilterQueryFacetChange = useCallback(
+    (key: string, values: string[]) => {
+      const facet = resolvedFilterOptions.queryFacets?.find((candidate) => candidate.key === key);
+      const nextSelection = filterSelectionFromDropdownValues(values, facet?.options ?? []);
+      const currentSelection = activeFilters.queryFacets?.[key] ?? ALL_MULTISELECT_FILTER;
+      const selectionChanged = JSON.stringify(currentSelection) !== JSON.stringify(nextSelection);
+      const invalidates = selectionChanged ? new Set(facet?.invalidates ?? []) : new Set<string>();
+      updateFilters({
+        ...(invalidates.has('kinds') ? { kinds: ALL_MULTISELECT_FILTER } : {}),
+        ...(invalidates.has('namespaces') ? { namespaces: ALL_MULTISELECT_FILTER } : {}),
+        ...(invalidates.has('clusters') ? { clusters: ALL_MULTISELECT_FILTER } : {}),
+        queryFacets: {
+          ...(activeFilters.queryFacets ?? {}),
+          [key]: nextSelection,
+        },
+      });
+    },
+    [activeFilters.queryFacets, resolvedFilterOptions.queryFacets, updateFilters]
   );
 
   const handleFilterReset = useCallback(() => {
@@ -268,6 +312,9 @@ export function useGridTableFilters<T>({
     handleFilterSearchChange,
     handleFilterKindsChange,
     handleFilterNamespacesChange,
+    handleFilterClustersChange,
+    handleFilterQueryFacetChange,
+    handleFiltersChange: updateFilters,
     handleFilterReset,
     caseSensitive: activeFilters.caseSensitive,
     toggleCaseSensitive,

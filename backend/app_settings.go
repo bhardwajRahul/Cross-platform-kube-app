@@ -11,6 +11,7 @@ import (
 	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/internal/containerlogs"
 	"github.com/luxury-yacht/app/backend/internal/logsources"
+	"github.com/luxury-yacht/app/backend/refresh/snapshot"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -71,7 +72,17 @@ type settingsFile struct {
 	Preferences   settingsPreferences               `json:"preferences"`
 	Kubeconfig    settingsKubeconfig                `json:"kubeconfig"`
 	UI            settingsUI                        `json:"ui"`
+	Attention     *settingsGlobalAttentionRules     `json:"attention,omitempty"`
 	Clusters      map[string]settingsClusterSection `json:"clusters,omitempty"`
+}
+
+type settingsGlobalAttentionRules struct {
+	FindingTypes []string `json:"findingTypes,omitempty"`
+}
+
+type settingsClusterAttentionRules struct {
+	ObjectFindings []snapshot.AttentionObjectFindingIgnore `json:"objectFindings,omitempty"`
+	FindingTypes   []string                                `json:"findingTypes,omitempty"`
 }
 
 // settingsClusterSection captures per-cluster persisted settings, keyed by
@@ -81,7 +92,8 @@ type settingsClusterSection struct {
 	// AllowedNamespaces is the cluster's namespace scope
 	// (docs/plans/namespace-scope.md). Empty means no scope: every namespaced
 	// data path runs cluster-wide.
-	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
+	AllowedNamespaces []string                       `json:"allowedNamespaces,omitempty"`
+	Attention         *settingsClusterAttentionRules `json:"attention,omitempty"`
 }
 
 // settingsPreferences captures user-configurable preferences.

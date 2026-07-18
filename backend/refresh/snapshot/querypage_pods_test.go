@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"testing"
@@ -37,15 +38,24 @@ func makePodRows(n int) []PodSummary {
 		if i%3 == 0 {
 			total = ready + 1 // some not-ready pairs
 		}
+		ownerName := owners[i%len(owners)]
+		ownerKind := "Deployment"
+		ownerAPIVersion := "apps/v1"
+		if ownerName == "None" {
+			ownerKind = "None"
+			ownerAPIVersion = ""
+		}
 		rows[i] = PodSummary{
+			ClusterMeta:        streamrows.ClusterMeta{ClusterID: "c"},
 			Name:               fmt.Sprintf("pod-%03d", i), // unique -> unique row key
 			Namespace:          namespaces[i%len(namespaces)],
 			Status:             statuses[i%len(statuses)],
 			StatusPresentation: presentations[i%len(presentations)],
 			Ready:              fmt.Sprintf("%d/%d", ready, total),
 			Restarts:           int32((i * 7) % 5), // many zeros and non-zeros
-			OwnerKind:          "Deployment",
-			OwnerName:          owners[i%len(owners)],
+			OwnerKind:          ownerKind,
+			OwnerName:          ownerName,
+			OwnerAPIVersion:    ownerAPIVersion,
 			Node:               nodes[i%len(nodes)],
 			Age:                fmt.Sprintf("%dm", i%5),
 			AgeTimestamp:       int64(1_000_000 + (i%9)*1000), // ties, non-zero so NumericSort engages
@@ -54,6 +64,36 @@ func makePodRows(n int) []PodSummary {
 		}
 	}
 	return rows
+}
+
+func testFacetOptionValues(values []ResourceQueryFacetValues, key string) []string {
+	for _, facet := range values {
+		if facet.Key != key {
+			continue
+		}
+		result := make([]string, 0, len(facet.Options))
+		for _, option := range facet.Options {
+			result = append(result, option.Value)
+		}
+		return result
+	}
+	return nil
+}
+
+func testFacetOptions(values []ResourceQueryFacetValues, key string) []ResourceQueryFacetOption {
+	for _, facet := range values {
+		if facet.Key == key {
+			return facet.Options
+		}
+	}
+	return nil
+}
+
+func podOwnerFacetValueForTest(t *testing.T, scope, kind, name, clusterID, group, version, namespace string) string {
+	t.Helper()
+	encoded, err := json.Marshal([]string{scope, kind, name, clusterID, group, version, namespace})
+	require.NoError(t, err)
+	return string(encoded)
 }
 
 // TestPodsQueryViaStoreEquivalent is the pods cutover gate: the engine-backed serve
@@ -91,8 +131,12 @@ func TestPodsQueryViaStoreEquivalent(t *testing.T) {
 	type filt struct {
 		ns         []string
 		kinds      []string
+		statuses   []string
+		owners     []string
+		nodes      []string
 		search     string
 		predicates []ResourceQueryPredicate
+		matchNone  bool
 	}
 	sorts := []string{"", "name", "namespace", "status", "ready", "restarts", "owner", "node", "age"}
 	dirs := []string{"asc", "desc"}
@@ -102,12 +146,17 @@ func TestPodsQueryViaStoreEquivalent(t *testing.T) {
 		{ns: []string{"default", "app"}},
 		{kinds: []string{"Pod"}},
 		{ns: []string{"kube-system"}, kinds: []string{"Pod"}},
+		{statuses: []string{"Pending"}},
+		{statuses: []string{"Pending", "Running"}, nodes: []string{"node-1", "node-2"}},
+		{owners: []string{podOwnerFacetValueForTest(t, "owner", "Deployment", "deploy-a", "c", "apps", "v1", "default")}},
+		{nodes: []string{"node-3"}},
 		{search: "pod-01"},
 		{search: "running"},
 		{predicates: []ResourceQueryPredicate{{Field: "health", Value: "restarts"}}},
 		{predicates: []ResourceQueryPredicate{{Field: "health", Value: "not-ready"}}},
 		{predicates: []ResourceQueryPredicate{{Field: "health", Value: "unhealthy"}}},
 		{ns: []string{"default"}, predicates: []ResourceQueryPredicate{{Field: "health", Value: "restarts"}}},
+		{matchNone: true},
 	}
 
 	for _, sf := range sorts {
@@ -117,7 +166,7 @@ func TestPodsQueryViaStoreEquivalent(t *testing.T) {
 					Enabled: true,
 					Request: ResourceQueryRequest{
 						ClusterID: "c", SortField: sf, SortDirection: d, Limit: 17,
-						Namespaces: f.ns, Kinds: f.kinds, Search: f.search, Predicates: f.predicates,
+						Namespaces: f.ns, Kinds: f.kinds, Facets: map[string][]string{"statuses": f.statuses, "owners": f.owners, "nodes": f.nodes}, Search: f.search, Predicates: f.predicates, MatchNone: f.matchNone,
 					},
 				}
 				liveKeys, liveFirst := paginate(func(q typedTableQuery) typedTableQueryPage[PodSummary] {
@@ -127,7 +176,7 @@ func TestPodsQueryViaStoreEquivalent(t *testing.T) {
 					return applyTypedTableQueryViaStore(items, q, adapter, podQuerypageSchema())
 				}, base)
 
-				label := fmt.Sprintf("sort=%q dir=%s ns=%v kinds=%v search=%q preds=%v", sf, d, f.ns, f.kinds, f.search, f.predicates)
+				label := fmt.Sprintf("sort=%q dir=%s ns=%v kinds=%v statuses=%v owners=%v nodes=%v search=%q preds=%v", sf, d, f.ns, f.kinds, f.statuses, f.owners, f.nodes, f.search, f.predicates)
 				if !slices.Equal(liveKeys, engineKeys) {
 					t.Fatalf("%s: row sequence differs (live=%d engine=%d rows)", label, len(liveKeys), len(engineKeys))
 				}
@@ -143,9 +192,108 @@ func TestPodsQueryViaStoreEquivalent(t *testing.T) {
 				if !slices.Equal(liveFirst.Kinds, engineFirst.Kinds) {
 					t.Fatalf("%s: kind facets live=%v engine=%v", label, liveFirst.Kinds, engineFirst.Kinds)
 				}
+				if !slices.Equal(testFacetOptionValues(liveFirst.FacetValues, "statuses"), testFacetOptionValues(engineFirst.FacetValues, "statuses")) {
+					t.Fatalf("%s: status facets live=%v engine=%v", label, liveFirst.FacetValues, engineFirst.FacetValues)
+				}
+				if !slices.Equal(testFacetOptionValues(liveFirst.FacetValues, "owners"), testFacetOptionValues(engineFirst.FacetValues, "owners")) {
+					t.Fatalf("%s: owner facets live=%v engine=%v", label, liveFirst.FacetValues, engineFirst.FacetValues)
+				}
+				if !slices.Equal(testFacetOptionValues(liveFirst.FacetValues, "nodes"), testFacetOptionValues(engineFirst.FacetValues, "nodes")) {
+					t.Fatalf("%s: node facets live=%v engine=%v", label, liveFirst.FacetValues, engineFirst.FacetValues)
+				}
 			}
 		}
 	}
+}
+
+func TestPodsQueryViaStoreFiltersStatusesAndNodes(t *testing.T) {
+	items := makePodRows(120)
+	query := typedTableQuery{
+		Enabled: true,
+		Request: ResourceQueryRequest{
+			ClusterID: "c",
+			Table:     "pods",
+			Facets:    map[string][]string{"statuses": {"Pending"}, "nodes": {"node-2"}},
+			SortField: "name",
+			Limit:     250,
+		},
+	}
+
+	page := applyTypedTableQueryViaStore(items, query, podTableQueryAdapter(), podQuerypageSchema())
+	want := 0
+	for _, item := range items {
+		if item.Status == "Pending" && item.Node == "node-2" {
+			want++
+		}
+	}
+
+	require.Equal(t, want, page.Total)
+	require.Len(t, page.Rows, want)
+	require.Equal(t, []string{"Completed", "CrashLoopBackOff", "Pending", "Running"}, testFacetOptionValues(page.FacetValues, "statuses"))
+	require.Equal(t, []string{"node-1", "node-2", "node-3"}, testFacetOptionValues(page.FacetValues, "nodes"))
+	for _, row := range page.Rows {
+		require.Equal(t, "Pending", row.Status)
+		require.Equal(t, "node-2", row.Node)
+	}
+}
+
+func TestPodsQueryViaStoreFiltersOwnersByFullIdentity(t *testing.T) {
+	items := []PodSummary{
+		{
+			ClusterMeta:     streamrows.ClusterMeta{ClusterID: "c"},
+			Name:            "deploy-pod",
+			Namespace:       "team-a",
+			OwnerKind:       "Deployment",
+			OwnerName:       "api",
+			OwnerAPIVersion: "apps/v1",
+		},
+		{
+			ClusterMeta:           streamrows.ClusterMeta{ClusterID: "c"},
+			Name:                  "cron-pod",
+			Namespace:             "team-a",
+			OwnerKind:             "CronJob",
+			OwnerName:             "nightly",
+			OwnerAPIVersion:       "batch/v1",
+			DirectOwnerKind:       "Job",
+			DirectOwnerName:       "nightly-29123456",
+			DirectOwnerAPIVersion: "batch/v1",
+		},
+		{
+			ClusterMeta: streamrows.ClusterMeta{ClusterID: "c"},
+			Name:        "standalone",
+			Namespace:   "team-a",
+			OwnerKind:   "None",
+			OwnerName:   "None",
+		},
+	}
+	deploymentOwner := podOwnerFacetValueForTest(t, "owner", "Deployment", "api", "c", "apps", "v1", "team-a")
+	query := typedTableQuery{
+		Enabled: true,
+		Request: ResourceQueryRequest{
+			ClusterID: "c",
+			Table:     "pods",
+			Facets:    map[string][]string{"owners": {deploymentOwner}},
+			SortField: "name",
+			Limit:     250,
+		},
+	}
+
+	page := applyTypedTableQueryViaStore(items, query, podTableQueryAdapter(), podQuerypageSchema())
+
+	require.Equal(t, []string{"deploy-pod"}, podSummaryNames(page.Rows))
+
+	jobOwner := podOwnerFacetValueForTest(t, "owner", "Job", "nightly-29123456", "c", "batch", "v1", "team-a")
+	query.Request.Facets = map[string][]string{"owners": {jobOwner}}
+	page = applyTypedTableQueryViaStore(items, query, podTableQueryAdapter(), podQuerypageSchema())
+	require.Equal(t, []string{"cron-pod"}, podSummaryNames(page.Rows))
+
+	require.Equal(t, []ResourceQueryFacetOption{
+		{Value: podOwnerFacetValueForTest(t, "owner", "CronJob", "nightly", "c", "batch", "v1", "team-a"), Label: "CronJob/nightly"},
+		{Value: deploymentOwner, Label: "Deployment/api"},
+		{Value: jobOwner, Label: "Job/nightly-29123456"},
+		{Value: podOwnerFacetValueForTest(t, "pod", "Pod", "standalone", "c", "", "v1", "team-a"), Label: "No owner: standalone"},
+	}, testFacetOptions(page.FacetValues, "owners"))
+	require.Equal(t, []string{"statuses", "owners", "nodes"}, typedTableFacetKeys(podQueryFacets()))
 }
 
 // TestPodMetricSortQueryViaStoreEquivalent proves the engine serves cpu/memory
@@ -248,11 +396,11 @@ func TestPodMaintainedIngestOverlayMatchesProject(t *testing.T) {
 	const cpuMilli, memBytes = int64(245), int64(256 * 1024 * 1024)
 
 	// OLD: project the row with the real metrics inline.
-	live := podres.BuildStreamSummary(meta, pod, cpuMilli, memBytes, rs)
+	live := podres.BuildStreamSummary(meta, pod, cpuMilli, memBytes, rs, nil)
 
 	// NEW: project with no-data metrics (what the informer feeds the store), then
 	// overlay the same metrics exactly as the metrics-domain serve path does.
-	stored := podSummaryWithoutMetrics(podres.BuildStreamSummary(meta, pod, 0, 0, rs))
+	stored := podSummaryWithoutMetrics(podres.BuildStreamSummary(meta, pod, 0, 0, rs, nil))
 	stored.CPUUsage = streamrows.FormatCPUMilli(cpuMilli)
 	stored.MemUsage = streamrows.FormatMemoryBytes(memBytes)
 
@@ -286,7 +434,7 @@ func TestPodBuilderMaintainedStoreServesNamespaceScopeWithFreshMetrics(t *testin
 	rs := testsupport.NewReplicaSetLister(t)
 	for _, p := range []*corev1.Pod{mkPod("alpha"), mkPod("bravo")} {
 		// Ingest the no-data metric row, exactly as the informer handler does.
-		maintained.upsertRow(podSummaryWithoutMetrics(podres.BuildStreamSummary(meta, p, 0, 0, rs)), p)
+		maintained.upsertRow(podSummaryWithoutMetrics(podres.BuildStreamSummary(meta, p, 0, 0, rs, nil)), p)
 	}
 
 	builder := &PodBuilder{

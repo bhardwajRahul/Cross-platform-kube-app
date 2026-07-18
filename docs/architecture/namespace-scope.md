@@ -49,7 +49,32 @@ checker, so the SSAR cache resets with it
   from ingest; when NOTHING is tracked (pre-data or fully denied), rows
   report `workloadsUnknown` so the sidebar never dims them as
   authoritatively empty. Browse's namespace groups serve the same list
-  (`catalogNamespaceGroups`).
+  (`catalogNamespaceGroups`). Each row also carries `unhealthyWorkloads`:
+  controller health is counted from the retained object-map status projection,
+  while only non-terminal, ownerless pod aggregates count as standalone
+  workload rows. The namespaces source signature includes these counts so a
+  status-only transition invalidates the snapshot and rings the same debounced
+  doorbell without counting controller-owned pods twice. The same summary
+  counts current Warning Event objects by involved-object namespace.
+  `warningEventsState` distinguishes an authoritative `available` zero from an
+  allowed informer that is still `loading` and an `unavailable` list/watch
+  source. Event add/update/delete handlers feed the namespace notifier; its
+  warning-count signature suppresses Normal-event churn and changes the
+  snapshot's `warning-events` source clock when a visible count or source state
+  changes. Events remain cluster-wide under a configured namespace scope, so
+  this optional aggregate is enabled only when the identity can list and watch
+  that cluster-wide source. Namespace utilization is joined at snapshot serve
+  from one consistent metrics-poller sample and carries the shared freshness
+  block plus an explicit `metricsState` (`loading`, `available`, or
+  `unavailable`); successful metric collections feed the same namespace
+  notifier, which invalidates the snapshot before broadcasting. ResourceQuota
+  ingest retains a compact aggregate half (namespace + highest used percentage)
+  rather than the typed object or table row. Namespace rows expose quota count,
+  the strongest percentage, explicit source state, and backend-owned pressure
+  presentation (`warning` at 80%, `critical` at 100%). The quota signature
+  suppresses object churn that does not change a namespace rollup and re-arms
+  while the ResourceQuota store is warming so an empty synced store becomes an
+  authoritative zero.
 - **Ingest**: one reflector per (kind, namespace) writing ONE shared store
   through partition views; `ReplacePartition` fully defines only its own
   namespace and fans per-row sink events (never the bulk kind-wide Replace,

@@ -44,6 +44,20 @@ describe('CatalogPaginationFooter', () => {
     container.remove();
   });
 
+  it('hides pagination when the exact result fits within the smallest page size', () => {
+    act(() => {
+      root.render(
+        <CatalogPaginationFooter
+          idPrefix="browse"
+          visibleItemCount={25}
+          pagination={pagination({ totalCount: 25 })}
+        />
+      );
+    });
+
+    expect(container.querySelector('.table-pagination-controls')).toBeNull();
+  });
+
   it('shows an exact visible range when the backend total is exact', () => {
     act(() => {
       root.render(
@@ -64,7 +78,7 @@ describe('CatalogPaginationFooter', () => {
     // Exact totals unlock the numbered page jump (P9), shown between the arrows
     // as [page] / total.
     expect(container.textContent).toContain('/ 2');
-    expect(container.querySelector('.query-pagination-page-jump-input')).not.toBeNull();
+    expect(container.querySelector('.table-pagination-page-jump-input')).not.toBeNull();
   });
 
   it('does not invent total pages for approximate totals', () => {
@@ -87,7 +101,7 @@ describe('CatalogPaginationFooter', () => {
     expect(container.textContent).toContain('101-200 of 10,000+');
     // Approximate totals keep first/prev/next only — no numbered jump, no
     // invented page count (large-data.md contract).
-    expect(container.querySelector('.query-pagination-page-jump-input')).toBeNull();
+    expect(container.querySelector('.table-pagination-page-jump-input')).toBeNull();
   });
 
   it('dispatches previous, next, and page-size changes from one control group', () => {
@@ -119,7 +133,7 @@ describe('CatalogPaginationFooter', () => {
       container.querySelector<HTMLElement>('[role="combobox"]')?.click();
     });
     act(() => {
-      Array.from(container.querySelectorAll<HTMLElement>('[role="option"]'))
+      Array.from(document.body.querySelectorAll<HTMLElement>('[role="option"]'))
         .find((option) => option.textContent?.includes('250'))
         ?.click();
     });

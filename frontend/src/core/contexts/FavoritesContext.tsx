@@ -21,6 +21,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { resolveFavoriteRoute } from '@/core/navigation/favoriteRoute';
 import type { Favorite } from '@/core/persistence/favorites';
 import {
   hydrateFavorites,
@@ -30,7 +31,11 @@ import {
   setFavoriteOrder,
   subscribeFavorites,
 } from '@/core/persistence/favorites';
-import { parseClusterViewType, parseNamespaceViewType } from '@/types/navigation/views';
+import {
+  parseClusterViewType,
+  parseGlobalViewType,
+  parseNamespaceViewType,
+} from '@/types/navigation/views';
 
 // ---------- Types ----------
 
@@ -68,14 +73,36 @@ interface FavoritesProviderProps {
 
 export const FavoritesProvider: React.FC<FavoritesProviderProps> = ({ children }) => {
   const [favorites, setFavorites] = useState<Favorite[]>([]);
-  const [pendingFavorite, setPendingFavorite] = useState<Favorite | null>(null);
+  const [pendingFavorite, setPendingFavoriteState] = useState<Favorite | null>(null);
+  const navigationAppliedRef = useRef(false);
+  const setPendingFavorite = useCallback((favorite: Favorite | null) => {
+    navigationAppliedRef.current = false;
+    setPendingFavoriteState(favorite);
+  }, []);
   const { selectedKubeconfig, selectedClusterId } = useKubeconfig();
-  const { isClusterReady } = useClusterLifecycle();
+  const { getClusterState, isClusterReady } = useClusterLifecycle();
   const viewState = useViewState();
   const namespaceCtx = useNamespace();
   const namespaceReady = namespaceCtx.namespaceReady;
-  // Track whether navigation state has been applied for the current pending favorite.
-  const navigationAppliedRef = useRef(false);
+  const pendingClusterId = pendingFavorite?.clusterId?.trim() || selectedClusterId;
+  const pendingClusterState = pendingClusterId ? getClusterState(pendingClusterId) : undefined;
+  const pendingProgressKey = `${pendingClusterId}\u0000${pendingClusterState ?? ''}`;
+  const pendingProgressRef = useRef('');
+
+  useEffect(() => {
+    if (!pendingFavorite) {
+      return;
+    }
+    pendingProgressRef.current = pendingProgressKey;
+    const timer = window.setTimeout(() => {
+      setPendingFavoriteState((current) =>
+        current === pendingFavorite && pendingProgressRef.current === pendingProgressKey
+          ? null
+          : current
+      );
+    }, 15_000);
+    return () => window.clearTimeout(timer);
+  }, [pendingFavorite, pendingProgressKey]);
 
   // Hydrate the favorites cache from the backend on mount.
   useEffect(() => {
@@ -114,8 +141,11 @@ export const FavoritesProvider: React.FC<FavoritesProviderProps> = ({ children }
     // For cluster-specific favorites, wait for the correct cluster to be active AND ready.
     // New favorites carry clusterId; older persisted favorites only have the kubeconfig
     // selection string, so keep that fallback for compatibility.
+    const route = resolveFavoriteRoute(pendingFavorite.viewType, pendingFavorite.view);
     const favoriteClusterId = pendingFavorite.clusterId?.trim() ?? '';
-    const isClusterSpecific = pendingFavorite.clusterSelection !== '' || favoriteClusterId !== '';
+    const isClusterSpecific =
+      route.scope !== 'global' &&
+      (pendingFavorite.clusterSelection !== '' || favoriteClusterId !== '');
     if (isClusterSpecific) {
       if (favoriteClusterId) {
         if (selectedClusterId !== favoriteClusterId) {
@@ -133,13 +163,18 @@ export const FavoritesProvider: React.FC<FavoritesProviderProps> = ({ children }
         return;
       }
     }
-    if (pendingFavorite.viewType === 'namespace' && !namespaceReady) {
+    if (route.scope === 'namespace' && !namespaceReady) {
       return;
     }
 
     navigationAppliedRef.current = true;
 
-    if (pendingFavorite.viewType === 'namespace') {
+    if (route.scope === 'global') {
+      const globalView = parseGlobalViewType(route.view);
+      if (globalView) {
+        viewState.navigateToGlobal(globalView);
+      }
+    } else if (route.scope === 'namespace') {
       viewState.setViewType('namespace');
       if (pendingFavorite.namespace) {
         namespaceCtx.setSelectedNamespace(pendingFavorite.namespace);
@@ -157,7 +192,7 @@ export const FavoritesProvider: React.FC<FavoritesProviderProps> = ({ children }
         type: 'namespace',
         value: pendingFavorite.namespace || '',
       });
-    } else if (pendingFavorite.viewType === 'cluster') {
+    } else {
       viewState.setViewType('cluster');
       viewState.setActiveClusterView(parseClusterViewType(pendingFavorite.view) ?? null);
       viewState.setSidebarSelection({ type: 'cluster', value: 'cluster' });
@@ -209,6 +244,7 @@ export const FavoritesProvider: React.FC<FavoritesProviderProps> = ({ children }
       handleDeleteFavorite,
       handleReorderFavorites,
       pendingFavorite,
+      setPendingFavorite,
     ]
   );
 

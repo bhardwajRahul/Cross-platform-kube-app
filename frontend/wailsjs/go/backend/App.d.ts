@@ -5,6 +5,7 @@ import {context} from '../models';
 import {types} from '../models';
 import {objectcatalog} from '../models';
 import {backendtlspolicy} from '../models';
+import {snapshot} from '../models';
 import {clusterrole} from '../models';
 import {clusterrolebinding} from '../models';
 import {configmap} from '../models';
@@ -13,6 +14,7 @@ import {apiextensions} from '../models';
 import {daemonset} from '../models';
 import {deployment} from '../models';
 import {endpointslice} from '../models';
+import {events} from '../models';
 import {gateway} from '../models';
 import {gatewayclass} from '../models';
 import {json} from '../models';
@@ -40,7 +42,7 @@ import {service} from '../models';
 import {serviceaccount} from '../models';
 import {statefulset} from '../models';
 import {storageclass} from '../models';
-import {snapshot} from '../models';
+import {resourcemodel} from '../models';
 import {capabilities} from '../models';
 
 export function AddFavorite(arg1:backend.Favorite):Promise<backend.Favorite>;
@@ -109,6 +111,8 @@ export function GetCatalogDiagnostics():Promise<backend.CatalogDiagnostics>;
 
 export function GetClusterAllowedNamespaces(arg1:string):Promise<Array<string>>;
 
+export function GetClusterAttentionIgnoreRules(arg1:string):Promise<snapshot.AttentionIgnoreRules>;
+
 export function GetClusterAuthState(arg1:string):Promise<string|string>;
 
 export function GetClusterPortForwardCount(arg1:string):Promise<number>;
@@ -134,6 +138,8 @@ export function GetDaemonSet(arg1:string,arg2:string,arg3:string):Promise<daemon
 export function GetDeployment(arg1:string,arg2:string,arg3:string):Promise<deployment.DeploymentDetails>;
 
 export function GetEndpointSlice(arg1:string,arg2:string,arg3:string):Promise<endpointslice.EndpointSliceDetails>;
+
+export function GetEvent(arg1:string,arg2:string,arg3:string):Promise<events.EventDetails>;
 
 export function GetFavorites():Promise<Array<backend.Favorite>>;
 
@@ -233,6 +239,12 @@ export function GetZoomLevel():Promise<number>;
 
 export function HydrateCatalogCustomRows(arg1:string,arg2:Array<snapshot.ResourceQueryRow>):Promise<Array<snapshot.CustomResourceSummary>>;
 
+export function IgnoreClusterAttentionFindingType(arg1:string,arg2:string):Promise<snapshot.AttentionIgnoreRules>;
+
+export function IgnoreClusterAttentionObjectFinding(arg1:string,arg2:resourcemodel.ResourceRef,arg3:string):Promise<snapshot.AttentionIgnoreRules>;
+
+export function IgnoreGlobalAttentionFindingType(arg1:string,arg2:string):Promise<snapshot.AttentionIgnoreRules>;
+
 export function IsAppLogsPanelVisible():Promise<boolean>;
 
 export function IsDiagnosticsPanelVisible():Promise<boolean>;
@@ -264,6 +276,12 @@ export function QueryPermissions(arg1:Array<capabilities.PermissionQuery>):Promi
 export function ReorderThemes(arg1:Array<string>):Promise<void>;
 
 export function ResizeShellSession(arg1:string,arg2:number,arg3:number):Promise<void>;
+
+export function RestoreClusterAttentionFindingType(arg1:string,arg2:string):Promise<snapshot.AttentionIgnoreRules>;
+
+export function RestoreClusterAttentionObjectFinding(arg1:string,arg2:resourcemodel.ResourceRef,arg3:string):Promise<snapshot.AttentionIgnoreRules>;
+
+export function RestoreGlobalAttentionFindingType(arg1:string,arg2:string):Promise<snapshot.AttentionIgnoreRules>;
 
 export function RetryAuth():Promise<void>;
 

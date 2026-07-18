@@ -12,6 +12,9 @@ import {
 } from '@shared/components/tables/pageSizeOptions';
 import type { UseGridTablePersistenceResult } from '@shared/components/tables/persistence/useGridTablePersistence';
 import { useGridTablePersistence } from '@shared/components/tables/persistence/useGridTablePersistence';
+import TablePaginationControls, {
+  shouldRenderTablePaginationControls,
+} from '@shared/components/tables/TablePaginationControls';
 import { buildRequiredCanonicalObjectRowKey } from '@shared/utils/objectIdentity';
 import { errorHandler } from '@utils/errorHandler';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -23,9 +26,13 @@ import type { RefreshDomain } from '@/core/refresh/types';
 import { useDefaultTablePageSize } from '@/hooks/useDefaultTablePageSize';
 import type { SortConfig } from '@/hooks/useTableSort';
 import { backendQuerySource } from './backendQuerySource';
-import QueryPaginationControls from './QueryPaginationControls';
 import type { QueryBackedTableState } from './queryBackedTableState';
-import { mergeQueryBackedFilterOptions, useQueryBackedTableState } from './queryBackedTableState';
+import {
+  excludeQueryFacetsFromFilterOptions,
+  excludeQueryFacetsFromTableState,
+  mergeQueryBackedFilterOptions,
+  useQueryBackedTableState,
+} from './queryBackedTableState';
 import type {
   ClusterResourceGridTableParams,
   NamespaceResourceGridTableParams,
@@ -162,6 +169,7 @@ interface QueryBackedGridParamsCommon<
   TRow extends ResourceGridTableRow,
 > {
   clusterId?: string | null;
+  enabled?: boolean;
   domain: RefreshDomain;
   label: string;
   baseScope?: string;
@@ -169,6 +177,7 @@ interface QueryBackedGridParamsCommon<
   selectRows: (payload: TPayload) => TRow[];
   predicates?: Record<string, string | null | undefined>;
   filterOptionOverrides?: Partial<GridTableFilterOptions>;
+  excludedQueryFacetKeys?: readonly string[];
 }
 
 interface TypedQueryLifecycle<
@@ -196,6 +205,7 @@ function useTypedQueryLifecycle<
   TRow extends ResourceGridTableRow,
 >({
   clusterId,
+  enabled,
   domain,
   viewId,
   label,
@@ -204,11 +214,13 @@ function useTypedQueryLifecycle<
   selectRows,
   predicates,
   filterOptionOverrides,
+  excludedQueryFacetKeys,
   defaultSort,
   persistence,
   liveScope,
 }: {
   clusterId?: string | null;
+  enabled: boolean;
   domain: RefreshDomain;
   viewId: string;
   label: string;
@@ -217,6 +229,7 @@ function useTypedQueryLifecycle<
   selectRows: (payload: TPayload) => TRow[];
   predicates?: Record<string, string | null | undefined>;
   filterOptionOverrides?: Partial<GridTableFilterOptions>;
+  excludedQueryFacetKeys?: readonly string[];
   defaultSort: SortConfig;
   persistence: UseGridTablePersistenceResult;
   liveScope: string;
@@ -225,10 +238,19 @@ function useTypedQueryLifecycle<
   const [tableStateReady, setTableStateReady] = useState(false);
   const defaultPageSize = useDefaultTablePageSize();
   const pageLimit = typedQueryPageLimitOrDefault(persistence.pageSize, defaultPageSize);
+  useEffect(() => {
+    const sanitized = excludeQueryFacetsFromTableState(
+      { filters: persistence.filters, sortConfig: null },
+      excludedQueryFacetKeys
+    );
+    if (sanitized.filters !== persistence.filters) {
+      persistence.setFilters(sanitized.filters);
+    }
+  }, [excludedQueryFacetKeys, persistence.filters, persistence.setFilters]);
   useScopedRefreshDomainLifecycle({
     domain,
     scope: liveScope || null,
-    enabled: true,
+    enabled,
     preserveState: true,
     fetchOnEnable: false,
   });
@@ -247,15 +269,19 @@ function useTypedQueryLifecycle<
       if (hydratedRef.current) {
         setTableStateReady(true);
       }
-      handleTableStateChange(next);
+      handleTableStateChange(excludeQueryFacetsFromTableState(next, excludedQueryFacetKeys));
     },
-    [handleTableStateChange]
+    [excludedQueryFacetKeys, handleTableStateChange]
   );
   // clusterId is required: without it buildTypedResourceQueryScope returns null and no fetch is
   // ever issued, so the query path could never settle. Gating here holds the table in its gating
   // (empty + loading) state until a cluster and persistence are ready.
   const queryEnabled =
-    Boolean(clusterId) && tableStateReady && persistence.hydrated && !liveDomainInitialLoadPending;
+    enabled &&
+    Boolean(clusterId) &&
+    tableStateReady &&
+    persistence.hydrated &&
+    !liveDomainInitialLoadPending;
 
   // One query serves every sort, including cpu/memory: the backend joins live
   // usage onto the rows at serve and sorts by it, so there is no separate
@@ -266,7 +292,7 @@ function useTypedQueryLifecycle<
     domain,
     label,
     baseScope,
-    filters: tableState.filters,
+    filters: excludeQueryFacetsFromTableState(tableState, excludedQueryFacetKeys).filters,
     sortConfig: tableState.sortConfig,
     pageLimit,
     predicates,
@@ -275,8 +301,12 @@ function useTypedQueryLifecycle<
   });
 
   const effectiveFilterOptionOverrides = useMemo(
-    () => mergeQueryBackedFilterOptions(filterOptionOverrides, query.filterOptions),
-    [filterOptionOverrides, query.filterOptions]
+    () =>
+      mergeQueryBackedFilterOptions(
+        filterOptionOverrides,
+        excludeQueryFacetsFromFilterOptions(query.filterOptions, excludedQueryFacetKeys)
+      ),
+    [excludedQueryFacetKeys, filterOptionOverrides, query.filterOptions]
   );
 
   const { data, loading, loaded, error } = deriveQueryBackedData<TRow>({
@@ -289,6 +319,7 @@ function useTypedQueryLifecycle<
 
   useAnchorOnUnmatchedFocusRequest({
     clusterId,
+    enabled: queryEnabled,
     domain,
     viewId,
     loaded,
@@ -323,6 +354,7 @@ const anchorDecisionKeyExtractor = () => '';
 // (filtered/not-found) is reported through the app's notification channel.
 export function useAnchorOnUnmatchedFocusRequest<TRow>({
   clusterId,
+  enabled = true,
   domain,
   viewId,
   loaded,
@@ -331,6 +363,7 @@ export function useAnchorOnUnmatchedFocusRequest<TRow>({
   anchorResult,
 }: {
   clusterId?: string | null;
+  enabled?: boolean;
   domain: RefreshDomain;
   viewId: string;
   loaded: boolean;
@@ -341,7 +374,7 @@ export function useAnchorOnUnmatchedFocusRequest<TRow>({
   const anchoredRequestRef = useRef<GridTableFocusRequest | null>(null);
 
   useEffect(() => {
-    if (!clusterId || !loaded) {
+    if (!enabled || !clusterId || !loaded) {
       return;
     }
     const request = peekPendingFocusRequest();
@@ -383,7 +416,7 @@ export function useAnchorOnUnmatchedFocusRequest<TRow>({
       name: request.name,
       uid: request.uid,
     });
-  }, [anchorTo, clusterId, loaded, rows, viewId]);
+  }, [anchorTo, clusterId, enabled, loaded, rows, viewId]);
 
   useEffect(() => {
     if (!anchorResult || anchorResult.found) {
@@ -439,6 +472,28 @@ function useQueryBackedGridResult<
   const fetchAllRows = useCallback((): Promise<TRow[]> => query.fetchAllRows(), [query]);
 
   const gridTableProps = useMemo(() => {
+    const paginationProps = {
+      idPrefix: viewId,
+      pageIndex: query.pageIndex,
+      pageSize: query.pageSize,
+      visibleItemCount: data.length,
+      pageSizeOptions: TABLE_PAGE_SIZE_OPTIONS,
+      totalCount: query.totalCount,
+      totalIsExact: query.totalIsExact,
+      hasPrevious: query.hasPrevious,
+      hasNext: Boolean(query.continueToken),
+      loading: query.isRequestingMore,
+      onPrevious: query.loadPrevious,
+      onNext: query.loadMore,
+      onPageSizeChange: (value: number) => {
+        if (isTablePageSize(value)) {
+          persistence.setPageSize(value);
+        }
+      },
+      // Numbered jumps ride the bounded startRank contract; the control
+      // renders only while the total is exact.
+      onPageJump: query.jumpToPage,
+    };
     const base = {
       ...table.gridTableProps,
       // Mirrors the footer buttons' disabled logic so the modified-arrow
@@ -447,28 +502,9 @@ function useQueryBackedGridResult<
       onPageNext: query.loadMore,
       canPagePrevious: query.hasPrevious && !query.isRequestingMore,
       canPageNext: Boolean(query.continueToken) && !query.isRequestingMore,
-      paginationControls: React.createElement(QueryPaginationControls, {
-        idPrefix: viewId,
-        pageIndex: query.pageIndex,
-        pageSize: query.pageSize,
-        visibleItemCount: data.length,
-        pageSizeOptions: TABLE_PAGE_SIZE_OPTIONS,
-        totalCount: query.totalCount,
-        totalIsExact: query.totalIsExact,
-        hasPrevious: query.hasPrevious,
-        hasNext: Boolean(query.continueToken),
-        loading: query.isRequestingMore,
-        onPrevious: query.loadPrevious,
-        onNext: query.loadMore,
-        onPageSizeChange: (value: number) => {
-          if (isTablePageSize(value)) {
-            persistence.setPageSize(value);
-          }
-        },
-        // Numbered jumps ride the bounded startRank contract; the control
-        // renders only while the total is exact.
-        onPageJump: query.jumpToPage,
-      }),
+      paginationControls: shouldRenderTablePaginationControls(paginationProps)
+        ? React.createElement(TablePaginationControls, paginationProps)
+        : null,
     };
     return { ...base, fetchAllRows, exportFilename: viewId };
   }, [data.length, fetchAllRows, persistence, query, table.gridTableProps, viewId]);
@@ -526,6 +562,7 @@ export function useQueryBackedNamespaceResourceGridTable<
   TRow extends ResourceGridTableRow,
 >({
   clusterId,
+  enabled = true,
   domain,
   label,
   baseScope,
@@ -533,6 +570,7 @@ export function useQueryBackedNamespaceResourceGridTable<
   selectRows,
   predicates,
   filterOptionOverrides,
+  excludedQueryFacetKeys,
   defaultSort = { key: 'name', direction: 'asc' },
   namespace,
   ...tableParams
@@ -563,6 +601,7 @@ export function useQueryBackedNamespaceResourceGridTable<
   );
   const lifecycle = useTypedQueryLifecycle<TPayload, TRow>({
     clusterId,
+    enabled,
     domain,
     viewId: tableParams.viewId,
     label,
@@ -574,6 +613,7 @@ export function useQueryBackedNamespaceResourceGridTable<
     selectRows,
     predicates,
     filterOptionOverrides,
+    excludedQueryFacetKeys,
     defaultSort,
     persistence,
     liveScope,
@@ -630,6 +670,7 @@ export function useQueryBackedClusterResourceGridTable<
   TRow extends ResourceGridTableRow,
 >({
   clusterId,
+  enabled = true,
   domain,
   label,
   baseScope = '',
@@ -637,6 +678,7 @@ export function useQueryBackedClusterResourceGridTable<
   selectRows,
   predicates,
   filterOptionOverrides,
+  excludedQueryFacetKeys,
   defaultSortKey = 'name',
   defaultSortDirection = 'asc',
   ...tableParams
@@ -667,6 +709,7 @@ export function useQueryBackedClusterResourceGridTable<
   );
   const lifecycle = useTypedQueryLifecycle<TPayload, TRow>({
     clusterId,
+    enabled,
     domain,
     viewId: tableParams.viewId,
     label,
@@ -675,6 +718,7 @@ export function useQueryBackedClusterResourceGridTable<
     selectRows,
     predicates,
     filterOptionOverrides,
+    excludedQueryFacetKeys,
     defaultSort,
     persistence,
     liveScope,

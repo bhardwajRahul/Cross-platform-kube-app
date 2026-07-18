@@ -8,6 +8,7 @@
 
 import { OBJECT_ACTION_IDS } from '@shared/actions/objectActionContract';
 import type { GridTableProps } from '@shared/components/tables/GridTable';
+import { getTextContent } from '@shared/components/tables/GridTable.utils';
 import React, { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,7 +24,6 @@ const {
   useTableSortMock,
   requestRefreshDomainStateMock,
   useGridTablePersistenceMock,
-  clusterMetricsRef,
   queryNamespacesPermissionsMock,
   POD_PERMISSIONS_SENTINEL,
 } = vi.hoisted(() => ({
@@ -34,7 +34,6 @@ const {
   useTableSortMock: vi.fn(),
   requestRefreshDomainStateMock: vi.fn(),
   useGridTablePersistenceMock: vi.fn(),
-  clusterMetricsRef: { current: null as unknown },
   queryNamespacesPermissionsMock: vi.fn(),
   POD_PERMISSIONS_SENTINEL: { feature: 'namespace-pods', specs: [] },
 }));
@@ -155,10 +154,6 @@ vi.mock('@/core/refresh', () => ({
   refreshManager: { triggerManualRefresh: vi.fn() },
 }));
 
-vi.mock('@/core/refresh/hooks/useMetricsAvailability', () => ({
-  useClusterMetricsAvailability: () => clusterMetricsRef.current,
-}));
-
 vi.mock('@wailsjs/go/backend/App', () => ({
   RunObjectAction: vi.fn(),
   FindCatalogObjectByUID: vi.fn(),
@@ -261,7 +256,6 @@ describe('PodsTab (query-backed)', () => {
     root = ReactDOM.createRoot(container);
     gridTablePropsRef.current = null;
     objectPanelRef.current = DEPLOYMENT_OBJECT_DATA;
-    clusterMetricsRef.current = null;
     mockOpenWithObject.mockReset();
     navigateToViewMock.mockReset();
     requestRefreshDomainStateMock.mockReset();
@@ -322,6 +316,60 @@ describe('PodsTab (query-backed)', () => {
     );
     expect(getGridTableProps().data.map((pod: PodSnapshotEntry) => pod.name)).toEqual([
       'query-pod',
+    ]);
+  });
+
+  it('omits Status while preserving the backend-owned Node query facet', async () => {
+    requestRefreshDomainStateMock.mockResolvedValue({
+      status: 'executed',
+      data: {
+        status: 'ready',
+        data: {
+          rows: [createPod()],
+          total: 1,
+          totalIsExact: true,
+          facetValues: [
+            {
+              key: 'statuses',
+              options: [{ value: 'Running', label: 'Running' }],
+              exact: true,
+            },
+            {
+              key: 'nodes',
+              options: [{ value: 'node-a', label: 'node-a' }],
+              exact: true,
+            },
+          ],
+          facetsExact: true,
+          capabilities: {
+            queryFacets: [
+              {
+                key: 'statuses',
+                label: 'Status',
+                placeholder: 'All statuses',
+                bulkActions: true,
+              },
+              {
+                key: 'nodes',
+                label: 'Node',
+                placeholder: 'All nodes',
+                searchable: true,
+                bulkActions: true,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    await renderPods();
+
+    expect(getGridTableProps().filters?.options?.queryFacets).toEqual([
+      expect.objectContaining({
+        key: 'nodes',
+        label: 'Node',
+        options: [{ value: 'node-a', label: 'node-a' }],
+      }),
     ]);
   });
 
@@ -392,6 +440,18 @@ describe('PodsTab (query-backed)', () => {
       'expected status cell element in PodsTab.test.tsx'
     );
     expect(cell.props.className).toBe('status-text warning');
+  });
+
+  it('renders zero pod restarts as no value without changing numeric sorting', async () => {
+    const pods = [createPod(), createPod({ name: 'restarted', restarts: 2 })];
+    mockQueryRows(pods);
+    await renderPods();
+
+    const column = getGridColumn('restarts');
+    expect(getTextContent(column.render(pods[0]))).toBe('-');
+    expect(getTextContent(column.render(pods[1]))).toBe('2');
+    expect(column.sortValue?.(pods[0])).toBe(0);
+    expect(column.sortValue?.(pods[1])).toBe(2);
   });
 
   it('opens the Map from the pod context menu using the pod identity', async () => {
@@ -470,9 +530,7 @@ describe('PodsTab (query-backed)', () => {
     );
   });
 
-  it('renders the metrics banner from the pods query payload (the panel cluster)', async () => {
-    // The rows query is scoped to the panel object's cluster and its payload
-    // carries that cluster's metrics meta — the banner must come from there.
+  it('keeps metrics availability out of the object-panel Pods table surface', async () => {
     requestRefreshDomainStateMock.mockResolvedValue({
       status: 'executed',
       data: {
@@ -487,42 +545,6 @@ describe('PodsTab (query-backed)', () => {
             collectedAt: 1700000000,
             successCount: 0,
             failureCount: 1,
-          },
-        },
-      },
-    });
-
-    await renderPods();
-
-    expect(container.querySelector('.metrics-warning-banner')?.textContent).toContain(
-      'Metrics API not found'
-    );
-  });
-
-  it('ignores the globally selected cluster metrics state (wrong cluster)', async () => {
-    // The globally selected cluster is failing, but the panel object's cluster
-    // (the query payload) is healthy — no banner may show.
-    clusterMetricsRef.current = {
-      stale: true,
-      lastError: 'metrics api unavailable',
-      collectedAt: 1700000000,
-      successCount: 0,
-      failureCount: 5,
-    };
-    requestRefreshDomainStateMock.mockResolvedValue({
-      status: 'executed',
-      data: {
-        status: 'ready',
-        data: {
-          rows: [createPod()],
-          total: 1,
-          totalIsExact: true,
-          metrics: {
-            stale: false,
-            lastError: '',
-            collectedAt: 1700000000,
-            successCount: 5,
-            failureCount: 0,
           },
         },
       },

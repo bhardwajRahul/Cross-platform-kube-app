@@ -42,7 +42,6 @@ const hoistedMocks = vi.hoisted(() => {
 });
 
 const viewRenderers = hoistedMocks.renderers;
-vi.mock('@modules/namespace/components/NsViewPods', () => hoistedMocks.makeMock('pods-view'));
 vi.mock('@modules/namespace/components/NsViewWorkloads', () =>
   hoistedMocks.makeMock('workloads-view')
 );
@@ -94,7 +93,6 @@ describe('AllNamespacesView', () => {
   };
 
   const tableTabs: Array<[NamespaceViewType, string]> = [
-    ['pods', 'pods-view'],
     ['workloads', 'workloads-view'],
     ['config', 'config-view'],
     ['autoscaling', 'autoscaling-view'],
@@ -106,16 +104,17 @@ describe('AllNamespacesView', () => {
     ['events', 'events-view'],
   ];
 
-  it.each(
-    tableTabs
-  )('renders the %s tab directly with the all-namespaces scope and no extra fetch', async (tab, rendererKey) => {
-    await renderView(tab);
+  it.each(tableTabs)(
+    'renders the %s tab directly with the all-namespaces scope and no extra fetch',
+    async (tab, rendererKey) => {
+      await renderView(tab);
 
-    expect(clientMocks.fetchSnapshotMock).not.toHaveBeenCalled();
-    const props = getLatestProps(rendererKey);
-    expect(props.namespace).toBe(ALL_NAMESPACES_SCOPE);
-    expect(props.showNamespaceColumn).toBe(true);
-  });
+      expect(clientMocks.fetchSnapshotMock).not.toHaveBeenCalled();
+      const props = getLatestProps(rendererKey);
+      expect(props.namespace).toBe(ALL_NAMESPACES_SCOPE);
+      expect(props.showNamespaceColumn).toBe(true);
+    }
+  );
 
   it('renders the custom tab with its catalog-backed props', async () => {
     await renderView('custom');

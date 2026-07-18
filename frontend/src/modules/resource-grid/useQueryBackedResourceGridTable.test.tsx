@@ -43,6 +43,7 @@ const {
   persistedPageSizeRef,
   persistenceHydratedRef,
   persistedFiltersRef,
+  setFiltersMock,
   setPageSizeMock,
 } = vi.hoisted(() => ({
   liveDomainStateRef: {
@@ -89,6 +90,7 @@ const {
   persistedPageSizeRef: { current: null as number | null },
   persistenceHydratedRef: { current: true },
   persistedFiltersRef: { current: null as Record<string, unknown> | null },
+  setFiltersMock: vi.fn(),
   setPageSizeMock: vi.fn(),
 }));
 
@@ -131,7 +133,7 @@ vi.mock('@shared/components/tables/persistence/useGridTablePersistence', () => (
     columnWidths: null,
     setColumnWidths: vi.fn(),
     filters: persistedFiltersRef.current ?? DEFAULT_GRID_TABLE_FILTER_STATE,
-    setFilters: vi.fn(),
+    setFilters: setFiltersMock,
     pageSize: persistedPageSizeRef.current,
     setPageSize: setPageSizeMock,
     hydrated: persistenceHydratedRef.current,
@@ -213,6 +215,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
     persistedPageSizeRef.current = null;
     persistenceHydratedRef.current = true;
     persistedFiltersRef.current = null;
+    setFiltersMock.mockReset();
     setPageSizeMock.mockReset();
     useTypedResourceQueryMock.mockReturnValue({
       rows: [row],
@@ -303,6 +306,43 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
     // state settles; every call must target the base domain with no siblings.
     const distinctParamsPerRender = new Set(callsPerRender.map(([params]) => params.label));
     expect(distinctParamsPerRender).toEqual(new Set(['Namespace Pods']));
+  });
+
+  it('removes excluded query facets from persisted table state', async () => {
+    persistedFiltersRef.current = {
+      ...DEFAULT_GRID_TABLE_FILTER_STATE,
+      queryFacets: {
+        statuses: { mode: 'some', values: ['Running'] },
+        nodes: { mode: 'some', values: ['node-a'] },
+      },
+    };
+
+    const Probe: React.FC = () => {
+      useQueryBackedNamespaceResourceGridTable<TestPayload, TestRow>({
+        clusterId: 'cluster-a',
+        domain: 'pods',
+        label: 'Namespace Pods',
+        selectRows,
+        viewId: 'namespace-pods',
+        namespace: 'team-a',
+        columns,
+        keyExtractor: (item) => item.name,
+        excludedQueryFacetKeys: ['statuses'],
+      });
+      return null;
+    };
+
+    await act(async () => {
+      root.render(<Probe />);
+      await Promise.resolve();
+    });
+
+    expect(setFiltersMock).toHaveBeenCalledWith({
+      ...DEFAULT_GRID_TABLE_FILTER_STATE,
+      queryFacets: {
+        nodes: { mode: 'some', values: ['node-a'] },
+      },
+    });
   });
 
   it('passes cluster scoped live refresh revisions into typed queries', () => {
@@ -919,7 +959,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
     });
 
     expect(result?.source.loading).toBe(false);
-    expect(paginationLoading(result)).toBe(false);
+    expect(paginationLoading(result)).toBeUndefined();
   });
 
   it('exposes table loading during a query load with no rows yet', async () => {
@@ -975,7 +1015,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
     });
 
     expect(result?.source.loading).toBe(true);
-    expect(paginationLoading(result)).toBe(false);
+    expect(paginationLoading(result)).toBeUndefined();
   });
 
   it('uses empty query results by default when local rows exist', async () => {
@@ -1171,7 +1211,7 @@ describe('useQueryBackedResourceGridTable live invalidation', () => {
       loadPrevious: vi.fn(),
       pageIndex: 1,
       pageSize: 250,
-      totalCount: 1,
+      totalCount: 1000,
       totalIsExact: true,
       filterOptions: {},
       dynamic: null,

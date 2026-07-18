@@ -3,6 +3,8 @@ package snapshot
 import (
 	"fmt"
 	"testing"
+
+	"github.com/luxury-yacht/app/backend/refresh/querypage"
 )
 
 // anchorFor builds a valid same-cluster anchor ref for typed serve tests.
@@ -196,6 +198,42 @@ func TestMaintainedDirectAnchorServesAlignedPage(t *testing.T) {
 	}
 }
 
+func TestMaintainedDirectAppliesProviderFacetsAndPublishesStructuralOptions(t *testing.T) {
+	store := querypage.NewStore(nodesQuerypageSchema())
+	store.Upsert(NodeSummary{Name: "ready", Status: "Ready"})
+	store.Upsert(NodeSummary{Name: "not-ready", Status: "NotReady"})
+	query := typedTableQuery{
+		Enabled: true,
+		Request: ResourceQueryRequest{
+			ClusterID: "c", Table: "nodes", SortField: "name", SortDirection: "asc", Limit: 50,
+			Facets: map[string][]string{"statuses": {"NotReady"}},
+		},
+	}
+	resolved := resolveMaintainedDirect(
+		store, query, map[string]bool{"Node": true}, "", nodeTableQueryAdapter(),
+		nodesQuerypageSchema(), nodeQueryCapabilities(), 100, "nodes",
+		func(NodeSummary) string { return "Node" }, func() []NodeSummary { return nil }, nil,
+	)
+
+	if len(resolved.Rows) != 1 || resolved.Rows[0].Status != "NotReady" {
+		t.Fatalf("maintained facet rows = %#v, want NotReady only", resolved.Rows)
+	}
+	wantOptions := []string{"NotReady", "Ready"}
+	if got := testFacetOptionValues(resolved.Envelope.FacetValues, "statuses"); !equalStringSlices(got, wantOptions) {
+		t.Fatalf("maintained status options = %v, want %v", got, wantOptions)
+	}
+
+	query.Request.Facets = map[string][]string{"statuses": {"notready"}}
+	caseFolded := resolveMaintainedDirect(
+		store, query, map[string]bool{"Node": true}, "", nodeTableQueryAdapter(),
+		nodesQuerypageSchema(), nodeQueryCapabilities(), 100, "nodes",
+		func(NodeSummary) string { return "Node" }, func() []NodeSummary { return nil }, nil,
+	)
+	if len(caseFolded.Rows) != 1 || caseFolded.Rows[0].Status != "NotReady" {
+		t.Fatalf("case-folded maintained facet rows = %#v, want NotReady only", caseFolded.Rows)
+	}
+}
+
 // Metric-sort anchor regression (plan P3): metric-joined domains are per-Build
 // with usage overlaid on the rows BEFORE the store is built, so an anchored
 // jump on a cpu sort ranks against the CURRENT tick's values by construction.
@@ -255,6 +293,7 @@ func TestAdapterAnchorKeyMatchesKey(t *testing.T) {
 		{"rbac", rbacTableQueryAdapter().AnchorKey, rbacTableQueryAdapter().Key(RBACSummary{Kind: "Role", Namespace: "ns-a", Name: "obj"}), "Role", "ns-a", "obj"},
 		{"helm", helmTableQueryAdapter().AnchorKey, helmTableQueryAdapter().Key(NamespaceHelmSummary{Namespace: "ns-a", Name: "obj"}), "HelmRelease", "ns-a", "obj"},
 		{"events", namespacedEventTableQueryAdapter().AnchorKey, namespacedEventTableQueryAdapter().Key(EventSummary{Kind: "Pod", Namespace: "ns-a", Name: "obj"}), "Event", "ns-a", "obj"},
+		{"cluster-events", clusterEventTableQueryAdapter().AnchorKey, clusterEventTableQueryAdapter().Key(ClusterEventEntry{Namespace: "ns-a", Name: "evt-1"}), "Event", "ns-a", "evt-1"},
 		{"pods", podTableQueryAdapter().AnchorKey, podTableQueryAdapter().Key(PodSummary{Namespace: "ns-a", Name: "obj"}), "Pod", "ns-a", "obj"},
 		{"workloads", workloadTableQueryAdapter().AnchorKey, workloadTableQueryAdapter().Key(WorkloadSummary{Kind: "Deployment", Namespace: "ns-a", Name: "obj"}), "Deployment", "ns-a", "obj"},
 	}
@@ -280,7 +319,6 @@ func TestClusterAdapterAnchorKeyMatchesKey(t *testing.T) {
 		name      string
 	}{
 		{"nodes", nodeTableQueryAdapter().AnchorKey, nodeTableQueryAdapter().Key(NodeSummary{Name: "node-1"}), "Node", "node-1"},
-		{"cluster-events", clusterEventTableQueryAdapter().AnchorKey, clusterEventTableQueryAdapter().Key(ClusterEventEntry{Name: "evt-1"}), "Event", "evt-1"},
 		{"cluster-config", clusterConfigTableQueryAdapter().AnchorKey, clusterConfigTableQueryAdapter().Key(ClusterConfigEntry{Kind: "StorageClass", Name: "gp3"}), "StorageClass", "gp3"},
 		{"cluster-storage", clusterStorageTableQueryAdapter().AnchorKey, clusterStorageTableQueryAdapter().Key(ClusterStorageEntry{Kind: "PersistentVolume", Name: "pv-1"}), "PersistentVolume", "pv-1"},
 		{"cluster-rbac", clusterRBACTableQueryAdapter().AnchorKey, clusterRBACTableQueryAdapter().Key(ClusterRBACEntry{Kind: "ClusterRole", Name: "admin"}), "ClusterRole", "admin"},

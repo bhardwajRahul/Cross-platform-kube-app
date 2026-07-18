@@ -18,7 +18,7 @@
  */
 
 import type React from 'react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import './BrowseView.css';
 import { useViewState } from '@core/contexts/ViewStateContext';
 import { useBrowseCatalog } from '@modules/browse/hooks/useBrowseCatalog';
@@ -34,8 +34,13 @@ import { useNamespaceGridTablePersistence } from '@modules/namespace/hooks/useNa
 import { useObjectPanel } from '@modules/object-panel/hooks/useObjectPanel';
 import { backendQuerySource } from '@modules/resource-grid/backendQuerySource';
 import ResourceInventoryTable from '@modules/resource-grid/ResourceInventoryTable';
+import { hasExplicitNoneResourceQueryFilter } from '@modules/resource-grid/typedResourceQueryScope';
 import { useQueryResourceGridTable } from '@modules/resource-grid/useResourceGridTable';
 import type { ContextMenuItem } from '@shared/components/ContextMenu';
+import {
+  ALL_MULTISELECT_FILTER,
+  filterSelectionValues,
+} from '@shared/components/dropdowns/multiSelectFilterSelection';
 import { GRIDTABLE_VIRTUALIZATION_DEFAULT } from '@shared/components/tables/GridTable';
 import { TABLE_PAGE_SIZE_OPTIONS } from '@shared/components/tables/pageSizeOptions';
 import { useGridTablePersistence } from '@shared/components/tables/persistence/useGridTablePersistence';
@@ -46,7 +51,10 @@ import {
 } from '@shared/utils/objectIdentity';
 import { useShortNames } from '@/hooks/useShortNames';
 import type { BrowseScope, BrowseViewProps } from './BrowseView.types';
-import CatalogPaginationFooter, { catalogPaginationPageKeyProps } from './CatalogPaginationFooter';
+import CatalogPaginationFooter, {
+  catalogPaginationPageKeyProps,
+  shouldRenderCatalogPaginationFooter,
+} from './CatalogPaginationFooter';
 
 const VIRTUALIZATION_THRESHOLD = 80;
 
@@ -274,7 +282,12 @@ const BrowseView: React.FC<BrowseViewProps> = ({
     columns,
     data: [], // We'll populate this after we have catalog data
     keyExtractor,
-    filterOptions: { kinds: [], namespaces: [], isNamespaceScoped: false },
+    filterOptions: {
+      kinds: [],
+      namespaces: [],
+      queryFacets: { apiGroups: [] },
+      isNamespaceScoped: false,
+    },
     pageSizeOptions: TABLE_PAGE_SIZE_OPTIONS,
     enabled: !isNamespaceScoped,
   });
@@ -286,7 +299,12 @@ const BrowseView: React.FC<BrowseViewProps> = ({
     columns,
     data: [], // We'll populate this after we have catalog data
     keyExtractor,
-    filterOptions: { kinds: [], namespaces: [], isNamespaceScoped: true },
+    filterOptions: {
+      kinds: [],
+      namespaces: [],
+      queryFacets: { apiGroups: [] },
+      isNamespaceScoped: true,
+    },
     pageSizeOptions: TABLE_PAGE_SIZE_OPTIONS,
     enabled: isNamespaceScoped,
   });
@@ -302,6 +320,7 @@ const BrowseView: React.FC<BrowseViewProps> = ({
     hasLoadedOnce,
     error: catalogError,
     filterOptions,
+    filterOptionsResolved,
     totalCount,
     unfilteredTotal,
     totalIsExact,
@@ -314,14 +333,46 @@ const BrowseView: React.FC<BrowseViewProps> = ({
     clusterScopedOnly,
     filters: {
       search: persistence.filters.search ?? '',
-      kinds: persistence.filters.kinds ?? [],
-      namespaces: persistence.filters.namespaces ?? [],
+      kinds: filterSelectionValues(persistence.filters.kinds),
+      namespaces: filterSelectionValues(persistence.filters.namespaces),
+      apiGroups: filterSelectionValues(
+        persistence.filters.queryFacets?.apiGroups ?? ALL_MULTISELECT_FILTER
+      ),
+      matchNone: hasExplicitNoneResourceQueryFilter(persistence.filters),
     },
     sort: persistence.sortConfig,
     pageLimit: persistence.pageSize ?? undefined,
     onPageLimitChange: persistence.setPageSize,
     diagnosticLabel: scope === 'namespace' ? 'Namespace Browse' : 'Browse',
   });
+
+  const selectedApiGroups = persistence.filters.queryFacets?.apiGroups ?? ALL_MULTISELECT_FILTER;
+  const selectedKinds = persistence.filters.kinds;
+  useEffect(() => {
+    if (
+      !filterOptionsResolved ||
+      selectedApiGroups.mode !== 'some' ||
+      selectedKinds.mode !== 'some'
+    ) {
+      return;
+    }
+    const availableKinds = new Set(filterOptions.kinds.map((kind) => kind.toLowerCase()));
+    const nextKinds = selectedKinds.values.filter((kind) => availableKinds.has(kind.toLowerCase()));
+    if (nextKinds.length === selectedKinds.values.length) {
+      return;
+    }
+    persistence.setFilters({
+      ...persistence.filters,
+      kinds: nextKinds.length > 0 ? { mode: 'some', values: nextKinds } : ALL_MULTISELECT_FILTER,
+    });
+  }, [
+    filterOptions.kinds,
+    filterOptionsResolved,
+    persistence.filters,
+    persistence.setFilters,
+    selectedApiGroups,
+    selectedKinds,
+  ]);
 
   // Convert items to table rows
   const rows = useMemo(
@@ -337,13 +388,14 @@ const BrowseView: React.FC<BrowseViewProps> = ({
   );
 
   const paginationControls = useMemo(
-    () => (
-      <CatalogPaginationFooter
-        idPrefix={resolvedViewId}
-        visibleItemCount={rows.length}
-        pagination={pagination}
-      />
-    ),
+    () =>
+      shouldRenderCatalogPaginationFooter(pagination) ? (
+        <CatalogPaginationFooter
+          idPrefix={resolvedViewId}
+          visibleItemCount={rows.length}
+          pagination={pagination}
+        />
+      ) : null,
     [pagination, resolvedViewId, rows.length]
   );
 
@@ -352,13 +404,23 @@ const BrowseView: React.FC<BrowseViewProps> = ({
       searchBehavior: 'query' as const,
       kinds: filterOptions.kinds,
       namespaces: filterOptions.namespaces,
+      queryFacets: [
+        {
+          key: 'apiGroups',
+          label: 'API groups',
+          placeholder: 'All API groups',
+          options: filterOptions.apiGroups,
+          searchable: true,
+          bulkActions: true,
+          placement: 'before-kinds' as const,
+          invalidates: ['kinds'] as const,
+        },
+      ],
       showKindDropdown: true,
       showNamespaceDropdown: showNamespaceColumn,
-      kindDropdownSearchable: true,
-      kindDropdownBulkActions: true,
       namespaceDropdownSearchable: true,
       includeClusterScopedSyntheticNamespace: false,
-      // Show the "showing N of M items due to filters" banner like every other view (the bar only
+      // Show the "Showing N of M items" filter chip like every other view (the bar only
       // renders it while a narrowing filter is active). totalCount is N; unfilteredTotal is M.
       totalCount,
       unfilteredTotal,
@@ -368,6 +430,7 @@ const BrowseView: React.FC<BrowseViewProps> = ({
     [
       filterOptions.kinds,
       filterOptions.namespaces,
+      filterOptions.apiGroups,
       filterOptions.partialDataLabel,
       showNamespaceColumn,
       totalCount,

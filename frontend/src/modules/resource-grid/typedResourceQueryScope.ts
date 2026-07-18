@@ -1,4 +1,6 @@
 import type { SortConfig } from '@hooks/useTableSort';
+import type { MultiSelectFilterSelection } from '@shared/components/dropdowns/multiSelectFilterSelection';
+import { migrateLegacyMultiSelectFilterSelection } from '@shared/components/dropdowns/multiSelectFilterSelection';
 import type {
   GridTableFilterOptions,
   GridTableFilterState,
@@ -9,8 +11,11 @@ import type {
   ResourceQueryAnchorResult,
   ResourceQueryCapabilities,
   ResourceQueryDynamicRef,
+  ResourceQueryFacetValues,
   ResourceQueryIssue,
 } from '@/core/refresh/types';
+
+export const RESOURCE_STATUS_QUERY_FACET_KEYS = ['statuses'] as const;
 
 export interface TypedQueryPayload {
   continue?: string;
@@ -24,11 +29,12 @@ export interface TypedQueryPayload {
   pageStartRank?: number;
   cursorInvalid?: boolean;
   total?: number;
-  // Items in scope before the request's filters — the "of M" in "showing N of M due to filters".
+  // Items in scope before the request's filters — the "of M" in "Showing N of M items".
   unfilteredTotal?: number;
   totalIsExact?: boolean;
   namespaces?: string[];
   kinds?: string[];
+  facetValues?: ResourceQueryFacetValues[];
   facetsExact?: boolean;
   issues?: ResourceQueryIssue[];
   dynamic?: ResourceQueryDynamicRef;
@@ -67,6 +73,24 @@ const stableTypedQueryList = (values: string[]) =>
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b));
 
+const stableTypedQuerySelection = (selection: unknown) => {
+  const normalized = migrateLegacyMultiSelectFilterSelection(selection);
+  return normalized.mode === 'some' ? stableTypedQueryList(normalized.values) : [];
+};
+
+const stableTypedQueryFacets = (facets: Record<string, MultiSelectFilterSelection> | undefined) =>
+  Object.fromEntries(
+    Object.entries(facets ?? {})
+      .map(([key, selection]) => [key, stableTypedQuerySelection(selection)] as const)
+      .filter(([, values]) => values.length > 0)
+      .sort(([left], [right]) => left.localeCompare(right))
+  );
+
+export const hasExplicitNoneResourceQueryFilter = (filters: GridTableFilterState): boolean =>
+  [filters.kinds, filters.namespaces, filters.clusters, ...Object.values(filters.queryFacets ?? {})]
+    .map(migrateLegacyMultiSelectFilterSelection)
+    .some((selection) => selection.mode === 'none');
+
 export const typedResourceQueryIdentity = ({
   filters,
   sortConfig,
@@ -76,8 +100,10 @@ export const typedResourceQueryIdentity = ({
     search: filters.search,
     caseSensitive: filters.caseSensitive,
     includeMetadata: filters.includeMetadata,
-    kinds: stableTypedQueryList(filters.kinds),
-    namespaces: stableTypedQueryList(filters.namespaces),
+    matchNone: hasExplicitNoneResourceQueryFilter(filters),
+    kinds: stableTypedQuerySelection(filters.kinds),
+    namespaces: stableTypedQuerySelection(filters.namespaces),
+    queryFacets: stableTypedQueryFacets(filters.queryFacets),
     sort: sortConfig,
     predicates: Object.fromEntries(
       Object.entries(predicates ?? {})
@@ -124,13 +150,23 @@ export function buildTypedResourceQueryScope(
   if (descriptor.filters.includeMetadata) {
     params.set('includeMetadata', 'true');
   }
-  const namespaces = stableTypedQueryList(descriptor.filters.namespaces);
+  if (hasExplicitNoneResourceQueryFilter(descriptor.filters)) {
+    params.set('matchNone', 'true');
+  }
+  const namespaces = stableTypedQuerySelection(descriptor.filters.namespaces);
   if (namespaces.length > 0) {
     params.set('namespaces', namespaces.join(','));
   }
-  const kinds = stableTypedQueryList(descriptor.filters.kinds);
+  const kinds = stableTypedQuerySelection(descriptor.filters.kinds);
   if (kinds.length > 0) {
     params.set('kinds', kinds.join(','));
+  }
+  for (const [key, values] of Object.entries(
+    stableTypedQueryFacets(descriptor.filters.queryFacets)
+  )) {
+    for (const value of values) {
+      params.append(`facet.${key}`, value);
+    }
   }
   if (descriptor.sortConfig?.key && descriptor.sortConfig.direction) {
     params.set('sort', descriptor.sortConfig.key);
@@ -182,15 +218,27 @@ export function filterOptionsFromTypedPayload(
     ? payload.issues.map((issue) => `${issue.kind}: ${issue.message}`).join('\n')
     : undefined;
   const facetsLabel =
-    payload.facetsExact === false
+    payload.facetsExact === false || payload.facetValues?.some((facet) => !facet.exact)
       ? 'Facet options are approximate because one or more backend data sources were unavailable.'
       : undefined;
+  const valuesByKey = new Map((payload.facetValues ?? []).map((facet) => [facet.key, facet]));
+  const queryFacets: NonNullable<GridTableFilterOptions['queryFacets']> = (
+    payload.capabilities?.queryFacets ?? []
+  ).map((descriptor) => ({
+    key: descriptor.key,
+    label: descriptor.label,
+    placeholder: descriptor.placeholder,
+    options: valuesByKey.get(descriptor.key)?.options ?? [],
+    searchable: descriptor.searchable,
+    bulkActions: descriptor.bulkActions,
+  }));
   return {
     kinds: payload.kinds,
     namespaces: payload.namespaces,
     totalCount: payload.total,
     unfilteredTotal: payload.unfilteredTotal,
     totalIsExact: payload.totalIsExact,
+    queryFacets: queryFacets.length > 0 ? queryFacets : undefined,
     partialDataLabel: [issueLabel, facetsLabel].filter(Boolean).join('\n') || undefined,
   };
 }

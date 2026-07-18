@@ -36,6 +36,8 @@ const (
 	catalogEngineFacetKindIdentity   = "kindidentity"
 	catalogEngineFacetNamespace      = "namespace"
 	catalogEngineFacetScope          = "scope"
+	catalogEngineFacetResourceScope  = "resourcescope"
+	catalogEngineFacetAPIGroup       = "apigroup"
 	catalogEngineFacetScopeNamespace = "scopenamespace"
 	catalogEngineFacetCustom         = "custom"
 )
@@ -43,6 +45,10 @@ const (
 // catalogEngineNoMatchFacetValue is not a valid catalogEngineKindIdentity value:
 // kind identities contain group/version/kind separated by catalogEngineFieldSep.
 const catalogEngineNoMatchFacetValue = catalogEngineFieldSep + "catalog-engine-no-match"
+
+// The empty core API group needs a non-empty, unambiguous query value. Parentheses
+// are not valid in Kubernetes API group names, so this cannot collide with a real group.
+const catalogCoreAPIGroupFacetValue = "(core)"
 
 // catalogEngineFieldSep separates identity components inside an encoded sort/UID
 // value. NUL can never appear in a Kubernetes identifier, so a concatenation of
@@ -91,6 +97,10 @@ func newCatalogQueryStoreSchema() querypage.Schema[Summary] {
 			// namespace — matching catalogQueryNamespaceIndexKey and the filter keys.
 			catalogEngineFacetNamespace: func(s Summary) string { return catalogQueryNamespaceIndexKey(s.Namespace, s.Scope) },
 			catalogEngineFacetScope:     func(s Summary) string { return strings.ToLower(string(s.Scope)) },
+			catalogEngineFacetResourceScope: func(s Summary) string {
+				return strings.ToLower(string(s.Scope))
+			},
+			catalogEngineFacetAPIGroup: func(s Summary) string { return catalogAPIGroupFacetValue(s.Group) },
 			catalogEngineFacetScopeNamespace: func(s Summary) string {
 				return catalogQueryNamespaceIndexKey(s.Namespace, s.Scope)
 			},
@@ -195,21 +205,73 @@ func catalogEngineDirection(direction string) querypage.Direction {
 
 // catalogEngineSignature pins a cursor to its query shape so a cursor minted for one
 // filter/sort/scope can never mispage a different one. It folds in limit, search, kinds,
-// namespaces, customOnly, and sort, so the cursor binds to exactly that query identity.
+// namespaces, API groups, resource scopes, customOnly, and sort, so the cursor binds to
+// exactly that query identity.
 func catalogEngineSignature(opts QueryOptions, limit int) string {
 	kinds := normalizeQueryValues(opts.Kinds)
 	namespaces := normalizeQueryValues(opts.Namespaces)
+	groups := normalizeCatalogAPIGroups(opts.Groups)
+	resourceScopes := normalizeCatalogResourceScopes(opts.ResourceScopes)
 	return fmt.Sprintf(
-		"limit=%d|scope=%s|scopeNamespaces=%s|search=%s|kinds=%s|namespaces=%s|customOnly=%t|sort=%s",
+		"limit=%d|scope=%s|scopeNamespaces=%s|search=%s|kinds=%s|namespaces=%s|groups=%s|resourceScopes=%s|customOnly=%t|sort=%s",
 		limit,
 		strings.ToLower(strings.TrimSpace(string(opts.Scope))),
 		strings.Join(normalizeQueryValues(opts.ScopeNamespaces), ","),
 		strings.TrimSpace(opts.Search),
 		strings.Join(kinds, ","),
 		strings.Join(namespaces, ","),
+		strings.Join(groups, ","),
+		strings.Join(resourceScopes, ","),
 		opts.CustomOnly,
 		catalogQuerySortContract(opts),
 	)
+}
+
+func catalogAPIGroupFacetValue(group string) string {
+	value := strings.ToLower(strings.TrimSpace(group))
+	if value == "" {
+		return catalogCoreAPIGroupFacetValue
+	}
+	return value
+}
+
+func normalizeCatalogAPIGroups(groups []string) []string {
+	if len(groups) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(groups))
+	values := make([]string, 0, len(groups))
+	for _, group := range groups {
+		value := catalogAPIGroupFacetValue(group)
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return values
+}
+
+func normalizeCatalogResourceScopes(scopes []Scope) []string {
+	if len(scopes) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(scopes))
+	values := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		value := strings.ToLower(strings.TrimSpace(string(scope)))
+		if value != strings.ToLower(string(ScopeCluster)) && value != strings.ToLower(string(ScopeNamespace)) {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return values
 }
 
 // catalogEngineKindFilterIdentities expands a kind filter into the exact set of
@@ -329,6 +391,7 @@ func (s *Service) queryViaEngineWithStore(
 		Limit:     limit,
 		Search:    opts.Search,
 		Filters:   filters,
+		MatchNone: opts.MatchNone,
 	}
 	var page querypage.Page[Summary]
 	var err error
@@ -360,7 +423,8 @@ func (s *Service) queryViaEngineWithStore(
 		page = querypage.Page[Summary]{PageStartRank: -1}
 	}
 
-	unfilteredTotal, unfilteredExact := s.catalogEngineUnfilteredTotal(store, opts, page.Total)
+	unfilteredTotal, groups, resourceScopes := catalogEngineStructuralMetadata(store, opts)
+	unfilteredExact := unfilteredTotal <= catalogQueryExactMetadataThreshold
 	metadataExact := page.Total <= catalogQueryExactMetadataThreshold
 
 	kinds, namespaces := resolveFacets(metadataExact)
@@ -377,6 +441,8 @@ func (s *Service) queryViaEngineWithStore(
 		ResourceCount:   countMatchingDescriptorsWithOptions(descriptors, newKindMatcher(opts.Kinds), opts),
 		Kinds:           kinds,
 		Namespaces:      namespaces,
+		Groups:          groups,
+		ResourceScopes:  resourceScopes,
 		FacetsExact:     metadataExact,
 		AnchorOutcome:   anchorOutcome,
 		PageStartRank:   page.PageStartRank,
@@ -409,16 +475,11 @@ func findAnchorSummary(rows []Summary, anchor *QueryAnchor) (Summary, bool) {
 }
 
 // catalogEngineFilters builds the querypage facet filters for a query: the kind
-// filter is expanded to the matching canonical identities, the namespace filter to
-// the namespace facet buckets, and CustomOnly to the custom="true" bucket.
+// filter is expanded to the matching canonical identities, namespace/API-group/
+// resource-scope filters map to their facet buckets, and CustomOnly remains part
+// of the structural custom="true" boundary.
 func (s *Service) catalogEngineFilters(rows []Summary, opts QueryOptions) map[string][]string {
-	filters := make(map[string][]string)
-	if scope := strings.ToLower(strings.TrimSpace(string(opts.Scope))); scope != "" {
-		filters[catalogEngineFacetScope] = []string{scope}
-	}
-	if values := catalogEngineNamespaceFilterValues(opts.ScopeNamespaces); len(values) > 0 {
-		filters[catalogEngineFacetScopeNamespace] = values
-	}
+	filters := catalogEngineStructuralFilters(opts)
 	if kinds := normalizeQueryValues(opts.Kinds); len(kinds) > 0 {
 		values := catalogEngineKindFilterIdentities(rows, kinds)
 		if len(values) == 0 {
@@ -429,19 +490,24 @@ func (s *Service) catalogEngineFilters(rows []Summary, opts QueryOptions) map[st
 	if values := catalogEngineNamespaceFilterValues(opts.Namespaces); len(values) > 0 {
 		filters[catalogEngineFacetNamespace] = values
 	}
-	if opts.CustomOnly {
-		filters[catalogEngineFacetCustom] = []string{"true"}
+	if len(opts.Groups) > 0 {
+		values := normalizeCatalogAPIGroups(opts.Groups)
+		if len(values) == 0 {
+			values = []string{catalogEngineNoMatchFacetValue}
+		}
+		filters[catalogEngineFacetAPIGroup] = values
+	}
+	if len(opts.ResourceScopes) > 0 {
+		values := normalizeCatalogResourceScopes(opts.ResourceScopes)
+		if len(values) == 0 {
+			values = []string{catalogEngineNoMatchFacetValue}
+		}
+		filters[catalogEngineFacetResourceScope] = values
 	}
 	return filters
 }
 
-// catalogEngineUnfilteredTotal is the count inside the query's structural scope before
-// kind/namespace/search filters. Structural resource and pinned-namespace boundaries,
-// plus custom-only, remain active when the user filters are cleared.
-func (s *Service) catalogEngineUnfilteredTotal(store *querypage.Store[Summary], opts QueryOptions, filteredTotal int) (int, bool) {
-	if len(opts.Kinds) == 0 && len(opts.Namespaces) == 0 && opts.Search == "" {
-		return filteredTotal, filteredTotal <= catalogQueryExactMetadataThreshold
-	}
+func catalogEngineStructuralFilters(opts QueryOptions) map[string][]string {
 	filters := make(map[string][]string)
 	if scope := strings.ToLower(strings.TrimSpace(string(opts.Scope))); scope != "" {
 		filters[catalogEngineFacetScope] = []string{scope}
@@ -452,28 +518,36 @@ func (s *Service) catalogEngineUnfilteredTotal(store *querypage.Store[Summary], 
 	if opts.CustomOnly {
 		filters[catalogEngineFacetCustom] = []string{"true"}
 	}
-	page, err := store.Query(querypage.Query{
-		ClusterID: s.clusterID,
-		Signature: catalogEngineSignature(QueryOptions{
-			Scope:           opts.Scope,
-			ScopeNamespaces: opts.ScopeNamespaces,
-			CustomOnly:      opts.CustomOnly,
-		}, clampQueryLimit(opts.Limit)),
-		Sort:      catalogEngineSortDefault,
-		Direction: querypage.Ascending,
-		Limit:     1,
-		Filters:   filters,
-	})
-	if err != nil {
-		return filteredTotal, true
+	return filters
+}
+
+// catalogEngineStructuralMetadata returns the denominator and filter vocabularies
+// inside the view's structural scope, before user search/kind/namespace/group/scope
+// filters. It uses the query store's column-only scope scan, so no rows are rebuilt.
+func catalogEngineStructuralMetadata(store *querypage.Store[Summary], opts QueryOptions) (int, []string, []Scope) {
+	facets, total := store.Scope(catalogEngineStructuralFilters(opts), "")
+
+	groups := make([]string, 0, len(facets[catalogEngineFacetAPIGroup]))
+	for group, count := range facets[catalogEngineFacetAPIGroup] {
+		if count > 0 {
+			groups = append(groups, group)
+		}
 	}
-	return page.Total, page.Total <= catalogQueryExactMetadataThreshold
+	sort.Strings(groups)
+
+	resourceScopes := make([]Scope, 0, 2)
+	for _, scope := range []Scope{ScopeCluster, ScopeNamespace} {
+		if facets[catalogEngineFacetResourceScope][strings.ToLower(string(scope))] > 0 {
+			resourceScopes = append(resourceScopes, scope)
+		}
+	}
+	return total, groups, resourceScopes
 }
 
 // catalogEngineFacets derives the maintained-store path's Kinds/Namespaces facets over
 // the store snapshot, using the publish-time cached lists:
-//   - Kinds: customOnly → kinds among custom matches; namespace filter → kinds present
-//     in the filtered namespaces; otherwise the full cached kinds list.
+//   - Kinds: customOnly → kinds among custom matches; namespace/API group/resource-scope
+//     filters → kinds present in their intersection; otherwise the full cached kinds list.
 //   - Namespaces: the full cached namespaces list (or, when none were cached but matches
 //     contribute namespaces, the matched namespaces).
 //
@@ -484,27 +558,41 @@ func catalogEngineFacets(rows []Summary, opts QueryOptions, cachedKinds []KindIn
 	namespaceMatcher := newNamespaceMatcher(opts.Namespaces)
 	searchMatcher := newSearchMatcher(opts.Search)
 	customMatcher := newCustomOnlyMatcher(opts.CustomOnly)
+	groupFilters := make(map[string]struct{}, len(opts.Groups))
+	for _, group := range normalizeCatalogAPIGroups(opts.Groups) {
+		groupFilters[group] = struct{}{}
+	}
+	resourceScopeFilters := make(map[string]struct{}, len(opts.ResourceScopes))
+	for _, scope := range normalizeCatalogResourceScopes(opts.ResourceScopes) {
+		resourceScopeFilters[scope] = struct{}{}
+	}
 
-	matchKinds := make(map[string]bool)
 	matchNamespaces := make(map[string]struct{})
-	namespaceKinds := make(map[string]bool)
+	allKinds := make(map[string]bool)
 	hasNamespaceFilter := len(opts.Namespaces) > 0
+	hasDependentKindFilter :=
+		hasNamespaceFilter || len(groupFilters) > 0 || len(resourceScopeFilters) > 0
+	dependentKinds := make(map[string]bool)
 
 	if metadataExact {
 		for _, item := range rows {
 			if !customMatcher(item) {
 				continue
 			}
-			if hasNamespaceFilter && namespaceMatcher(item.Namespace, item.Scope) && item.Kind != "" {
-				namespaceKinds[item.Kind] = item.Scope == ScopeNamespace
-			}
-			if !matchesCatalogQuery(item, kindMatcher, namespaceMatcher, searchMatcher) {
-				continue
-			}
 			if item.Kind != "" {
-				matchKinds[item.Kind] = item.Scope == ScopeNamespace
+				allKinds[item.Kind] = item.Scope == ScopeNamespace
 			}
-			if item.Namespace != "" {
+			matchesDependentFilters := !hasNamespaceFilter || namespaceMatcher(item.Namespace, item.Scope)
+			if matchesDependentFilters && len(groupFilters) > 0 {
+				_, matchesDependentFilters = groupFilters[catalogAPIGroupFacetValue(item.Group)]
+			}
+			if matchesDependentFilters && len(resourceScopeFilters) > 0 {
+				_, matchesDependentFilters = resourceScopeFilters[strings.ToLower(string(item.Scope))]
+			}
+			if matchesDependentFilters && item.Kind != "" {
+				dependentKinds[item.Kind] = item.Scope == ScopeNamespace
+			}
+			if matchesCatalogQuery(item, kindMatcher, namespaceMatcher, searchMatcher) && item.Namespace != "" {
 				matchNamespaces[item.Namespace] = struct{}{}
 			}
 		}
@@ -512,16 +600,10 @@ func catalogEngineFacets(rows []Summary, opts QueryOptions, cachedKinds []KindIn
 
 	kinds := cachedKinds
 	switch {
-	case opts.CustomOnly:
-		kinds = snapshotSortedKindInfos(matchKinds)
-	case hasNamespaceFilter:
-		if len(namespaceKinds) > 0 {
-			kinds = snapshotSortedKindInfos(namespaceKinds)
-		} else {
-			kinds = []KindInfo{}
-		}
-	case len(cachedKinds) == 0 && len(matchKinds) > 0:
-		kinds = snapshotSortedKindInfos(matchKinds)
+	case opts.CustomOnly || hasDependentKindFilter:
+		kinds = snapshotSortedKindInfos(dependentKinds)
+	case len(cachedKinds) == 0 && len(allKinds) > 0:
+		kinds = snapshotSortedKindInfos(allKinds)
 	}
 
 	namespaces := cachedNamespaces
@@ -537,17 +619,27 @@ func catalogEngineFacets(rows []Summary, opts QueryOptions, cachedKinds []KindIn
 // the Namespaces facet is the FULL in-scope namespace set (every custom-matched namespace
 // in the snapshot), independent of the kind/namespace/search filter — so a cluster-scope
 // filter still surfaces the cluster's namespaces in the facet list. Kinds are the full
-// custom-matched kind set, scoped to the filtered namespaces only when a namespace filter
-// is active. CustomOnly is honored solely by customMatcher gating the universe — there is
-// no separate CustomOnly kind branch.
+// custom-matched kind set, scoped to the intersection of namespace/API group/resource-scope
+// filters when any are active. CustomOnly is honored solely by customMatcher gating the
+// universe — there is no separate CustomOnly kind branch.
 func catalogEngineSnapshotFacets(rows []Summary, opts QueryOptions, metadataExact bool) ([]KindInfo, []string) {
 	namespaceMatcher := newNamespaceMatcher(opts.Namespaces)
 	customMatcher := newCustomOnlyMatcher(opts.CustomOnly)
 	hasNamespaceFilter := len(opts.Namespaces) > 0
+	groupFilters := make(map[string]struct{}, len(opts.Groups))
+	for _, group := range normalizeCatalogAPIGroups(opts.Groups) {
+		groupFilters[group] = struct{}{}
+	}
+	resourceScopeFilters := make(map[string]struct{}, len(opts.ResourceScopes))
+	for _, scope := range normalizeCatalogResourceScopes(opts.ResourceScopes) {
+		resourceScopeFilters[scope] = struct{}{}
+	}
+	hasDependentKindFilter :=
+		hasNamespaceFilter || len(groupFilters) > 0 || len(resourceScopeFilters) > 0
 
 	kindSet := make(map[string]bool)
 	namespaceSet := make(map[string]struct{})
-	namespaceKinds := make(map[string]bool)
+	dependentKinds := make(map[string]bool)
 
 	if metadataExact {
 		for _, item := range rows {
@@ -560,15 +652,22 @@ func catalogEngineSnapshotFacets(rows []Summary, opts QueryOptions, metadataExac
 			if item.Namespace != "" {
 				namespaceSet[item.Namespace] = struct{}{}
 			}
-			if hasNamespaceFilter && namespaceMatcher(item.Namespace, item.Scope) && item.Kind != "" {
-				namespaceKinds[item.Kind] = item.Scope == ScopeNamespace
+			matchesDependentFilters := !hasNamespaceFilter || namespaceMatcher(item.Namespace, item.Scope)
+			if matchesDependentFilters && len(groupFilters) > 0 {
+				_, matchesDependentFilters = groupFilters[catalogAPIGroupFacetValue(item.Group)]
+			}
+			if matchesDependentFilters && len(resourceScopeFilters) > 0 {
+				_, matchesDependentFilters = resourceScopeFilters[strings.ToLower(string(item.Scope))]
+			}
+			if matchesDependentFilters && item.Kind != "" {
+				dependentKinds[item.Kind] = item.Scope == ScopeNamespace
 			}
 		}
 	}
 
 	kindSource := kindSet
-	if hasNamespaceFilter {
-		kindSource = namespaceKinds
+	if hasDependentKindFilter {
+		kindSource = dependentKinds
 	}
 	return snapshotSortedKindInfos(kindSource), snapshotSortedKeys(namespaceSet)
 }

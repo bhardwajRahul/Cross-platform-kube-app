@@ -157,6 +157,16 @@ const renderNamespaceGrid = (
               age: '',
               hasWorkloads: true,
               workloadsUnknown: false,
+              unhealthyWorkloads: 0,
+              warningEvents: 0,
+              warningEventsState: 'unavailable',
+              cpuUsageMilli: 0,
+              memoryUsageBytes: 0,
+              utilizationState: 'unavailable',
+              quotaCount: 0,
+              quotaHighestUsedPercentage: 0,
+              quotaPressure: '',
+              quotaPressureState: 'unavailable',
               resourceVersion: '',
               isSynthetic: true,
             },
@@ -168,6 +178,16 @@ const renderNamespaceGrid = (
               age: '',
               hasWorkloads: true,
               workloadsUnknown: false,
+              unhealthyWorkloads: 0,
+              warningEvents: 0,
+              warningEventsState: 'available',
+              cpuUsageMilli: 0,
+              memoryUsageBytes: 0,
+              utilizationState: 'available',
+              quotaCount: 0,
+              quotaHighestUsedPercentage: 0,
+              quotaPressure: '',
+              quotaPressureState: 'available',
               resourceVersion: '',
             },
             {
@@ -178,9 +198,22 @@ const renderNamespaceGrid = (
               age: '',
               hasWorkloads: true,
               workloadsUnknown: false,
+              unhealthyWorkloads: 0,
+              warningEvents: 0,
+              warningEventsState: 'available',
+              cpuUsageMilli: 0,
+              memoryUsageBytes: 0,
+              utilizationState: 'available',
+              quotaCount: 0,
+              quotaHighestUsedPercentage: 0,
+              quotaPressure: '',
+              quotaPressureState: 'available',
               resourceVersion: '',
             },
           ],
+          namespaceSummaries: [],
+          namespaceMetricsState: 'unavailable',
+          namespaceError: null,
           selectedNamespace: ALL_NAMESPACES_SCOPE,
           selectedNamespaceClusterId: 'alpha:ctx',
           namespaceLoading: false,
@@ -242,28 +275,30 @@ describe('useNamespaceResourceGridTable', () => {
     act(() => {
       harness.result.current?.gridTableProps.filters?.onChange?.({
         ...DEFAULT_GRID_TABLE_FILTER_STATE,
-        namespaces: ['team-a', 'team-b'],
+        namespaces: { mode: 'some', values: ['team-a', 'team-b'] },
       });
     });
 
-    expect(harness.result.current?.gridTableProps.filters?.value?.namespaces).toEqual([
-      'team-a',
-      'team-b',
-    ]);
+    expect(harness.result.current?.gridTableProps.filters?.value?.namespaces).toEqual({
+      mode: 'some',
+      values: ['team-a', 'team-b'],
+    });
     expect(harness.onTableStateChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        filters: expect.objectContaining({ namespaces: [] }),
+        filters: expect.objectContaining({ namespaces: { mode: 'all' } }),
       })
     );
 
     act(() => {
       harness.result.current?.gridTableProps.filters?.onChange?.({
         ...DEFAULT_GRID_TABLE_FILTER_STATE,
-        namespaces: [],
+        namespaces: { mode: 'all' },
       });
     });
 
-    expect(harness.result.current?.gridTableProps.filters?.value?.namespaces).toEqual([]);
+    expect(harness.result.current?.gridTableProps.filters?.value?.namespaces).toEqual({
+      mode: 'all',
+    });
 
     harness.cleanup();
   });
@@ -315,7 +350,6 @@ describe('useNamespaceResourceGridTable', () => {
 
     expect(harness.result.current?.gridTableProps.filters?.options).toMatchObject({
       searchBehavior: 'local',
-      kindDropdownBulkActions: false,
     });
     expect(harness.result.current?.gridTableProps.filters?.options?.partialDataLabel).toContain(
       'visible dataset'

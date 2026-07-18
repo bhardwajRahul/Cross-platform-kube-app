@@ -96,7 +96,8 @@ const (
 	// doorbell domains its POLLS STAY ON: the doorbell only rings on
 	// successful collections, so a metrics-less cluster would otherwise
 	// freeze the overview's object-derived counts.
-	domainClusterOverview = "cluster-overview"
+	domainClusterOverview  = "cluster-overview"
+	domainClusterAttention = "cluster-attention"
 )
 
 const (
@@ -229,6 +230,8 @@ type Manager struct {
 	nextID      uint64
 	buffers     map[string]*updateBuffer
 	sequences   map[string]uint64
+
+	jobPodOwnerHealSink *ingest.AsyncBundleSink
 }
 
 // NewManager wires informer handlers into a resource stream manager. ingestManager,
@@ -297,6 +300,9 @@ func NewManager(
 func (m *Manager) Stop() {
 	if m == nil {
 		return
+	}
+	if m.jobPodOwnerHealSink != nil {
+		m.jobPodOwnerHealSink.Stop()
 	}
 	m.customInformerMu.Lock()
 	defer m.customInformerMu.Unlock()
@@ -1015,6 +1021,20 @@ func (m *Manager) BroadcastNamespacesRefresh(version, reason string) {
 		"namespaces doorbell %s: %s — signaling %d subscribed scope(s) to refetch the namespace list",
 		version, reason, len(scopes)))
 	m.broadcastDoorbellRefresh(domainNamespaces, scopes, SourceObject, version)
+}
+
+// BroadcastClusterAttentionRefresh tells the cluster Attention table to
+// refetch after its maintained finding set changes.
+func (m *Manager) BroadcastClusterAttentionRefresh(version string) {
+	if m == nil {
+		return
+	}
+	m.broadcastDoorbellRefresh(
+		domainClusterAttention,
+		m.subscribedScopes(domainClusterAttention),
+		SourceAttention,
+		version,
+	)
 }
 
 // BroadcastObjectEventsRefresh fans a SourceEvent doorbell to the subscribed

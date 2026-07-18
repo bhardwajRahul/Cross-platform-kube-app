@@ -723,7 +723,7 @@ describe('refreshOrchestrator', () => {
     );
   });
 
-  it('refreshes pods scope when namespace pods view is active during manual refresh', async () => {
+  it('refreshes the Pods table when the combined Workloads view is active', async () => {
     refreshManagerMocks.triggerManualRefreshForContextMock.mockResolvedValue(
       undefined as unknown as undefined
     );
@@ -732,7 +732,7 @@ describe('refreshOrchestrator', () => {
     registerPodsDomain();
     refreshOrchestrator.updateContext({
       currentView: 'namespace',
-      activeNamespaceView: 'pods',
+      activeNamespaceView: 'workloads',
       selectedNamespace: 'team-a',
       selectedClusterId: 'cluster-a',
     });
@@ -1100,6 +1100,8 @@ describe('refreshOrchestrator', () => {
       resourceVersion: '1',
       creationTimestamp: 100,
       hasWorkloads: false,
+      warningEventsState: 'available' as const,
+      quotaPressureState: 'available' as const,
     };
     const changedNamespace = {
       clusterId: 'cluster-a',
@@ -1117,6 +1119,8 @@ describe('refreshOrchestrator', () => {
       resourceVersion: '2',
       creationTimestamp: 200,
       hasWorkloads: false,
+      warningEventsState: 'available' as const,
+      quotaPressureState: 'available' as const,
     };
 
     setScopedDomainState('namespaces', scope, (prev) => ({
@@ -1124,6 +1128,8 @@ describe('refreshOrchestrator', () => {
       status: 'ready',
       data: {
         namespaces: [cachedNamespace, changedNamespace],
+        metrics: { stale: false, successCount: 1, failureCount: 0 },
+        metricsState: 'available',
         clusterId: 'test-cluster',
         clusterName: 'Test Cluster',
       },
@@ -1139,6 +1145,8 @@ describe('refreshOrchestrator', () => {
         sequence: 2,
         payload: {
           namespaces: [{ ...cachedNamespace }, { ...changedNamespace, phase: 'Terminating' }],
+          metrics: { stale: false, successCount: 1, failureCount: 0 },
+          metricsState: 'available',
           clusterId: 'test-cluster',
           clusterName: 'Test Cluster',
         },
@@ -1491,6 +1499,20 @@ describe('refreshOrchestrator', () => {
     expect(clientMocks.setMetricsActiveMock).toHaveBeenCalledTimes(2);
   });
 
+  it('treats the namespace aggregate lease as metrics demand', () => {
+    refreshOrchestrator.registerDomain({
+      domain: 'namespaces',
+      refresherName: SYSTEM_REFRESHERS.namespaces,
+      category: 'cluster',
+    });
+
+    refreshOrchestrator.setScopedDomainEnabled('namespaces', 'cluster-a|', true);
+    expect(clientMocks.setMetricsActiveMock).toHaveBeenCalledWith(true);
+
+    refreshOrchestrator.setScopedDomainEnabled('namespaces', 'cluster-a|', false);
+    expect(clientMocks.setMetricsActiveMock).toHaveBeenLastCalledWith(false);
+  });
+
   it('keeps single-scope system domains isolated by cluster runtime', () => {
     refreshOrchestrator.registerDomain({
       domain: 'cluster-overview',
@@ -1557,6 +1579,46 @@ describe('refreshOrchestrator', () => {
     expect(scopedMap?.get(firstScope)).toBe(false);
     expect(scopedMap?.get(secondScope)).toBe(true);
     expect(getScopedDomainState('cluster-overview', firstScope).status).toBe('idle');
+  });
+
+  it('keeps the leased cluster-attention base scope while a table query scope is active', () => {
+    refreshOrchestrator.registerDomain({
+      domain: 'cluster-attention',
+      refresherName: CLUSTER_REFRESHERS.attention,
+      category: 'cluster',
+    });
+
+    const baseScope = buildClusterScope('cluster-a', '');
+    const queryScope = buildClusterScope('cluster-a', '?limit=50&sort=severity');
+    const severityCounts = { info: 5, warning: 16, error: 0 };
+
+    refreshOrchestrator.acquireScopedDomainLease('cluster-attention', baseScope, {
+      preserveState: true,
+    });
+    setScopedDomainState('cluster-attention', baseScope, (previous) => ({
+      ...previous,
+      status: 'ready',
+      data: { severityCounts } as never,
+      scope: baseScope,
+    }));
+
+    // Typed table queries temporarily enable their full query scope, then
+    // disable it after reading the result. That transient scope must not evict
+    // the sidebar's independently leased base snapshot.
+    refreshOrchestrator.setScopedDomainEnabled('cluster-attention', queryScope, true);
+    refreshOrchestrator.setScopedDomainEnabled('cluster-attention', queryScope, false);
+
+    const scopedMap = orchestratorInternals.clusterRuntimes
+      .get('cluster-a')
+      ?.scopedEnabledState.get('cluster-attention');
+    expect(scopedMap?.get(baseScope)).toBe(true);
+    expect(getScopedDomainState('cluster-attention', baseScope).data?.severityCounts).toEqual(
+      severityCounts
+    );
+
+    refreshOrchestrator.releaseScopedDomainLease('cluster-attention', baseScope, {
+      preserveState: true,
+    });
   });
 
   it('allows object-panel domains to keep multiple active object scopes', () => {
@@ -1831,7 +1893,7 @@ describe('refreshOrchestrator', () => {
     const scope = buildClusterScope('cluster-a', 'namespace:team-a');
     refreshOrchestrator.updateContext({
       currentView: 'namespace',
-      activeNamespaceView: 'pods',
+      activeNamespaceView: 'workloads',
       selectedClusterId: 'cluster-a',
       selectedClusterIds: ['cluster-a'],
     });
@@ -1852,7 +1914,7 @@ describe('refreshOrchestrator', () => {
     );
     refreshOrchestrator.updateContext({
       currentView: 'namespace',
-      activeNamespaceView: 'pods',
+      activeNamespaceView: 'workloads',
       selectedClusterId: 'cluster-a',
       selectedClusterIds: ['cluster-a'],
     });
@@ -1892,7 +1954,7 @@ describe('refreshOrchestrator', () => {
     const scope = buildClusterScope('cluster-a', 'namespace:team-a');
     refreshOrchestrator.updateContext({
       currentView: 'namespace',
-      activeNamespaceView: 'pods',
+      activeNamespaceView: 'workloads',
       selectedClusterId: 'cluster-a',
       selectedClusterIds: ['cluster-a'],
     });
@@ -1986,7 +2048,7 @@ describe('refreshOrchestrator', () => {
 
   it('streams a workload-scoped pods window regardless of the active main view', async () => {
     // The object panel's Pods tab leases a workload-scoped pods window while
-    // ANY main view is active. Gating its stream on the namespace pods view
+    // ANY main view is active. Gating its stream on a namespace-level view
     // froze the tab: no doorbells -> the typed query never refetches -> rows
     // stale + the metrics meta ages into "Awaiting metrics data...".
     registerStreamingPodsDomain();
@@ -2033,13 +2095,13 @@ describe('refreshOrchestrator', () => {
     refreshOrchestrator.setScopedDomainEnabled('pods', scope, true);
     await Promise.resolve();
 
-    // Not looking at the namespace pods view: the big namespace scope stays polled-only.
+    // Not looking at the combined Workloads view: the broad namespace scope stays polled-only.
     expect(resourceStreamMocks.start).not.toHaveBeenCalledWith(scope);
 
-    // Switching to the namespace pods view starts it.
+    // Switching to the combined Workloads view starts it.
     refreshOrchestrator.updateContext({
       currentView: 'namespace',
-      activeNamespaceView: 'pods',
+      activeNamespaceView: 'workloads',
     });
     await Promise.resolve();
 
@@ -2864,7 +2926,7 @@ describe('refreshOrchestrator', () => {
     const scopeB = buildClusterScope('cluster-b', 'namespace:default');
     refreshOrchestrator.updateContext({
       currentView: 'namespace',
-      activeNamespaceView: 'pods',
+      activeNamespaceView: 'workloads',
       selectedClusterId: 'cluster-a',
       selectedClusterIds: ['cluster-a'],
       allConnectedClusterIds: ['cluster-a', 'cluster-b'],
@@ -2955,7 +3017,7 @@ describe('refreshOrchestrator', () => {
     const scope = buildClusterScope('cluster-a', 'namespace:default');
     refreshOrchestrator.updateContext({
       currentView: 'namespace',
-      activeNamespaceView: 'pods',
+      activeNamespaceView: 'workloads',
       selectedClusterId: 'cluster-a',
       selectedClusterIds: ['cluster-a'],
     });

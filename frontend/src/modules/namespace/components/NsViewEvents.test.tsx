@@ -5,6 +5,7 @@
  * Covers key behaviors and edge cases for NsViewEvents.
  */
 
+import { ALL_NAMESPACES_SCOPE } from '@modules/namespace/constants';
 import { OBJECT_ACTION_IDS, objectActionLabel } from '@shared/actions/objectActionContract';
 import type { GridTableProps } from '@shared/components/tables/GridTable';
 import { withStableListKeys } from '@shared/utils/stableListKeys';
@@ -255,6 +256,9 @@ describe('NsViewEvents', () => {
 
   const baseEvent = (overrides: Partial<EventData> = {}): EventData => ({
     kind: 'Event',
+    name: 'api.123',
+    uid: 'event-uid',
+    resourceVersion: '1',
     type: 'Warning',
     source: 'kubelet',
     reason: 'FailedScheduling',
@@ -290,7 +294,7 @@ describe('NsViewEvents', () => {
     return gridTablePropsRef.current;
   };
 
-  it('defines Age as the visible event timestamp sort column', async () => {
+  it('defines Last Seen as the visible Event timestamp sort column', async () => {
     const event = baseEvent({ ageTimestamp: 42 });
     const props = await renderEventsView();
     const ageColumn = requireValue(
@@ -302,6 +306,90 @@ describe('NsViewEvents', () => {
     expect(ageColumn.sortable).not.toBe(false);
     expect(requireValue(ageColumn.sortValue, 'expected the event age sort accessor')(event)).toBe(
       -42
+    );
+  });
+
+  it('projects backend Event triage facets for All Namespaces', async () => {
+    requestRefreshDomainStateMock.mockResolvedValue({
+      status: 'executed',
+      data: {
+        status: 'ready',
+        data: {
+          rows: [baseEvent()],
+          total: 1,
+          unfilteredTotal: 2,
+          totalIsExact: true,
+          namespaces: ['team-a', 'team-b'],
+          kinds: ['Pod'],
+          facetValues: [
+            {
+              key: 'types',
+              options: [
+                { value: 'Normal', label: 'Normal' },
+                { value: 'Warning', label: 'Warning' },
+              ],
+              exact: true,
+            },
+            {
+              key: 'reasons',
+              options: [{ value: 'FailedScheduling', label: 'FailedScheduling' }],
+              exact: true,
+            },
+            {
+              key: 'sources',
+              options: [{ value: 'kubelet', label: 'kubelet' }],
+              exact: true,
+            },
+          ],
+          facetsExact: true,
+          capabilities: {
+            queryFacets: [
+              {
+                key: 'types',
+                label: 'Type',
+                placeholder: 'All types',
+                searchable: false,
+                bulkActions: true,
+              },
+              {
+                key: 'reasons',
+                label: 'Reason',
+                placeholder: 'All reasons',
+                searchable: true,
+                bulkActions: true,
+              },
+              {
+                key: 'sources',
+                label: 'Source',
+                placeholder: 'All sources',
+                searchable: true,
+                bulkActions: true,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const props = await renderEventsView({
+      namespace: ALL_NAMESPACES_SCOPE,
+      showNamespaceColumn: true,
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(props.filters?.options?.queryFacets).toEqual([
+      expect.objectContaining({ key: 'types', searchable: false }),
+      expect.objectContaining({ key: 'reasons', searchable: true }),
+      expect.objectContaining({ key: 'sources', searchable: true }),
+    ]);
+    expect(requestRefreshDomainStateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        domain: 'namespace-events',
+        scope: expect.stringContaining('cluster-a|namespace:all?'),
+      })
     );
   });
 
@@ -363,7 +451,10 @@ describe('NsViewEvents', () => {
 
     const cell = requireReactElement<{
       onClick: (event: { stopPropagation: () => void }) => void;
+      'data-gridtable-rowclick'?: string;
     }>(objectNameColumn.render(event), 'expected the event object-name cell element');
+
+    expect(cell.props['data-gridtable-rowclick']).toBe('suppress');
 
     await act(async () => {
       cell.props.onClick({ stopPropagation: () => undefined });
@@ -378,6 +469,55 @@ describe('NsViewEvents', () => {
         group: '',
         version: 'v1',
         clusterId: 'alpha:ctx',
+      })
+    );
+  });
+
+  it('opens the Event object from the row and Kind badge', async () => {
+    const event = baseEvent();
+    const props = await renderEventsView();
+    const onRowClick = requireValue(props.onRowClick, 'expected the namespace Event row action');
+
+    act(() => {
+      onRowClick(event);
+    });
+
+    expect(openWithObjectMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        clusterId: 'alpha:ctx',
+        clusterName: 'alpha',
+        group: '',
+        version: 'v1',
+        kind: 'Event',
+        resource: 'events',
+        namespace: 'team-a',
+        name: 'api.123',
+        uid: 'event-uid',
+      })
+    );
+
+    openWithObjectMock.mockClear();
+    const kindColumn = requireValue(
+      props.columns.find((column) => column.key === 'kind'),
+      'expected the namespace Event kind column'
+    );
+    const kindCell = requireReactElement<{ onClick: (event: { altKey: boolean }) => void }>(
+      kindColumn.render(event),
+      'expected the namespace Event kind badge'
+    );
+
+    act(() => {
+      kindCell.props.onClick({ altKey: false });
+    });
+
+    expect(openWithObjectMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        clusterId: 'alpha:ctx',
+        group: '',
+        version: 'v1',
+        kind: 'Event',
+        namespace: 'team-a',
+        name: 'api.123',
       })
     );
   });
@@ -425,11 +565,27 @@ describe('NsViewEvents', () => {
     );
   });
 
-  it('suppresses context actions when no related object provided', async () => {
+  it('keeps Event actions when no involved object is available', async () => {
     const event = baseEvent({ object: undefined });
     const props = await renderEventsView();
     const menu = props.getCustomContextMenuItems(event, 'objectName');
-    expect(menu).toHaveLength(0);
+    const viewDetails = menu.find((item) => item.actionId === OBJECT_ACTION_IDS.viewDetails);
+    expect(viewDetails).toBeTruthy();
+    expect(menu.some((item) => item.actionId === OBJECT_ACTION_IDS.viewInvolvedObject)).toBe(false);
+
+    act(() => {
+      viewDetails?.onClick?.();
+    });
+    expect(openWithObjectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clusterId: 'alpha:ctx',
+        group: '',
+        version: 'v1',
+        kind: 'Event',
+        namespace: 'team-a',
+        name: 'api.123',
+      })
+    );
   });
 
   it('passes stable event row identity into useTableSort', async () => {
@@ -441,9 +597,7 @@ describe('NsViewEvents', () => {
       'expected event table sort options'
     );
     const rowIdentity = requireValue(options.rowIdentity, 'expected event table row identity');
-    expect(rowIdentity(event, 0)).toBe(
-      'alpha:ctx|/v1/Event/team-a/FailedScheduling:kubelet:Pod/api'
-    );
+    expect(rowIdentity(event, 0)).toBe('alpha:ctx|/v1/Event/team-a/api.123');
   });
 
   it('renders age from timestamp when available and falls back to provided age', async () => {
@@ -526,23 +680,39 @@ describe('NsViewEvents', () => {
     expect(namespaceColumn).toBeUndefined();
   });
 
-  it('respects short name preferences when sizing columns', async () => {
-    shortNamesMock.mockReturnValue(true);
+  it('renders Event types with status chips', async () => {
     const props = await renderEventsView();
 
     const typeColumn = requireValue(
       props.columns.find((column) => column.key === 'type'),
       'expected the event type column'
     );
-    // Type column renders with event-badge styling
-    const cell = requireReactElement<{ children?: React.ReactNode; className?: string }>(
+    const warning = requireReactElement<{ children?: React.ReactNode; variant?: string }>(
       typeColumn.render(baseEvent({ type: 'Warning' })),
-      'expected the event type badge element'
+      'expected the warning event type chip'
     );
-    expect(cell.props.children).toBe('Warning');
-    expect(cell.props.className).toContain('event-badge');
-    expect(cell.props.className).toContain('warning');
-    expect(cell.props.className).not.toContain('kind-badge');
-    expect(cell.props.className).not.toMatch(/hash-color-\d+/);
+    const normal = requireReactElement<{ children?: React.ReactNode; variant?: string }>(
+      typeColumn.render(baseEvent({ type: 'Normal' })),
+      'expected the normal event type chip'
+    );
+
+    expect(warning.props).toMatchObject({ children: 'Warning', variant: 'warning' });
+    expect(normal.props).toMatchObject({ children: 'Normal', variant: 'healthy' });
+  });
+
+  it('uses the canonical Event table labels', async () => {
+    const props = await renderEventsView();
+
+    expect(props.columns.map((column) => column.header)).toEqual([
+      'Kind',
+      'Type',
+      'Namespace',
+      'Source',
+      'Object Type',
+      'Object Name',
+      'Reason',
+      'Message',
+      'Last Seen',
+    ]);
   });
 });

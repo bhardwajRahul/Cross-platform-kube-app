@@ -41,12 +41,13 @@ type typedTableQueryPage[T any] struct {
 	PageStartRank *int
 	Total         int
 	// UnfilteredTotal is the count of items in scope before the query's filters
-	// (search/kinds/namespaces/predicates). It is the "of M" in the table's
+	// (search/kinds/namespaces/provider facets/predicates). It is the "of M" in the table's
 	// "showing N of M items due to filters" banner; Total is the "N".
 	UnfilteredTotal int
 	TotalIsExact    bool
 	Namespaces      []string
 	Kinds           []string
+	FacetValues     []ResourceQueryFacetValues
 	FacetsExact     bool
 	Dynamic         *ResourceQueryDynamicRef
 	// SortField is the field the request asked to sort by; the envelope
@@ -59,6 +60,7 @@ type typedTableQueryAdapter[T any] struct {
 	Key       func(T) string
 	Namespace func(T) string
 	Kind      func(T) string
+	Facets    []typedTableQueryFacet[T]
 	// AnchorKey builds the SAME row key as Key from an anchor's object identity
 	// (kind, namespace, name) — the anchor→row resolution contract, pinned by
 	// TestAdapterAnchorKeyMatchesKey. nil means the family cannot resolve
@@ -71,6 +73,35 @@ type typedTableQueryAdapter[T any] struct {
 	Predicate    func(T, string, string) bool
 	SortValue    func(T, string) string
 	NumericSort  func(T, string) (float64, bool)
+}
+
+type typedTableQueryFacet[T any] struct {
+	Descriptor ResourceQueryFacetDescriptor
+	Value      func(T) string
+	Values     func(T) []string
+	Label      func(string) string
+}
+
+func typedTableFacetDescriptors[T any](facets []typedTableQueryFacet[T]) []ResourceQueryFacetDescriptor {
+	descriptors := make([]ResourceQueryFacetDescriptor, 0, len(facets))
+	for _, facet := range facets {
+		descriptors = append(descriptors, facet.Descriptor)
+	}
+	return descriptors
+}
+
+func statusQueryFacet[T any](value func(T) string) typedTableQueryFacet[T] {
+	return typedTableQueryFacet[T]{
+		Descriptor: ResourceQueryFacetDescriptor{Key: "statuses", Label: "Status", Placeholder: "All statuses", BulkActions: true},
+		Value:      value,
+	}
+}
+
+func nodeQueryFacet[T any](value func(T) string) typedTableQueryFacet[T] {
+	return typedTableQueryFacet[T]{
+		Descriptor: ResourceQueryFacetDescriptor{Key: "nodes", Label: "Node", Placeholder: "All nodes", Searchable: true, BulkActions: true},
+		Value:      value,
+	}
 }
 
 func parseTypedTableQueryScope(clusterID, scope, table string, dynamicRevision string) (string, typedTableQuery, error) {
@@ -136,6 +167,7 @@ func typedQueryEnvelope[T any](table string, page typedTableQueryPage[T], capabi
 		TotalIsExact:    page.TotalIsExact,
 		Kinds:           page.Kinds,
 		Namespaces:      page.Namespaces,
+		FacetValues:     page.FacetValues,
 		FacetsExact:     page.FacetsExact,
 		Completeness:    resourceQueryCompleteness(true),
 		Dynamic:         page.Dynamic,
@@ -167,7 +199,11 @@ func unsupportedSortFieldIssues(sortField string, capabilities ResourceQueryCapa
 // typedWindowEnvelope assembles the envelope for the non-query truncated-window
 // path of a typed-resource table (no cursor or dynamic ref; facets describe the
 // local window). `exact` is whether the window holds the complete matching set.
-func typedWindowEnvelope(table string, total int, exact bool, kinds []string, capabilities ResourceQueryCapabilities) ResourceQueryEnvelope {
+func typedWindowEnvelope(table string, total int, exact bool, kinds []string, facetValues []ResourceQueryFacetValues, capabilities ResourceQueryCapabilities) ResourceQueryEnvelope {
+	facetsExact := true
+	for _, facet := range facetValues {
+		facetsExact = facetsExact && facet.Exact
+	}
 	return ResourceQueryEnvelope{
 		Provider:        ResourceQueryProviderTypedResource,
 		Table:           table,
@@ -175,7 +211,8 @@ func typedWindowEnvelope(table string, total int, exact bool, kinds []string, ca
 		UnfilteredTotal: total,
 		TotalIsExact:    exact,
 		Kinds:           kinds,
-		FacetsExact:     true,
+		FacetValues:     facetValues,
+		FacetsExact:     facetsExact,
 		Completeness:    resourceQueryCompleteness(exact),
 		Capabilities:    capabilities,
 	}
@@ -188,6 +225,9 @@ func typedWindowEnvelope(table string, total int, exact bool, kinds []string, ca
 func (e ResourceQueryEnvelope) withDegraded(exact bool, issues []ResourceQueryIssue) ResourceQueryEnvelope {
 	e.TotalIsExact = e.TotalIsExact && exact
 	e.FacetsExact = e.FacetsExact && exact
+	for index := range e.FacetValues {
+		e.FacetValues[index].Exact = e.FacetValues[index].Exact && exact
+	}
 	e.Completeness = resourceQueryCompleteness(exact)
 	// Append: the envelope may already carry issues (e.g. an unsupported sort).
 	e.Issues = append(e.Issues, issues...)
@@ -213,16 +253,18 @@ type typedSnapshotPage[T any] struct {
 	Stats    refresh.SnapshotStats
 }
 
-// typedTableQueryMatcher prebuilds the per-query filter state (namespace/kind
-// sets, search needle, predicate map) so matching N rows costs N membership
+// typedTableQueryMatcher prebuilds the per-query filter state (namespace/kind/
+// provider-facet sets, search needle, predicate map) so matching N rows costs N membership
 // checks, not N map constructions.
 type typedTableQueryMatcher[T any] struct {
 	adapter         typedTableQueryAdapter[T]
 	includeMetadata bool
 	namespaceSet    map[string]struct{}
 	kindSet         map[string]struct{}
+	facetSets       map[string]map[string]struct{}
 	searchNeedle    string
 	predicates      map[string]string
+	matchNone       bool
 }
 
 func newTypedTableQueryMatcher[T any](query typedTableQuery, adapter typedTableQueryAdapter[T]) typedTableQueryMatcher[T] {
@@ -231,12 +273,17 @@ func newTypedTableQueryMatcher[T any](query typedTableQuery, adapter typedTableQ
 		includeMetadata: query.Request.IncludeMetadata,
 		namespaceSet:    stringSet(query.Request.Namespaces),
 		kindSet:         stringSet(query.Request.Kinds),
+		facetSets:       typedTableFacetSelectionSets(query.Request.Facets),
 		searchNeedle:    strings.ToLower(strings.TrimSpace(query.Request.Search)),
 		predicates:      resourceQueryPredicatesToMap(query.Request.Predicates),
+		matchNone:       query.Request.MatchNone,
 	}
 }
 
 func (m typedTableQueryMatcher[T]) Matches(item T) bool {
+	if m.matchNone {
+		return false
+	}
 	if len(m.namespaceSet) > 0 {
 		if _, ok := m.namespaceSet[strings.ToLower(strings.TrimSpace(m.adapter.Namespace(item)))]; !ok {
 			return false
@@ -244,6 +291,22 @@ func (m typedTableQueryMatcher[T]) Matches(item T) bool {
 	}
 	if len(m.kindSet) > 0 {
 		if _, ok := m.kindSet[strings.ToLower(strings.TrimSpace(m.adapter.Kind(item)))]; !ok {
+			return false
+		}
+	}
+	for key, selected := range m.facetSets {
+		facet, ok := typedTableFacetByKey(m.adapter.Facets, key)
+		if !ok || (facet.Value == nil && facet.Values == nil) {
+			return false
+		}
+		matched := false
+		for _, value := range typedTableFacetItemValues(facet, item) {
+			if _, exists := selected[strings.ToLower(strings.TrimSpace(value))]; exists {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			return false
 		}
 	}
@@ -262,6 +325,36 @@ func (m typedTableQueryMatcher[T]) Matches(item T) bool {
 		}
 	}
 	return true
+}
+
+func typedTableFacetItemValues[T any](facet typedTableQueryFacet[T], item T) []string {
+	if facet.Values != nil {
+		return facet.Values(item)
+	}
+	if facet.Value != nil {
+		return []string{facet.Value(item)}
+	}
+	return nil
+}
+
+func typedTableFacetSelectionSets(selections map[string][]string) map[string]map[string]struct{} {
+	if len(selections) == 0 {
+		return nil
+	}
+	sets := make(map[string]map[string]struct{}, len(selections))
+	for key, values := range selections {
+		sets[key] = stringSet(values)
+	}
+	return sets
+}
+
+func typedTableFacetByKey[T any](facets []typedTableQueryFacet[T], key string) (typedTableQueryFacet[T], bool) {
+	for _, facet := range facets {
+		if facet.Descriptor.Key == key {
+			return facet, true
+		}
+	}
+	return typedTableQueryFacet[T]{}, false
 }
 
 func (q typedTableQuery) dynamicRef() *ResourceQueryDynamicRef {
@@ -315,6 +408,29 @@ func collectTypedTableFacet[T any](items []T, accessor func(T) string) []string 
 		addTypedTableFacetValue(seen, accessor(item))
 	}
 	return typedTableFacetMapValues(seen)
+}
+
+func collectTypedTableFacetValues[T any](items []T, facets []typedTableQueryFacet[T], exact bool) []ResourceQueryFacetValues {
+	values := make([]ResourceQueryFacetValues, 0, len(facets))
+	for _, facet := range facets {
+		seen := map[string]string{}
+		for _, item := range items {
+			for _, value := range typedTableFacetItemValues(facet, item) {
+				addTypedTableFacetValue(seen, value)
+			}
+		}
+		options := typedTableFacetMapValues(seen)
+		projected := make([]ResourceQueryFacetOption, 0, len(options))
+		for _, value := range options {
+			label := value
+			if facet.Label != nil {
+				label = facet.Label(value)
+			}
+			projected = append(projected, ResourceQueryFacetOption{Value: value, Label: label})
+		}
+		values = append(values, ResourceQueryFacetValues{Key: facet.Descriptor.Key, Options: projected, Exact: exact})
+	}
+	return values
 }
 
 func addTypedTableFacetValue(seen map[string]string, raw string) {

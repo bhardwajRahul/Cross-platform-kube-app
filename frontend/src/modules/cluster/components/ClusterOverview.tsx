@@ -14,6 +14,8 @@ import {
   USAGE_HIGH_THRESHOLD_PERCENT,
 } from '@shared/components/resourceBarThresholds';
 import Tooltip from '@shared/components/Tooltip';
+import { DEFAULT_GRID_TABLE_FILTER_STATE } from '@shared/components/tables/gridTableFilterState';
+import { requestGridTableFilters } from '@shared/components/tables/hooks/useGridTableExternalFilters';
 import {
   calculateResourceMetrics,
   formatCpuValue,
@@ -33,10 +35,6 @@ import type { ClusterOverviewPayload } from '@/core/refresh/types';
 import './ClusterOverview.css';
 import { useClusterLifecycle } from '@core/contexts/ClusterLifecycleContext';
 import { useKubeconfig } from '@modules/kubernetes/config/KubeconfigContext';
-import {
-  emitPodsUnhealthySignal,
-  type PodsFilterMode,
-} from '@modules/namespace/components/podsFilterSignals';
 import { ALL_NAMESPACES_SCOPE } from '@modules/namespace/constants';
 import { useNamespace } from '@modules/namespace/contexts/NamespaceContext';
 import {
@@ -62,6 +60,8 @@ import {
   clusterWorkloadUsageValue,
 } from '@/core/resource-metrics';
 import { useClusterHealthListener } from '@/hooks/useWailsRuntimeEvents';
+import type { ClusterViewType } from '@/types/navigation/views';
+import { CLUSTER_ATTENTION_FINDING_TYPES } from '../clusterAttentionFindingTypes';
 import ClusterOverviewRestrictionNotice, {
   type OverviewRestriction,
 } from './ClusterOverviewRestrictionNotice';
@@ -115,6 +115,16 @@ const EMPTY_OVERVIEW: ClusterOverviewPayload = {
   notReadyNodes: 0,
   cordonedNodes: 0,
   recentEvents: [],
+};
+
+type PodStatusFilter = 'none' | 'starting' | 'failing' | 'terminating' | 'restarts' | 'not-ready';
+
+const POD_ATTENTION_FINDINGS: Record<Exclude<PodStatusFilter, 'none'>, string[]> = {
+  starting: [CLUSTER_ATTENTION_FINDING_TYPES.podUnhealthy],
+  failing: [CLUSTER_ATTENTION_FINDING_TYPES.errorPresentation],
+  terminating: [CLUSTER_ATTENTION_FINDING_TYPES.podUnhealthy],
+  restarts: [CLUSTER_ATTENTION_FINDING_TYPES.restarts],
+  'not-ready': [CLUSTER_ATTENTION_FINDING_TYPES.podNotReady],
 };
 
 const ClusterOverview: React.FC<ClusterOverviewProps> = ({ clusterContext }) => {
@@ -211,7 +221,13 @@ const ClusterOverview: React.FC<ClusterOverviewProps> = ({ clusterContext }) => 
     selectedClusterId,
   ]);
   const metricsBanner = useMetricsBannerInfo(metricsInfo);
-  const { setActiveNamespaceTab, setSidebarSelection, navigateToNamespace } = useViewState();
+  const {
+    setActiveNamespaceTab,
+    setActiveClusterView,
+    setSidebarSelection,
+    navigateToClusterView,
+    navigateToNamespace,
+  } = useViewState();
 
   const selectedOverview = useMemo(() => {
     const overviewByCluster = overviewDomain.data?.overviewByCluster;
@@ -364,28 +380,53 @@ const ClusterOverview: React.FC<ClusterOverviewProps> = ({ clusterContext }) => 
     };
   }, [canActivateOverviewRefresh, overviewScope]);
 
-  type PodStatusFilter = 'none' | PodsFilterMode;
-
   const handlePodStatusNavigate = useCallback(
     (filter: PodStatusFilter, count: number) => {
       if (count <= 0) {
         return;
       }
+      if (filter !== 'none') {
+        if (selectedClusterId) {
+          requestGridTableFilters({
+            clusterId: selectedClusterId,
+            destinationViewId: 'cluster-attention',
+            filters: {
+              ...DEFAULT_GRID_TABLE_FILTER_STATE,
+              kinds: { mode: 'some', values: ['Pod'] },
+              queryFacets: {
+                findings: { mode: 'some', values: POD_ATTENTION_FINDINGS[filter] },
+              },
+            },
+          });
+        }
+        setActiveClusterView('attention');
+        navigateToClusterView('cluster');
+        setSidebarSelection({ type: 'cluster', value: 'cluster' });
+        return;
+      }
       setSelectedNamespace(ALL_NAMESPACES_SCOPE);
-      setActiveNamespaceTab('pods');
+      setActiveNamespaceTab('workloads');
       setSidebarSelection({ type: 'namespace', value: ALL_NAMESPACES_SCOPE });
       navigateToNamespace();
-      if (filter !== 'none' && selectedClusterId) {
-        emitPodsUnhealthySignal(selectedClusterId, ALL_NAMESPACES_SCOPE, filter);
-      }
     },
     [
+      navigateToClusterView,
       navigateToNamespace,
       selectedClusterId,
+      setActiveClusterView,
       setActiveNamespaceTab,
       setSelectedNamespace,
       setSidebarSelection,
     ]
+  );
+
+  const handleClusterViewNavigate = useCallback(
+    (view: ClusterViewType) => {
+      setActiveClusterView(view);
+      navigateToClusterView('cluster');
+      setSidebarSelection({ type: 'cluster', value: 'cluster' });
+    },
+    [navigateToClusterView, setActiveClusterView, setSidebarSelection]
   );
 
   const podStatusItems = [
@@ -401,21 +442,21 @@ const ClusterOverview: React.FC<ClusterOverviewProps> = ({ clusterContext }) => 
       label: 'starting',
       value: displayOverview.startingPods,
       variant: 'starting',
-      filter: 'unhealthy' as const,
+      filter: 'starting' as const,
     },
     {
       key: 'failing',
       label: 'failing',
       value: displayOverview.failingPods,
       variant: 'failing',
-      filter: 'unhealthy' as const,
+      filter: 'failing' as const,
     },
     {
       key: 'terminating',
       label: 'terminating',
       value: displayOverview.terminatingPods,
       variant: 'terminating',
-      filter: 'unhealthy' as const,
+      filter: 'terminating' as const,
     },
   ];
   const podSignalItems = [
@@ -813,23 +854,41 @@ const ClusterOverview: React.FC<ClusterOverviewProps> = ({ clusterContext }) => 
     label: string;
     value: number;
     variant: string;
-  }) => (
-    <div
-      key={item.key}
-      className="metric-legend__item"
-      aria-disabled={item.value === 0}
-      data-testid={`cluster-node-health-${item.key}`}
-    >
-      <span
-        className={`metric-legend__dot metric-legend__dot--${item.variant}`}
-        aria-hidden="true"
-      />
-      <span className="metric-legend__count">
-        {showSkeleton || nodesUnavailable ? DASH : item.value}
-      </span>
-      <span className="metric-legend__label">{item.label}</span>
-    </div>
-  );
+  }) => {
+    const clickable = item.key !== 'ready' && item.value > 0 && !showSkeleton && !nodesUnavailable;
+    const content = (
+      <>
+        <span
+          className={`metric-legend__dot metric-legend__dot--${item.variant}`}
+          aria-hidden="true"
+        />
+        <span className="metric-legend__count">
+          {showSkeleton || nodesUnavailable ? DASH : item.value}
+        </span>
+        <span className="metric-legend__label">{item.label}</span>
+      </>
+    );
+    return clickable ? (
+      <button
+        type="button"
+        key={item.key}
+        className="metric-legend__item metric-legend__item--clickable cluster-overview__node-link"
+        onClick={() => handleClusterViewNavigate('nodes')}
+        data-testid={`cluster-node-health-${item.key}`}
+      >
+        {content}
+      </button>
+    ) : (
+      <div
+        key={item.key}
+        className="metric-legend__item"
+        aria-disabled={item.value === 0}
+        data-testid={`cluster-node-health-${item.key}`}
+      >
+        {content}
+      </div>
+    );
+  };
 
   // Before the initial snapshot arrives we don't have real values yet —
   // render a dash placeholder instead of zeros so the UI reads as "loading"
