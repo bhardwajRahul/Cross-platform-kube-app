@@ -385,6 +385,45 @@ describe('refreshOrchestrator', () => {
     resetAllScopedDomainStates('cluster-config');
   });
 
+  it('holds a catalog refresh while foreground activation re-establishes a cooled cluster', async () => {
+    clusterReadiness.resetForTests();
+    registerCatalogDomain();
+    const scope = buildClusterScope('cluster-cold', '');
+    resetAllScopedDomainStates('catalog');
+    setRuntimeScopeEnabled('catalog', scope, true);
+    eventBus.emit('cluster:lifecycle', { clusterId: 'cluster-cold', state: 'ready' });
+    clusterReadiness.beginForegroundActivation('cluster-cold');
+    clientMocks.fetchSnapshotMock.mockClear();
+
+    await refreshOrchestrator.fetchScopedDomain('catalog', scope, { isManual: false });
+
+    expect(clientMocks.fetchSnapshotMock).not.toHaveBeenCalled();
+
+    clientMocks.fetchSnapshotMock.mockResolvedValueOnce({
+      snapshot: {
+        domain: 'catalog',
+        scope,
+        version: 1,
+        checksum: 'etag-catalog',
+        generatedAt: Date.now(),
+        sequence: 1,
+        payload: makeCatalogSnapshotPayload({ clusterId: 'cluster-cold' }),
+        stats: { itemCount: 0, buildDurationMs: 0 },
+      },
+      etag: 'etag-catalog',
+      notModified: false,
+    });
+
+    clusterReadiness.endForegroundActivation('cluster-cold');
+
+    await vi.waitFor(() => {
+      expect(clientMocks.fetchSnapshotMock).toHaveBeenCalledTimes(1);
+    });
+
+    clusterReadiness.resetForTests();
+    resetAllScopedDomainStates('catalog');
+  });
+
   it('cluster-overview polls proceed while its metric-doorbell stream is healthy (doorbell augments polling)', async () => {
     // The overview's metric doorbell rings ONLY on successful collections;
     // on a metrics-less cluster it never rings. If a healthy stream

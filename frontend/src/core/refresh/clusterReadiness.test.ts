@@ -69,6 +69,30 @@ describe('clusterReadiness', () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
+  it('holds a ready cluster while foreground activation is pending', () => {
+    const listener = vi.fn();
+    clusterReadiness.onBecameServiceable(listener);
+    lifecycle('cluster-a', 'ready');
+    listener.mockClear();
+
+    clusterReadiness.beginForegroundActivation('cluster-a');
+    clusterReadiness.beginForegroundActivation('cluster-a');
+
+    expect(clusterReadiness.isServiceable('cluster-a')).toBe(false);
+    expect(listener).not.toHaveBeenCalled();
+
+    clusterReadiness.endForegroundActivation('cluster-a');
+
+    expect(clusterReadiness.isServiceable('cluster-a')).toBe(false);
+    expect(listener).not.toHaveBeenCalled();
+
+    clusterReadiness.endForegroundActivation('cluster-a');
+
+    expect(clusterReadiness.isServiceable('cluster-a')).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith('cluster-a');
+  });
+
   it('unsubscribes listeners', () => {
     const listener = vi.fn();
     const off = clusterReadiness.onBecameServiceable(listener);

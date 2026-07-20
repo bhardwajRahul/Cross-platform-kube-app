@@ -66,8 +66,9 @@ const REFRESHER_TO_DOMAIN: Record<string, RefreshDomain> = {
   // NOTE: no 'cluster-custom' entry — the Custom tab is catalog-backed and its
   // refresher is nulled upstream (refresherTypes clusterViewToRefresher).
   'cluster-events': 'cluster-events',
-  catalog: 'catalog',
-  'catalog-diff': 'catalog-diff',
+  // Browse is catalog-backed and visible-only. Cold clusters intentionally
+  // stop their catalog producer, so retained Browse data must not create
+  // background snapshot demand.
   // Namespace refreshers
   workloads: 'namespace-workloads',
   config: 'namespace-config',

@@ -11,8 +11,11 @@ payload shape; they link here instead of restating freshness behavior.
    wait for readiness, or replace it with a loading screen before asking for
    fresh data.
 2. **Reconcile immediately after activation.** Foreground activation starts one
-   non-manual refresh for the newly visible scopes. When it completes, its
-   snapshot replaces the retained data.
+   non-manual refresh for the newly visible scopes. Retained data paints while
+   a cooled backend re-establishes that cluster's producers; snapshot and stream
+   dispatch wait on that activation boundary instead of surfacing transient
+   service-unavailable errors. When reconciliation completes, its snapshot
+   replaces the retained data.
 3. **Keep background work passive.** An open inactive cluster retains snapshots
    and object-change subscriptions. It does not continuously fetch snapshots,
    start metrics collection, or produce manual-refresh errors merely because

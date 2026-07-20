@@ -32,6 +32,7 @@ import { SetSelectedKubeconfigs, SetVisibleCluster } from '@/core/backend-api';
 import { eventBus } from '@/core/events';
 import { logAppLogsInfo } from '@/core/logging/appLogsClient';
 import { refreshOrchestrator, useBackgroundRefresh } from '@/core/refresh';
+import { clusterReadiness } from '@/core/refresh/clusterReadiness';
 
 interface KubeconfigContextType {
   kubeconfigs: types.KubeconfigInfo[];
@@ -540,12 +541,19 @@ export const KubeconfigProvider: React.FC<KubeconfigProviderProps> = ({ children
         const meta = resolveClusterMeta(config, kubeconfigsRef.current);
         if (meta.id) {
           // Foreground activation starts immediately but does not gate retained
-          // data. Publishing the active identity drives a fresh scoped request
-          // while this backend work proceeds.
-          void SetVisibleCluster(meta.id).catch(() => {
-            // The retained snapshot remains usable if the Wails binding is
-            // temporarily unavailable; the refresh path reports its own error.
-          });
+          // data. Hold new refresh dispatch until the backend has re-established
+          // producers for a cooled cluster; the retained snapshot remains
+          // visible throughout this activation window.
+          clusterReadiness.beginForegroundActivation(meta.id);
+          void SetVisibleCluster(meta.id)
+            .catch(() => {
+              // The retained snapshot remains usable if the Wails binding is
+              // temporarily unavailable; once the hold releases, the refresh
+              // path reports any persistent backend error itself.
+            })
+            .finally(() => {
+              clusterReadiness.endForegroundActivation(meta.id);
+            });
         }
       }
     },

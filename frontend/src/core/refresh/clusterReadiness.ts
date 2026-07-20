@@ -1,8 +1,8 @@
 /**
  * frontend/src/core/refresh/clusterReadiness.ts
  *
- * Tracks per-cluster lifecycle states for the refresh layer so dispatch can be
- * held for clusters whose backend refresh subsystem is not serving yet.
+ * Tracks per-cluster lifecycle and foreground-activation state for the refresh
+ * layer so dispatch is held while the backend cannot serve the cluster yet.
  *
  * Backend ordering (app_refresh_setup.go): snapshot services register before
  * the 'loading' lifecycle transition, so 'connecting'/'connected' requests
@@ -26,6 +26,7 @@ const SERVICEABLE_STATES: ReadonlySet<ClusterLifecycleState> = new Set<ClusterLi
 
 class ClusterReadinessTracker {
   private states = new Map<string, ClusterLifecycleState>();
+  private foregroundActivations = new Map<string, number>();
   private listeners = new Set<(clusterId: string) => void>();
 
   constructor() {
@@ -43,16 +44,47 @@ class ClusterReadinessTracker {
     });
   }
 
-  /** Whether the cluster's backend refresh subsystem can serve requests. */
+  /** Whether lifecycle and foreground activation both allow snapshot dispatch. */
   isServiceable(clusterId: string | null | undefined): boolean {
     if (!clusterId) {
       return true;
     }
     const state = this.states.get(clusterId);
     if (state === undefined) {
-      return true;
+      return !this.foregroundActivations.has(clusterId);
     }
-    return SERVICEABLE_STATES.has(state);
+    return SERVICEABLE_STATES.has(state) && !this.foregroundActivations.has(clusterId);
+  }
+
+  /** Hold refresh dispatch while backend foreground activation re-establishes producers. */
+  beginForegroundActivation(clusterId: string): void {
+    const normalized = clusterId.trim();
+    if (!normalized) {
+      return;
+    }
+    this.foregroundActivations.set(
+      normalized,
+      (this.foregroundActivations.get(normalized) ?? 0) + 1
+    );
+  }
+
+  /** Release one foreground activation hold and wake retained refresh demand when serviceable. */
+  endForegroundActivation(clusterId: string): void {
+    const normalized = clusterId.trim();
+    if (!normalized) {
+      return;
+    }
+    const pending = this.foregroundActivations.get(normalized) ?? 0;
+    if (pending <= 1) {
+      this.foregroundActivations.delete(normalized);
+      if (pending === 1 && this.isServiceable(normalized)) {
+        this.listeners.forEach((listener) => {
+          listener(normalized);
+        });
+      }
+      return;
+    }
+    this.foregroundActivations.set(normalized, pending - 1);
   }
 
   /** Fires on the not-serviceable → serviceable edge for a cluster. */
@@ -67,6 +99,7 @@ class ClusterReadinessTracker {
   // modules (the orchestrator subscribes once at construction) and survive.
   resetForTests(): void {
     this.states.clear();
+    this.foregroundActivations.clear();
   }
 }
 

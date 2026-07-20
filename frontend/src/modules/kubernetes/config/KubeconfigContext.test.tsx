@@ -14,6 +14,7 @@ import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eventBus } from '@/core/events';
+import { clusterReadiness } from '@/core/refresh/clusterReadiness';
 import { KubeconfigProvider, useKubeconfig } from './KubeconfigContext';
 
 const {
@@ -106,6 +107,7 @@ describe('KubeconfigContext', () => {
     setVisibleClusterMock.mockReset();
     setVisibleClusterMock.mockResolvedValue(undefined);
     mocks.backgroundRefreshState.enabled = true;
+    clusterReadiness.resetForTests();
     resetClusterTabOrderCacheForTesting();
   });
 
@@ -262,6 +264,8 @@ describe('KubeconfigContext', () => {
         resolveActivation = resolve;
       })
     );
+    eventBus.emit('cluster:lifecycle', { clusterId: 'beta:prod', state: 'ready' });
+    expect(clusterReadiness.isServiceable('beta:prod')).toBe(true);
 
     act(() => {
       getContext().setActiveKubeconfig('/kube/beta:prod');
@@ -271,6 +275,7 @@ describe('KubeconfigContext', () => {
     });
 
     expect(setVisibleClusterMock).toHaveBeenCalledWith('beta:prod');
+    expect(clusterReadiness.isServiceable('beta:prod')).toBe(false);
     expect(getContext().selectedKubeconfig).toBe('/kube/beta:prod');
     expect(getContext().selectedClusterId).toBe('beta:prod');
     expect(mocks.refreshOrchestrator.updateContext).toHaveBeenLastCalledWith(
@@ -286,6 +291,7 @@ describe('KubeconfigContext', () => {
       await flushPromises();
     });
 
+    expect(clusterReadiness.isServiceable('beta:prod')).toBe(true);
     expect(mocks.refreshOrchestrator.updateContext).toHaveBeenLastCalledWith(
       expect.objectContaining({
         selectedClusterId: 'beta:prod',
@@ -324,6 +330,7 @@ describe('KubeconfigContext', () => {
     const { getContext, unmount } = await renderProvider();
     mocks.refreshOrchestrator.updateContext.mockClear();
     setVisibleClusterMock.mockRejectedValueOnce(new Error('binding unavailable'));
+    eventBus.emit('cluster:lifecycle', { clusterId: 'beta:prod', state: 'ready' });
 
     act(() => {
       getContext().setActiveKubeconfig('/kube/beta:prod');
@@ -334,6 +341,7 @@ describe('KubeconfigContext', () => {
 
     expect(getContext().selectedKubeconfig).toBe('/kube/beta:prod');
     expect(getContext().selectedClusterId).toBe('beta:prod');
+    expect(clusterReadiness.isServiceable('beta:prod')).toBe(true);
     expect(mocks.refreshOrchestrator.updateContext).toHaveBeenLastCalledWith(
       expect.objectContaining({
         selectedClusterId: 'beta:prod',
