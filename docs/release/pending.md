@@ -1,69 +1,39 @@
 ### Added
 
-- Added a Cluster Attention view with severity, kind, namespace, finding-type,
-  and status filters; active filter chips; and persisted ignore scopes.
-- Added Global → Namespaces and Cluster → Namespaces views for comparing and
-  opening namespace state at the appropriate scope.
-- Added a Global Clusters view that compares health, capacity, and metrics across
-  open clusters and links each cluster name to that cluster's Overview.
-- Added backend-query Owner and Node filters to namespace and All Namespaces
-  Pods tables, with options covering the full selected scope.
-- Added backend-query Type, Reason, and Source filters to cluster, namespace,
-  and All Namespaces Events, with searchable high-cardinality options.
-- Added object, cluster, and all-cluster ignore scopes for each Attention
-  finding, with persisted rules that can be restored from the Attention view.
+**Global views**
+
+- When more than one cluster is open, a new Global tab will be displayed with views that synthesize data from all open clusters.
+  - **Clusters** view shows status, summary info, and aggregated metrics for all open clusters.
+  - **Namespaces** view shows status, summary info, and metrics per-namespace in all open clusters.
+
+**Attention view**
+
+- Clusters now have an Attention view that shows items in that cluster that may require your attention.
+  - Attention findings can be ignored individually, per cluster, or globally (right-click on an item to ignore it).
+  - The sidebar shows summary badges for info/warning/error counts.
+
+**Combined Workloads and Pods into a single view**
+- The Workloads view now includes pods in a split-pane view. Selecting a workload in the top pane filters which pods are visible in the bottom pane.
+  - The Pods pane can be collapsed to allow more screen space for workloads.
+
+**Filter chips**
+
+- When filters are enabled in any table view, those filters are displayed as chips to easily see which filters are being applied to the view.
+  - This brings table filters to parity with the filter chips that already exist for container logs.
 
 ### Changed
 
-- Made Global a first-class workspace with its own tab and retained navigation,
-  independent of the foreground cluster tab.
-- Made Cluster Overview the attention landing surface: node problem signals link
-  to Cluster Nodes, pod problem signals link to the relevant Workloads/Pods
-  results, and warning events link to the involved object.
-- Combined namespace Workloads and Pods into independently filterable,
-  sortable, paginated tables with a collapsible, resizable split. Selecting a
-  workload now populates the standard Namespace and Owner filters, resolving
-  ReplicaSet and Job ancestry and preserving ownerless Pods.
-- Rendered shared dropdown menus in a viewport-aware overlay so opening one no
-  longer resizes or clips tables beside split panes and docked panels.
-- Kept portaled dropdown menus anchored to their triggers when application zoom
-  is above or below 100%.
-- Hid table pagination controls when an exact result contains 25 or fewer
-  objects and no previous or next page is available.
-- Standardized absent table values on a dimmed hyphen across resource,
-  object-panel, parsed-log, and diagnostics tables.
-- Displayed zero restart counts as the dimmed no-value hyphen in Nodes,
-  Workloads, and Pods tables while preserving numeric restart sorting.
-- Removed redundant metrics-availability banners from Workloads and Pods
-  tables; the app-level metrics status remains the availability indicator.
-- Made every multi-select Kinds filter searchable and gave each one explicit
-  Select all and Select none controls.
-- Favorites now save every filter declared by a GridTable and save both the
-  Workloads and Pods panes together. Version 1 and 2 favorites are silently
-  migrated on app start; an individual favorite that cannot be migrated is
-  deleted while migration continues for the remaining favorites. Files from a
-  newer schema are rejected without being rewritten so a newer app's data is
-  preserved.
-- Removed the visible Workloads/Pods divider band and moved the expand/collapse
-  control to the left edge of the Pods filter bar. Collapsed Pods now retains a
-  compact `Show Pods` header instead of removing its expansion control. The
-  split retains a one-pixel separator that thickens when its resize handle is
-  hovered or dragged and remains visible when Pods is collapsed.
+- Overhauled the Favorites system to properly support all views, including the new split-pane workloads view.
+  - **⚠️ The new Favorites system required a schema change.** The app will attempt to migrate your existing favorites automatically. If it cannot migrate them, it will delete them. If this happens, you'll have to manually recreate them. I tested the migration but it's possible that I missed something, so apologies in advance if this happens to you.
+- Improved container log scrolling. When you manually scroll in the logs, it will now properly retain your place in the viewport, continue to buffer new logs in the background, and present a button to resume scrolling.
+- Pagination controls do not appear unless there are more than 25 rows in the table (25 is the smallest pagination size).
+- Added Type, Reason, and Source filters to Events views.
+- Pod Status and Pod Signal in the Cluster Overview now link to the new Attention view, with the proper filters applied.
+- Standardized absent table values as a dimmed hyphen across all table views.
+- Every multi-select filter is now searchable and has Select All/Select None controls.
 
 ### Fixed
 
-- Made open-cluster tab switches repaint retained cluster-scoped data
-  immediately, refresh only the newly visible cluster scopes, and replace the
-  retained snapshot when fresh backend data arrives.
-- Preserved namespace change subscriptions when a cooled cluster re-warms, so
-  namespace creation and deletion continue appearing without fallback polling.
-- Restored Browse and discovery data when a cooled cluster re-warms, and kept
-  inactive clusters recoverable when sustained memory pressure forces a full
-  teardown before their retained backend snapshot can settle.
-- Stopped automatic navigation from creating manual-refresh jobs and prevented
-  retained namespace timeout errors from reappearing on every tab switch.
-- Updated namespace utilization immediately when metrics collection fails,
-  retried transient metrics-activation requests, and kept failed or cancelled
-  manual refreshes terminal across cluster subsystem rebuilds.
-- Refreshed YAML and object maps when versionless snapshot payloads change, so
-  deleted or updated objects no longer remain visible from a stale response.
+- Dropdowns are now viewport-aware and zoom-aware so should correctly render in all window sizes and zoom levels.
+- Fixed YAML editor and and object map data freshness. The app is now aware of when versionless snapshot payloads change, so deleted or updated objects no longer remain visible from a stale response from the backend.
+- Many improvements to the refresh system (https://github.com/luxury-yacht/app/pull/266) to improve the app's performance and stability.
