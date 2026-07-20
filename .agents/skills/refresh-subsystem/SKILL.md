@@ -182,6 +182,45 @@ checklist when touching anything they name.
        clusters through the build chokepoint on tab switch;
        `transitionClusterToLoading` keeps an already-ready cluster ready
        (re-warm serving is continuous).
+   12. **Governor tier application is serialized**: `reconcileGovernorWith`
+       may record newer visible-cluster intent while another call is cooling,
+       but executor actions cannot overlap. Otherwise `ensureRunning` can observe
+       the interval after feeds stop and before `Cooled` is published, accept it
+       as live, and leave every refresh domain without producers. Publish the desired
+       tier to the planned map before executor work, but update the applied map only
+       after the executor reaches that tier; the two maps encode different contracts.
+   13. **Cold clusters do not start object catalogs**:
+       `startObjectCatalogForTarget` gates on the serialized governor **planned** tier before
+       discovery or capability work. A Cold subsystem's ingest and informer feeds
+       are stopped, so starting its catalog creates API traffic and an endless
+       all-ingest-kinds-unsynced retry loop. Re-warm publishes a live plan before
+       rebuilding, and `ensureRunning` must not report the live tier reached until the
+       catalog exists; reading the last-applied tier reverses both ordering guarantees.
+   14. **Foreground activation replays lifecycle truth**: after serialized governor
+       reconciliation, `SetVisibleCluster` emits the cluster's current lifecycle
+       state even if it is unchanged. The Wails relay must reach both React state and
+       `eventBus` refresh-readiness consumers; otherwise a missed earlier edge leaves
+       the tab permanently behind its serving gate.
+   15. **Read scope is not refresh eligibility**: derive retained-data reads from the
+       selected cluster identity. Lifecycle may gate signals, leases, and requests,
+       but never the read key or rendered retained rows. When an open cluster becomes
+       temporarily ineligible, disable its scope with `preserveState: true`; clear the
+       scope only when the cluster is actually removed.
+   16. **Cold entry requires a retained baseline**: never stop a subsystem's producers
+       before server-owned `namespaces` readiness and the exact per-cluster
+       `cluster-overview` snapshot have built. A deferred transition must remain at its
+       actual live applied tier, then reconcile again when preparation succeeds. Use
+       both the aggregate service's server-owned Ready transition and the current
+       subsystem generation's `NamespaceNotifier.WorkloadsReady()` as proof of the
+       namespace baseline. The generation-local check is required because lifecycle
+       Ready may be retained across re-warm. Do not poll namespace snapshots from Cold
+       preparation (scoped builds may issue per-namespace API probes). The preparation
+       context belongs to the subsystem generation: replacement/teardown cancels it, and
+       the retry loop checks that its subsystem is still current before every attempt.
+       The sole exception is sustained memory pressure after the bounded preparation
+       grace: re-drive reconciliation on every over-budget sample, then use the normal
+       full teardown so available stores spill and heap is reclaimed. Do not mmap or
+       serve the unsettled baseline; backend data stays unavailable until re-warm.
 10. **Stream health = connected + server-confirmed synchronized**, not
     recently-delivered (`computeSubscriptionHealth`;
     `markSubscriptionSynchronized` only after the mux confirms the subscribe).

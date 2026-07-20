@@ -152,9 +152,40 @@ func (a *App) startObjectCatalog() {
 	}
 }
 
+// ensureObjectCatalogForCluster makes the object catalog part of the live-tier
+// invariant. Rebuild normally starts it, but this also repairs a live subsystem
+// left catalog-less by an interrupted or previously mis-ordered transition.
+func (a *App) ensureObjectCatalogForCluster(clusterID string) error {
+	if a == nil || clusterID == "" {
+		return fmt.Errorf("cluster identifier missing")
+	}
+	if a.objectCatalogServiceForCluster(clusterID) != nil {
+		return nil
+	}
+	for _, target := range a.catalogTargets() {
+		if target.meta.ID != clusterID {
+			continue
+		}
+		if err := a.startObjectCatalogForTarget(target); err != nil {
+			return err
+		}
+		if a.objectCatalogServiceForCluster(clusterID) == nil {
+			return fmt.Errorf("object catalog did not start")
+		}
+		return nil
+	}
+	return fmt.Errorf("cluster selection unavailable")
+}
+
 func (a *App) startObjectCatalogForTarget(target catalogTarget) error {
 	if target.meta.ID == "" {
 		return fmt.Errorf("cluster identifier missing")
+	}
+	// Cold clusters deliberately have no live informer/ingest producers. Starting
+	// their catalogs would run discovery and capability checks, then repeatedly try
+	// to collect from stores whose feeds the governor intentionally stopped.
+	if a.governorKeepsClusterCold(target.meta.ID) {
+		return nil
 	}
 
 	clients := a.clusterClientsForID(target.meta.ID)

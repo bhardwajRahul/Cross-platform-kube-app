@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/luxury-yacht/app/backend/capabilities"
 	"github.com/luxury-yacht/app/backend/refresh"
@@ -59,15 +60,23 @@ type App struct {
 	// governor holds the process-wide resource governor state: which open
 	// clusters run Foreground/Background/Cold so RAM stays bounded when many
 	// clusters are open. All fields are guarded by governorMu.
-	governorMu       sync.Mutex
-	governorPolicy   system.GovernorPolicy
-	governorMRU      []string                       // open cluster IDs, most-recently-visible first
-	governorVisible  string                         // the cluster the user is currently viewing
-	governorApplied  map[string]system.ResourceTier // last-applied tier per cluster
-	governorPressure bool                           // memory-pressure signal (HeapInuse over budget)
-	governorBudget   uint64                         // HeapInuse byte budget; 0 disables pressure demotion
-	spillRoot        string                         // override for the maintained-store spill root; empty = user cache dir (tests set a temp dir)
-	spillFormat      string                         // override for the spill format version; empty = app Version (tests set a fixed value)
+	// governorReconcileMu serializes slow tier applications without preventing
+	// callers from recording a newer visible cluster under governorMu. The next
+	// reconcile then observes that newer intent after the in-flight transition
+	// has reached a real, internally consistent subsystem state.
+	governorReconcileMu sync.Mutex
+	governorMu          sync.Mutex
+	governorPolicy      system.GovernorPolicy
+	governorMRU         []string                       // open cluster IDs, most-recently-visible first
+	governorVisible     string                         // the cluster the user is currently viewing
+	governorPlanned     map[string]system.ResourceTier // latest tier plan published before lifecycle work starts
+	governorApplied     map[string]system.ResourceTier // last-applied tier per cluster
+	governorPressure    bool                           // memory-pressure signal (HeapInuse over budget)
+	governorHeapInuse   uint64                         // latest sampled HeapInuse, for pressure diagnostics
+	governorBudget      uint64                         // HeapInuse byte budget; 0 disables pressure demotion
+	governorNow         func() time.Time               // clock for bounded pressure fallback; time.Now in production
+	spillRoot           string                         // override for the maintained-store spill root; empty = user cache dir (tests set a temp dir)
+	spillFormat         string                         // override for the spill format version; empty = app Version (tests set a fixed value)
 
 	// cooledMmapClosers holds, per cooled cluster, the mmap closers returned by
 	// CoolMaintainedStoresToMmap. Each closer unmaps one domain's cooled column file and MUST

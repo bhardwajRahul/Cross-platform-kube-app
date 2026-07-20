@@ -17,7 +17,8 @@ payload shape; they link here instead of restating freshness behavior.
    service-unavailable errors. When reconciliation completes, its snapshot
    replaces the retained data. This activation boundary applies to every refresh
    domain and every dispatch path, including scheduled work, stream-triggered
-   snapshots, and stream-only domains.
+   snapshots, and stream-only domains. Backend cool/re-warm transitions are
+   serialized so this boundary cannot complete against a half-cooled subsystem.
 3. **Keep background work passive.** An open inactive cluster retains snapshots
    and object-change subscriptions. It does not continuously fetch snapshots,
    start metrics collection, or produce manual-refresh errors merely because
@@ -50,12 +51,36 @@ stream reconciliation path rather than creating a ManualQueue job.
 ## Retention and leases
 
 - Refresh state is keyed by one `clusterId` plus the domain-owned scope.
+- The selected cluster and domain scope determine the retained-data read key.
+  Lifecycle/readiness may gate leases and requests, but must not remove that read
+  key or hide a retained snapshot.
 - Disabling or switching a visible scope preserves its last successful data.
+- If an open cluster temporarily loses refresh eligibility, stop its active work
+  with state preservation. Only closing/removing the cluster clears that scope.
 - Re-enabling paints that data before the activation request settles.
 - Cross-cluster views acquire one lease per displayed cluster; membership
   changes acquire/release only the changed clusters.
 - A lease expresses consumer demand. Do not use an open background workspace as
   demand for expensive producers that only feed visible data.
+- A governor Cold assignment is not applied until the backend has built a settled
+  `namespaces` snapshot and a `cluster-overview` snapshot for that exact cluster
+  scope. The namespace build runs through the aggregate lifecycle callback so
+  loading reaches Ready without a frontend request. Until both retained baselines
+  exist, the subsystem and its producers stay live; completion retries the tier
+  reconciliation. Cold preparation requires both that aggregate lifecycle state
+  and the current subsystem generation's namespace workload tracker to be ready;
+  this prevents a Ready state retained across re-warm from authorizing an unsynced
+  replacement subsystem. Preparation does not poll namespace snapshots, because
+  scoped namespace builds can perform API probes. This is automatic preparation,
+  never a manual refresh.
+- Sustained memory pressure is the only exception to that Cold-serving entry
+  rule. If preparation remains unsettled for one bounded snapshot-attempt grace
+  period, each still-over-budget pressure sample re-drives the transition and the
+  backend may force a full teardown of an inactive cluster. It first stops feeds
+  and spills every store currently available, while frontend leases keep their
+  last successful rows. The backend then serves no data for that cluster until a
+  foreground re-warm rebuilds its subsystem and catalog. It must not freeze or
+  present an unsettled store as settled Cold truth.
 
 ## Signals and source clocks
 
@@ -124,6 +149,17 @@ The authored domain contract declares which clocks can change a payload:
   error state clears that scope's dedupe so a later failure can notify again.
 - Loading gates may block invalid early reads, but must still allow the request
   that advances the cluster to ready.
+- After foreground governor reconciliation, the backend replays that cluster's
+  current authoritative lifecycle state even when no transition occurred. The
+  frontend relay applies it to both React lifecycle consumers and refresh
+  readiness consumers so a missed earlier event cannot leave the tab behind the
+  serving gate.
+- Startup settings restore, saved-selection restore, and client initialization
+  use the same serialized selection-mutation boundary as runtime selection
+  changes. Each completed cluster client is published independently; one slow
+  sibling may not delay it. After a cluster enters `loading`, `loading_slow`, or
+  `ready`, a late `connecting`/`connected` result cannot move it back behind the
+  frontend serving gate.
 - When a cluster subsystem is replaced, queued or running manual work moves to
   its replacement queue. Succeeded, failed, and cancelled jobs remain terminal
   and are never re-enqueued.
@@ -163,5 +199,12 @@ For a freshness change, test the contract at the producer/consumer seam:
     domain, aborts in-flight work for only the activating cluster, preserves
     visible request intent, and never converts passive background work into
     queued demand.
+11. a temporarily unavailable open cluster stops refresh work without losing its
+    retained snapshot, including when every open cluster is unavailable;
+12. tab activation replays the backend's unchanged authoritative lifecycle state
+    to both frontend lifecycle consumer paths.
+13. Cold preparation belongs to one subsystem generation, stops on replacement,
+    and under sustained memory pressure re-drives until either a settled mmap
+    transition or the bounded full-teardown fallback completes.
 
 Finish non-documentation changes with `mage qc:prerelease`.

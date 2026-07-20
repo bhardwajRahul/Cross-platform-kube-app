@@ -117,22 +117,60 @@ the completed `v2` rewrite plan.
   columnar format, warm-paint on re-warm (cross-restart, format-version-guarded), and
   reconcile after sync. A Cold cluster can serve from read-only **mmap-aliased** stores
   (column data off-heap/OS-reclaimable, indexes resident) rather than full teardown;
-  re-warm unroutes then closes the mappings safely. Starting points:
+  re-warm unroutes then closes the mappings safely. Cold clusters do not run object-catalog
+  discovery, capability checks, or sync loops against their stopped feeds; the catalog
+  restarts as part of re-warm. Starting points:
   `domain/maintained_stores.go`, `querypage/columnstore_mmap.go`, `app_refresh_spill.go`.
+- **Cold has a server-owned entry gate.** A desired Cold tier stays unapplied while
+  the live subsystem builds settled `namespaces` and `cluster-overview` snapshots
+  for its cluster scope. The namespace build uses the aggregate lifecycle callback,
+  so Ready and the retained sidebar/Global payloads exist before any producer stops.
+  Preparation waits on that lifecycle state and the current subsystem generation's
+  namespace workload tracker without polling namespace snapshots, retries the overview
+  from the backend, and does not wait for tab activation. This generation-local gate
+  prevents a retained Ready state from cooling a replacement subsystem before its own
+  stores settle. Only a successful preparation marks the subsystem eligible for
+  cooling; the governor records Cold after the executor reaches it. Preparation is
+  owned by that subsystem generation: replacement or teardown cancels an in-flight
+  build, and the retry loop exits as soon as the generation is no longer current.
+  Under sustained HeapInuse pressure only, an unsettled preparation that exceeds one
+  bounded snapshot-attempt grace degrades to the normal full teardown path. Available
+  stores still spill, but the backend is unavailable for that cluster until re-warm;
+  it never serves an unsettled store as a Cold mmap baseline. Every over-budget sample
+  re-drives reconciliation so this fallback remains reachable after the pressure edge.
 - **Re-warm keeps Ready.** Governor re-warms rebuild the subsystem through the same
-  per-cluster chokepoint as first builds, but serving is continuous (cooled mmap stores
-  serve until the aggregate re-routes; fresh stores warm-paint from spill) —
+  per-cluster chokepoint as first builds. Normal mmap-cooled serving is continuous
+  (cooled stores serve until the aggregate re-routes; fresh stores warm-paint from spill);
+  after a pressure-forced full teardown, frontend-retained rows remain visible while the
+  backend rebuilds from spill —
   `transitionClusterToLoading` guards the chokepoint so an already-READY cluster is
   never demoted to loading on a tab switch. Aggregate stream routing then ends
   only that cluster's old-manager subscriptions so they re-establish against the
   replacement without reconnecting other clusters; continuity follows
   [the freshness contract](data-freshness.md#signals-and-source-clocks).
+- **Tier application is serialized.** Cooling and re-warming are multi-step subsystem
+  replacements. A newer visible-cluster intent may be recorded while one is running,
+  but its reconciliation waits until the in-flight transition has reached a consistent
+  Cold or live state. Foreground activation must never inspect or accept the interval
+  after feeds stop but before the subsystem is marked Cold. After reconciliation,
+  activation replays the cluster's current lifecycle state so a frontend that missed
+  an earlier transition converges even when the backend state did not change. The
+  governor publishes a separate planned tier before executor work begins, then records
+  the applied tier only after that work completes. Catalog gating reads the plan: it
+  closes before cooling stops feeds and opens before re-warm starts the catalog. A live
+  tier is reached only when both the subsystem and its cluster object catalog exist.
 - **Cluster-Ready is server-driven.** The loading→ready transition rides a namespaces
   snapshot build after the workload stores settle; the backend self-builds it on each
   pre-Ready namespaces doorbell (`runNamespacesReadinessSelfBuild` via the
   `Subsystem.NamespacesDoorbell` observer, wired per cluster in
   `buildRefreshSubsystemForSelection`). Readiness never depends on the frontend
   asking first.
+- **Client publication and lifecycle are ordered per cluster.** Startup settings and
+  saved-selection restore run through the runtime selection coordinator. A completed
+  client is installed inside its per-cluster operation before that operation publishes
+  `connected`, without waiting for sibling builds. Building the refresh subsystem then
+  advances the cluster to `loading`; stale client-build completions cannot demote
+  `loading`, `loading_slow`, or `ready` back to `connecting`/`connected`.
 
 ## Delivery — page + refetch-on-signal
 

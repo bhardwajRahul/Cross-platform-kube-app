@@ -9,9 +9,14 @@ import (
 	"unsafe"
 
 	"github.com/luxury-yacht/app/backend/internal/config"
+	"github.com/luxury-yacht/app/backend/kind/streamrows"
 	"github.com/luxury-yacht/app/backend/objectcatalog"
+	refreshinformer "github.com/luxury-yacht/app/backend/refresh/informer"
+	"github.com/luxury-yacht/app/backend/refresh/ingest"
+	refreshpermissions "github.com/luxury-yacht/app/backend/refresh/permissions"
 	"github.com/luxury-yacht/app/backend/refresh/resourcestream"
 	"github.com/luxury-yacht/app/backend/refresh/snapshot"
+	"github.com/luxury-yacht/app/backend/refresh/system"
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
 	"github.com/stretchr/testify/require"
 	apiextensionsfake "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/fake"
@@ -27,6 +32,118 @@ import (
 	cgofake "k8s.io/client-go/kubernetes/fake"
 	cgotesting "k8s.io/client-go/testing"
 )
+
+func catalogLifecycleTestApp(t *testing.T, tier system.ResourceTier, cooled bool) (*App, catalogTarget) {
+	t.Helper()
+	const clusterID = "cluster-a:context-a"
+	app := newTestAppWithDefaults(t)
+	app.Ctx = context.Background()
+	app.governorPlanned = map[string]system.ResourceTier{clusterID: tier}
+	app.governorApplied = map[string]system.ResourceTier{clusterID: tier}
+
+	kubeClient := cgofake.NewClientset()
+	apiExtensionsClient := apiextensionsfake.NewSimpleClientset()
+	checker := refreshpermissions.NewCheckerWithReview(clusterID, time.Minute, func(context.Context, string, string, string, string) (bool, error) {
+		return true, nil
+	})
+	factory := refreshinformer.New(kubeClient, apiExtensionsClient, time.Minute, checker)
+	app.clusterClients = make(map[string]*clusterClients)
+	app.clusterClients[clusterID] = &clusterClients{
+		meta:                ClusterMeta{ID: clusterID, Name: "Cluster A"},
+		client:              kubeClient,
+		apiextensionsClient: apiExtensionsClient,
+		dynamicClient:       fake.NewSimpleDynamicClient(runtime.NewScheme()),
+	}
+	app.setRefreshSubsystem(clusterID, &system.Subsystem{
+		Cooled:          cooled,
+		InformerFactory: factory,
+		IngestManager: ingest.NewIngestManager(
+			streamrows.ClusterMeta{ClusterID: clusterID, ClusterName: "Cluster A"},
+			kubeClient,
+			apiExtensionsClient,
+			nil,
+		),
+	})
+	app.availableKubeconfigs = []KubeconfigInfo{{
+		Name:    "cluster-a",
+		Path:    "/p/a",
+		Context: "context-a",
+	}}
+	app.selectedKubeconfigs = []string{(kubeconfigSelection{Path: "/p/a", Context: "context-a"}).String()}
+	t.Cleanup(func() { app.stopObjectCatalogForCluster(clusterID) })
+	return app, catalogTarget{
+		selection: kubeconfigSelection{Path: "/p/a", Context: "context-a"},
+		meta:      ClusterMeta{ID: clusterID, Name: "Cluster A"},
+	}
+}
+
+func TestStartObjectCatalogForTargetSkipsCooledSubsystem(t *testing.T) {
+	app, target := catalogLifecycleTestApp(t, system.TierCold, true)
+
+	err := app.startObjectCatalogForTarget(target)
+
+	require.NoError(t, err)
+	require.Nil(t, app.objectCatalogServiceForCluster(target.meta.ID), "a Cold cluster must not start catalog API work against stopped feeds")
+}
+
+func TestStartObjectCatalogForTargetStartsForForegroundSubsystem(t *testing.T) {
+	app, target := catalogLifecycleTestApp(t, system.TierForeground, false)
+
+	err := app.startObjectCatalogForTarget(target)
+
+	require.NoError(t, err)
+	require.NotNil(t, app.objectCatalogServiceForCluster(target.meta.ID), "a live cluster must start its catalog")
+}
+
+type catalogStartingGovernorExecutor struct {
+	app    *App
+	target catalogTarget
+}
+
+func (e *catalogStartingGovernorExecutor) ensureRunning(string) bool {
+	return e.app.startObjectCatalogForTarget(e.target) == nil &&
+		e.app.objectCatalogServiceForCluster(e.target.meta.ID) != nil
+}
+
+func (e *catalogStartingGovernorExecutor) teardown(string) bool {
+	_ = e.app.startObjectCatalogForTarget(e.target)
+	return e.app.objectCatalogServiceForCluster(e.target.meta.ID) == nil
+}
+
+func TestReconcileGovernorPublishesForegroundPlanBeforeStartingCatalog(t *testing.T) {
+	app, target := catalogLifecycleTestApp(t, system.TierCold, false)
+	app.governorVisible = target.meta.ID
+	app.governorMRU = []string{target.meta.ID}
+
+	app.reconcileGovernorWith(&catalogStartingGovernorExecutor{app: app, target: target})
+
+	require.NotNil(t, app.objectCatalogServiceForCluster(target.meta.ID),
+		"the catalog start inside the re-warm executor must observe the planned live tier")
+	require.Equal(t, system.TierForeground, app.governorApplied[target.meta.ID])
+}
+
+func TestReconcileGovernorPublishesColdPlanBeforeTeardownStarts(t *testing.T) {
+	app, target := catalogLifecycleTestApp(t, system.TierBackground, false)
+	app.governorPolicy = system.GovernorPolicy{KeepWarm: 0}
+	app.governorMRU = []string{target.meta.ID}
+
+	app.reconcileGovernorWith(&catalogStartingGovernorExecutor{app: app, target: target})
+
+	require.Nil(t, app.objectCatalogServiceForCluster(target.meta.ID),
+		"catalog work started during teardown must observe the planned Cold tier")
+	require.Equal(t, system.TierCold, app.governorApplied[target.meta.ID])
+}
+
+func TestGovernorEnsureRunningStartsMissingCatalogForLiveCluster(t *testing.T) {
+	app, target := catalogLifecycleTestApp(t, system.TierForeground, false)
+	require.Nil(t, app.objectCatalogServiceForCluster(target.meta.ID))
+
+	reachedLiveTier := app.realGovernorExecutor().ensureRunning(target.meta.ID)
+
+	require.True(t, reachedLiveTier)
+	require.NotNil(t, app.objectCatalogServiceForCluster(target.meta.ID),
+		"a live tier is incomplete until the cluster object catalog is running")
+}
 
 func TestStopObjectCatalogCancelsAndResets(t *testing.T) {
 	app := NewApp()
