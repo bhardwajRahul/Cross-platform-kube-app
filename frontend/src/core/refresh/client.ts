@@ -35,7 +35,14 @@ interface FetchSnapshotOptions {
   scope?: string;
   signal?: AbortSignal;
   ifNoneMatch?: string;
+  manual?: boolean;
 }
+
+type ManualRefreshJob = {
+  jobId: string;
+  state: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  error?: string;
+};
 
 let cachedRefreshBaseURL: string | null = null;
 let refreshBaseURLPromise: Promise<string> | null = null;
@@ -44,6 +51,9 @@ let refreshReadyPromise: Promise<string> | null = null;
 const REFRESH_NOT_READY_PATTERN = /refresh subsystem not initialised/i;
 const MAX_REFRESH_URL_ATTEMPTS = 30;
 const INITIAL_REFRESH_URL_DELAY_MS = 200;
+const MANUAL_REFRESH_TIMEOUT_MS = 60_000;
+const INITIAL_MANUAL_JOB_POLL_MS = 50;
+const MAX_MANUAL_JOB_POLL_MS = 1_000;
 
 const toError = (error: unknown): Error => {
   if (error instanceof Error) {
@@ -53,6 +63,91 @@ const toError = (error: unknown): Error => {
 };
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const abortableDelay = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('Manual refresh aborted', 'AbortError'));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timeoutId);
+      reject(new DOMException('Manual refresh aborted', 'AbortError'));
+    };
+    const timeoutId = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+
+const parseManualRefreshJob = async (response: Response): Promise<ManualRefreshJob> => {
+  if (!response.ok) {
+    const { message } = await safeParseError(response);
+    throw new Error(message);
+  }
+  const job = (await response.json()) as Partial<ManualRefreshJob>;
+  if (!job.jobId || !job.state) {
+    throw new Error('Manual refresh returned an invalid job');
+  }
+  return job as ManualRefreshJob;
+};
+
+const waitForManualRefresh = async (
+  baseURL: string,
+  domain: RefreshDomain,
+  scope: string,
+  signal?: AbortSignal
+): Promise<void> => {
+  const controller = new AbortController();
+  let timedOut = false;
+  const onAbort = () => controller.abort();
+  if (signal?.aborted) {
+    controller.abort();
+  } else {
+    signal?.addEventListener('abort', onAbort, { once: true });
+  }
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, MANUAL_REFRESH_TIMEOUT_MS);
+
+  try {
+    const enqueueURL = new URL(`/api/v2/refresh/${domain}`, baseURL);
+    let job = await parseManualRefreshJob(
+      await fetch(enqueueURL.toString(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope, reason: 'user' }),
+        signal: controller.signal,
+      })
+    );
+    let pollDelayMs = INITIAL_MANUAL_JOB_POLL_MS;
+    while (job.state === 'queued' || job.state === 'running') {
+      const statusURL = new URL(`/api/v2/jobs/${job.jobId}`, baseURL);
+      job = await parseManualRefreshJob(
+        await fetch(statusURL.toString(), { signal: controller.signal })
+      );
+      if (job.state === 'queued' || job.state === 'running') {
+        await abortableDelay(pollDelayMs, controller.signal);
+        pollDelayMs = Math.min(MAX_MANUAL_JOB_POLL_MS, pollDelayMs * 2);
+      }
+    }
+    if (job.state === 'failed' || job.state === 'cancelled') {
+      throw new Error(job.error || `Manual refresh failed for ${domain}`);
+    }
+  } catch (error) {
+    if (timedOut) {
+      throw new Error(
+        `Manual refresh timed out after ${MANUAL_REFRESH_TIMEOUT_MS / 1_000} seconds for ${domain}`
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', onAbort);
+  }
+};
 
 async function attemptResolveRefreshBaseURL(attempt = 0): Promise<string> {
   try {
@@ -116,6 +211,17 @@ export async function fetchSnapshot<TPayload>(
   domain: RefreshDomain,
   options: FetchSnapshotOptions = {}
 ): Promise<{ snapshot?: Snapshot<TPayload>; etag?: string; notModified: boolean }> {
+  if (options.manual) {
+    if (!options.scope) {
+      throw new Error(`Manual refresh for ${domain} requires a cluster scope`);
+    }
+    await waitForManualRefresh(
+      await resolveRefreshBaseURL(),
+      domain,
+      options.scope,
+      options.signal
+    );
+  }
   const buildRequest = async () => {
     const baseURL = await resolveRefreshBaseURL();
     const url = new URL(`/api/v2/snapshots/${domain}`, baseURL);
@@ -125,7 +231,7 @@ export async function fetchSnapshot<TPayload>(
     }
 
     const headers: Record<string, string> = {};
-    if (options.ifNoneMatch) {
+    if (options.ifNoneMatch && !options.manual) {
       headers['If-None-Match'] = options.ifNoneMatch;
     }
 
@@ -244,14 +350,14 @@ export async function fetchTelemetrySummary(): Promise<NormalizedTelemetrySummar
   };
 }
 
-export async function setMetricsActive(active: boolean): Promise<void> {
+export async function setMetricsActive(clusterIds: readonly string[]): Promise<void> {
   const baseURL = await resolveRefreshBaseURL();
   const url = new URL('/api/v2/metrics/active', baseURL);
 
   const response = await fetch(url.toString(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ active }),
+    body: JSON.stringify({ clusterIds }),
   });
   if (!response.ok) {
     throw new Error(`Metrics activity request failed: ${response.status} ${response.statusText}`);

@@ -109,8 +109,9 @@ the completed `v2` rewrite plan.
 ## Lifecycle & governor
 
 - **Foreground / Background / Cold** per cluster (`system/governor.go`,
-  `app_refresh_governor.go`). Background idles the metrics poller (object liveness
-  untouched). A memory-pressure poll (`runtime.ReadMemStats` HeapInuse vs budget — **not**
+  `app_refresh_governor.go`). Foreground and Background both keep the subsystem
+  live; metrics polling follows cluster-scoped frontend lease demand rather than
+  governor visibility. A memory-pressure poll (`runtime.ReadMemStats` HeapInuse vs budget — **not**
   `GOMEMLIMIT`) collapses the warm set under pressure and `FreeOSMemory`s.
 - **Spill + Cold-serving.** Maintained stores spill to a per-cluster cache dir in the
   columnar format, warm-paint on re-warm (cross-restart, format-version-guarded), and
@@ -122,7 +123,10 @@ the completed `v2` rewrite plan.
   per-cluster chokepoint as first builds, but serving is continuous (cooled mmap stores
   serve until the aggregate re-routes; fresh stores warm-paint from spill) —
   `transitionClusterToLoading` guards the chokepoint so an already-READY cluster is
-  never demoted to loading on a tab switch.
+  never demoted to loading on a tab switch. Aggregate stream routing then ends
+  only that cluster's old-manager subscriptions so they re-establish against the
+  replacement without reconnecting other clusters; continuity follows
+  [the freshness contract](data-freshness.md#signals-and-source-clocks).
 - **Cluster-Ready is server-driven.** The loading→ready transition rides a namespaces
   snapshot build after the workload stores settle; the backend self-builds it on each
   pre-Ready namespaces doorbell (`runNamespacesReadinessSelfBuild` via the
@@ -139,10 +143,10 @@ the completed `v2` rewrite plan.
   refetches its page. **No live row ever crosses the wire** — the
   envelope (`streammux.ServerMessage`) has no row field, and the live-row-merge path
   (`applyResourceRowUpdates`, `mergeSnapshotRows`, `sortRows`, per-domain collections) is deleted. See
-  [`resource-stream-signals.md`](./resource-stream-signals.md) for the frontend contract.
+  [`data-freshness.md`](./data-freshness.md) for the frontend contract.
 - **Metrics** reach a view by serve-time overlay (above), not the store or the wire.
   Metric source clocks and frontend utilization reads are covered by
-  [`resource-stream-signals.md`](./resource-stream-signals.md) and
+  [`data-freshness.md`](./data-freshness.md) and
   [`resource-metrics.md`](./resource-metrics.md).
 
 ## Boundaries (deliberately NOT this path)

@@ -14,7 +14,24 @@
       "payloadOwner": "backend/refresh/snapshot.NamespaceBuilder",
       "refreshPayloadType": "NamespaceSnapshotPayload",
       "cachePolicy": "snapshot-cache-with-merge",
-      "streamSemantics": ["snapshot-replace"],
+      "streamSemantics": ["snapshot-replace", "change-signal"],
+      "coverageContract": "snapshot-table-payload",
+      "coverageStatus": "enforced"
+    },
+    "namespace-metrics": {
+      "behaviorClass": "snapshot-table",
+      "scopeContract": {
+        "kind": "cluster",
+        "clusterPrefix": "required",
+        "parser": "backend/refresh/resourcestream/selector.go:ParseStreamSelector",
+        "frontendBuilder": "frontend/src/core/refresh/clusterScope.ts:buildClusterScope",
+        "acceptedEncodings": [""]
+      },
+      "singleCluster": true,
+      "payloadOwner": "backend/refresh/snapshot.NamespaceMetricsBuilder",
+      "refreshPayloadType": "NamespaceMetricsSnapshotPayload",
+      "cachePolicy": "snapshot-cache-bypass",
+      "streamSemantics": ["snapshot-replace", "change-signal"],
       "coverageContract": "snapshot-table-payload",
       "coverageStatus": "enforced"
     },
@@ -31,7 +48,7 @@
       "payloadOwner": "backend/refresh/snapshot/cluster_overview.go:ClusterOverviewBuilder.Build",
       "refreshPayloadType": "ClusterOverviewSnapshotPayload",
       "cachePolicy": "snapshot-cache",
-      "streamSemantics": ["snapshot-replace"],
+      "streamSemantics": ["snapshot-replace", "change-signal"],
       "coverageContract": "aggregate-snapshot-permission-fallback",
       "coverageStatus": "enforced"
     },
@@ -98,7 +115,7 @@
       "singleCluster": true,
       "payloadOwner": "backend/refresh/snapshot.NodeBuilder",
       "refreshPayloadType": "ClusterNodeSnapshotPayload",
-      "cachePolicy": "snapshot-cache",
+      "cachePolicy": "snapshot-cache-bypass",
       "streamSemantics": ["snapshot-replace", "change-signal", "complete-resync"],
       "coverageContract": "query-refetch-on-signal",
       "coverageStatus": "enforced"
@@ -217,7 +234,7 @@
       "singleCluster": true,
       "payloadOwner": "backend/refresh/snapshot.NamespaceWorkloadsBuilder",
       "refreshPayloadType": "NamespaceWorkloadSnapshotPayload",
-      "cachePolicy": "snapshot-cache",
+      "cachePolicy": "snapshot-cache-bypass",
       "streamSemantics": ["snapshot-replace", "change-signal", "complete-resync"],
       "coverageContract": "query-refetch-on-signal",
       "coverageStatus": "enforced"
@@ -387,7 +404,7 @@
       "singleCluster": true,
       "payloadOwner": "backend/refresh/snapshot.PodBuilder",
       "refreshPayloadType": "PodSnapshotPayload",
-      "cachePolicy": "snapshot-cache",
+      "cachePolicy": "snapshot-cache-bypass",
       "streamSemantics": ["snapshot-replace", "change-signal", "complete-resync"],
       "coverageContract": "query-refetch-on-signal",
       "coverageStatus": "enforced"
@@ -404,7 +421,7 @@
       "singleCluster": true,
       "payloadOwner": "backend/refresh/snapshot.ObjectDetailsBuilder",
       "refreshPayloadType": "ObjectDetailsSnapshotPayload",
-      "cachePolicy": "snapshot-cache-plus-provider-cache",
+      "cachePolicy": "provider-cache",
       "streamSemantics": ["snapshot-replace"],
       "coverageContract": "detail-payload-shape",
       "coverageStatus": "enforced"
@@ -473,7 +490,7 @@
       "payloadOwner": "backend/refresh/snapshot.ObjectEventsBuilder",
       "refreshPayloadType": "ObjectEventsSnapshotPayload",
       "cachePolicy": "snapshot-cache",
-      "streamSemantics": ["snapshot-replace"],
+      "streamSemantics": ["snapshot-replace", "change-signal"],
       "coverageContract": "event-snapshot-payload",
       "coverageStatus": "enforced"
     },
@@ -734,6 +751,19 @@
         "orchestrator": "doorbell-snapshot",
         "diagnosticsStream": "resources",
         "timing": { "interval": 2000, "cooldown": 1000, "timeout": 10 },
+        "priority": 0
+      }
+    },
+    {
+      "domain": "namespace-metrics",
+      "category": "system",
+      "sourceClocks": ["metric"],
+      "backend": { "registration": "direct", "permission": "exempt", "resourceStream": false },
+      "frontend": {
+        "refresherName": "namespace-metrics",
+        "orchestrator": "doorbell-snapshot",
+        "diagnosticsStream": "resources",
+        "timing": { "interval": 5000, "cooldown": 1000, "timeout": 10 },
         "priority": 0
       }
     },
@@ -1069,7 +1099,7 @@
         "refresherName": "object-map",
         "orchestrator": "snapshot",
         "diagnosticsStream": null,
-        "timing": { "interval": 2000, "cooldown": 1000, "timeout": 10 }
+        "timing": { "interval": 5000, "cooldown": 1000, "timeout": 10 }
       }
     },
     {

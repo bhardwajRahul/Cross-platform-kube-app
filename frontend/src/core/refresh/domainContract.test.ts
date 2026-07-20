@@ -137,6 +137,7 @@ const CACHE_POLICIES = new Set([
   'snapshot-cache-with-merge',
   'snapshot-cache-bypass',
   'snapshot-cache-plus-provider-cache',
+  'provider-cache',
   'external-catalog-cache',
   'external-catalog-cache-with-merge',
   'stream-only',
@@ -270,6 +271,24 @@ describe('refresh domain contract', () => {
     }
   });
 
+  it('does not poll object-map faster than its five-second snapshot cache', () => {
+    expect(getRefreshDomainDescriptor('object-map').timing.interval).toBe(5_000);
+  });
+
+  it('records object-details as provider-cache only', () => {
+    expect(refreshDomainContract.domainInventory['object-details'].cachePolicy).toBe(
+      'provider-cache'
+    );
+  });
+
+  it('records serve-time metric joins as snapshot-cache bypasses', () => {
+    for (const domain of ['pods', 'nodes', 'namespace-workloads', 'namespace-metrics'] as const) {
+      expect(refreshDomainContract.domainInventory[domain].cachePolicy).toBe(
+        'snapshot-cache-bypass'
+      );
+    }
+  });
+
   it('covers frontend descriptors, orchestrator registrations, streams, and diagnostics', () => {
     const contract = refreshDomainContract;
     expect(contract.version).toBe(2);
@@ -304,11 +323,13 @@ describe('refresh domain contract', () => {
           expect(resourceStreamDomains.has(entry.domain)).toBe(false);
           break;
         case 'doorbell-snapshot':
-          // Doorbell-refetched snapshot domains (namespaces, object-events,
-          // cluster-overview, cluster-attention): streaming wiring exists for the signal-only
+          // Doorbell-refetched snapshot domains (namespaces,
+          // namespace-metrics, object-events, cluster-overview,
+          // cluster-attention): streaming wiring exists for the signal-only
           // doorbell, but they are not resource table domains. Each declares
           // exactly the one clock its doorbell rides (namespaces: object;
-          // object-events: event; cluster-overview: metric; cluster-attention: attention — and overview polls
+          // namespace-metrics/cluster-overview: metric; object-events: event;
+          // cluster-attention: attention — and overview polls
           // STAY ON, since metric doorbells only ring on successful
           // collections). The doorbell rides the resources WebSocket, so
           // diagnostics reflect that stream instead of mislabeling the
@@ -318,7 +339,7 @@ describe('refresh domain contract', () => {
           expect(entry.sourceClocks).toEqual(
             entry.domain === 'object-events'
               ? ['event']
-              : entry.domain === 'cluster-overview'
+              : entry.domain === 'namespace-metrics' || entry.domain === 'cluster-overview'
                 ? ['metric']
                 : entry.domain === 'cluster-attention'
                   ? ['attention']
@@ -483,11 +504,13 @@ describe('refresh domain contract', () => {
         case 'doorbell-snapshot':
           // A snapshot payload whose refetch trigger includes a signal-only
           // doorbell: namespaces (snapshot-table, object doorbell),
+          // namespace-metrics (snapshot-table, metric doorbell),
           // object-events (event-snapshot, per-object event doorbell), and
           // cluster-overview (aggregate-snapshot, metric doorbell with polls
           // kept on).
           expect([
             'namespaces',
+            'namespace-metrics',
             'object-events',
             'cluster-overview',
             'cluster-attention',
@@ -498,6 +521,9 @@ describe('refresh domain contract', () => {
               : entry.domain === 'cluster-overview'
                 ? 'aggregate-snapshot'
                 : 'snapshot-table'
+          );
+          expect(inventory.streamSemantics).toEqual(
+            expect.arrayContaining(['snapshot-replace', 'change-signal'])
           );
           break;
         case 'snapshot':
@@ -529,7 +555,11 @@ describe('refresh domain contract', () => {
           if (inventory.behaviorClass === 'detail-payload') {
             expect(['object-details', 'object-yaml']).toContain(entry.domain);
             expect(inventory.scopeContract.kind).toBe('object-ref');
-            expect(inventory.cachePolicy).toBe('snapshot-cache-plus-provider-cache');
+            expect(inventory.cachePolicy).toBe(
+              entry.domain === 'object-details'
+                ? 'provider-cache'
+                : 'snapshot-cache-plus-provider-cache'
+            );
             expect(inventory.streamSemantics).toEqual(['snapshot-replace']);
             expect(inventory.coverageContract).toBe('detail-payload-shape');
           }

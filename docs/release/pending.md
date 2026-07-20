@@ -52,7 +52,15 @@
 
 ### Fixed
 
-- Kept cluster-scoped data in place when switching open cluster tabs instead of
-  triggering a manual refresh or racing the backend foreground re-warm.
+- Made open-cluster tab switches repaint retained cluster-scoped data
+  immediately, refresh only the newly visible cluster scopes, and replace the
+  retained snapshot when fresh backend data arrives.
+- Preserved namespace change subscriptions when a cooled cluster re-warms, so
+  namespace creation and deletion continue appearing without fallback polling.
+- Stopped automatic navigation from creating manual-refresh jobs and prevented
+  retained namespace timeout errors from reappearing on every tab switch.
+- Updated namespace utilization immediately when metrics collection fails,
+  retried transient metrics-activation requests, and kept failed or cancelled
+  manual refreshes terminal across cluster subsystem rebuilds.
 - Refreshed YAML and object maps when versionless snapshot payloads change, so
   deleted or updated objects no longer remain visible from a stale response.

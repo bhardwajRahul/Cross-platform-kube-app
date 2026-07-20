@@ -175,6 +175,7 @@ func TestDomainInventoryCoversAuthoredDomainsAndUsesKnownVocabulary(t *testing.T
 		"snapshot-cache-with-merge",
 		"snapshot-cache-bypass",
 		"snapshot-cache-plus-provider-cache",
+		"provider-cache",
 		"external-catalog-cache",
 		"external-catalog-cache-with-merge",
 		"stream-only",
@@ -256,6 +257,16 @@ func TestDomainInventoryIsCompatibleWithExistingContractHomes(t *testing.T) {
 		default:
 			require.Failf(t, "unknown registration", "domain=%s registration=%s", domainID, domain.Backend.Registration)
 		}
+
+		if domain.Frontend.Orchestrator == "doorbell-snapshot" {
+			require.ElementsMatchf(
+				t,
+				[]string{"snapshot-replace", "change-signal"},
+				inventory.StreamSemantics,
+				"doorbell-snapshot domain %q stream semantics",
+				domainID,
+			)
+		}
 	}
 
 	catalog := contract.DomainInventory["catalog"]
@@ -289,14 +300,18 @@ func TestDomainInventoryIsCompatibleWithExistingContractHomes(t *testing.T) {
 	require.Equal(t, "object-ref", objectEvents.ScopeContract.Kind)
 	require.Equal(t, "backend/refresh/snapshot.ObjectEventsBuilder", objectEvents.PayloadOwner)
 	require.Equal(t, "snapshot-cache", objectEvents.CachePolicy)
-	require.Equal(t, []string{"snapshot-replace"}, objectEvents.StreamSemantics)
+	require.ElementsMatch(t, []string{"snapshot-replace", "change-signal"}, objectEvents.StreamSemantics)
 	require.Equal(t, "event-snapshot-payload", objectEvents.CoverageContract)
 
 	for _, domainID := range []string{"object-details", "object-yaml"} {
 		detail := contract.DomainInventory[domainID]
 		require.Equal(t, "detail-payload", detail.BehaviorClass)
 		require.Equal(t, "object-ref", detail.ScopeContract.Kind)
-		require.Equal(t, "snapshot-cache-plus-provider-cache", detail.CachePolicy)
+		if domainID == "object-details" {
+			require.Equal(t, "provider-cache", detail.CachePolicy)
+		} else {
+			require.Equal(t, "snapshot-cache-plus-provider-cache", detail.CachePolicy)
+		}
 		require.Equal(t, []string{"snapshot-replace"}, detail.StreamSemantics)
 		require.Equal(t, "detail-payload-shape", detail.CoverageContract)
 	}
@@ -513,13 +528,14 @@ func TestRefreshDomainSourceClocksAuthored(t *testing.T) {
 			// Doorbell-refetched snapshot domains declare exactly the one
 			// signal-only clock their doorbell rides — no projection descriptor
 			// exists: namespaces rides the object clock, object-events the
-			// event clock, cluster-overview the metric clock (its polls stay
+			// event clock, and namespace-metrics/cluster-overview the metric clock
+			// (the overview's polls stay
 			// on — metric doorbells only ring on successful collections).
 			expected := []string{"object"}
 			switch entry.Domain {
 			case "object-events":
 				expected = []string{"event"}
-			case "cluster-overview":
+			case "namespace-metrics", "cluster-overview":
 				expected = []string{"metric"}
 			case "cluster-attention":
 				expected = []string{"attention"}

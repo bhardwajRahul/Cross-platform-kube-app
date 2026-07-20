@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -75,12 +76,12 @@ func (errorQueue) Next(ctx context.Context) (*refresh.ManualRefreshJob, error) {
 	return nil, ctx.Err()
 }
 
-type fakeMetricsController struct {
-	activeValues []bool
+type fakeClusterMetricsController struct {
+	clusterIDs [][]string
 }
 
-func (f *fakeMetricsController) SetMetricsActive(active bool) {
-	f.activeValues = append(f.activeValues, active)
+func (f *fakeClusterMetricsController) SetMetricsActiveForClusters(clusterIDs []string) {
+	f.clusterIDs = append(f.clusterIDs, append([]string(nil), clusterIDs...))
 }
 
 func TestSnapshotEndpoint(t *testing.T) {
@@ -419,8 +420,8 @@ func TestTelemetrySummaryWithoutRecorderReturnsEmptyArrays(t *testing.T) {
 	}
 }
 
-func TestMetricsActiveEndpoint(t *testing.T) {
-	controller := &fakeMetricsController{}
+func TestMetricsActiveEndpointRequiresClusterIDs(t *testing.T) {
+	controller := &fakeClusterMetricsController{}
 	server := api.NewServer(snapshotService(), &fakeQueue{}, nil, controller)
 	mux := http.NewServeMux()
 	server.Register(mux)
@@ -430,11 +431,33 @@ func TestMetricsActiveEndpoint(t *testing.T) {
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400 got %d", rr.Code)
+	}
+	if len(controller.clusterIDs) != 0 {
+		t.Fatalf("expected legacy metrics demand to be rejected")
+	}
+}
+
+func TestMetricsActiveEndpointRoutesClusterScopedDemand(t *testing.T) {
+	controller := &fakeClusterMetricsController{}
+	server := api.NewServer(snapshotService(), &fakeQueue{}, nil, controller)
+	mux := http.NewServeMux()
+	server.Register(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/metrics/active", strings.NewReader(`{"clusterIds":["cluster-b","cluster-a"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("expected status 204 got %d", rr.Code)
 	}
-	if len(controller.activeValues) != 1 || controller.activeValues[0] != true {
-		t.Fatalf("expected metrics controller to receive active=true")
+	if len(controller.clusterIDs) != 1 {
+		t.Fatalf("expected one cluster-scoped demand update, got %#v", controller.clusterIDs)
+	}
+	if !slices.Equal(controller.clusterIDs[0], []string{"cluster-b", "cluster-a"}) {
+		t.Fatalf("unexpected cluster demand: %#v", controller.clusterIDs[0])
 	}
 }
 

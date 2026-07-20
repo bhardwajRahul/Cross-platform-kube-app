@@ -60,7 +60,11 @@ type RefreshOrchestratorInternals = {
   suspendedDomains: Map<RefreshDomain, boolean>;
   lastNotifiedErrors: Map<string, unknown>;
   contextVersion: number;
-  metricsDemandActive: boolean;
+  metricsDemandClusterKey: string;
+  metricsDemandRequestKey: string | null;
+  metricsDemandRetryKey: string | null;
+  metricsDemandRetryTimer: ReturnType<typeof setTimeout> | null;
+  metricsDemandRetryDelayMs: number;
   context: RefreshContext;
   getRuntimeForScope: (domain: RefreshDomain, scope: string) => TestClusterRefreshRuntime;
   notifyRefreshError: (domain: RefreshDomain, scope: string | undefined, message: string) => void;
@@ -213,7 +217,14 @@ describe('refreshOrchestrator', () => {
     orchestratorInternals.suspendedDomains?.clear?.();
     orchestratorInternals.lastNotifiedErrors?.clear?.();
     orchestratorInternals.contextVersion = 0;
-    orchestratorInternals.metricsDemandActive = false;
+    orchestratorInternals.metricsDemandClusterKey = '';
+    orchestratorInternals.metricsDemandRequestKey = null;
+    orchestratorInternals.metricsDemandRetryKey = null;
+    if (orchestratorInternals.metricsDemandRetryTimer !== null) {
+      clearTimeout(orchestratorInternals.metricsDemandRetryTimer);
+    }
+    orchestratorInternals.metricsDemandRetryTimer = null;
+    orchestratorInternals.metricsDemandRetryDelayMs = 1_000;
     orchestratorInternals.context = {
       currentView: 'namespace',
       objectPanel: { isOpen: false },
@@ -1483,7 +1494,7 @@ describe('refreshOrchestrator', () => {
     expect(getRefreshState().pendingRequests).toBe(0);
   });
 
-  it('updates metrics demand when metrics domains toggle', () => {
+  it('updates metrics demand when metrics domains toggle', async () => {
     refreshOrchestrator.registerDomain({
       domain: 'cluster-overview',
       refresherName: SYSTEM_REFRESHERS.clusterOverview,
@@ -1491,15 +1502,44 @@ describe('refreshOrchestrator', () => {
     });
 
     // Metrics demand should follow the visibility of metrics-driven domains.
-    refreshOrchestrator.setScopedDomainEnabled('cluster-overview', 'cluster-a', true);
-    expect(clientMocks.setMetricsActiveMock).toHaveBeenCalledWith(true);
+    const scope = buildClusterScope('cluster-a', '');
+    refreshOrchestrator.setScopedDomainEnabled('cluster-overview', scope, true);
+    expect(clientMocks.setMetricsActiveMock).toHaveBeenCalledWith(['cluster-a']);
+    await Promise.resolve();
 
-    refreshOrchestrator.setScopedDomainEnabled('cluster-overview', 'cluster-a', false);
-    expect(clientMocks.setMetricsActiveMock).toHaveBeenLastCalledWith(false);
+    refreshOrchestrator.setScopedDomainEnabled('cluster-overview', scope, false);
+    await Promise.resolve();
+    expect(clientMocks.setMetricsActiveMock).toHaveBeenLastCalledWith([]);
     expect(clientMocks.setMetricsActiveMock).toHaveBeenCalledTimes(2);
   });
 
-  it('treats the namespace aggregate lease as metrics demand', () => {
+  it('routes metrics demand to the clusters that own active metric-bearing scopes', async () => {
+    refreshOrchestrator.registerDomain({
+      domain: 'cluster-overview',
+      refresherName: SYSTEM_REFRESHERS.clusterOverview,
+      category: 'system',
+    });
+
+    const scopeA = buildClusterScope('cluster-a', '');
+    const scopeB = buildClusterScope('cluster-b', '');
+    refreshOrchestrator.setScopedDomainEnabled('cluster-overview', scopeA, true);
+    await Promise.resolve();
+    refreshOrchestrator.setScopedDomainEnabled('cluster-overview', scopeB, true);
+    await Promise.resolve();
+    expect(clientMocks.setMetricsActiveMock).toHaveBeenLastCalledWith(['cluster-a', 'cluster-b']);
+
+    refreshOrchestrator.setScopedDomainEnabled('cluster-overview', scopeA, false);
+    await Promise.resolve();
+    expect(clientMocks.setMetricsActiveMock).toHaveBeenLastCalledWith(['cluster-b']);
+
+    refreshOrchestrator.setScopedDomainEnabled('cluster-overview', scopeA, true);
+    await Promise.resolve();
+    refreshOrchestrator.updateContext({ allConnectedClusterIds: ['cluster-b'] });
+    await Promise.resolve();
+    expect(clientMocks.setMetricsActiveMock).toHaveBeenLastCalledWith(['cluster-b']);
+  });
+
+  it('does not treat a retained namespace workspace as metrics demand', () => {
     refreshOrchestrator.registerDomain({
       domain: 'namespaces',
       refresherName: SYSTEM_REFRESHERS.namespaces,
@@ -1507,10 +1547,50 @@ describe('refreshOrchestrator', () => {
     });
 
     refreshOrchestrator.setScopedDomainEnabled('namespaces', 'cluster-a|', true);
-    expect(clientMocks.setMetricsActiveMock).toHaveBeenCalledWith(true);
+    expect(clientMocks.setMetricsActiveMock).not.toHaveBeenCalled();
 
     refreshOrchestrator.setScopedDomainEnabled('namespaces', 'cluster-a|', false);
-    expect(clientMocks.setMetricsActiveMock).toHaveBeenLastCalledWith(false);
+    expect(clientMocks.setMetricsActiveMock).not.toHaveBeenCalled();
+  });
+
+  it('treats a visible namespace-metrics lease as metrics demand', async () => {
+    refreshOrchestrator.registerDomain({
+      domain: 'namespace-metrics',
+      refresherName: SYSTEM_REFRESHERS.namespaceMetrics,
+      category: 'system',
+    });
+
+    refreshOrchestrator.setScopedDomainEnabled('namespace-metrics', 'cluster-a|', true);
+    expect(clientMocks.setMetricsActiveMock).toHaveBeenLastCalledWith(['cluster-a']);
+    await Promise.resolve();
+
+    refreshOrchestrator.setScopedDomainEnabled('namespace-metrics', 'cluster-a|', false);
+    await Promise.resolve();
+    expect(clientMocks.setMetricsActiveMock).toHaveBeenLastCalledWith([]);
+  });
+
+  it('retries unchanged metrics demand after a transient request failure', async () => {
+    vi.useFakeTimers();
+    try {
+      clientMocks.setMetricsActiveMock
+        .mockRejectedValueOnce(new Error('refresh API unavailable'))
+        .mockResolvedValue(undefined);
+      refreshOrchestrator.registerDomain({
+        domain: 'namespace-metrics',
+        refresherName: SYSTEM_REFRESHERS.namespaceMetrics,
+        category: 'system',
+      });
+
+      refreshOrchestrator.setScopedDomainEnabled('namespace-metrics', 'cluster-a|', true);
+      await Promise.resolve();
+      expect(clientMocks.setMetricsActiveMock).toHaveBeenCalledTimes(1);
+
+      await vi.runOnlyPendingTimersAsync();
+      expect(clientMocks.setMetricsActiveMock).toHaveBeenCalledTimes(2);
+      expect(clientMocks.setMetricsActiveMock).toHaveBeenLastCalledWith(['cluster-a']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps single-scope system domains isolated by cluster runtime', () => {
@@ -1550,6 +1630,28 @@ describe('refreshOrchestrator', () => {
       orchestratorInternals.coordinatorRuntime.scopedEnabledState.get('cluster-overview')
     ).toBeUndefined();
     expect(getScopedDomainState('cluster-overview', scopeA).status).toBe('ready');
+  });
+
+  it('does not attach the shared scheduler to a consumer-scheduled domain', () => {
+    refreshOrchestrator.registerDomain({
+      domain: 'object-details',
+      refresherName: SYSTEM_REFRESHERS.objectDetails,
+      category: 'system',
+      scheduled: false,
+    });
+
+    refreshOrchestrator.setScopedDomainEnabled(
+      'object-details',
+      buildClusterScope('cluster-a', 'default:/v1:Pod:pod-a'),
+      true
+    );
+
+    expect(refreshManagerMocks.registerMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: SYSTEM_REFRESHERS.objectDetails })
+    );
+    expect(refreshManagerMocks.enableMock).not.toHaveBeenCalledWith(
+      SYSTEM_REFRESHERS.objectDetails
+    );
   });
 
   it('keeps one active scope by default within a cluster runtime', () => {
@@ -1939,12 +2041,12 @@ describe('refreshOrchestrator', () => {
     });
 
     refreshOrchestrator.setScopedDomainEnabled('pods', scope, true);
-    await refreshOrchestrator.fetchScopedDomain('pods', scope, { isManual: false });
+    await refreshOrchestrator.fetchScopedDomain('pods', scope, { isManual: true });
 
     expect(resourceStreamMocks.start).not.toHaveBeenCalled();
     expect(clientMocks.fetchSnapshotMock).toHaveBeenCalledWith(
       'pods',
-      expect.objectContaining({ scope })
+      expect.objectContaining({ scope, manual: false })
     );
     expect(getScopedDomainState('pods', scope).data?.rows).toHaveLength(1);
   });

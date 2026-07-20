@@ -26,7 +26,7 @@ import type {
 } from './types';
 
 const isReasonAllowedWhilePaused = (reason: DataRequestReason): boolean => {
-  return reason === 'user';
+  return reason === 'foreground' || reason === 'user';
 };
 
 export const isDataAccessBlocked = (
@@ -215,7 +215,9 @@ export const requestContextRefresh = async ({
     label: label ?? 'refresh-context',
     scope,
     read: async () => {
-      await refreshOrchestrator.triggerManualRefreshForContext(context);
+      if (reason === 'user') {
+        await refreshOrchestrator.triggerManualRefreshForContext(context);
+      }
     },
   });
 

@@ -25,6 +25,7 @@ var (
 	errJobIDNotSpecified  = errors.New("job id not specified")
 	errClusterScopeNeeded = errors.New("cluster scope is required")
 	errSingleClusterScope = errors.New("single cluster scope is required")
+	errClusterIDsNeeded   = errors.New("clusterIds is required")
 )
 
 // Server exposes HTTP endpoints for snapshot retrieval and manual refresh.
@@ -32,11 +33,7 @@ type Server struct {
 	snapshots refresh.SnapshotService
 	queue     refresh.ManualQueue
 	telemetry telemetry.Summarizer
-	metrics   metricsController
-}
-
-type metricsController interface {
-	SetMetricsActive(active bool)
+	metrics   refresh.ClusterMetricsDemandController
 }
 
 // NewServer constructs an API server instance.
@@ -44,7 +41,7 @@ func NewServer(
 	snapshots refresh.SnapshotService,
 	queue refresh.ManualQueue,
 	recorder telemetry.Summarizer,
-	metrics metricsController,
+	metrics refresh.ClusterMetricsDemandController,
 ) *Server {
 	return &Server{
 		snapshots: snapshots,
@@ -238,7 +235,7 @@ func (s *Server) handleMetricsActive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Active bool `json:"active"`
+		ClusterIDs *[]string `json:"clusterIds"`
 	}
 	if r.Body != nil {
 		defer r.Body.Close()
@@ -251,8 +248,12 @@ func (s *Server) handleMetricsActive(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if body.ClusterIDs == nil {
+		writeError(w, http.StatusBadRequest, errClusterIDsNeeded, correlationID)
+		return
+	}
 	if s.metrics != nil {
-		s.metrics.SetMetricsActive(body.Active)
+		s.metrics.SetMetricsActiveForClusters(*body.ClusterIDs)
 	}
 
 	setCorrelationID(w, correlationID)

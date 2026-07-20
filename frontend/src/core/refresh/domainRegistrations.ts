@@ -9,13 +9,18 @@ import type { RefreshDomain } from './types';
 type ResourceStreamDomainName = Parameters<typeof resourceStreamManager.start>[0];
 
 export function registerDefaultRefreshDomains(registrar: RefreshDomainRegistrar): void {
-  const registerRefreshDomain = (domain: RefreshDomain, streaming?: StreamingRegistration) => {
+  const registerRefreshDomain = (
+    domain: RefreshDomain,
+    streaming?: StreamingRegistration,
+    scheduled = true
+  ) => {
     const descriptor = getRefreshDomainDescriptor(domain);
     registrar.registerDomain({
       domain,
       refresherName: descriptor.refresherName,
       category: descriptor.category,
       ...(streaming ? { streaming } : {}),
+      ...(scheduled ? {} : { scheduled: false }),
     });
   };
 
@@ -62,6 +67,10 @@ export function registerDefaultRefreshDomains(registrar: RefreshDomainRegistrar)
   // (namespace object changes + workload-presence flips); its 2s timing is now
   // only the stream-down fallback.
   doorbellStreamDomain('namespaces');
+  // Namespace utilization has an independent metric clock and payload. Only
+  // visible namespace surfaces lease it, so open background tabs do not turn
+  // the shared Kubernetes metrics poller on.
+  doorbellStreamDomain('namespace-metrics');
   // The Object Panel Events tab refetches on the backend's per-object events
   // doorbell; its 10s timing is now only the stream-down fallback.
   doorbellStreamDomain('object-events');
@@ -70,9 +79,11 @@ export function registerDefaultRefreshDomains(registrar: RefreshDomainRegistrar)
   // (the doorbell may never ring on metrics-less clusters).
   doorbellStreamDomain('cluster-overview');
   doorbellStreamDomain('cluster-attention');
+  registerSnapshotDomains('object-maintenance');
+  // Each open panel owns a distinct 2s/5s object-details refresher; registering
+  // the shared 10s refresher as well would schedule every scope twice.
+  registerRefreshDomain('object-details', undefined, false);
   registerSnapshotDomains(
-    'object-maintenance',
-    'object-details',
     'object-map',
     'object-yaml',
     'object-helm-manifest',

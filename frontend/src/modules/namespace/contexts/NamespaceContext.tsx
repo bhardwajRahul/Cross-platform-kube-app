@@ -45,7 +45,8 @@ import {
 import { buildClusterScope } from '@/core/refresh/clusterScope';
 import { useAutoRefreshLoadingState } from '@/core/refresh/hooks/useAutoRefreshLoadingState';
 import { useStreamSignalRefetch } from '@/core/refresh/hooks/useStreamSignalRefetch';
-import type { NamespaceSignalState, NamespaceSummary } from '@/core/refresh/types';
+import type { NamespaceSignalState } from '@/core/refresh/types';
+import { joinNamespaceMetrics, type NamespaceSummaryWithMetrics } from './namespaceMetrics';
 
 export interface NamespaceListItem {
   name: string;
@@ -75,7 +76,7 @@ export interface NamespaceListItem {
 
 interface NamespaceContextType {
   namespaces: NamespaceListItem[];
-  namespaceSummaries: NamespaceSummary[];
+  namespaceSummaries: NamespaceSummaryWithMetrics[];
   namespaceMetricsState: NamespaceSignalState;
   namespaceError: string | null;
   selectedNamespace?: string;
@@ -109,6 +110,8 @@ export const useNamespace = () => {
 // signal-refetch wiring, then read the same scoped store entries through this
 // module so data access and doorbell freshness stay one contract.
 export const useNamespaceStatesByScope = () => useRefreshScopedDomainStates('namespaces');
+export const useNamespaceMetricStatesByScope = () =>
+  useRefreshScopedDomainStates('namespace-metrics');
 
 interface NamespaceProviderProps {
   children: ReactNode;
@@ -156,7 +159,8 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
   }, [refreshAvailableClusterIds]);
 
   const namespaceDomain = useRefreshScopedDomain('namespaces', namespacesScope);
-  const namespaceMetricsBanner = useMetricsBannerInfo(namespaceDomain.data?.metrics ?? null);
+  const namespaceMetricsDomain = useRefreshScopedDomain('namespace-metrics', namespacesScope);
+  const namespaceMetricsBanner = useMetricsBannerInfo(namespaceMetricsDomain.data?.metrics ?? null);
   // Doorbell refetch: the namespaces stream signal only bumps the scoped
   // sourceVersion — the snapshot itself must be refetched. The shared hook
   // covers every leased cluster scope so background cluster tabs stay fresh.
@@ -165,6 +169,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
     [namespaceScopes, namespacesScope]
   );
   useStreamSignalRefetch('namespaces', namespaceSignalScopes);
+  useStreamSignalRefetch('namespace-metrics', namespacesScope ? [namespacesScope] : []);
   const { suppressPassiveLoading } = useAutoRefreshLoadingState();
   // Track namespace selection per cluster tab to avoid cross-tab selection bleed.
   const [namespaceSelections, setNamespaceSelections] = useState<
@@ -174,10 +179,12 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
   const selectedNamespace = namespaceSelections[clusterKey];
   const selectedNamespaceClusterId =
     selectedNamespace && selectedClusterId ? selectedClusterId : undefined;
-  const lastErrorRef = useRef<string | null>(null);
+  const lastErrorByScopeRef = useRef<Map<string, string>>(new Map());
   const namespaceScopesRef = useRef<string[]>([]);
   const lastEvaluatedNamespaceRef = useRef<string | null>(null);
   const requestedNamespaceScopesRef = useRef<Set<string>>(new Set());
+  const previousForegroundNamespacesScopeRef = useRef(namespacesScope);
+  const namespaceMetricsScopeRef = useRef('');
 
   // Keep a ref to the latest namespace selections map for stable callback access.
   const namespaceSelectionsRef = useRef(namespaceSelections);
@@ -224,8 +231,16 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
     if (!namespaceDomain.data || !activeClusterId || !activeClusterRefreshAvailable) {
       return [];
     }
-    return (namespaceDomain.data.namespaces ?? []).filter((ns) => ns.clusterId === activeClusterId);
-  }, [activeClusterId, activeClusterRefreshAvailable, namespaceDomain.data]);
+    const objectRows = (namespaceDomain.data.namespaces ?? []).filter(
+      (ns) => ns.clusterId === activeClusterId
+    );
+    return joinNamespaceMetrics(objectRows, namespaceMetricsDomain.data?.namespaces);
+  }, [
+    activeClusterId,
+    activeClusterRefreshAvailable,
+    namespaceDomain.data,
+    namespaceMetricsDomain.data?.namespaces,
+  ]);
 
   useEffect(() => {
     if (!namespaceDomain.data) {
@@ -263,14 +278,14 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
             : 'Unavailable';
       const cpuUsageMilli = ns.cpuUsageMilli ?? 0;
       const memoryUsageBytes = ns.memoryUsageBytes ?? 0;
-      const utilizationState = namespaceDomain.data?.metricsState ?? 'unavailable';
+      const utilizationState = namespaceMetricsDomain.data?.metricsState ?? 'unavailable';
       const usageDisplay = namespaceAggregateUsageDisplay(cpuUsageMilli, memoryUsageBytes);
       const utilizationSummary =
         utilizationState === 'available'
           ? `${usageDisplay.cpu} CPU, ${usageDisplay.memory} memory${namespaceMetricsBanner ? ` (${namespaceMetricsBanner.message})` : ''}`
           : utilizationState === 'loading'
             ? (namespaceMetricsBanner?.message ?? 'Collecting')
-            : (namespaceDomain.data?.metrics?.lastError?.trim() ?? 'Unavailable');
+            : (namespaceMetricsDomain.data?.metrics?.lastError?.trim() ?? 'Unavailable');
       const quotaCount = ns.quotaCount ?? 0;
       const quotaHighestUsedPercentage = ns.quotaHighestUsedPercentage ?? 0;
       const quotaPressure = ns.quotaPressure ?? '';
@@ -316,6 +331,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
     allNamespaceItem,
     namespaceDomain.status,
     namespaceDomain.data,
+    namespaceMetricsDomain.data,
     namespaceMetricsBanner,
     scopedNamespaces,
     updateNamespaces,
@@ -400,6 +416,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
         refreshOrchestrator.resetDomain('namespaces');
         updateNamespaces([]);
         lastEvaluatedNamespaceRef.current = null;
+        lastErrorByScopeRef.current.clear();
         requestedNamespaceScopesRef.current.clear();
       }
       return;
@@ -415,6 +432,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
     requestedNamespaceScopesRef.current.forEach((scope) => {
       if (!activeScopeSet.has(scope)) {
         setRefreshDomainEnabled({ domain: 'namespaces', scope, enabled: false });
+        lastErrorByScopeRef.current.delete(scope);
         requestedNamespaceScopesRef.current.delete(scope);
       }
     });
@@ -432,6 +450,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
       refreshOrchestrator.resetDomain('namespaces');
       updateNamespaces([]);
       lastEvaluatedNamespaceRef.current = null;
+      lastErrorByScopeRef.current.clear();
       requestedNamespaceScopesRef.current.clear();
       return;
     }
@@ -449,6 +468,52 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
     });
   }, [clearSelection, namespaceScopes, selectedKubeconfig, updateNamespaces]);
 
+  useEffect(() => {
+    const previousScope = previousForegroundNamespacesScopeRef.current;
+    previousForegroundNamespacesScopeRef.current = namespacesScope;
+    if (!previousScope || !namespacesScope || previousScope === namespacesScope) {
+      return;
+    }
+
+    // Every open cluster keeps its namespace lease and retained snapshot. A
+    // foreground switch repaints that snapshot first, then refreshes only the
+    // newly visible cluster instead of fanning out across every open tab.
+    void requestRefreshDomain({
+      domain: 'namespaces',
+      scope: namespacesScope,
+      reason: 'foreground',
+    });
+  }, [namespacesScope]);
+
+  useEffect(() => {
+    const previousScope = namespaceMetricsScopeRef.current;
+    if (previousScope && previousScope !== namespacesScope) {
+      setRefreshDomainEnabled({
+        domain: 'namespace-metrics',
+        scope: previousScope,
+        enabled: false,
+        preserveState: true,
+      });
+    }
+
+    namespaceMetricsScopeRef.current = namespacesScope;
+    if (!namespacesScope) {
+      return;
+    }
+
+    setRefreshDomainEnabled({
+      domain: 'namespace-metrics',
+      scope: namespacesScope,
+      enabled: true,
+      preserveState: true,
+    });
+    void requestRefreshDomain({
+      domain: 'namespace-metrics',
+      scope: namespacesScope,
+      reason: previousScope ? 'foreground' : 'startup',
+    });
+  }, [namespacesScope]);
+
   // Unmount-only teardown: release whatever scopes are currently held. Kept
   // separate from the reconciliation effect above so re-runs never release
   // still-active scopes.
@@ -461,6 +526,14 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
         preserveState: true,
       });
     });
+    if (namespaceMetricsScopeRef.current) {
+      setRefreshDomainEnabled({
+        domain: 'namespace-metrics',
+        scope: namespaceMetricsScopeRef.current,
+        enabled: false,
+        preserveState: true,
+      });
+    }
   });
   useEffect(() => releaseNamespaceScopes(), []);
 
@@ -553,6 +626,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
       refreshOrchestrator.resetDomain('namespaces');
       clearSelection();
       updateNamespaces([]);
+      lastErrorByScopeRef.current.clear();
     };
 
     const handleKubeconfigChanging = () => {
@@ -563,6 +637,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
       refreshOrchestrator.resetDomain('namespaces');
       clearSelection();
       updateNamespaces([]);
+      lastErrorByScopeRef.current.clear();
     };
 
     const handleKubeconfigChanged = () => {
@@ -577,13 +652,9 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
       });
     };
 
-    // A namespace-scope rebuild finished (docs/plans/namespace-scope.md): the
-    // namespaces domain now serves the new scope. Derive the scope from the
-    // EVENT's clusterId — the local scope memo can be empty or stale at this
-    // moment (the cluster cycled through teardown) — and re-ask on a short
-    // schedule so convergence never depends on one fetch racing the rebuilt
-    // subsystem's HTTP wiring.
-    const scopeRefetchTimers: number[] = [];
+    // A namespace-scope rebuild finished: the aggregate route has already been
+    // updated before this event is emitted. Derive the scope from the event's
+    // clusterId and reconcile once without creating a ManualQueue job.
     const handleClusterScopeChanged = (payload: { clusterId: string }) => {
       const scope = payload.clusterId ? buildClusterScope(payload.clusterId, '') : namespacesScope;
       if (!scope) {
@@ -591,13 +662,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
       }
       setRefreshDomainEnabled({ domain: 'namespaces', scope, enabled: true });
       requestedNamespaceScopesRef.current.add(scope);
-      [0, 2000, 6000].forEach((delay) => {
-        scopeRefetchTimers.push(
-          window.setTimeout(() => {
-            void requestRefreshDomain({ domain: 'namespaces', scope, reason: 'user' });
-          }, delay)
-        );
-      });
+      void requestRefreshDomain({ domain: 'namespaces', scope, reason: 'foreground' });
     };
 
     const unsubReset = eventBus.on('view:reset', handleResetViews);
@@ -610,9 +675,6 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
       unsubChanging();
       unsubChanged();
       unsubScopeChanged();
-      scopeRefetchTimers.forEach((timer) => {
-        window.clearTimeout(timer);
-      });
     };
   }, [clearSelection, namespaceScopes, namespacesScope, updateNamespaces]);
 
@@ -621,15 +683,18 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
   const namespacesPermissionDenied = namespaceDomain.permissionDenied === true;
 
   useEffect(() => {
+    if (!namespacesScope) {
+      return;
+    }
     if (namespaceDomain.status === 'error' && namespaceDomain.error) {
       // Permission denial is a designed, rendered state (the sidebar shows the
       // message) — not an error to toast.
       if (namespacesPermissionDenied) {
-        lastErrorRef.current = namespaceDomain.error;
+        lastErrorByScopeRef.current.set(namespacesScope, namespaceDomain.error);
         return;
       }
-      if (namespaceDomain.error !== lastErrorRef.current) {
-        lastErrorRef.current = namespaceDomain.error;
+      if (namespaceDomain.error !== lastErrorByScopeRef.current.get(namespacesScope)) {
+        lastErrorByScopeRef.current.set(namespacesScope, namespaceDomain.error);
         errorHandler.handle(
           new Error(namespaceDomain.error),
           {
@@ -640,12 +705,13 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
         );
       }
     } else {
-      lastErrorRef.current = null;
+      lastErrorByScopeRef.current.delete(namespacesScope);
     }
   }, [
     namespaceDomain.status,
     namespaceDomain.error,
     namespacesPermissionDenied,
+    namespacesScope,
     selectedKubeconfig,
   ]);
 
@@ -653,7 +719,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
     () => ({
       namespaces,
       namespaceSummaries: scopedNamespaces,
-      namespaceMetricsState: namespaceDomain.data?.metricsState ?? 'unavailable',
+      namespaceMetricsState: namespaceMetricsDomain.data?.metricsState ?? 'unavailable',
       namespaceError: namespaceDomain.error ?? null,
       selectedNamespace,
       selectedNamespaceClusterId,
@@ -669,7 +735,7 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
     [
       namespaces,
       scopedNamespaces,
-      namespaceDomain.data?.metricsState,
+      namespaceMetricsDomain.data?.metricsState,
       namespaceDomain.error,
       selectedNamespace,
       selectedNamespaceClusterId,

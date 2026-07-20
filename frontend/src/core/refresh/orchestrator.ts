@@ -69,6 +69,8 @@ type DomainFetchOptions = {
 // Set autoStart: true on individual domain registrations when needed.
 const DEFAULT_AUTO_START = false;
 const noopStreamingCleanup = () => undefined;
+const METRICS_DEMAND_RETRY_INITIAL_MS = 1_000;
+const METRICS_DEMAND_RETRY_MAX_MS = 30_000;
 
 const logInfo = (message: string, cluster?: AppLogsClusterMeta): void => {
   logAppLogsInfo(message, APP_LOG_SOURCES.RefreshOrchestrator, cluster);
@@ -90,7 +92,11 @@ class RefreshOrchestrator {
   private pendingClusterReadiness = new Map<string, Set<string>>();
 
   private requestCounter = 0;
-  private metricsDemandActive = false;
+  private metricsDemandClusterKey = '';
+  private metricsDemandRequestKey: string | null = null;
+  private metricsDemandRetryKey: string | null = null;
+  private metricsDemandRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private metricsDemandRetryDelayMs = METRICS_DEMAND_RETRY_INITIAL_MS;
 
   private suspendedDomains = new Map<RefreshDomain, boolean>();
   private contextVersion = 0;
@@ -995,6 +1001,7 @@ class RefreshOrchestrator {
       // Let cluster-keyed caches outside the refresh store die with the runtime.
       eventBus.emit('refresh:cluster-pruned', { clusterId });
     });
+    this.updateMetricsDemand();
   }
 
   // resetScopedStatesForRemovedClusters clears the global scoped-domain state of every scope
@@ -1056,7 +1063,10 @@ class RefreshOrchestrator {
   }
 
   private shouldAllowRefresher(config: DomainRegistration<RefreshDomain>): boolean {
-    return !config.streaming || config.streaming.pauseRefresherWhenStreaming === true;
+    return (
+      config.scheduled !== false &&
+      (!config.streaming || config.streaming.pauseRefresherWhenStreaming === true)
+    );
   }
 
   async fetchScopedDomain<K extends RefreshDomain>(
@@ -1225,6 +1235,7 @@ class RefreshOrchestrator {
         scope: normalizedScope,
         signal: controller.signal,
         ifNoneMatch: previousState.sourceVersion ?? previousState.etag,
+        manual: Boolean(options.isManual && !isResourceStreamDomain(domain)),
       });
 
       if (controller.signal.aborted) {
@@ -1364,37 +1375,81 @@ class RefreshOrchestrator {
     }
   }
 
-  private isMetricsDemandActive(): boolean {
-    // The metric-bearing domains join live usage at serve, so any active lease
-    // on them (a table or object panel) is metrics demand for the backend poller.
-    if (this.hasEnabledScopedSources('cluster-overview')) {
-      return true;
-    }
-    if (this.hasEnabledScopedSources('namespaces')) {
-      return true;
-    }
-    if (this.hasEnabledScopedSources('nodes')) {
-      return true;
-    }
-    if (this.hasEnabledScopedSources('pods')) {
-      return true;
-    }
-    if (this.hasEnabledScopedSources('namespace-workloads')) {
-      return true;
-    }
-    return false;
+  private metricsDemandClusterIds(): string[] {
+    const metricDomains: readonly RefreshDomain[] = [
+      'cluster-overview',
+      'nodes',
+      'pods',
+      'namespace-workloads',
+      'namespace-metrics',
+    ];
+    const demanded: string[] = [];
+    this.clusterRuntimes.forEach((runtime, clusterId) => {
+      if (metricDomains.some((domain) => runtime.hasEnabledScopedSources(domain))) {
+        demanded.push(clusterId);
+      }
+    });
+    return demanded.sort();
   }
 
   private updateMetricsDemand(): void {
-    const active = this.isMetricsDemandActive();
-    if (active === this.metricsDemandActive) {
+    const clusterIds = this.metricsDemandClusterIds();
+    const clusterKey = clusterIds.join('\0');
+    if (clusterKey === this.metricsDemandClusterKey) {
+      this.clearMetricsDemandRetry();
       return;
     }
-    this.metricsDemandActive = active;
-    void setMetricsActive(active).catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      logWarning(`[refresh] metrics demand update failed: ${message}`);
-    });
+    if (this.metricsDemandRequestKey !== null) {
+      return;
+    }
+    if (this.metricsDemandRetryTimer !== null) {
+      if (this.metricsDemandRetryKey === clusterKey) {
+        return;
+      }
+      this.clearMetricsDemandRetry();
+    }
+
+    this.metricsDemandRequestKey = clusterKey;
+    void setMetricsActive(clusterIds).then(
+      () => {
+        this.metricsDemandRequestKey = null;
+        this.metricsDemandClusterKey = clusterKey;
+        this.metricsDemandRetryDelayMs = METRICS_DEMAND_RETRY_INITIAL_MS;
+        this.updateMetricsDemand();
+      },
+      (error) => {
+        this.metricsDemandRequestKey = null;
+        const message = error instanceof Error ? error.message : String(error);
+        logWarning(`[refresh] metrics demand update failed: ${message}`);
+
+        const currentKey = this.metricsDemandClusterIds().join('\0');
+        if (currentKey !== clusterKey) {
+          this.metricsDemandRetryDelayMs = METRICS_DEMAND_RETRY_INITIAL_MS;
+          this.updateMetricsDemand();
+          return;
+        }
+
+        const delay = this.metricsDemandRetryDelayMs;
+        this.metricsDemandRetryDelayMs = Math.min(
+          this.metricsDemandRetryDelayMs * 2,
+          METRICS_DEMAND_RETRY_MAX_MS
+        );
+        this.metricsDemandRetryKey = clusterKey;
+        this.metricsDemandRetryTimer = setTimeout(() => {
+          this.metricsDemandRetryTimer = null;
+          this.metricsDemandRetryKey = null;
+          this.updateMetricsDemand();
+        }, delay);
+      }
+    );
+  }
+
+  private clearMetricsDemandRetry(): void {
+    if (this.metricsDemandRetryTimer !== null) {
+      clearTimeout(this.metricsDemandRetryTimer);
+      this.metricsDemandRetryTimer = null;
+    }
+    this.metricsDemandRetryKey = null;
   }
 
   private isScopedDomainEnabledInternal(domain: RefreshDomain, scope: string): boolean {
