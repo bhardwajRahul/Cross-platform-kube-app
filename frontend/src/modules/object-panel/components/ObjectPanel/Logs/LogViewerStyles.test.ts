@@ -1,16 +1,23 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { escapeRegExp } from './logSearch';
 
 const styles = readFileSync(
   resolve(process.cwd(), 'src/modules/object-panel/components/ObjectPanel/Logs/LogViewer.css'),
   'utf8'
 );
 
-const ruleBody = (selector: string): string | undefined =>
-  styles.match(new RegExp(`${selector.replace(/\./g, '\\.')}\\s*\\{([^}]*)\\}`))?.[1];
+const ruleBody = (selector: string, stylesheet = styles): string | undefined =>
+  stylesheet.match(new RegExp(`${escapeRegExp(selector)}\\s*\\{([^}]*)\\}`))?.[1];
 
 describe('LogViewer styles', () => {
+  it('treats regular-expression metacharacters in selectors as literal characters', () => {
+    const selector = String.raw`.logs\viewer[0]`;
+
+    expect(ruleBody(selector, `${selector} { color: red; }`)).toContain('color: red;');
+  });
+
   it('presents the resume-scrolling overlay as a neutral control', () => {
     const baseRule = ruleBody('.logs-viewer-resume-scrolling');
     const hoverRule = ruleBody('.logs-viewer-resume-scrolling:hover');
