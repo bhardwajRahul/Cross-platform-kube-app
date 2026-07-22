@@ -9,6 +9,7 @@
  */
 
 import * as fs from 'node:fs';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { compareUtf16Strings } from '@/shared/utils/sort';
@@ -75,8 +76,8 @@ function walkSourceFiles(dir: string): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      // Skip node_modules, dist, and test fixtures.
-      if (entry.name === 'node_modules' || entry.name === 'dist') {
+      // Skip transient/tooling directories and generated dependency/build trees.
+      if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'dist') {
         continue;
       }
       results.push(...walkSourceFiles(full));
@@ -86,6 +87,26 @@ function walkSourceFiles(dir: string): string[] {
   }
   return results;
 }
+
+describe('walkSourceFiles', () => {
+  it('ignores dot-directories while retaining ordinary source directories', () => {
+    const sourceRoot = fs.mkdtempSync(path.join(tmpdir(), 'gridtable-view-registry-'));
+    const dotDirectory = path.join(sourceRoot, '.biome-boundary-probe');
+    const ordinaryDirectory = path.join(sourceRoot, 'ordinary');
+    const transientFile = path.join(dotDirectory, 'adversarial.ts');
+    const ordinaryFile = path.join(ordinaryDirectory, 'view.ts');
+    try {
+      fs.mkdirSync(dotDirectory);
+      fs.mkdirSync(ordinaryDirectory);
+      fs.writeFileSync(transientFile, 'export {};');
+      fs.writeFileSync(ordinaryFile, 'export {};');
+
+      expect(walkSourceFiles(sourceRoot)).toEqual([ordinaryFile]);
+    } finally {
+      fs.rmSync(sourceRoot, { recursive: true, force: true });
+    }
+  });
+});
 
 /**
  * Extract viewId string literals from files that call one of the persistence hooks.
