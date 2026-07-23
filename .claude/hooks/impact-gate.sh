@@ -35,7 +35,8 @@ except Exception:
 
 # Emit a PreToolUse "deny" decision; the reason is surfaced back to the model.
 deny() {
-  printf '%s' "$1" | python3 -c '
+  local reason="$1"
+  printf '%s' "$reason" | python3 -c '
 import sys, json
 print(json.dumps({"hookSpecificOutput": {
   "hookEventName": "PreToolUse",
@@ -46,7 +47,8 @@ print(json.dumps({"hookSpecificOutput": {
 
 # True only for production source we want to gate.
 gated() {
-  case "$1" in
+  local fileglob="$1"
+  case "$fileglob" in
   *_test.go | *.test.ts | *.test.tsx | *.spec.ts | *.spec.tsx) return 1 ;; # TDD tests
   */.claude/* | */docs/*) return 1 ;;
   *.go | *.ts | *.tsx | *.js | *.jsx) return 0 ;;
@@ -55,16 +57,16 @@ gated() {
 }
 
 fresh() {
-  [ -f "$impact" ] || return 1
+  [[ -f "$impact" ]] || return 1
   local mtime
   mtime=$(stat -f %m "$impact" 2>/dev/null || stat -c %Y "$impact" 2>/dev/null) || return 1
-  [ $(($(date +%s) - mtime)) -le "$FRESH_SECONDS" ]
+  [[ $(($(date +%s) - mtime)) -le "$FRESH_SECONDS" ]]
 }
 
 CHECK="Open .claude/impact-analysis.md and add/refresh an entry for THIS change that names every file you will touch and, for each, lists: (1) every consumer/caller affected, (2) dependencies, (3) states/edge cases, (4) downstream & runtime effects — each marked VERIFIED (you read the producer and consumers, or measured it) or ASSUMED. Resolve every ASSUMED item before editing, then retry."
 
 while IFS= read -r f; do
-  [ -n "$f" ] || continue
+  [[ -n "$f" ]] || continue
   gated "$f" || continue
   fresh || deny "Impact gate: no current impact analysis. $CHECK"
   base="$(basename "$f")"
@@ -75,7 +77,7 @@ while IFS= read -r f; do
     # A bare-basename mention is only acceptable when the name is unambiguous —
     # otherwise one analysis would unlock every same-named file repo-wide.
     count="$(git -C "$project_dir" ls-files "*/$base" "$base" 2>/dev/null | wc -l | tr -d ' ')"
-    [ "${count:-0}" -le 1 ] && continue
+    [[ "${count:-0}" -le 1 ]] && continue
     deny "Impact gate: .claude/impact-analysis.md mentions $base, but multiple files share that name; name the full path ($rel) in the entry. $CHECK"
   fi
   deny "Impact gate: .claude/impact-analysis.md does not mention $base. $CHECK"
