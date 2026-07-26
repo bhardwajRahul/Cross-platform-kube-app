@@ -17,8 +17,10 @@ export const CordonIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -35,8 +37,10 @@ export const DrainIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -53,8 +57,10 @@ export const DeleteIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -71,8 +77,10 @@ export const ScaleIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -92,8 +100,10 @@ export const ForceDeleteIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -110,8 +120,10 @@ export const ExpandIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -128,8 +140,10 @@ export const CollapseIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -146,8 +160,10 @@ export const ExpandAllIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -164,8 +180,10 @@ export const CollapseAllIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -182,8 +200,10 @@ export const SortAscIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -200,8 +220,10 @@ export const SortDescIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -218,8 +240,10 @@ export const OpenIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -236,8 +260,10 @@ export const RestartIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -254,8 +280,10 @@ export const RollbackIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -272,8 +300,10 @@ export const NamespaceIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -290,8 +320,10 @@ export const NamespaceOpenIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -308,8 +340,10 @@ export const SettingsIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -326,8 +360,10 @@ export const CollapseSidebarIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -344,8 +380,10 @@ export const ExpandSidebarIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -362,8 +400,10 @@ export const ClusterOverviewIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -380,8 +420,10 @@ export const ClusterResourcesIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -398,8 +440,10 @@ export const CategoryIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -412,8 +456,9 @@ export const CategoryIcon: React.FC<IconProps> = ({
   </svg>
 );
 
-export const CloseIcon: React.FC<IconProps> = ({ width = 24, height = 24 }) => (
+export const CloseIcon: React.FC<IconProps> = ({ width = 24, height = 24, className }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     width={width}
@@ -430,8 +475,10 @@ export const CaseSensitiveIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -450,8 +497,10 @@ export const MetadataIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -468,8 +517,10 @@ export const PortForwardIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -489,8 +540,10 @@ export const ResetFiltersIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -508,8 +561,10 @@ export const CheckIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -527,8 +582,10 @@ export const EditIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -545,8 +602,10 @@ export const InfoIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -563,8 +622,10 @@ export const DiagnosticsIcon: React.FC<IconProps> = ({
   width = 24,
   height = 24,
   fill = 'currentColor',
+  className,
 }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -582,8 +643,9 @@ export const DiagnosticsIcon: React.FC<IconProps> = ({
   </svg>
 );
 
-export const DiffIcon: React.FC<IconProps> = ({ width = 24, height = 24 }) => (
+export const DiffIcon: React.FC<IconProps> = ({ width = 24, height = 24, className }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -600,8 +662,9 @@ export const DiffIcon: React.FC<IconProps> = ({ width = 24, height = 24 }) => (
   </svg>
 );
 
-export const LogsIcon: React.FC<IconProps> = ({ width = 24, height = 24 }) => (
+export const LogsIcon: React.FC<IconProps> = ({ width = 24, height = 24, className }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -618,8 +681,9 @@ export const LogsIcon: React.FC<IconProps> = ({ width = 24, height = 24 }) => (
   </svg>
 );
 
-export const RefreshIcon: React.FC<IconProps> = ({ width = 24, height = 24 }) => (
+export const RefreshIcon: React.FC<IconProps> = ({ width = 24, height = 24, className }) => (
   <svg
+    className={className}
     aria-hidden="true"
     focusable="false"
     xmlns="http://www.w3.org/2000/svg"
@@ -782,8 +846,9 @@ export const StatusDotIcon: React.FC<IconProps & { outlined?: boolean }> = ({
   </svg>
 );
 
-export const StopSquareIcon: React.FC<IconProps> = ({ width = 24, height = 24 }) => (
+export const StopSquareIcon: React.FC<IconProps> = ({ width = 24, height = 24, className }) => (
   <svg
+    className={className}
     viewBox="0 0 16 16"
     fill="currentColor"
     width={width}
