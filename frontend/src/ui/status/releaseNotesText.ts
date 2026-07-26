@@ -30,14 +30,23 @@ export const toPlainReleaseNotes = (markdown: string): string => {
     text = text.replace(/^\s*>\s?/, '');
     // Inline emphasis / code / strikethrough markers.
     text = text.replace(/\*\*|__|~~|`/g, '');
-    return text.replace(/\s+$/, '');
+    return text.trimEnd();
   });
 
   // Collapse runs of blank lines so stripped headings/rules don't leave gaps,
   // then drop leading/trailing blank lines (but keep the first line's indentation
   // so a leading nested bullet stays nested).
-  return transformed
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/^\n+|\n+$/g, '');
+  const collapsed = transformed.join('\n').replace(/\n{3,}/g, '\n\n');
+  // Scan rather than match: `/^\n+|\n+$/` backtracks quadratically on a long
+  // newline run, and only newlines may go — the first line's indentation is
+  // load-bearing, so trimStart() would flatten a leading nested bullet.
+  let start = 0;
+  while (start < collapsed.length && collapsed[start] === '\n') {
+    start += 1;
+  }
+  let end = collapsed.length;
+  while (end > start && collapsed[end - 1] === '\n') {
+    end -= 1;
+  }
+  return collapsed.slice(start, end);
 };

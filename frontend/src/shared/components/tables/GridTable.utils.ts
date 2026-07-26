@@ -121,7 +121,13 @@ export const buildClusterScopedKey = (row: unknown, baseKey: string): string => 
 // Hex-encodes characters outside [a-zA-Z0-9_-] so distinct keys always
 // produce distinct IDs — unlike the old lossy replace-with-underscore approach.
 export const getStableRowId = (rowKey: string): string => {
-  const safe = rowKey.replace(/[^a-zA-Z0-9_-]/g, (ch) => `_x${ch.charCodeAt(0).toString(16)}_`);
+  // The pattern has no `u` flag, so each match is a single UTF-16 code unit and
+  // codePointAt(0) yields the same number charCodeAt(0) did — lone surrogates
+  // included — keeping previously generated ids stable.
+  const safe = rowKey.replace(
+    /[^a-zA-Z0-9_-]/g,
+    (ch) => `_x${(ch.codePointAt(0) ?? 0).toString(16)}_`
+  );
   return `gridtable-row-${safe}`;
 };
 
@@ -213,11 +219,17 @@ export const detectWidthUnit = (input: ColumnWidthInput | undefined | null): Col
   if (!input || input === 'auto') {
     return 'px';
   }
-  const match = input.match(/[a-z%]+$/i);
-  if (!match) {
+  // Scan back over the unit suffix instead of matching it. `/[a-z%]+$/i` is
+  // unanchored at the start, so the engine retries from every position; walking
+  // backwards finds the same suffix in one pass.
+  let suffixStart = input.length;
+  while (suffixStart > 0 && /[a-z%]/i.test(input[suffixStart - 1])) {
+    suffixStart -= 1;
+  }
+  if (suffixStart === input.length) {
     return 'px';
   }
-  const unit = match[0].toLowerCase();
+  const unit = input.slice(suffixStart).toLowerCase();
   if (unit === 'px' || unit === 'em' || unit === 'rem' || unit === '%') {
     return unit as ColumnWidthUnit;
   }

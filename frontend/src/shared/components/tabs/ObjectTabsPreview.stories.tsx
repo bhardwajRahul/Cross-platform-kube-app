@@ -268,9 +268,10 @@ interface TabGroup {
  * finding one not in `existing`. Falls back to a timestamped id if all
  * of `a`-`z` are taken (not expected in practice, but defensive).
  */
+const GROUP_ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz';
+
 function nextGroupId(existing: Set<string>): string {
-  for (let code = 'a'.charCodeAt(0); code <= 'z'.charCodeAt(0); code++) {
-    const candidate = String.fromCharCode(code);
+  for (const candidate of GROUP_ID_ALPHABET) {
     if (!existing.has(candidate)) {
       return candidate;
     }
