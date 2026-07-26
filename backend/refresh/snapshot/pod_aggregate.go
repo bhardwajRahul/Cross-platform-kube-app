@@ -20,6 +20,7 @@ import (
 	replicasetpkg "github.com/luxury-yacht/app/backend/resources/replicaset"
 	statefulsetpkg "github.com/luxury-yacht/app/backend/resources/statefulset"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	appslisters "k8s.io/client-go/listers/apps/v1"
 )
@@ -158,24 +159,34 @@ func workloadKindForPod(pod *corev1.Pod, rsLister appslisters.ReplicaSetLister) 
 		if owner.Controller == nil || !*owner.Controller {
 			continue
 		}
-		switch owner.Kind {
-		case deploymentpkg.Identity.Kind, daemonsetpkg.Identity.Kind, statefulsetpkg.Identity.Kind, jobpkg.Identity.Kind:
-			return owner.Kind
-		case replicasetpkg.Identity.Kind:
-			if rsLister == nil {
-				return ""
-			}
-			rs, err := rsLister.ReplicaSets(pod.Namespace).Get(owner.Name)
-			if err != nil {
-				return ""
-			}
-			for _, rsOwner := range rs.OwnerReferences {
-				if rsOwner.Controller != nil && *rsOwner.Controller && rsOwner.Kind == deploymentpkg.Identity.Kind {
-					return deploymentpkg.Identity.Kind
-				}
-			}
-		}
+		return workloadKindForControllerOwner(pod.Namespace, owner, rsLister)
+	}
+	return ""
+}
+
+func workloadKindForControllerOwner(namespace string, owner metav1.OwnerReference, rsLister appslisters.ReplicaSetLister) string {
+	switch owner.Kind {
+	case deploymentpkg.Identity.Kind, daemonsetpkg.Identity.Kind, statefulsetpkg.Identity.Kind, jobpkg.Identity.Kind:
+		return owner.Kind
+	case replicasetpkg.Identity.Kind:
+		return deploymentKindForReplicaSet(namespace, owner.Name, rsLister)
+	default:
 		return ""
+	}
+}
+
+func deploymentKindForReplicaSet(namespace, replicaSetName string, rsLister appslisters.ReplicaSetLister) string {
+	if rsLister == nil {
+		return ""
+	}
+	replicaSet, err := rsLister.ReplicaSets(namespace).Get(replicaSetName)
+	if err != nil {
+		return ""
+	}
+	for _, owner := range replicaSet.OwnerReferences {
+		if owner.Controller != nil && *owner.Controller && owner.Kind == deploymentpkg.Identity.Kind {
+			return deploymentpkg.Identity.Kind
+		}
 	}
 	return ""
 }

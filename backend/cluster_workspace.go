@@ -202,42 +202,47 @@ func (a *App) buildClusterWorkspaceState() ClusterWorkspaceState {
 	a.governorMu.Unlock()
 
 	if a.clusterLifecycle != nil {
-		for clusterID, lifecycle := range a.clusterLifecycle.GetAllStates() {
-			cluster := state.Clusters[clusterID]
-			cluster.ClusterID = clusterID
-			cluster.Lifecycle = lifecycle
-			if cluster.Auth.State == "" {
-				cluster.Auth.State = "unknown"
-			}
-			if cluster.Health == "" {
-				cluster.Health = ClusterHealthUnknown
-			}
-			state.Clusters[clusterID] = cluster
-		}
+		mergeClusterLifecycleStates(state.Clusters, a.clusterLifecycle.GetAllStates())
 	}
 	health, revisions := a.clusterWorkspaceRuntimeState()
-	for clusterID, healthState := range health {
-		cluster := state.Clusters[clusterID]
-		cluster.ClusterID = clusterID
-		cluster.Health = healthState
-		if cluster.Auth.State == "" {
-			cluster.Auth.State = "unknown"
-		}
-		state.Clusters[clusterID] = cluster
-	}
-	for clusterID, revision := range revisions {
-		cluster := state.Clusters[clusterID]
-		cluster.ClusterID = clusterID
-		cluster.ScopeRevision = revision
-		if cluster.Auth.State == "" {
-			cluster.Auth.State = "unknown"
-		}
-		if cluster.Health == "" {
-			cluster.Health = ClusterHealthUnknown
-		}
-		state.Clusters[clusterID] = cluster
-	}
+	mergeClusterHealthStates(state.Clusters, health)
+	mergeClusterScopeRevisions(state.Clusters, revisions)
 	return state
+}
+
+func mergeClusterLifecycleStates(clusters map[string]ClusterWorkspaceClusterState, states map[string]ClusterLifecycleState) {
+	for clusterID, lifecycle := range states {
+		cluster := clusterWorkspaceStateWithDefaults(clusterID, clusters[clusterID])
+		cluster.Lifecycle = lifecycle
+		clusters[clusterID] = cluster
+	}
+}
+
+func mergeClusterHealthStates(clusters map[string]ClusterWorkspaceClusterState, states map[string]ClusterHealthState) {
+	for clusterID, healthState := range states {
+		cluster := clusterWorkspaceStateWithDefaults(clusterID, clusters[clusterID])
+		cluster.Health = healthState
+		clusters[clusterID] = cluster
+	}
+}
+
+func mergeClusterScopeRevisions(clusters map[string]ClusterWorkspaceClusterState, revisions map[string]uint64) {
+	for clusterID, revision := range revisions {
+		cluster := clusterWorkspaceStateWithDefaults(clusterID, clusters[clusterID])
+		cluster.ScopeRevision = revision
+		clusters[clusterID] = cluster
+	}
+}
+
+func clusterWorkspaceStateWithDefaults(clusterID string, cluster ClusterWorkspaceClusterState) ClusterWorkspaceClusterState {
+	cluster.ClusterID = clusterID
+	if cluster.Auth.State == "" {
+		cluster.Auth.State = "unknown"
+	}
+	if cluster.Health == "" {
+		cluster.Health = ClusterHealthUnknown
+	}
+	return cluster
 }
 
 // ApplyClusterWorkspace serializes selection mutation before foreground

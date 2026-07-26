@@ -943,18 +943,7 @@ func splitTimestamp(line string) (string, string) {
 }
 
 func (s *Streamer) podBelongsToCronJob(ctx context.Context, namespace, cronJob string, pod *corev1.Pod, cache map[string]bool) bool {
-	if pod == nil {
-		return false
-	}
-	jobName := pod.Labels["job-name"]
-	if jobName == "" {
-		for _, owner := range pod.OwnerReferences {
-			if owner.Kind == jobpkg.Identity.Kind {
-				jobName = owner.Name
-				break
-			}
-		}
-	}
+	jobName := cronJobPodJobName(pod)
 	if jobName == "" {
 		return false
 	}
@@ -963,13 +952,7 @@ func (s *Streamer) podBelongsToCronJob(ctx context.Context, namespace, cronJob s
 		return allowed
 	}
 
-	// Evict cache if it exceeds size limit to prevent unbounded growth
-	if len(cache) >= config.ContainerLogsStreamCronCacheMaxSize {
-		for k := range cache {
-			delete(cache, k)
-		}
-		s.logger.Debug("containerlogsstream: cron cache evicted due to size limit", logsources.ContainerLogsStream)
-	}
+	s.evictCronJobCacheIfFull(cache)
 
 	job, err := s.client.BatchV1().Jobs(namespace).Get(ctx, jobName, metav1.GetOptions{})
 	if err != nil {
@@ -977,12 +960,41 @@ func (s *Streamer) podBelongsToCronJob(ctx context.Context, namespace, cronJob s
 		cache[cacheKey] = false
 		return false
 	}
-	for _, owner := range job.OwnerReferences {
+	allowed := jobOwnedByCronJob(job.OwnerReferences, cronJob)
+	cache[cacheKey] = allowed
+	return allowed
+}
+
+func cronJobPodJobName(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	if jobName := pod.Labels["job-name"]; jobName != "" {
+		return jobName
+	}
+	for _, owner := range pod.OwnerReferences {
+		if owner.Kind == jobpkg.Identity.Kind {
+			return owner.Name
+		}
+	}
+	return ""
+}
+
+func (s *Streamer) evictCronJobCacheIfFull(cache map[string]bool) {
+	if len(cache) < config.ContainerLogsStreamCronCacheMaxSize {
+		return
+	}
+	for key := range cache {
+		delete(cache, key)
+	}
+	s.logger.Debug("containerlogsstream: cron cache evicted due to size limit", logsources.ContainerLogsStream)
+}
+
+func jobOwnedByCronJob(owners []metav1.OwnerReference, cronJob string) bool {
+	for _, owner := range owners {
 		if owner.Kind == cronjobpkg.Identity.Kind && owner.Name == cronJob {
-			cache[cacheKey] = true
 			return true
 		}
 	}
-	cache[cacheKey] = false
 	return false
 }

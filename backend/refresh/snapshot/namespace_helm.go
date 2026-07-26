@@ -424,52 +424,55 @@ func mapHelmReleases(
 	var version uint64
 
 	for _, release := range releases {
-		if release == nil {
+		summary, ok := mapHelmRelease(release, namespaceFilter, meta)
+		if !ok {
 			continue
 		}
-		ns := release.Namespace
-		if ns == "" && namespaceFilter != "" {
-			ns = namespaceFilter
-		}
-		if namespaceFilter != "" && ns != namespaceFilter {
-			continue
-		}
-		helmOpts := resourcemodel.ResourceModelBuildOptions{Materialization: resourcemodel.MaterializeSummaryFacts}
-		model := helm.BuildResourceModel(meta.ClusterID, release, namespaceFilter, nil, nil, helmOpts)
-		facts := helm.BuildFacts(release, nil, nil, helmOpts)
-		chartName := facts.Chart
-		appVersion := facts.AppVersion
-		status := model.Status.Label
-		updated := ""
-		description := ""
-		age := ""
-		ageTimestamp := int64(0)
-		if facts.Updated != nil && !facts.Updated.IsZero() {
-			updated = facts.Updated.Time.Format(time.RFC3339)
-		}
-		description = facts.Description
-		if !model.Metadata.CreationTimestamp.IsZero() {
-			age = formatAge(model.Metadata.CreationTimestamp.Time)
-			ageTimestamp = model.Metadata.CreationTimestamp.UnixMilli()
-		}
-		summaries = append(summaries, NamespaceHelmSummary{
-			Ref:                model.Ref,
-			Chart:              chartName,
-			AppVersion:         appVersion,
-			Status:             status,
-			StatusState:        model.Status.State,
-			StatusPresentation: model.Status.Presentation,
-			StatusReason:       model.Status.Reason,
-			Revision:           release.Version,
-			Updated:            updated,
-			Description:        description,
-			Age:                age,
-			AgeTimestamp:       ageTimestamp,
-		})
+		summaries = append(summaries, summary)
 		if v := uint64(release.Version); v > version {
 			version = v
 		}
 	}
 
 	return summaries, version
+}
+
+func mapHelmRelease(release *release.Release, namespaceFilter string, meta ClusterMeta) (NamespaceHelmSummary, bool) {
+	if release == nil {
+		return NamespaceHelmSummary{}, false
+	}
+	namespace := release.Namespace
+	if namespace == "" && namespaceFilter != "" {
+		namespace = namespaceFilter
+	}
+	if namespaceFilter != "" && namespace != namespaceFilter {
+		return NamespaceHelmSummary{}, false
+	}
+	helmOpts := resourcemodel.ResourceModelBuildOptions{Materialization: resourcemodel.MaterializeSummaryFacts}
+	model := helm.BuildResourceModel(meta.ClusterID, release, namespaceFilter, nil, nil, helmOpts)
+	facts := helm.BuildFacts(release, nil, nil, helmOpts)
+	updated := ""
+	if facts.Updated != nil && !facts.Updated.IsZero() {
+		updated = facts.Updated.Time.Format(time.RFC3339)
+	}
+	age := ""
+	ageTimestamp := int64(0)
+	if !model.Metadata.CreationTimestamp.IsZero() {
+		age = formatAge(model.Metadata.CreationTimestamp.Time)
+		ageTimestamp = model.Metadata.CreationTimestamp.UnixMilli()
+	}
+	return NamespaceHelmSummary{
+		Ref:                model.Ref,
+		Chart:              facts.Chart,
+		AppVersion:         facts.AppVersion,
+		Status:             model.Status.Label,
+		StatusState:        model.Status.State,
+		StatusPresentation: model.Status.Presentation,
+		StatusReason:       model.Status.Reason,
+		Revision:           release.Version,
+		Updated:            updated,
+		Description:        facts.Description,
+		Age:                age,
+		AgeTimestamp:       ageTimestamp,
+	}, true
 }

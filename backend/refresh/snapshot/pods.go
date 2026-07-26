@@ -857,16 +857,26 @@ func matchesWorkload(pod *corev1.Pod, scope workloadScope, rsLister appslisters.
 		if ownerMatchesWorkloadScope(owner.APIVersion, owner.Kind, owner.Name, scope) {
 			return true
 		}
-		if owner.Kind == replicasetpkg.Identity.Kind && scope.kind == deploymentpkg.Identity.Kind && rsLister != nil {
-			rs, err := rsLister.ReplicaSets(pod.Namespace).Get(owner.Name)
-			if err != nil {
-				continue
-			}
-			for _, rsOwner := range rs.OwnerReferences {
-				if rsOwner.Controller != nil && *rsOwner.Controller && ownerMatchesWorkloadScope(rsOwner.APIVersion, rsOwner.Kind, rsOwner.Name, scope) {
-					return true
-				}
-			}
+		if owner.Kind == replicasetpkg.Identity.Kind &&
+			scope.kind == deploymentpkg.Identity.Kind &&
+			replicaSetMatchesWorkload(pod.Namespace, owner.Name, scope, rsLister) {
+			return true
+		}
+	}
+	return false
+}
+
+func replicaSetMatchesWorkload(namespace, replicaSetName string, scope workloadScope, rsLister appslisters.ReplicaSetLister) bool {
+	if rsLister == nil {
+		return false
+	}
+	replicaSet, err := rsLister.ReplicaSets(namespace).Get(replicaSetName)
+	if err != nil {
+		return false
+	}
+	for _, owner := range replicaSet.OwnerReferences {
+		if owner.Controller != nil && *owner.Controller && ownerMatchesWorkloadScope(owner.APIVersion, owner.Kind, owner.Name, scope) {
+			return true
 		}
 	}
 	return false

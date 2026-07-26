@@ -380,44 +380,53 @@ func (idx *objectMapIndex) collectTyped(src objectMapTypedSource) {
 	// and names no kind. The permission gate skips resources the user cannot
 	// list+watch, preserving the old live-list Forbidden skip and, for cluster-
 	// scoped types, avoiding a blind .Lister() on an unstarted informer.
-	clusterID := idx.meta.ClusterID
 	for _, collector := range objectMapCollectors {
-		if !src.allowed(collector.Identity.Group, collector.Identity.Resource) {
-			idx.warnSkippedPermission(collector.Identity.Resource)
-			continue
-		}
-		// Ingest-owned (cut) kinds are no longer cached by the shared factory; their
-		// projected object-map nodes come from the ingest source instead of a lister.
-		if _, cut := objectMapIngestOwnedGVRs[collector.Identity.GVR()]; cut {
-			idx.collectIngestNodes(collector.Identity, src.ingest)
-			continue
-		}
-		items, err := collector.List(src.shared)
-		if idx.skipListError(collector.Identity.Resource, err) {
-			if idx.hasListError() {
-				return
-			}
-			continue
-		}
-		for _, obj := range items {
-			rec := &objectMapRecord{
-				ref:               refFromObject(obj, collector.Identity.Group, collector.Identity.Version, collector.Identity.Kind, collector.Identity.Resource, obj.GetNamespace()),
-				obj:               obj,
-				creationTimestamp: objectCreationTimestamp(obj),
-				owners:            obj.GetOwnerReferences(),
-				labels:            cloneStringMap(obj.GetLabels()),
-				status:            collector.Status(clusterID, obj),
-			}
-			if collector.ActionFacts != nil {
-				rec.actionFacts = collector.ActionFacts(obj)
-			}
-			idx.addRecord(rec)
+		if !idx.collectTypedCollector(src, collector) {
+			return
 		}
 	}
 	if src.allowed("autoscaling", "horizontalpodautoscalers") {
 		idx.collectHPAs(src.shared)
 	} else {
 		idx.warnSkippedPermission("horizontalpodautoscalers")
+	}
+}
+
+func (idx *objectMapIndex) collectTypedCollector(src objectMapTypedSource, collector objectmapnode.Collector) bool {
+	identity := collector.Identity
+	if !src.allowed(identity.Group, identity.Resource) {
+		idx.warnSkippedPermission(identity.Resource)
+		return true
+	}
+	// Ingest-owned (cut) kinds are no longer cached by the shared factory; their
+	// projected object-map nodes come from the ingest source instead of a lister.
+	if _, cut := objectMapIngestOwnedGVRs[identity.GVR()]; cut {
+		idx.collectIngestNodes(identity, src.ingest)
+		return true
+	}
+	items, err := collector.List(src.shared)
+	if idx.skipListError(identity.Resource, err) {
+		return !idx.hasListError()
+	}
+	idx.addTypedCollectorItems(collector, items)
+	return true
+}
+
+func (idx *objectMapIndex) addTypedCollectorItems(collector objectmapnode.Collector, items []metav1.Object) {
+	identity := collector.Identity
+	for _, obj := range items {
+		record := &objectMapRecord{
+			ref:               refFromObject(obj, identity.Group, identity.Version, identity.Kind, identity.Resource, obj.GetNamespace()),
+			obj:               obj,
+			creationTimestamp: objectCreationTimestamp(obj),
+			owners:            obj.GetOwnerReferences(),
+			labels:            cloneStringMap(obj.GetLabels()),
+			status:            collector.Status(idx.meta.ClusterID, obj),
+		}
+		if collector.ActionFacts != nil {
+			record.actionFacts = collector.ActionFacts(obj)
+		}
+		idx.addRecord(record)
 	}
 }
 
@@ -653,6 +662,10 @@ func (idx *objectMapIndex) enrichActionFacts() {
 	if idx == nil || !idx.hpaListed {
 		return
 	}
+	idx.applyHPAManagedActionFacts(idx.hpaManagedActionTargets())
+}
+
+func (idx *objectMapIndex) hpaManagedActionTargets() map[string]struct{} {
 	managedTargets := make(map[string]struct{})
 	for _, record := range idx.records {
 		if record == nil {
@@ -669,6 +682,10 @@ func (idx *objectMapIndex) enrichActionFacts() {
 		}
 		managedTargets[objectMapActionTargetKey(target.ref)] = struct{}{}
 	}
+	return managedTargets
+}
+
+func (idx *objectMapIndex) applyHPAManagedActionFacts(managedTargets map[string]struct{}) {
 	for _, record := range idx.records {
 		if record == nil || !isObjectMapScalableWorkload(record.ref) {
 			continue

@@ -287,42 +287,38 @@ func (s *Service) processNodeLogDiscoveryTask(
 		if state.hasReachedSourceLimit() {
 			return
 		}
+		s.processNodeLogDiscoveryEntry(nodeName, task, entry, state, taskWG, taskCh)
+	}
+}
 
-		nextPath, ok := joinNodeLogPath(task.path, entry.Href)
-		if !ok {
-			continue
+func (s *Service) processNodeLogDiscoveryEntry(
+	nodeName string,
+	task nodeLogDiscoveryTask,
+	entry nodeLogListingEntry,
+	state *nodeLogDiscoveryState,
+	taskWG *sync.WaitGroup,
+	taskCh chan<- nodeLogDiscoveryTask,
+) {
+	nextPath, ok := joinNodeLogPath(task.path, entry.Href)
+	if !ok || !state.markVisited(nextPath) || shouldSkipNodeLogDiscoveryPath(nextPath) {
+		return
+	}
+	childBody, err := s.fetchNodeLogDiscoveryPath(nodeName, nextPath)
+	if err != nil {
+		return
+	}
+	switch probeNodeLogPath(nextPath, childBody) {
+	case nodeLogProbeDirectory:
+		if task.depth+1 >= maxNodeLogDiscoveryDepth {
+			return
 		}
-		if !state.markVisited(nextPath) {
-			continue
-		}
-		if shouldSkipNodeLogDiscoveryPath(nextPath) {
-			continue
-		}
-
-		childBody, err := s.fetchNodeLogDiscoveryPath(nodeName, nextPath)
-		if err != nil {
-			continue
-		}
-		probeKind := probeNodeLogPath(nextPath, childBody)
-		switch probeKind {
-		case nodeLogProbeDirectory:
-			if task.depth+1 >= maxNodeLogDiscoveryDepth {
-				continue
-			}
-			taskWG.Add(1)
-			taskCh <- nodeLogDiscoveryTask{
-				path:  nextPath,
-				body:  childBody,
-				depth: task.depth + 1,
-			}
-			continue
-		case nodeLogProbeBinary:
-			continue
-		}
-		if !isSupportedNodeLogSource(nextPath) {
-			continue
-		}
-
+		taskWG.Add(1)
+		taskCh <- nodeLogDiscoveryTask{path: nextPath, body: childBody, depth: task.depth + 1}
+		return
+	case nodeLogProbeBinary:
+		return
+	}
+	if isSupportedNodeLogSource(nextPath) {
 		state.addSource(nextPath)
 	}
 }
@@ -445,10 +441,7 @@ func validateNodeLogSourcePath(sourcePath string) error {
 	}
 
 	if serviceName, ok := parseNodeLogServiceSource(trimmed); ok {
-		if strings.ContainsAny(serviceName, `/\?#`) || strings.Contains(serviceName, "..") {
-			return fmt.Errorf("invalid node log source path")
-		}
-		return nil
+		return validateNodeLogServiceName(serviceName)
 	}
 
 	decoded, err := url.PathUnescape(trimmed)
@@ -456,19 +449,31 @@ func validateNodeLogSourcePath(sourcePath string) error {
 		return fmt.Errorf("invalid node log source path")
 	}
 	for _, candidate := range []string{trimmed, decoded} {
-		if strings.Contains(candidate, `\`) ||
-			strings.Contains(candidate, "://") ||
-			strings.ContainsAny(candidate, "?#") {
-			return fmt.Errorf("invalid node log source path")
+		if err := validateNodeLogPathCandidate(candidate); err != nil {
+			return err
 		}
-		clean := strings.Trim(candidate, "/")
-		if strings.HasPrefix(clean, "api/") {
+	}
+	return nil
+}
+
+func validateNodeLogServiceName(serviceName string) error {
+	if strings.ContainsAny(serviceName, `/\?#`) || strings.Contains(serviceName, "..") {
+		return fmt.Errorf("invalid node log source path")
+	}
+	return nil
+}
+
+func validateNodeLogPathCandidate(candidate string) error {
+	if strings.Contains(candidate, `\`) || strings.Contains(candidate, "://") || strings.ContainsAny(candidate, "?#") {
+		return fmt.Errorf("invalid node log source path")
+	}
+	clean := strings.Trim(candidate, "/")
+	if strings.HasPrefix(clean, "api/") {
+		return fmt.Errorf("invalid node log source path")
+	}
+	for _, segment := range strings.Split(clean, "/") {
+		if segment == "." || segment == ".." {
 			return fmt.Errorf("invalid node log source path")
-		}
-		for _, segment := range strings.Split(clean, "/") {
-			if segment == "." || segment == ".." {
-				return fmt.Errorf("invalid node log source path")
-			}
 		}
 	}
 	return nil

@@ -74,11 +74,7 @@ func newClusterLifecycleWithSlowThreshold(
 func (cl *clusterLifecycle) SetState(clusterId string, state ClusterLifecycleState) {
 	cl.mu.Lock()
 
-	entry := cl.entries[clusterId]
-	if entry == nil {
-		entry = &clusterLifecycleEntry{}
-		cl.entries[clusterId] = entry
-	}
+	entry := cl.entryForClusterLocked(clusterId)
 
 	previousState := entry.state
 	if isRefreshServingState(previousState) && isClientInitializationState(state) {
@@ -93,31 +89,12 @@ func (cl *clusterLifecycle) SetState(clusterId string, state ClusterLifecycleSta
 	}
 
 	entry.state = state
-	if cl.snapshotChangeObserver != nil {
-		cl.snapshotChangeObserver()
-	}
+	cl.notifySnapshotChangeLocked()
 
 	// When entering Loading, start a timer that will auto-transition to LoadingSlow
 	// if the cluster is still in Loading after the threshold.
 	if state == ClusterStateLoading {
-		entry.slowTimer = time.AfterFunc(cl.slowThreshold, func() {
-			cl.mu.Lock()
-			e := cl.entries[clusterId]
-			if e == nil || e.state != ClusterStateLoading {
-				cl.mu.Unlock()
-				return
-			}
-			e.state = ClusterStateLoadingSlow
-			e.slowTimer = nil
-			if cl.snapshotChangeObserver != nil {
-				cl.snapshotChangeObserver()
-			}
-			cl.mu.Unlock()
-
-			if cl.emitter != nil {
-				cl.emitter(clusterId, ClusterStateLoadingSlow, ClusterStateLoading)
-			}
-		})
+		cl.startSlowLoadingTimerLocked(clusterId, entry)
 	}
 
 	cl.mu.Unlock()
@@ -125,6 +102,40 @@ func (cl *clusterLifecycle) SetState(clusterId string, state ClusterLifecycleSta
 	if cl.emitter != nil {
 		cl.emitter(clusterId, state, previousState)
 	}
+}
+
+func (cl *clusterLifecycle) entryForClusterLocked(clusterId string) *clusterLifecycleEntry {
+	entry := cl.entries[clusterId]
+	if entry == nil {
+		entry = &clusterLifecycleEntry{}
+		cl.entries[clusterId] = entry
+	}
+	return entry
+}
+
+func (cl *clusterLifecycle) notifySnapshotChangeLocked() {
+	if cl.snapshotChangeObserver != nil {
+		cl.snapshotChangeObserver()
+	}
+}
+
+func (cl *clusterLifecycle) startSlowLoadingTimerLocked(clusterId string, entry *clusterLifecycleEntry) {
+	entry.slowTimer = time.AfterFunc(cl.slowThreshold, func() {
+		cl.mu.Lock()
+		current := cl.entries[clusterId]
+		if current == nil || current.state != ClusterStateLoading {
+			cl.mu.Unlock()
+			return
+		}
+		current.state = ClusterStateLoadingSlow
+		current.slowTimer = nil
+		cl.notifySnapshotChangeLocked()
+		cl.mu.Unlock()
+
+		if cl.emitter != nil {
+			cl.emitter(clusterId, ClusterStateLoadingSlow, ClusterStateLoading)
+		}
+	})
 }
 
 func isClientInitializationState(state ClusterLifecycleState) bool {

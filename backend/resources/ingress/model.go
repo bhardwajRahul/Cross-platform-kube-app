@@ -39,31 +39,14 @@ func BuildFacts(clusterID string, ingress *networkingv1.Ingress) Facts {
 		}
 	}
 	hostSet := map[string]struct{}{}
-	for _, tls := range ingress.Spec.TLS {
-		tlsFacts := TLSFacts{Hosts: append([]string(nil), tls.Hosts...)}
-		if tls.SecretName != "" {
-			link := resourcemodel.NewDisplayResourceLink(clusterID, "", "v1", "Secret", "secrets", ingress.Namespace, tls.SecretName)
-			tlsFacts.SecretRef = &link
-		}
-		facts.TLS = append(facts.TLS, tlsFacts)
-	}
+	facts.TLS = buildIngressTLSFacts(clusterID, ingress.Namespace, ingress.Spec.TLS)
 	for _, rule := range ingress.Spec.Rules {
 		if rule.Host != "" {
 			hostSet[rule.Host] = struct{}{}
 		}
-		ruleFacts := RuleFacts{Host: rule.Host}
-		if rule.HTTP != nil {
-			for _, path := range rule.HTTP.Paths {
-				pathFacts := PathFacts{Path: path.Path}
-				if path.PathType != nil {
-					pathFacts.PathType = string(*path.PathType)
-				}
-				pathFacts.Backend = backendFacts(clusterID, ingress.Namespace, path.Backend)
-				ruleFacts.Paths = append(ruleFacts.Paths, pathFacts)
-				appendBackendRef(&facts.BackendRefs, pathFacts.Backend)
-			}
-		}
+		ruleFacts, backendRefs := buildIngressRuleFacts(clusterID, ingress.Namespace, rule)
 		facts.Rules = append(facts.Rules, ruleFacts)
+		facts.BackendRefs = append(facts.BackendRefs, backendRefs...)
 	}
 	if ingress.Spec.DefaultBackend != nil {
 		backend := backendFacts(clusterID, ingress.Namespace, *ingress.Spec.DefaultBackend)
@@ -76,6 +59,37 @@ func BuildFacts(clusterID string, ingress *networkingv1.Ingress) Facts {
 	}
 	sort.Strings(facts.Hosts)
 	return facts
+}
+
+func buildIngressTLSFacts(clusterID, namespace string, entries []networkingv1.IngressTLS) []TLSFacts {
+	facts := make([]TLSFacts, 0, len(entries))
+	for _, entry := range entries {
+		tlsFacts := TLSFacts{Hosts: append([]string(nil), entry.Hosts...)}
+		if entry.SecretName != "" {
+			link := resourcemodel.NewDisplayResourceLink(clusterID, "", "v1", "Secret", "secrets", namespace, entry.SecretName)
+			tlsFacts.SecretRef = &link
+		}
+		facts = append(facts, tlsFacts)
+	}
+	return facts
+}
+
+func buildIngressRuleFacts(clusterID, namespace string, rule networkingv1.IngressRule) (RuleFacts, []resourcemodel.ResourceLink) {
+	facts := RuleFacts{Host: rule.Host}
+	var backendRefs []resourcemodel.ResourceLink
+	if rule.HTTP == nil {
+		return facts, backendRefs
+	}
+	for _, path := range rule.HTTP.Paths {
+		pathFacts := PathFacts{Path: path.Path}
+		if path.PathType != nil {
+			pathFacts.PathType = string(*path.PathType)
+		}
+		pathFacts.Backend = backendFacts(clusterID, namespace, path.Backend)
+		facts.Paths = append(facts.Paths, pathFacts)
+		appendBackendRef(&backendRefs, pathFacts.Backend)
+	}
+	return facts, backendRefs
 }
 
 func statusPresentation(ingress *networkingv1.Ingress, facts Facts) resourcemodel.ResourceStatusPresentation {

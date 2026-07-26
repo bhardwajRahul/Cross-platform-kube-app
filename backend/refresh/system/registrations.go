@@ -139,53 +139,64 @@ func runDomainRegistrations(ctx context.Context, gate *permissionGate, checker *
 // It merges requirements from the registration table, the shared domain access
 // contract, and any extra requests such as metrics.
 func preflightRequests(registrations []domainRegistration, extra []informer.PermissionRequest) []informer.PermissionRequest {
-	requests := make([]informer.PermissionRequest, 0, len(extra))
-	seen := make(map[string]struct{})
-
-	add := func(group, resource, verb string) {
-		key := fmt.Sprintf("%s/%s/%s", group, resource, verb)
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		requests = append(requests, informer.PermissionRequest{
-			Group:    group,
-			Resource: resource,
-			Verb:     verb,
-		})
+	collector := permissionRequestCollector{
+		requests: make([]informer.PermissionRequest, 0, len(extra)),
+		seen:     make(map[string]struct{}),
 	}
-
-	for _, req := range extra {
-		add(req.Group, req.Resource, req.Verb)
-	}
-
+	collector.addAll(extra)
 	// Add the shared domain permission contract so runtime and stream checks are pre-warmed.
-	for _, req := range domainpermissions.PreflightRequirements() {
-		add(req.Group, req.Resource, req.Verb)
-	}
-
+	collector.addRequirements(domainpermissions.PreflightRequirements())
 	for _, registration := range registrations {
-		if registration.list != nil {
-			for _, check := range registration.list.checks {
-				add(check.group, check.resource, "list")
-			}
-		}
-		if registration.listWatch != nil {
-			for _, check := range registration.listWatch.checks {
-				add(check.group, check.resource, "list")
-				add(check.group, check.resource, "watch")
-			}
-		}
-		for _, check := range registration.preflightList {
-			add(check.group, check.resource, "list")
-		}
-		for _, check := range registration.preflightListWatch {
-			add(check.group, check.resource, "list")
-			add(check.group, check.resource, "watch")
+		collector.addRegistration(registration)
+	}
+	return collector.requests
+}
+
+type permissionRequestCollector struct {
+	requests []informer.PermissionRequest
+	seen     map[string]struct{}
+}
+
+func (c *permissionRequestCollector) add(group, resource, verb string) {
+	key := fmt.Sprintf("%s/%s/%s", group, resource, verb)
+	if _, ok := c.seen[key]; ok {
+		return
+	}
+	c.seen[key] = struct{}{}
+	c.requests = append(c.requests, informer.PermissionRequest{Group: group, Resource: resource, Verb: verb})
+}
+
+func (c *permissionRequestCollector) addAll(requests []informer.PermissionRequest) {
+	for _, request := range requests {
+		c.add(request.Group, request.Resource, request.Verb)
+	}
+}
+
+func (c *permissionRequestCollector) addRequirements(requirements []permissions.ResourceRequirement) {
+	for _, requirement := range requirements {
+		c.add(requirement.Group, requirement.Resource, requirement.Verb)
+	}
+}
+
+func (c *permissionRequestCollector) addRegistration(registration domainRegistration) {
+	if registration.list != nil {
+		for _, check := range registration.list.checks {
+			c.add(check.group, check.resource, "list")
 		}
 	}
-
-	return requests
+	if registration.listWatch != nil {
+		for _, check := range registration.listWatch.checks {
+			c.add(check.group, check.resource, "list")
+			c.add(check.group, check.resource, "watch")
+		}
+	}
+	for _, check := range registration.preflightList {
+		c.add(check.group, check.resource, "list")
+	}
+	for _, check := range registration.preflightListWatch {
+		c.add(check.group, check.resource, "list")
+		c.add(check.group, check.resource, "watch")
+	}
 }
 
 // domainReadinessResources returns, per registered domain, the canonical

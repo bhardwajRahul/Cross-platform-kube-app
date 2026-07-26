@@ -551,21 +551,9 @@ type namespaceQuotaIngestState interface {
 
 func namespaceQuotaRollupsFromIngest(source namespacePodIngestSource) (map[string]namespaceQuotaRollup, NamespaceSignalState) {
 	rollups := make(map[string]namespaceQuotaRollup)
-	if source == nil || !source.Tracks(ResourceQuotaGVR) {
-		return rollups, NamespaceSignalUnavailable
-	}
-	if stateSource, ok := source.(namespaceQuotaIngestState); ok {
-		if stateSource.PermissionSkippedFor(ResourceQuotaGVR) {
-			return rollups, NamespaceSignalUnavailable
-		}
-		if !stateSource.RawHasSyncedFor(ResourceQuotaGVR) {
-			if source.HasSyncedFor(ResourceQuotaGVR) {
-				return rollups, NamespaceSignalUnavailable
-			}
-			return rollups, NamespaceSignalLoading
-		}
-	} else if !source.HasSyncedFor(ResourceQuotaGVR) {
-		return rollups, NamespaceSignalLoading
+	state := namespaceQuotaIngestSignalState(source)
+	if state != NamespaceSignalAvailable {
+		return rollups, state
 	}
 	for _, row := range source.AggregateRows(ResourceQuotaGVR) {
 		aggregate, ok := row.(streamrows.ResourceQuotaAggregate)
@@ -580,6 +568,29 @@ func namespaceQuotaRollupsFromIngest(source namespacePodIngestSource) (map[strin
 		rollups[aggregate.Namespace] = rollup
 	}
 	return rollups, NamespaceSignalAvailable
+}
+
+func namespaceQuotaIngestSignalState(source namespacePodIngestSource) NamespaceSignalState {
+	if source == nil || !source.Tracks(ResourceQuotaGVR) {
+		return NamespaceSignalUnavailable
+	}
+	stateSource, exposesRawState := source.(namespaceQuotaIngestState)
+	if !exposesRawState {
+		if !source.HasSyncedFor(ResourceQuotaGVR) {
+			return NamespaceSignalLoading
+		}
+		return NamespaceSignalAvailable
+	}
+	if stateSource.PermissionSkippedFor(ResourceQuotaGVR) {
+		return NamespaceSignalUnavailable
+	}
+	if stateSource.RawHasSyncedFor(ResourceQuotaGVR) {
+		return NamespaceSignalAvailable
+	}
+	if source.HasSyncedFor(ResourceQuotaGVR) {
+		return NamespaceSignalUnavailable
+	}
+	return NamespaceSignalLoading
 }
 
 func namespaceQuotaPressure(highestUsedPercentage int) NamespaceQuotaPressure {

@@ -77,44 +77,54 @@ func RegisterObjectEventsDomain(
 		return nil, fmt.Errorf("kubernetes client is required for object events domain")
 	}
 	builder := &ObjectEventsBuilder{client: client}
-	var notifier *ObjectEventsChangeNotifier
-	if factory != nil {
-		eventInformer := factory.Core().V1().Events()
-		if eventInformer != nil {
-			_ = eventInformer.Informer().AddIndexers(cache.Indexers{
-				objectEventIndexName: objectEventIndex,
-			})
-			builder.eventLister = eventInformer.Lister()
-			builder.eventIndexer = eventInformer.Informer().GetIndexer()
-			builder.eventSynced = eventInformer.Informer().HasSynced
-
-			notifier = NewObjectEventsChangeNotifier()
-			record := func(obj interface{}) {
-				if evt, ok := maintainedUnwrap(obj).(*corev1.Event); ok {
-					notifier.EventChanged(evt)
-				}
-			}
-			if _, err := eventInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-				AddFunc: record,
-				UpdateFunc: func(oldObj, newObj interface{}) {
-					// Informer resyncs re-deliver every event with an unchanged
-					// ResourceVersion; only real changes ring the doorbell.
-					if eventUpdateIsEcho(oldObj, newObj) {
-						return
-					}
-					record(newObj)
-				},
-				DeleteFunc: record,
-			}); err != nil {
-				return nil, fmt.Errorf("object-events: register event handler: %w", err)
-			}
-		}
+	notifier, err := configureObjectEventsInformer(factory, builder)
+	if err != nil {
+		return nil, err
 	}
 	if err := reg.Register(refresh.DomainConfig{
 		Name:          objectEventsDomain,
 		BuildSnapshot: builder.Build,
 	}); err != nil {
 		return nil, err
+	}
+	return notifier, nil
+}
+
+func configureObjectEventsInformer(factory informers.SharedInformerFactory, builder *ObjectEventsBuilder) (*ObjectEventsChangeNotifier, error) {
+	if factory == nil {
+		return nil, nil
+	}
+	eventInformer := factory.Core().V1().Events()
+	if eventInformer == nil {
+		return nil, nil
+	}
+	_ = eventInformer.Informer().AddIndexers(cache.Indexers{
+		objectEventIndexName: objectEventIndex,
+	})
+	builder.eventLister = eventInformer.Lister()
+	builder.eventIndexer = eventInformer.Informer().GetIndexer()
+	builder.eventSynced = eventInformer.Informer().HasSynced
+
+	notifier := NewObjectEventsChangeNotifier()
+	record := func(obj interface{}) {
+		if evt, ok := maintainedUnwrap(obj).(*corev1.Event); ok {
+			notifier.EventChanged(evt)
+		}
+	}
+	_, err := eventInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: record,
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			// Informer resyncs re-deliver every event with an unchanged
+			// ResourceVersion; only real changes ring the doorbell.
+			if eventUpdateIsEcho(oldObj, newObj) {
+				return
+			}
+			record(newObj)
+		},
+		DeleteFunc: record,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("object-events: register event handler: %w", err)
 	}
 	return notifier, nil
 }

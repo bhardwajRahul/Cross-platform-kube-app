@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 )
 
@@ -58,27 +59,30 @@ func DiscoverViaDiscovery(ctx context.Context, discoveryClient discovery.Discove
 	_, resources, err := discoveryClient.ServerGroupsAndResources()
 	presence := EmptyPresence()
 	for _, list := range resources {
-		if list == nil {
-			continue
-		}
-		groupVersion := strings.TrimSpace(list.GroupVersion)
-		group, version := splitGroupVersion(groupVersion)
-		if group != Group || version == "" {
-			continue
-		}
-		for _, resource := range list.APIResources {
-			if strings.Contains(resource.Name, "/") {
-				continue
-			}
-			if _, ok := supportedKinds[resource.Kind]; !ok {
-				continue
-			}
-			if existing := presence.versionsByKind[resource.Kind]; existing == "" || version == "v1" {
-				presence.versionsByKind[resource.Kind] = version
-			}
-		}
+		recordGatewayAPIResources(presence, list)
 	}
 	return presence, err
+}
+
+func recordGatewayAPIResources(presence *Presence, list *metav1.APIResourceList) {
+	if list == nil {
+		return
+	}
+	group, version := splitGroupVersion(strings.TrimSpace(list.GroupVersion))
+	if group != Group || version == "" {
+		return
+	}
+	for _, resource := range list.APIResources {
+		if strings.Contains(resource.Name, "/") {
+			continue
+		}
+		if _, ok := supportedKinds[resource.Kind]; !ok {
+			continue
+		}
+		if existing := presence.versionsByKind[resource.Kind]; existing == "" || version == "v1" {
+			presence.versionsByKind[resource.Kind] = version
+		}
+	}
 }
 
 func splitGroupVersion(groupVersion string) (string, string) {

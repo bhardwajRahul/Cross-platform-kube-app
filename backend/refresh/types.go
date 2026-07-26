@@ -154,10 +154,25 @@ func NewManager(reg Registry, hub InformerHub, svc SnapshotService, poller Metri
 
 // Start boots the informer hub and captures the metrics poller context once.
 func (m *Manager) Start(ctx context.Context) error {
-	m.mu.Lock()
-	if m.started {
-		m.mu.Unlock()
+	runCtx, started := m.startContext(ctx)
+	if started {
 		return nil
+	}
+	if m.informerHub != nil {
+		if err := m.informerHub.Start(runCtx); err != nil {
+			return err
+		}
+	}
+	m.startMetricsPoller(runCtx)
+	m.startManualQueue(runCtx)
+	return nil
+}
+
+func (m *Manager) startContext(ctx context.Context) (context.Context, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.started {
+		return nil, true
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -165,39 +180,37 @@ func (m *Manager) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	m.started = true
 	m.runCancel = cancel
-	m.mu.Unlock()
+	return runCtx, false
+}
 
-	if m.informerHub != nil {
-		if err := m.informerHub.Start(runCtx); err != nil {
-			return err
-		}
+func (m *Manager) startMetricsPoller(runCtx context.Context) {
+	if m.metricsPoller == nil {
+		return
 	}
-
-	if m.metricsPoller != nil {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[refresh] panic in metrics poller: %v", r)
-				}
-			}()
-			if err := m.metricsPoller.Start(runCtx); err != nil && !errors.Is(err, context.Canceled) {
-				log.Printf("[refresh] metrics poller stopped with error: %v", err)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Printf("[refresh] panic in metrics poller: %v", recovered)
 			}
 		}()
-	}
+		if err := m.metricsPoller.Start(runCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("[refresh] metrics poller stopped with error: %v", err)
+		}
+	}()
+}
 
-	if m.manualQueue != nil {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[refresh] panic in manual queue: %v", r)
-				}
-			}()
-			m.runManualQueue(runCtx)
+func (m *Manager) startManualQueue(runCtx context.Context) {
+	if m.manualQueue == nil {
+		return
+	}
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Printf("[refresh] panic in manual queue: %v", recovered)
+			}
 		}()
-	}
-
-	return nil
+		m.runManualQueue(runCtx)
+	}()
 }
 
 // SetMetricsActive toggles demand-driven metrics polling when supported.

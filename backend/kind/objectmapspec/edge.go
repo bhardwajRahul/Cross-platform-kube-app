@@ -135,23 +135,35 @@ func volumeEdges(namespace string, volume corev1.Volume) []Edge {
 func containerEdges(namespace string, container corev1.Container) []Edge {
 	var edges []Edge
 	for _, envFrom := range container.EnvFrom {
-		if envFrom.ConfigMapRef != nil && envFrom.ConfigMapRef.Name != "" {
-			edges = append(edges, Edge{Type: EdgeUses, TracedBy: "envFrom.configMapRef", CoreRef: &CoreRef{Version: "v1", Kind: "ConfigMap", Namespace: namespace, Name: envFrom.ConfigMapRef.Name}})
-		}
-		if envFrom.SecretRef != nil && envFrom.SecretRef.Name != "" {
-			edges = append(edges, Edge{Type: EdgeUses, TracedBy: "envFrom.secretRef", CoreRef: &CoreRef{Version: "v1", Kind: "Secret", Namespace: namespace, Name: envFrom.SecretRef.Name}})
-		}
+		edges = append(edges, envFromReferenceEdges(namespace, envFrom)...)
 	}
 	for _, env := range container.Env {
-		if env.ValueFrom == nil {
-			continue
-		}
-		if env.ValueFrom.ConfigMapKeyRef != nil && env.ValueFrom.ConfigMapKeyRef.Name != "" {
-			edges = append(edges, Edge{Type: EdgeUses, TracedBy: "env.configMapKeyRef", CoreRef: &CoreRef{Version: "v1", Kind: "ConfigMap", Namespace: namespace, Name: env.ValueFrom.ConfigMapKeyRef.Name}})
-		}
-		if env.ValueFrom.SecretKeyRef != nil && env.ValueFrom.SecretKeyRef.Name != "" {
-			edges = append(edges, Edge{Type: EdgeUses, TracedBy: "env.secretKeyRef", CoreRef: &CoreRef{Version: "v1", Kind: "Secret", Namespace: namespace, Name: env.ValueFrom.SecretKeyRef.Name}})
-		}
+		edges = append(edges, envVarReferenceEdges(namespace, env)...)
+	}
+	return edges
+}
+
+func envFromReferenceEdges(namespace string, envFrom corev1.EnvFromSource) []Edge {
+	var edges []Edge
+	if envFrom.ConfigMapRef != nil && envFrom.ConfigMapRef.Name != "" {
+		edges = append(edges, Edge{Type: EdgeUses, TracedBy: "envFrom.configMapRef", CoreRef: &CoreRef{Version: "v1", Kind: "ConfigMap", Namespace: namespace, Name: envFrom.ConfigMapRef.Name}})
+	}
+	if envFrom.SecretRef != nil && envFrom.SecretRef.Name != "" {
+		edges = append(edges, Edge{Type: EdgeUses, TracedBy: "envFrom.secretRef", CoreRef: &CoreRef{Version: "v1", Kind: "Secret", Namespace: namespace, Name: envFrom.SecretRef.Name}})
+	}
+	return edges
+}
+
+func envVarReferenceEdges(namespace string, env corev1.EnvVar) []Edge {
+	if env.ValueFrom == nil {
+		return nil
+	}
+	var edges []Edge
+	if env.ValueFrom.ConfigMapKeyRef != nil && env.ValueFrom.ConfigMapKeyRef.Name != "" {
+		edges = append(edges, Edge{Type: EdgeUses, TracedBy: "env.configMapKeyRef", CoreRef: &CoreRef{Version: "v1", Kind: "ConfigMap", Namespace: namespace, Name: env.ValueFrom.ConfigMapKeyRef.Name}})
+	}
+	if env.ValueFrom.SecretKeyRef != nil && env.ValueFrom.SecretKeyRef.Name != "" {
+		edges = append(edges, Edge{Type: EdgeUses, TracedBy: "env.secretKeyRef", CoreRef: &CoreRef{Version: "v1", Kind: "Secret", Namespace: namespace, Name: env.ValueFrom.SecretKeyRef.Name}})
 	}
 	return edges
 }

@@ -118,16 +118,8 @@ func resolveServiceTargetPortForPod(servicePort *corev1.ServicePort, pod *corev1
 		if targetPort.StrVal == "" {
 			return int(servicePort.Port), nil
 		}
-		for _, container := range pod.Spec.Containers {
-			for _, port := range container.Ports {
-				if port.Name != targetPort.StrVal {
-					continue
-				}
-				if !isTCPProtocol(port.Protocol) {
-					continue
-				}
-				return int(port.ContainerPort), nil
-			}
+		if port, ok := findNamedTCPContainerPort(pod, targetPort.StrVal); ok {
+			return port, nil
 		}
 		return 0, fmt.Errorf(
 			"failed to resolve named targetPort %q for pod %s",
@@ -141,6 +133,17 @@ func resolveServiceTargetPortForPod(servicePort *corev1.ServicePort, pod *corev1
 	}
 
 	return int(servicePort.Port), nil
+}
+
+func findNamedTCPContainerPort(pod *corev1.Pod, name string) (int, bool) {
+	for _, container := range pod.Spec.Containers {
+		for _, port := range container.Ports {
+			if port.Name == name && isTCPProtocol(port.Protocol) {
+				return int(port.ContainerPort), true
+			}
+		}
+	}
+	return 0, false
 }
 
 func isTCPProtocol(protocol corev1.Protocol) bool {

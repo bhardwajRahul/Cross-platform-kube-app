@@ -23,20 +23,24 @@ func ForwardPodName(ctx context.Context, client kubernetes.Interface, namespace,
 	}
 	for _, slice := range slices.Items {
 		for _, endpoint := range slice.Endpoints {
-			if endpoint.Conditions.Ready == nil || !*endpoint.Conditions.Ready {
-				continue
-			}
-			if endpoint.TargetRef == nil || endpoint.TargetRef.Kind != "Pod" {
-				continue
-			}
-			pod, err := client.CoreV1().Pods(namespace).Get(ctx, endpoint.TargetRef.Name, metav1.GetOptions{})
-			if err != nil {
-				continue
-			}
-			if common.IsPodReady(pod) {
-				return endpoint.TargetRef.Name, nil
+			if podName, ok := readyPodNameForEndpoint(ctx, client, namespace, endpoint); ok {
+				return podName, nil
 			}
 		}
 	}
 	return "", fmt.Errorf("no ready pod found for service %s", name)
+}
+
+func readyPodNameForEndpoint(ctx context.Context, client kubernetes.Interface, namespace string, endpoint discoveryv1.Endpoint) (string, bool) {
+	if endpoint.Conditions.Ready == nil || !*endpoint.Conditions.Ready {
+		return "", false
+	}
+	if endpoint.TargetRef == nil || endpoint.TargetRef.Kind != "Pod" {
+		return "", false
+	}
+	pod, err := client.CoreV1().Pods(namespace).Get(ctx, endpoint.TargetRef.Name, metav1.GetOptions{})
+	if err != nil || !common.IsPodReady(pod) {
+		return "", false
+	}
+	return endpoint.TargetRef.Name, true
 }

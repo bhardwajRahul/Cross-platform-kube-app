@@ -41,9 +41,17 @@ func (s *Service) evaluateDescriptor(ctx context.Context, svc *capabilities.Serv
 	if svc == nil {
 		return true, nil
 	}
-	targets := s.preflightNamespaces(desc)
-	reviews := make([]capabilities.ReviewAttributes, 0, len(targets))
-	for _, namespace := range targets {
+	reviews := descriptorPreflightReviews(desc, s.preflightNamespaces(desc))
+	results, err := svc.Evaluate(ctx, reviews)
+	if err != nil {
+		return false, err
+	}
+	return summarizeDescriptorEvaluation(results)
+}
+
+func descriptorPreflightReviews(desc resourceDescriptor, namespaces []string) []capabilities.ReviewAttributes {
+	reviews := make([]capabilities.ReviewAttributes, 0, len(namespaces))
+	for _, namespace := range namespaces {
 		reviews = append(reviews, capabilities.ReviewAttributes{
 			ID: desc.GVR.String() + "|" + namespace,
 			Attributes: &authorizationv1.ResourceAttributes{
@@ -55,10 +63,10 @@ func (s *Service) evaluateDescriptor(ctx context.Context, svc *capabilities.Serv
 			},
 		})
 	}
-	results, err := svc.Evaluate(ctx, reviews)
-	if err != nil {
-		return false, err
-	}
+	return reviews
+}
+
+func summarizeDescriptorEvaluation(results []capabilities.CheckResult) (bool, error) {
 	var firstErr error
 	answered := false
 	for _, res := range results {

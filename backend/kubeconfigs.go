@@ -236,26 +236,8 @@ func (a *App) OpenKubeconfigSearchPathDialog() (string, error) {
 func (a *App) defaultKubeconfigSearchDirectory() string {
 	searchPaths, err := a.loadKubeconfigSearchPaths()
 	if err == nil {
-		for _, entry := range searchPaths {
-			resolved := resolveKubeconfigSearchPath(entry)
-			if resolved == "" {
-				continue
-			}
-			info, err := os.Stat(resolved)
-			if err != nil {
-				continue
-			}
-			if info.IsDir() {
-				return resolved
-			}
-			parent := filepath.Dir(resolved)
-			if parent == "" {
-				continue
-			}
-			parentInfo, err := os.Stat(parent)
-			if err == nil && parentInfo.IsDir() {
-				return parent
-			}
+		if directory := firstExistingKubeconfigDirectory(searchPaths); directory != "" {
+			return directory
 		}
 	}
 
@@ -264,6 +246,31 @@ func (a *App) defaultKubeconfigSearchDirectory() string {
 		return home
 	}
 
+	return ""
+}
+
+func firstExistingKubeconfigDirectory(searchPaths []string) string {
+	for _, entry := range searchPaths {
+		resolved := resolveKubeconfigSearchPath(entry)
+		if resolved == "" {
+			continue
+		}
+		info, err := os.Stat(resolved)
+		if err != nil {
+			continue
+		}
+		if info.IsDir() {
+			return resolved
+		}
+		parent := filepath.Dir(resolved)
+		if parent == "" {
+			continue
+		}
+		parentInfo, err := os.Stat(parent)
+		if err == nil && parentInfo.IsDir() {
+			return parent
+		}
+	}
 	return ""
 }
 
@@ -444,14 +451,7 @@ func (a *App) CloseCluster(selectionOrClusterID string) error {
 	targetClusterID := target
 	found := false
 	for _, selection := range currentSelections {
-		clusterID := ""
-		if parsed, err := parseKubeconfigSelection(selection); err == nil {
-			if clients := a.clusterClientsForSelection(parsed); clients != nil && clients.meta.ID != "" {
-				clusterID = clients.meta.ID
-			} else {
-				clusterID = a.clusterMetaForSelection(parsed).ID
-			}
-		}
+		clusterID := a.clusterIDForSelection(selection)
 		if selection == target || clusterID == target {
 			if clusterID != "" {
 				targetClusterID = clusterID
@@ -469,6 +469,17 @@ func (a *App) CloseCluster(selectionOrClusterID string) error {
 	return a.SetSelectedKubeconfigs(remainingSelections)
 }
 
+func (a *App) clusterIDForSelection(selection string) string {
+	parsed, err := parseKubeconfigSelection(selection)
+	if err != nil {
+		return ""
+	}
+	if clients := a.clusterClientsForSelection(parsed); clients != nil && clients.meta.ID != "" {
+		return clients.meta.ID
+	}
+	return a.clusterMetaForSelection(parsed).ID
+}
+
 // buildSelectionChangeIntent parses and validates a requested selection set.
 func (a *App) buildSelectionChangeIntent(selections []string, generation uint64) (selectionChangeIntent, error) {
 	intent := selectionChangeIntent{generation: generation}
@@ -481,45 +492,52 @@ func (a *App) buildSelectionChangeIntent(selections []string, generation uint64)
 	previousSelections := append([]string(nil), a.selectedKubeconfigs...)
 	a.kubeconfigsMu.RUnlock()
 
-	normalized := make([]kubeconfigSelection, 0, len(selections))
-	normalizedStrings := make([]string, 0, len(selections))
-	seenContexts := make(map[string]struct{}, len(selections))
-
-	for _, selection := range selections {
-		parsed, err := a.normalizeKubeconfigSelection(selection)
-		if err != nil {
-			return selectionChangeIntent{}, err
-		}
-		if err := a.validateKubeconfigSelection(parsed); err != nil {
-			return selectionChangeIntent{}, err
-		}
-
-		selectionKey := parsed.String()
-		if selectionKey != "" {
-			if _, exists := seenContexts[selectionKey]; exists {
-				return selectionChangeIntent{}, fmt.Errorf("duplicate selection: %s", selectionKey)
-			}
-			seenContexts[selectionKey] = struct{}{}
-		}
-
-		normalized = append(normalized, parsed)
-		normalizedStrings = append(normalizedStrings, parsed.String())
-	}
-
-	selectionChanged := len(previousSelections) != len(normalizedStrings)
-	if !selectionChanged {
-		for i, selection := range previousSelections {
-			if selection != normalizedStrings[i] {
-				selectionChanged = true
-				break
-			}
-		}
+	normalized, normalizedStrings, err := a.normalizeSelectionSet(selections)
+	if err != nil {
+		return selectionChangeIntent{}, err
 	}
 
 	intent.normalizedSelections = normalized
 	intent.normalizedSelectionText = normalizedStrings
-	intent.selectionChanged = selectionChanged
+	intent.selectionChanged = !selectionSetsEqual(previousSelections, normalizedStrings)
 	return intent, nil
+}
+
+func (a *App) normalizeSelectionSet(selections []string) ([]kubeconfigSelection, []string, error) {
+	normalized := make([]kubeconfigSelection, 0, len(selections))
+	normalizedStrings := make([]string, 0, len(selections))
+	seenContexts := make(map[string]struct{}, len(selections))
+	for _, selection := range selections {
+		parsed, err := a.normalizeKubeconfigSelection(selection)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := a.validateKubeconfigSelection(parsed); err != nil {
+			return nil, nil, err
+		}
+		selectionKey := parsed.String()
+		if selectionKey != "" {
+			if _, exists := seenContexts[selectionKey]; exists {
+				return nil, nil, fmt.Errorf("duplicate selection: %s", selectionKey)
+			}
+			seenContexts[selectionKey] = struct{}{}
+		}
+		normalized = append(normalized, parsed)
+		normalizedStrings = append(normalizedStrings, selectionKey)
+	}
+	return normalized, normalizedStrings, nil
+}
+
+func selectionSetsEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // commitSelectionChangeIntent applies validated selection state in-memory and to settings.
@@ -581,14 +599,8 @@ func (a *App) executeSelectionChangeWork(
 		return err
 	}
 	refreshStart := time.Now()
-	if a.refreshHTTPServer == nil || a.refreshAggregates.Load() == nil || a.refreshCtx == nil {
-		if err := a.setupRefreshSubsystem(); err != nil {
-			return err
-		}
-	} else {
-		if err := a.updateRefreshSubsystemSelections(intent.normalizedSelections); err != nil {
-			return err
-		}
+	if err := a.reconcileRefreshSubsystemSelections(intent.normalizedSelections); err != nil {
+		return err
 	}
 	if phases != nil {
 		phases.refresh = time.Since(refreshStart)
@@ -603,6 +615,13 @@ func (a *App) executeSelectionChangeWork(
 		phases.objectCatalog = time.Since(catalogStart)
 	}
 	return nil
+}
+
+func (a *App) reconcileRefreshSubsystemSelections(selections []kubeconfigSelection) error {
+	if a.refreshHTTPServer == nil || a.refreshAggregates.Load() == nil || a.refreshCtx == nil {
+		return a.setupRefreshSubsystem()
+	}
+	return a.updateRefreshSubsystemSelections(selections)
 }
 
 // clearKubeconfigSelection clears the active selection and resets client state.

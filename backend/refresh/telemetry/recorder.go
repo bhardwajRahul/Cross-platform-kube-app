@@ -217,12 +217,30 @@ func (r *Recorder) RecordSnapshot(
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	entry, ok := r.snapshots[domain]
-	if !ok {
-		entry = &SnapshotStatus{Domain: domain}
-		r.snapshots[domain] = entry
-	}
+	entry := r.snapshotStatus(domain)
+	updateSnapshotBatch(entry, scope, clusterID, clusterName, duration, truncated, totalItems, batchIndex, totalBatches, batchSize, isFinal)
+	updateSnapshotTiming(entry, batchIndex, timeToFirstBatchMs, informerSyncWaitMs)
+	updateSnapshotWarnings(entry, warnings)
+	updateSnapshotResult(entry, err)
+}
 
+func (r *Recorder) snapshotStatus(domain string) *SnapshotStatus {
+	if entry, ok := r.snapshots[domain]; ok {
+		return entry
+	}
+	entry := &SnapshotStatus{Domain: domain}
+	r.snapshots[domain] = entry
+	return entry
+}
+
+func updateSnapshotBatch(
+	entry *SnapshotStatus,
+	scope, clusterID, clusterName string,
+	duration time.Duration,
+	truncated bool,
+	totalItems, batchIndex, totalBatches, batchSize int,
+	isFinal bool,
+) {
 	entry.Scope = scope
 	// Use the provided cluster identifiers instead of instance fields to ensure
 	// correct attribution when the recorder is shared across clusters.
@@ -236,6 +254,9 @@ func (r *Recorder) RecordSnapshot(
 	entry.TotalBatches = totalBatches
 	entry.LastBatchSize = batchSize
 	entry.IsFinalBatch = isFinal
+}
+
+func updateSnapshotTiming(entry *SnapshotStatus, batchIndex int, timeToFirstBatchMs, informerSyncWaitMs int64) {
 	if batchIndex == 0 && timeToFirstBatchMs > 0 {
 		entry.TimeToFirstBatchMs = timeToFirstBatchMs
 	}
@@ -244,6 +265,9 @@ func (r *Recorder) RecordSnapshot(
 	if informerSyncWaitMs > entry.MaxInformerSyncWaitMs {
 		entry.MaxInformerSyncWaitMs = informerSyncWaitMs
 	}
+}
+
+func updateSnapshotWarnings(entry *SnapshotStatus, warnings []string) {
 	if len(warnings) > 0 {
 		copyWarnings := make([]string, 0, len(warnings))
 		for _, warning := range warnings {
@@ -264,6 +288,9 @@ func (r *Recorder) RecordSnapshot(
 		entry.Warnings = nil
 		entry.LastWarning = ""
 	}
+}
+
+func updateSnapshotResult(entry *SnapshotStatus, err error) {
 	if err != nil {
 		entry.LastStatus = SnapshotLastStatusError
 		entry.LastError = err.Error()

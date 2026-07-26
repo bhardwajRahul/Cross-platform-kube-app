@@ -114,24 +114,38 @@ func endpointsFromSlices(slices []*discoveryv1.EndpointSlice) (endpoints []strin
 		if slice == nil || len(slice.Ports) == 0 {
 			continue
 		}
-		for _, endpoint := range slice.Endpoints {
-			if len(endpoint.Addresses) == 0 {
-				continue
-			}
-			if !resourcemodel.EndpointReady(endpoint) {
-				notReadyCount += len(endpoint.Addresses)
-				continue
-			}
-			readyCount += len(endpoint.Addresses)
-			for _, address := range endpoint.Addresses {
-				for _, port := range slice.Ports {
-					endpoints = append(endpoints, fmt.Sprintf("%s:%d", address, endpointPortNumber(port)))
-				}
-			}
-		}
+		sliceEndpoints, sliceReady, sliceNotReady := endpointsFromSlice(slice)
+		endpoints = append(endpoints, sliceEndpoints...)
+		readyCount += sliceReady
+		notReadyCount += sliceNotReady
 	}
 	sort.Strings(endpoints)
 	return endpoints, readyCount, notReadyCount
+}
+
+func endpointsFromSlice(slice *discoveryv1.EndpointSlice) (endpoints []string, readyCount, notReadyCount int) {
+	for _, endpoint := range slice.Endpoints {
+		if len(endpoint.Addresses) == 0 {
+			continue
+		}
+		if !resourcemodel.EndpointReady(endpoint) {
+			notReadyCount += len(endpoint.Addresses)
+			continue
+		}
+		readyCount += len(endpoint.Addresses)
+		endpoints = append(endpoints, formatEndpointAddresses(endpoint.Addresses, slice.Ports)...)
+	}
+	return endpoints, readyCount, notReadyCount
+}
+
+func formatEndpointAddresses(addresses []string, ports []discoveryv1.EndpointPort) []string {
+	formatted := make([]string, 0, len(addresses)*len(ports))
+	for _, address := range addresses {
+		for _, port := range ports {
+			formatted = append(formatted, fmt.Sprintf("%s:%d", address, endpointPortNumber(port)))
+		}
+	}
+	return formatted
 }
 
 func endpointPortNumber(port discoveryv1.EndpointPort) int32 {

@@ -103,38 +103,42 @@ func EnumerateContainersWithOptions(pod *corev1.Pod, options ContainerSelectionO
 	isAll := filter == "" || strings.EqualFold(filter, "all")
 	var containers []ContainerRef
 
-	appendIfMatches := func(container ContainerRef) {
-		if !options.Selection.MatchContainer(container) {
-			return
-		}
-		if !isAll {
-			if MatchContainerFilter(container, filter) {
-				containers = append(containers, container)
-			}
-			return
-		}
-		switch {
-		case container.IsInit && !options.IncludeInit:
-			return
-		case container.IsEphemeral && !options.IncludeEphemeral:
-			return
-		case !matchesContainerState(pod, container, options.StateFilter):
-			return
-		}
-		containers = append(containers, container)
-	}
-
 	for _, container := range pod.Spec.InitContainers {
-		appendIfMatches(ContainerRef{Name: container.Name, IsInit: true})
+		candidate := ContainerRef{Name: container.Name, IsInit: true}
+		if containerMatchesOptions(pod, candidate, options, filter, isAll) {
+			containers = append(containers, candidate)
+		}
 	}
 	for _, container := range pod.Spec.Containers {
-		appendIfMatches(ContainerRef{Name: container.Name})
+		candidate := ContainerRef{Name: container.Name}
+		if containerMatchesOptions(pod, candidate, options, filter, isAll) {
+			containers = append(containers, candidate)
+		}
 	}
 	for _, container := range pod.Spec.EphemeralContainers {
-		appendIfMatches(ContainerRef{Name: container.Name, IsEphemeral: true})
+		candidate := ContainerRef{Name: container.Name, IsEphemeral: true}
+		if containerMatchesOptions(pod, candidate, options, filter, isAll) {
+			containers = append(containers, candidate)
+		}
 	}
 
 	return containers
+}
+
+func containerMatchesOptions(pod *corev1.Pod, container ContainerRef, options ContainerSelectionOptions, filter string, isAll bool) bool {
+	if !options.Selection.MatchContainer(container) {
+		return false
+	}
+	if !isAll {
+		return MatchContainerFilter(container, filter)
+	}
+	if container.IsInit && !options.IncludeInit {
+		return false
+	}
+	if container.IsEphemeral && !options.IncludeEphemeral {
+		return false
+	}
+	return matchesContainerState(pod, container, options.StateFilter)
 }
 
 func matchesContainerState(

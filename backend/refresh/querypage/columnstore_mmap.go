@@ -85,44 +85,58 @@ func writeInternedField(w *internedWriter, fc *fieldCodec, dicts *codecDicts, ty
 	case fieldBool:
 		w.boolcol(fc.boolCol, n)
 	case fieldPtrScalar:
-		w.boolcol(fc.present, n)
-		switch fc.elemKind {
-		case fieldString:
-			w.u32col(fc.strCol, n)
-			w.strsec(dicts.dict(fc).vals)
-		case fieldInt:
-			w.i64col(fc.intCol, n)
-		case fieldUint:
-			w.u64col(fc.uintCol, n)
-		case fieldFloat:
-			w.u64colFromFloat(fc.floatCol, n)
-		case fieldBool:
-			w.boolcol(fc.boolCol, n)
-		}
+		writeInternedPointerField(w, fc, dicts, n)
 	case fieldFallback:
-		ft := fieldGoType(typ, fc.index)
-		var gbuf bytes.Buffer
-		enc := gob.NewEncoder(&gbuf)
-		for i := 0; i < n; i++ {
-			rv := reflect.Zero(ft)
-			if i < len(fc.fallback) && fc.fallback[i].IsValid() {
-				rv = fc.fallback[i]
-			}
-			// gob cannot encode a top-level nil pointer/interface, so record a presence flag and
-			// only encode the value when present. A nil pointer-to-struct field (e.g. a nil
-			// *resourcemodel.ResourceLink) then round-trips as nil instead of panicking the spill.
-			present := true
-			switch rv.Kind() {
-			case reflect.Ptr, reflect.Interface:
-				present = !rv.IsNil()
-			}
-			_ = enc.Encode(present)
-			if present {
-				_ = enc.Encode(rv.Interface())
-			}
+		writeInternedFallbackField(w, fc, typ, n)
+	}
+}
+
+func writeInternedPointerField(w *internedWriter, fc *fieldCodec, dicts *codecDicts, n int) {
+	w.boolcol(fc.present, n)
+	switch fc.elemKind {
+	case fieldString:
+		w.u32col(fc.strCol, n)
+		w.strsec(dicts.dict(fc).vals)
+	case fieldInt:
+		w.i64col(fc.intCol, n)
+	case fieldUint:
+		w.u64col(fc.uintCol, n)
+	case fieldFloat:
+		w.u64colFromFloat(fc.floatCol, n)
+	case fieldBool:
+		w.boolcol(fc.boolCol, n)
+	}
+}
+
+func writeInternedFallbackField(w *internedWriter, fc *fieldCodec, typ reflect.Type, n int) {
+	fieldType := fieldGoType(typ, fc.index)
+	var buffer bytes.Buffer
+	encoder := gob.NewEncoder(&buffer)
+	for index := 0; index < n; index++ {
+		value := fallbackFieldValue(fc, fieldType, index)
+		present := reflectValuePresent(value)
+		_ = encoder.Encode(present)
+		if present {
+			_ = encoder.Encode(value.Interface())
 		}
-		w.u64(uint64(gbuf.Len()))
-		w.bytes(gbuf.Bytes())
+	}
+	w.u64(uint64(buffer.Len()))
+	w.bytes(buffer.Bytes())
+}
+
+func fallbackFieldValue(fc *fieldCodec, fieldType reflect.Type, index int) reflect.Value {
+	if index < len(fc.fallback) && fc.fallback[index].IsValid() {
+		return fc.fallback[index]
+	}
+	return reflect.Zero(fieldType)
+}
+
+func reflectValuePresent(value reflect.Value) bool {
+	switch value.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		return !value.IsNil()
+	default:
+		return true
 	}
 }
 
@@ -262,45 +276,57 @@ func readInternedField(r *internedReader, fc *fieldCodec, dicts *codecDicts, typ
 	case fieldBool:
 		fc.boolCol = r.boolcol(n)
 	case fieldPtrScalar:
-		fc.present = r.boolcol(n)
-		switch fc.elemKind {
-		case fieldString:
-			fc.strCol = r.u32col(n)
-			dicts.dict(fc).vals = r.strsec()
-		case fieldInt:
-			fc.intCol = r.i64col(n)
-		case fieldUint:
-			fc.uintCol = r.u64col(n)
-		case fieldFloat:
-			fc.floatCol = r.f64col(n)
-		case fieldBool:
-			fc.boolCol = r.boolcol(n)
-		}
+		readInternedPointerField(r, fc, dicts, n)
 	case fieldFallback:
-		blob := int(r.u64())
-		dec := gob.NewDecoder(bytes.NewReader(r.take(blob)))
-		ft := fieldGoType(typ, fc.index)
-		fc.fallback = make([]reflect.Value, n)
-		for i := 0; i < n; i++ {
-			// Mirror the writer: a presence flag precedes each value; an absent value (a nil
-			// pointer/interface the writer could not gob-encode) decodes back to the zero value.
-			var present bool
-			if err := dec.Decode(&present); err != nil {
-				r.fail(err)
-				return
-			}
-			if !present {
-				fc.fallback[i] = reflect.Zero(ft)
-				continue
-			}
-			np := reflect.New(ft)
-			if err := dec.Decode(np.Interface()); err != nil {
-				r.fail(err)
-				return
-			}
-			fc.fallback[i] = np.Elem()
-		}
+		readInternedFallbackField(r, fc, typ, n)
 	}
+}
+
+func readInternedPointerField(r *internedReader, fc *fieldCodec, dicts *codecDicts, n int) {
+	fc.present = r.boolcol(n)
+	switch fc.elemKind {
+	case fieldString:
+		fc.strCol = r.u32col(n)
+		dicts.dict(fc).vals = r.strsec()
+	case fieldInt:
+		fc.intCol = r.i64col(n)
+	case fieldUint:
+		fc.uintCol = r.u64col(n)
+	case fieldFloat:
+		fc.floatCol = r.f64col(n)
+	case fieldBool:
+		fc.boolCol = r.boolcol(n)
+	}
+}
+
+func readInternedFallbackField(r *internedReader, fc *fieldCodec, typ reflect.Type, n int) {
+	blob := int(r.u64())
+	decoder := gob.NewDecoder(bytes.NewReader(r.take(blob)))
+	fieldType := fieldGoType(typ, fc.index)
+	fc.fallback = make([]reflect.Value, n)
+	for index := 0; index < n; index++ {
+		value, err := decodeFallbackFieldValue(decoder, fieldType)
+		if err != nil {
+			r.fail(err)
+			return
+		}
+		fc.fallback[index] = value
+	}
+}
+
+func decodeFallbackFieldValue(decoder *gob.Decoder, fieldType reflect.Type) (reflect.Value, error) {
+	var present bool
+	if err := decoder.Decode(&present); err != nil {
+		return reflect.Value{}, err
+	}
+	if !present {
+		return reflect.Zero(fieldType), nil
+	}
+	value := reflect.New(fieldType)
+	if err := decoder.Decode(value.Interface()); err != nil {
+		return reflect.Value{}, err
+	}
+	return value.Elem(), nil
 }
 
 // fieldGoType returns the Go type of the leaf field reached by idx within struct type typ.

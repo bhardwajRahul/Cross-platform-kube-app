@@ -55,86 +55,79 @@ func spawnNewWindow() {
 
 // createApplicationMenu creates the macOS app menu and the File menu (all platforms)
 func createApplicationMenu(appMenu *menu.Menu, app *App) {
-	// macOS: the application menu is separate from the File menu
 	if runtime.GOOS == "darwin" {
-		appSubmenu := appMenu.AddSubmenu("Luxury Yacht")
-
-		appSubmenu.AddText("About Luxury Yacht", nil, func(_ *menu.CallbackData) {
-			go func() {
-				app.ShowAbout()
-			}()
-		})
-
-		appSubmenu.AddSeparator()
-
-		appSubmenu.AddText("Settings...", keys.CmdOrCtrl(","), func(_ *menu.CallbackData) {
-			go func() {
-				app.ShowSettings()
-			}()
-		})
-
-		appSubmenu.AddText("Hide Luxury Yacht", keys.CmdOrCtrl("h"), func(_ *menu.CallbackData) {
-			go func() {
-				if app.Ctx != nil {
-					wailsRuntime.Hide(app.Ctx)
-				}
-			}()
-		})
-
-		appSubmenu.AddText("Quit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
-			if app.Ctx != nil {
-				wailsRuntime.Quit(app.Ctx)
-			}
-		})
+		addMacApplicationMenu(appMenu, app)
 	}
+	addFileMenu(appMenu, app)
+}
 
-	// File menu (all platforms)
+func addMacApplicationMenu(appMenu *menu.Menu, app *App) {
+	appSubmenu := appMenu.AddSubmenu("Luxury Yacht")
+	appSubmenu.AddText("About Luxury Yacht", nil, asyncMenuCallback(app.ShowAbout))
+	appSubmenu.AddSeparator()
+	appSubmenu.AddText("Settings...", keys.CmdOrCtrl(","), asyncMenuCallback(app.ShowSettings))
+	appSubmenu.AddText("Hide Luxury Yacht", keys.CmdOrCtrl("h"), hideApplicationCallback(app))
+	appSubmenu.AddText("Quit", keys.CmdOrCtrl("q"), quitApplicationCallback(app))
+}
+
+func addFileMenu(appMenu *menu.Menu, app *App) {
 	fileMenu := appMenu.AddSubmenu("File")
-
-	// New Window spawns a separate application process
-	fileMenu.AddText("New Window", keys.CmdOrCtrl("n"), func(_ *menu.CallbackData) {
-		go spawnNewWindow()
-	})
+	fileMenu.AddText("New Window", keys.CmdOrCtrl("n"), asyncMenuCallback(spawnNewWindow))
 
 	// Open Cluster emits an event the frontend uses to open the Open Cluster
 	// modal (the "+" in the cluster tab bar does the same). The accelerator is
 	// the shortcut, mirroring New Window/Close.
-	fileMenu.AddText("Open Cluster", keys.CmdOrCtrl("o"), func(_ *menu.CallbackData) {
-		if app.Ctx != nil {
-			app.emitEvent("open-cluster")
-		}
-	})
+	fileMenu.AddText("Open Cluster", keys.CmdOrCtrl("o"), emitMenuEventWhenReady(app, "open-cluster"))
 
 	// Close emits an event to the frontend, which decides whether to close a
 	// cluster tab or quit the application (Chrome/VS Code style Cmd/Ctrl+W).
-	fileMenu.AddText("Close Cluster", keys.CmdOrCtrl("w"), func(_ *menu.CallbackData) {
-		if app.Ctx != nil {
-			app.emitEvent("menu:close")
-		}
-	})
+	fileMenu.AddText("Close Cluster", keys.CmdOrCtrl("w"), emitMenuEventWhenReady(app, "menu:close"))
 
-	// Windows/Linux: Settings and Exit/Quit also live in the File menu
 	if runtime.GOOS != "darwin" {
-		fileMenu.AddSeparator()
+		addDesktopFileMenuItems(fileMenu, app)
+	}
+}
 
-		fileMenu.AddText("Settings...", keys.CmdOrCtrl(","), func(_ *menu.CallbackData) {
-			go func() {
-				app.ShowSettings()
-			}()
-		})
+func addDesktopFileMenuItems(fileMenu *menu.Menu, app *App) {
+	fileMenu.AddSeparator()
+	fileMenu.AddText("Settings...", keys.CmdOrCtrl(","), asyncMenuCallback(app.ShowSettings))
+	fileMenu.AddSeparator()
+	exitLabel := "Quit"
+	if runtime.GOOS == "windows" {
+		exitLabel = "Exit"
+	}
+	fileMenu.AddText(exitLabel, keys.CmdOrCtrl("q"), quitApplicationCallback(app))
+}
 
-		fileMenu.AddSeparator()
+func asyncMenuCallback(action func()) func(*menu.CallbackData) {
+	return func(_ *menu.CallbackData) {
+		go action()
+	}
+}
 
-		exitLabel := "Quit"
-		if runtime.GOOS == "windows" {
-			exitLabel = "Exit"
-		}
-
-		fileMenu.AddText(exitLabel, keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
+func hideApplicationCallback(app *App) func(*menu.CallbackData) {
+	return func(_ *menu.CallbackData) {
+		go func() {
 			if app.Ctx != nil {
-				wailsRuntime.Quit(app.Ctx)
+				wailsRuntime.Hide(app.Ctx)
 			}
-		})
+		}()
+	}
+}
+
+func quitApplicationCallback(app *App) func(*menu.CallbackData) {
+	return func(_ *menu.CallbackData) {
+		if app.Ctx != nil {
+			wailsRuntime.Quit(app.Ctx)
+		}
+	}
+}
+
+func emitMenuEventWhenReady(app *App, event string) func(*menu.CallbackData) {
+	return func(_ *menu.CallbackData) {
+		if app.Ctx != nil {
+			app.emitEvent(event)
+		}
 	}
 }
 
@@ -188,12 +181,20 @@ func createViewMenu(appMenu *menu.Menu, app *App) {
 	// frontend binds the same Cmd/Ctrl+Shift+P shortcut; the click emits an event
 	// the palette listens for and opens through its guarded open path, so firing
 	// both the native accelerator and the web shortcut is harmless.
-	viewMenu.AddText("Command Palette", keys.Combo("p", keys.ShiftKey, keys.CmdOrCtrlKey), func(_ *menu.CallbackData) {
-		app.emitEvent("open-command-palette")
-	})
+	viewMenu.AddText("Command Palette", keys.Combo("p", keys.ShiftKey, keys.CmdOrCtrlKey), emitMenuEvent(app, "open-command-palette"))
 
 	viewMenu.AddSeparator()
+	addZoomMenuItems(viewMenu, app)
+	viewMenu.AddSeparator()
+	addViewToggleMenuItems(viewMenu, app)
 
+	// macOS will automatically add "Enter Full Screen" after this separator
+	if runtime.GOOS == "darwin" {
+		viewMenu.AddSeparator()
+	}
+}
+
+func addZoomMenuItems(viewMenu *menu.Menu, app *App) {
 	// Zoom controls
 	//
 	// On Windows the Wails v2 keyMap has no entries for "+" or "-", so native
@@ -215,47 +216,20 @@ func createViewMenu(appMenu *menu.Menu, app *App) {
 		resetZoomAccel = keys.CmdOrCtrl("0")
 	}
 
-	viewMenu.AddText(zoomInLabel, zoomInAccel, func(_ *menu.CallbackData) {
-		go func() {
-			app.emitEvent("zoom-in")
-		}()
-	})
+	viewMenu.AddText(zoomInLabel, zoomInAccel, asyncMenuCallback(func() { app.emitEvent("zoom-in") }))
+	viewMenu.AddText(zoomOutLabel, zoomOutAccel, asyncMenuCallback(func() { app.emitEvent("zoom-out") }))
+	viewMenu.AddText(resetZoomLabel, resetZoomAccel, asyncMenuCallback(func() { app.emitEvent("zoom-reset") }))
+}
 
-	viewMenu.AddText(zoomOutLabel, zoomOutAccel, func(_ *menu.CallbackData) {
-		go func() {
-			app.emitEvent("zoom-out")
-		}()
-	})
-
-	viewMenu.AddText(resetZoomLabel, resetZoomAccel, func(_ *menu.CallbackData) {
-		go func() {
-			app.emitEvent("zoom-reset")
-		}()
-	})
-
-	viewMenu.AddSeparator()
-
+func addViewToggleMenuItems(viewMenu *menu.Menu, app *App) {
 	// Dynamic sidebar menu item text
 	sidebarText := "Hide Sidebar"
 	if !app.IsSidebarVisible() {
 		sidebarText = "Show Sidebar"
 	}
 
-	viewMenu.AddText(sidebarText, keys.CmdOrCtrl("b"), func(_ *menu.CallbackData) {
-		go func() {
-			if err := app.ToggleSidebar(); err != nil {
-				println("Failed to toggle sidebar:", err.Error())
-			}
-		}()
-	})
-
-	viewMenu.AddText("Diff Objects", keys.CmdOrCtrl("d"), func(_ *menu.CallbackData) {
-		go func() {
-			if err := app.ToggleObjectDiff(); err != nil {
-				println("Failed to toggle object diff:", err.Error())
-			}
-		}()
-	})
+	viewMenu.AddText(sidebarText, keys.CmdOrCtrl("b"), asyncErrorMenuCallback("Failed to toggle sidebar:", app.ToggleSidebar))
+	viewMenu.AddText("Diff Objects", keys.CmdOrCtrl("d"), asyncErrorMenuCallback("Failed to toggle object diff:", app.ToggleObjectDiff))
 
 	// Dynamic Application Logs Panel menu item text
 	logsText := "Show Application Logs"
@@ -263,13 +237,7 @@ func createViewMenu(appMenu *menu.Menu, app *App) {
 		logsText = "Hide Application Logs"
 	}
 
-	viewMenu.AddText(logsText, keys.Combo("l", keys.ShiftKey, keys.ControlKey), func(_ *menu.CallbackData) {
-		go func() {
-			if err := app.ToggleAppLogsPanel(); err != nil {
-				println("Failed to toggle Application Logs Panel:", err.Error())
-			}
-		}()
-	})
+	viewMenu.AddText(logsText, keys.Combo("l", keys.ShiftKey, keys.ControlKey), asyncErrorMenuCallback("Failed to toggle Application Logs Panel:", app.ToggleAppLogsPanel))
 
 	// Dynamic Diagnostics panel menu item text
 	diagnosticsText := "Show Diagnostics Panel"
@@ -277,17 +245,22 @@ func createViewMenu(appMenu *menu.Menu, app *App) {
 		diagnosticsText = "Hide Diagnostics Panel"
 	}
 
-	viewMenu.AddText(diagnosticsText, keys.Combo("d", keys.ShiftKey, keys.ControlKey), func(_ *menu.CallbackData) {
+	viewMenu.AddText(diagnosticsText, keys.Combo("d", keys.ShiftKey, keys.ControlKey), asyncErrorMenuCallback("Failed to toggle diagnostics panel:", app.ToggleDiagnosticsPanel))
+}
+
+func emitMenuEvent(app *App, event string) func(*menu.CallbackData) {
+	return func(_ *menu.CallbackData) {
+		app.emitEvent(event)
+	}
+}
+
+func asyncErrorMenuCallback(prefix string, action func() error) func(*menu.CallbackData) {
+	return func(_ *menu.CallbackData) {
 		go func() {
-			if err := app.ToggleDiagnosticsPanel(); err != nil {
-				println("Failed to toggle diagnostics panel:", err.Error())
+			if err := action(); err != nil {
+				println(prefix, err.Error())
 			}
 		}()
-	})
-
-	// macOS will automatically add "Enter Full Screen" after this separator
-	if runtime.GOOS == "darwin" {
-		viewMenu.AddSeparator()
 	}
 }
 

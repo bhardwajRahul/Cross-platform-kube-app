@@ -76,46 +76,59 @@ func (s *Service) processStorageClassDetails(storageClass *storagev1.StorageClas
 		Annotations:      storageClass.Annotations,
 		IsDefault:        facts.DefaultClass,
 	}
+	details.ReclaimPolicy = storageClassReclaimPolicy(storageClass)
+	details.VolumeBindingMode = storageClassVolumeBindingMode(storageClass)
+	details.AllowVolumeExpansion = storageClass.AllowVolumeExpansion != nil && *storageClass.AllowVolumeExpansion
+	details.AllowedTopologies = storageClassTopologySelectors(storageClass.AllowedTopologies)
+	details.PersistentVolumes = storageClassPersistentVolumeNames(storageClass.Name, pvs)
+	details.Details = storageClassSummary(details)
+	return details
+}
 
-	if storageClass.ReclaimPolicy != nil {
-		details.ReclaimPolicy = string(*storageClass.ReclaimPolicy)
-	} else {
-		details.ReclaimPolicy = "Delete"
+func storageClassReclaimPolicy(storageClass *storagev1.StorageClass) string {
+	if storageClass.ReclaimPolicy == nil {
+		return "Delete"
 	}
+	return string(*storageClass.ReclaimPolicy)
+}
 
-	if storageClass.VolumeBindingMode != nil {
-		details.VolumeBindingMode = string(*storageClass.VolumeBindingMode)
-	} else {
-		details.VolumeBindingMode = "Immediate"
+func storageClassVolumeBindingMode(storageClass *storagev1.StorageClass) string {
+	if storageClass.VolumeBindingMode == nil {
+		return "Immediate"
 	}
+	return string(*storageClass.VolumeBindingMode)
+}
 
-	if storageClass.AllowVolumeExpansion != nil {
-		details.AllowVolumeExpansion = *storageClass.AllowVolumeExpansion
+func storageClassTopologySelectors(topologies []corev1.TopologySelectorTerm) []TopologySelector {
+	selectors := make([]TopologySelector, 0, len(topologies))
+	for _, topology := range topologies {
+		selector := TopologySelector{}
+		for _, expression := range topology.MatchLabelExpressions {
+			selector.MatchLabelExpressions = append(selector.MatchLabelExpressions, TopologyLabelRequirement{
+				Key:    expression.Key,
+				Values: expression.Values,
+			})
+		}
+		selectors = append(selectors, selector)
 	}
+	return selectors
+}
 
-	if storageClass.AllowedTopologies != nil {
-		for _, topology := range storageClass.AllowedTopologies {
-			selector := TopologySelector{}
-			for _, expr := range topology.MatchLabelExpressions {
-				selector.MatchLabelExpressions = append(selector.MatchLabelExpressions, TopologyLabelRequirement{
-					Key:    expr.Key,
-					Values: expr.Values,
-				})
-			}
-			details.AllowedTopologies = append(details.AllowedTopologies, selector)
+func storageClassPersistentVolumeNames(storageClassName string, pvs *corev1.PersistentVolumeList) []string {
+	if pvs == nil {
+		return nil
+	}
+	var names []string
+	for _, pv := range pvs.Items {
+		if pv.Spec.StorageClassName == storageClassName {
+			names = append(names, pv.Name)
 		}
 	}
+	return names
+}
 
-	// List persistent volumes associated with this storage class
-	if pvs != nil {
-		for _, pv := range pvs.Items {
-			if pv.Spec.StorageClassName == storageClass.Name {
-				details.PersistentVolumes = append(details.PersistentVolumes, pv.Name)
-			}
-		}
-	}
-
-	provisionerInfo := storageClass.Provisioner
+func storageClassSummary(details *StorageClassDetails) string {
+	provisionerInfo := details.Provisioner
 	if details.IsDefault {
 		provisionerInfo += " (default)"
 	}
@@ -132,7 +145,5 @@ func (s *Service) processStorageClassDetails(storageClass *storagev1.StorageClas
 		pvInfo = fmt.Sprintf(", %d PV(s)", len(details.PersistentVolumes))
 	}
 
-	details.Details = fmt.Sprintf("%s, %s%s%s", provisionerInfo, policyInfo, expansionInfo, pvInfo)
-
-	return details
+	return fmt.Sprintf("%s, %s%s%s", provisionerInfo, policyInfo, expansionInfo, pvInfo)
 }

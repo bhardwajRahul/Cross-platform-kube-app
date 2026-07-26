@@ -51,46 +51,68 @@ func (s *Service) collectViaSharedInformer(index int, desc resourceDescriptor, n
 	case collectionSourceSkip:
 		return nil, true, nil
 	case collectionSourceAPIExtensionsInformer:
-		if s.deps.APIExtensionsInformerFactory == nil {
-			return emitSummaries(index, agg, nil, nil, false)
-		}
-		lister := s.deps.APIExtensionsInformerFactory.Apiextensions().V1().CustomResourceDefinitions().Lister()
-		items, err := lister.List(labels.Everything())
-		if err != nil {
-			return emitSummaries(index, agg, nil, err, true)
-		}
-		return emitSummaries(index, agg, s.summariesFromObjects(desc, toMetaObjects(items)), nil, true)
+		return s.collectViaAPIExtensionsInformer(index, desc, agg)
 	case collectionSourceSharedInformer:
-		factory := s.deps.InformerFactory
-		if factory == nil {
-			return emitSummaries(index, agg, nil, nil, false)
-		}
-		gr := plan.groupResource
-		// Check permissions before accessing shared informer listers to avoid triggering
-		// lazy informer creation for resources the user cannot list/watch.
-		if s.deps.PermissionChecker != nil && !s.deps.PermissionChecker.CanListWatch(gr.Group, gr.Resource) {
-			// No permission - fall back to listResource which handles 403 gracefully
-			return emitSummaries(index, agg, nil, nil, false)
-		}
-		listFn := sharedInformerLister(factory, sharedInformerGroupResources[gr])
-		if listFn == nil {
-			return emitSummaries(index, agg, nil, nil, false)
-		}
-		summaries, err := s.collectFromNamespacedLister(desc, namespaces, listFn)
-		return emitSummaries(index, agg, summaries, err, true)
+		return s.collectViaCoreSharedInformer(index, desc, namespaces, plan.groupResource, agg)
 	case collectionSourceGatewayInformer:
-		if s.deps.GatewayInformerFactory == nil {
-			return emitSummaries(index, agg, nil, nil, false)
-		}
-		listFn := gatewayInformerLister(s.deps.GatewayInformerFactory, gatewayInformerGroupResources[plan.groupResource])
-		if listFn == nil {
-			return emitSummaries(index, agg, nil, nil, false)
-		}
-		summaries, err := s.collectFromNamespacedLister(desc, namespaces, listFn)
-		return emitSummaries(index, agg, summaries, err, true)
+		return s.collectViaGatewayInformer(index, desc, namespaces, plan.groupResource, agg)
 	default:
 		return emitSummaries(index, agg, nil, nil, false)
 	}
+}
+
+func (s *Service) collectViaAPIExtensionsInformer(index int, desc resourceDescriptor, agg *streamingAggregator) ([]Summary, bool, error) {
+	if s.deps.APIExtensionsInformerFactory == nil {
+		return emitSummaries(index, agg, nil, nil, false)
+	}
+	lister := s.deps.APIExtensionsInformerFactory.Apiextensions().V1().CustomResourceDefinitions().Lister()
+	items, err := lister.List(labels.Everything())
+	if err != nil {
+		return emitSummaries(index, agg, nil, err, true)
+	}
+	return emitSummaries(index, agg, s.summariesFromObjects(desc, toMetaObjects(items)), nil, true)
+}
+
+func (s *Service) collectViaCoreSharedInformer(
+	index int,
+	desc resourceDescriptor,
+	namespaces []string,
+	gr schema.GroupResource,
+	agg *streamingAggregator,
+) ([]Summary, bool, error) {
+	if s.deps.InformerFactory == nil {
+		return emitSummaries(index, agg, nil, nil, false)
+	}
+	// Check permissions before accessing shared informer listers to avoid triggering
+	// lazy informer creation for resources the user cannot list/watch.
+	if s.deps.PermissionChecker != nil && !s.deps.PermissionChecker.CanListWatch(gr.Group, gr.Resource) {
+		// No permission - fall back to listResource which handles 403 gracefully.
+		return emitSummaries(index, agg, nil, nil, false)
+	}
+	listFn := sharedInformerLister(s.deps.InformerFactory, sharedInformerGroupResources[gr])
+	if listFn == nil {
+		return emitSummaries(index, agg, nil, nil, false)
+	}
+	summaries, err := s.collectFromNamespacedLister(desc, namespaces, listFn)
+	return emitSummaries(index, agg, summaries, err, true)
+}
+
+func (s *Service) collectViaGatewayInformer(
+	index int,
+	desc resourceDescriptor,
+	namespaces []string,
+	gr schema.GroupResource,
+	agg *streamingAggregator,
+) ([]Summary, bool, error) {
+	if s.deps.GatewayInformerFactory == nil {
+		return emitSummaries(index, agg, nil, nil, false)
+	}
+	listFn := gatewayInformerLister(s.deps.GatewayInformerFactory, gatewayInformerGroupResources[gr])
+	if listFn == nil {
+		return emitSummaries(index, agg, nil, nil, false)
+	}
+	summaries, err := s.collectFromNamespacedLister(desc, namespaces, listFn)
+	return emitSummaries(index, agg, summaries, err, true)
 }
 
 func (s *Service) collectFromNamespacedLister(desc resourceDescriptor, namespaces []string, list func(namespace string) ([]metav1.Object, error)) ([]Summary, error) {

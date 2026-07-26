@@ -120,31 +120,9 @@ func (b *ClusterCRDBuilder) Build(ctx context.Context, scope string) (*refresh.S
 		return nil, err
 	}
 
-	var entries []ClusterCRDEntry
-	var version uint64
-	if b.maintained != nil {
-		// Serve from the informer-fed store (rows projected at intake by the same
-		// BuildStreamSummary the list path uses) instead of listing + re-projecting.
-		entries = b.maintained.rows("", clusterCRDAvailableKinds)
-		version = b.maintained.snapshotVersion()
-	} else {
-		crds, err := b.crdLister.List(labels.Everything())
-		if err != nil {
-			return nil, fmt.Errorf("cluster crds: failed to list CRDs: %w", err)
-		}
-		entries = make([]ClusterCRDEntry, 0, len(crds))
-		for _, crd := range crds {
-			if crd == nil {
-				continue
-			}
-			// Use the shared row builder so the full-snapshot path and the
-			// streaming/incremental update path emit identical row shapes.
-			// See BuildClusterCRDSummary in streaming_helpers.go.
-			entries = append(entries, apiextensions.BuildStreamSummary(meta, crd))
-			if v := resourceVersionOrTimestamp(crd); v > version {
-				version = v
-			}
-		}
+	entries, version, err := b.clusterCRDEntries(meta)
+	if err != nil {
+		return nil, err
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
@@ -180,4 +158,30 @@ func (b *ClusterCRDBuilder) Build(ctx context.Context, scope string) (*refresh.S
 		},
 		Stats: resolved.Stats,
 	}, nil
+}
+
+func (b *ClusterCRDBuilder) clusterCRDEntries(meta ClusterMeta) ([]ClusterCRDEntry, uint64, error) {
+	if b.maintained != nil {
+		// Serve from the informer-fed store (rows projected at intake by the same
+		// BuildStreamSummary the list path uses) instead of listing + re-projecting.
+		return b.maintained.rows("", clusterCRDAvailableKinds), b.maintained.snapshotVersion(), nil
+	}
+	crds, err := b.crdLister.List(labels.Everything())
+	if err != nil {
+		return nil, 0, fmt.Errorf("cluster crds: failed to list CRDs: %w", err)
+	}
+	entries := make([]ClusterCRDEntry, 0, len(crds))
+	var version uint64
+	for _, crd := range crds {
+		if crd == nil {
+			continue
+		}
+		// Use the shared row builder so the full-snapshot path and the
+		// streaming/incremental update path emit identical row shapes.
+		entries = append(entries, apiextensions.BuildStreamSummary(meta, crd))
+		if v := resourceVersionOrTimestamp(crd); v > version {
+			version = v
+		}
+	}
+	return entries, version, nil
 }

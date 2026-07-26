@@ -21,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
@@ -147,22 +148,27 @@ func summarizeReplicaSets(deployment *appsv1.Deployment, replicaSets *appsv1.Rep
 	deploymentRevision := deployment.Annotations["deployment.kubernetes.io/revision"]
 
 	for _, rs := range replicaSets.Items {
-		for _, owner := range rs.OwnerReferences {
-			if owner.UID == deployment.UID {
-				names = append(names, rs.Name)
-				if revision, ok := rs.Annotations["deployment.kubernetes.io/revision"]; ok {
-					if deploymentRevision != "" && revision == deploymentRevision {
-						currentRevision = revision
-						currentRSName = rs.Name
-					}
-				}
-				break
-			}
+		if !replicaSetOwnedByDeployment(rs, deployment.UID) {
+			continue
+		}
+		names = append(names, rs.Name)
+		if revision := rs.Annotations["deployment.kubernetes.io/revision"]; deploymentRevision != "" && revision == deploymentRevision {
+			currentRevision = revision
+			currentRSName = rs.Name
 		}
 	}
 
 	sort.Strings(names)
 	return names, currentRevision, currentRSName
+}
+
+func replicaSetOwnedByDeployment(replicaSet appsv1.ReplicaSet, deploymentUID k8stypes.UID) bool {
+	for _, owner := range replicaSet.OwnerReferences {
+		if owner.UID == deploymentUID {
+			return true
+		}
+	}
+	return false
 }
 
 func filterPodsForDeployment(

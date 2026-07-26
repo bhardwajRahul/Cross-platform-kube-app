@@ -19,6 +19,14 @@ type rpmTemplateData struct {
 	RPMArch      string
 }
 
+type rpmPackageContext struct {
+	templateData   rpmTemplateData
+	linuxOutputDir string
+	topDir         string
+	rpmArch        string
+	rpmVersion     string
+}
+
 func renderRPMTemplate(templatePath, destPath string, data rpmTemplateData, perm os.FileMode) error {
 	tmpl, err := template.ParseFiles(templatePath)
 	if err != nil {
@@ -50,7 +58,21 @@ func packageRPM(cfg BuildConfig, binPath, packagesDir string) error {
 	}
 
 	fmt.Println("\n📦 Building .rpm package")
+	packaging, err := prepareRPMPackage(cfg, packagesDir)
+	if err != nil {
+		return err
+	}
+	if err := stageRPMPackage(cfg, binPath, packaging); err != nil {
+		return err
+	}
+	specPath := filepath.Join(packaging.topDir, "SPECS", fmt.Sprintf("%s.spec", cfg.AppShortName))
+	if err := sh.RunV("rpmbuild", "-bb", "--quiet", "--define", fmt.Sprintf("_topdir %s", packaging.topDir), specPath); err != nil {
+		return fmt.Errorf("failed to build .rpm: %w", err)
+	}
+	return collectRPMPackage(cfg, packaging)
+}
 
+func prepareRPMPackage(cfg BuildConfig, packagesDir string) (rpmPackageContext, error) {
 	rpmArch := map[string]string{
 		"amd64": "x86_64",
 		"arm64": "aarch64",
@@ -59,7 +81,7 @@ func packageRPM(cfg BuildConfig, binPath, packagesDir string) error {
 		rpmArch = cfg.ArchType
 	}
 	rpmVersion := strings.ReplaceAll(cfg.Version, "-", ".")
-	tmplData := rpmTemplateData{
+	templateData := rpmTemplateData{
 		AppShortName: cfg.AppShortName,
 		AppLongName:  cfg.AppLongName,
 		Version:      cfg.Version,
@@ -69,13 +91,13 @@ func packageRPM(cfg BuildConfig, binPath, packagesDir string) error {
 
 	linuxOutputDir := filepath.Join(cfg.BuildDir, "artifacts")
 	if err := os.MkdirAll(linuxOutputDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create linux package output dir: %w", err)
+		return rpmPackageContext{}, fmt.Errorf("failed to create linux package output dir: %w", err)
 	}
 
 	topDir := filepath.Join(packagesDir, "rpm")
 	topDirAbs, err := filepath.Abs(topDir)
 	if err != nil {
-		return fmt.Errorf("failed to resolve rpm topdir: %w", err)
+		return rpmPackageContext{}, fmt.Errorf("failed to resolve rpm topdir: %w", err)
 	}
 	dirs := []string{
 		filepath.Join(topDirAbs, "BUILD"),
@@ -86,59 +108,67 @@ func packageRPM(cfg BuildConfig, binPath, packagesDir string) error {
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("failed to create rpm dir %s: %w", dir, err)
+			return rpmPackageContext{}, fmt.Errorf("failed to create rpm dir %s: %w", dir, err)
 		}
 	}
+	return rpmPackageContext{
+		templateData:   templateData,
+		linuxOutputDir: linuxOutputDir,
+		topDir:         topDirAbs,
+		rpmArch:        rpmArch,
+		rpmVersion:     rpmVersion,
+	}, nil
+}
 
-	sourceBin := filepath.Join(topDirAbs, "SOURCES", cfg.AppShortName)
+func stageRPMPackage(cfg BuildConfig, binPath string, packaging rpmPackageContext) error {
+	sourceBin := filepath.Join(packaging.topDir, "SOURCES", cfg.AppShortName)
 	if err := sh.Copy(sourceBin, binPath); err != nil {
 		return fmt.Errorf("failed to copy binary into rpm SOURCES: %w", err)
 	}
 
-	sourceDesktop := filepath.Join(topDirAbs, "SOURCES", fmt.Sprintf("%s.desktop", cfg.AppShortName))
+	sourceDesktop := filepath.Join(packaging.topDir, "SOURCES", fmt.Sprintf("%s.desktop", cfg.AppShortName))
 	desktopTemplate := filepath.Join("mage", "rpm", "desktop.tmpl")
-	if err := renderRPMTemplate(desktopTemplate, sourceDesktop, tmplData, 0o644); err != nil {
+	if err := renderRPMTemplate(desktopTemplate, sourceDesktop, packaging.templateData, 0o644); err != nil {
 		return err
 	}
 
 	if _, err := os.Stat(cfg.IconSource); err != nil {
 		return fmt.Errorf("icon not found at %s: %w", cfg.IconSource, err)
 	}
-	sourceIcon := filepath.Join(topDirAbs, "SOURCES", fmt.Sprintf("%s.png", cfg.AppShortName))
+	sourceIcon := filepath.Join(packaging.topDir, "SOURCES", fmt.Sprintf("%s.png", cfg.AppShortName))
 	if err := sh.Copy(sourceIcon, cfg.IconSource); err != nil {
 		return fmt.Errorf("failed to copy icon into rpm SOURCES: %w", err)
 	}
 
-	sourceMetainfo := filepath.Join(topDirAbs, "SOURCES", fmt.Sprintf("%s.metainfo.xml", cfg.AppShortName))
+	sourceMetainfo := filepath.Join(packaging.topDir, "SOURCES", fmt.Sprintf("%s.metainfo.xml", cfg.AppShortName))
 	metainfoTemplate := filepath.Join("mage", "rpm", "metainfo.xml.tmpl")
-	if err := renderRPMTemplate(metainfoTemplate, sourceMetainfo, tmplData, 0o644); err != nil {
+	if err := renderRPMTemplate(metainfoTemplate, sourceMetainfo, packaging.templateData, 0o644); err != nil {
 		return err
 	}
 
-	specPath := filepath.Join(topDirAbs, "SPECS", fmt.Sprintf("%s.spec", cfg.AppShortName))
+	specPath := filepath.Join(packaging.topDir, "SPECS", fmt.Sprintf("%s.spec", cfg.AppShortName))
 	specTemplate := filepath.Join("mage", "rpm", "spec.tmpl")
-	if err := renderRPMTemplate(specTemplate, specPath, tmplData, 0o644); err != nil {
+	if err := renderRPMTemplate(specTemplate, specPath, packaging.templateData, 0o644); err != nil {
 		return err
 	}
+	return nil
+}
 
-	if err := sh.RunV("rpmbuild", "-bb", "--quiet", "--define", fmt.Sprintf("_topdir %s", topDirAbs), specPath); err != nil {
-		return fmt.Errorf("failed to build .rpm: %w", err)
-	}
-
-	rpmOutputDir := filepath.Join(topDirAbs, "RPMS", rpmArch)
-	matches, _ := filepath.Glob(filepath.Join(rpmOutputDir, fmt.Sprintf("%s-%s-1.*.rpm", cfg.AppShortName, rpmVersion)))
+func collectRPMPackage(cfg BuildConfig, packaging rpmPackageContext) error {
+	rpmOutputDir := filepath.Join(packaging.topDir, "RPMS", packaging.rpmArch)
+	matches, _ := filepath.Glob(filepath.Join(rpmOutputDir, fmt.Sprintf("%s-%s-1.*.rpm", cfg.AppShortName, packaging.rpmVersion)))
 	if len(matches) > 0 {
 		rpmFile := matches[0]
-		rpmCopy := filepath.Join(linuxOutputDir, fmt.Sprintf("%s-%s-linux-%s.rpm", cfg.AppShortName, cfg.Version, rpmArch))
+		rpmCopy := filepath.Join(packaging.linuxOutputDir, fmt.Sprintf("%s-%s-linux-%s.rpm", cfg.AppShortName, cfg.Version, packaging.rpmArch))
 		if err := sh.Copy(rpmCopy, rpmFile); err != nil {
 			return fmt.Errorf("failed to copy rpm into %s: %w", rpmCopy, err)
 		}
-		if err := os.RemoveAll(topDirAbs); err != nil {
+		if err := os.RemoveAll(packaging.topDir); err != nil {
 			return fmt.Errorf("failed to clean rpm staging dir: %w", err)
 		}
 		fmt.Printf("✅ Built RPM package: %s\n", rpmCopy)
 	} else {
-		_ = os.RemoveAll(topDirAbs)
+		_ = os.RemoveAll(packaging.topDir)
 		fmt.Printf("✅ Built RPM package under %s\n", rpmOutputDir)
 	}
 	return nil

@@ -60,30 +60,34 @@ func GatewayStatusFromConditions(meta metav1.ObjectMeta, fallbackState, fallback
 	}
 
 	priority := []string{"Ready", "Programmed", "Accepted", "ResolvedRefs"}
-	for _, conditionType := range priority {
-		if condition, ok := findConditionFacts(conditions, conditionType); ok && condition.Status == string(metav1.ConditionFalse) {
-			label := condition.Type
-			if condition.Reason != "" {
-				label = fmt.Sprintf("%s: %s", condition.Type, condition.Reason)
-			}
-			return ObjectSourceStatus(label, condition.Status, condition.Reason, "", "warning", signals, lifecycle)
-		}
+	if condition, ok := firstGatewayConditionWithStatus(conditions, priority, metav1.ConditionFalse); ok {
+		return gatewayConditionStatus(condition, "warning", signals, lifecycle)
 	}
-	for _, conditionType := range priority {
-		if condition, ok := findConditionFacts(conditions, conditionType); ok && condition.Status == string(metav1.ConditionUnknown) {
-			label := condition.Type
-			if condition.Reason != "" {
-				label = fmt.Sprintf("%s: %s", condition.Type, condition.Reason)
-			}
-			return ObjectSourceStatus(label, condition.Status, condition.Reason, "", "unknown", signals, lifecycle)
-		}
+	if condition, ok := firstGatewayConditionWithStatus(conditions, priority, metav1.ConditionUnknown); ok {
+		return gatewayConditionStatus(condition, "unknown", signals, lifecycle)
 	}
-	for _, conditionType := range priority {
-		if condition, ok := findConditionFacts(conditions, conditionType); ok && condition.Status == string(metav1.ConditionTrue) {
-			return ObjectSourceStatus(condition.Type, condition.Status, condition.Reason, "", "ready", signals, lifecycle)
-		}
+	if condition, ok := firstGatewayConditionWithStatus(conditions, priority, metav1.ConditionTrue); ok {
+		return ObjectSourceStatus(condition.Type, condition.Status, condition.Reason, "", "ready", signals, lifecycle)
 	}
 	return ObjectSourceStatus(fallbackLabel, fallbackState, "", "", "unknown", signals, lifecycle)
+}
+
+func firstGatewayConditionWithStatus(conditions []ConditionFacts, priority []string, status metav1.ConditionStatus) (ConditionFacts, bool) {
+	for _, conditionType := range priority {
+		condition, ok := findConditionFacts(conditions, conditionType)
+		if ok && condition.Status == string(status) {
+			return condition, true
+		}
+	}
+	return ConditionFacts{}, false
+}
+
+func gatewayConditionStatus(condition ConditionFacts, presentation string, signals []ResourceStatusSignal, lifecycle ResourceLifecycle) ResourceStatusPresentation {
+	label := condition.Type
+	if condition.Reason != "" {
+		label = fmt.Sprintf("%s: %s", condition.Type, condition.Reason)
+	}
+	return ObjectSourceStatus(label, condition.Status, condition.Reason, "", presentation, signals, lifecycle)
 }
 
 func gatewayConditionSignals(conditions []ConditionFacts) []ResourceStatusSignal {

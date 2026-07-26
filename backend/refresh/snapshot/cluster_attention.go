@@ -1260,35 +1260,26 @@ func evaluatePodAttention(record attentionSourceRecord, now time.Time) attention
 	nextEvaluation := time.Time{}
 	graceDeadline, beforeGrace := warningGraceDeadline(record.AgeTimestamp, now)
 	causes := make([]AttentionCause, 0, 3)
-
-	includeClassification := statusNeedsAttention
-	classificationSeverity := classification.Severity
-	if statusNeedsAttention && classification.Grace > 0 && record.Restarts == 0 {
-		if beforeGrace {
-			if classification.GraceSeverity == "" {
-				includeClassification = false
-			} else {
-				classificationSeverity = classification.GraceSeverity
-			}
+	if statusNeedsAttention {
+		var deferred bool
+		causes, deferred = appendGraceAwareCause(
+			causes,
+			classificationCause(classification, record),
+			classification.Grace,
+			classification.GraceSeverity,
+			record.Restarts == 0 && beforeGrace,
+		)
+		if deferred {
 			nextEvaluation = graceDeadline
 		}
-	}
-	if includeClassification {
-		cause := classificationCause(classification, record)
-		cause.Severity = classificationSeverity
-		causes = appendAttentionCause(causes, cause)
 	}
 	if podNotReady {
 		policy := attentionPolicyForSignal(attentionSignalPodNotReady)
 		cause := signalCause(attentionSignalPodNotReady, policy, strings.TrimSpace(record.Ready)+" ready")
-		if policy.Grace > 0 && beforeGrace {
-			if policy.GraceSeverity != "" {
-				cause.Severity = policy.GraceSeverity
-				causes = appendAttentionCause(causes, cause)
-			}
+		var deferred bool
+		causes, deferred = appendGraceAwareCause(causes, cause, policy.Grace, policy.GraceSeverity, beforeGrace)
+		if deferred {
 			nextEvaluation = graceDeadline
-		} else {
-			causes = appendAttentionCause(causes, cause)
 		}
 	}
 	if record.Restarts > 0 {
@@ -1315,28 +1306,25 @@ func evaluateWorkloadAttention(record attentionSourceRecord, now time.Time) atte
 	nextEvaluation := time.Time{}
 	causes := make([]AttentionCause, 0, 3)
 	if statusNeedsAttention {
-		cause := classificationCause(classification, record)
-		if classification.Grace > 0 && record.Restarts == 0 && beforeGrace {
-			if classification.GraceSeverity != "" {
-				cause.Severity = classification.GraceSeverity
-				causes = appendAttentionCause(causes, cause)
-			}
+		var deferred bool
+		causes, deferred = appendGraceAwareCause(
+			causes,
+			classificationCause(classification, record),
+			classification.Grace,
+			classification.GraceSeverity,
+			record.Restarts == 0 && beforeGrace,
+		)
+		if deferred {
 			nextEvaluation = graceDeadline
-		} else {
-			causes = appendAttentionCause(causes, cause)
 		}
 	}
 	if replicaMismatch {
 		policy := attentionPolicyForSignal(attentionSignalReplicaMismatch)
 		cause := signalCause(attentionSignalReplicaMismatch, policy, strings.TrimSpace(record.Ready)+" ready")
-		if policy.Grace > 0 && record.Restarts == 0 && beforeGrace {
-			if policy.GraceSeverity != "" {
-				cause.Severity = policy.GraceSeverity
-				causes = appendAttentionCause(causes, cause)
-			}
+		var deferred bool
+		causes, deferred = appendGraceAwareCause(causes, cause, policy.Grace, policy.GraceSeverity, record.Restarts == 0 && beforeGrace)
+		if deferred {
 			nextEvaluation = graceDeadline
-		} else {
-			causes = appendAttentionCause(causes, cause)
 		}
 	}
 	if record.Restarts > 0 {
@@ -1346,6 +1334,23 @@ func evaluateWorkloadAttention(record attentionSourceRecord, now time.Time) atte
 	evaluation := findingEvaluation(record, causes)
 	evaluation.NextEvaluation = nextEvaluation
 	return evaluation
+}
+
+func appendGraceAwareCause(
+	causes []AttentionCause,
+	cause AttentionCause,
+	grace time.Duration,
+	graceSeverity AttentionSeverity,
+	withinGrace bool,
+) ([]AttentionCause, bool) {
+	if grace > 0 && withinGrace {
+		if graceSeverity != "" {
+			cause.Severity = graceSeverity
+			causes = appendAttentionCause(causes, cause)
+		}
+		return causes, true
+	}
+	return appendAttentionCause(causes, cause), false
 }
 
 func evaluateNodeAttention(record attentionSourceRecord) attentionEvaluation {

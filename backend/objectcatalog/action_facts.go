@@ -87,39 +87,43 @@ func buildUnstructuredSummaryActionFacts(desc resourceDescriptor, item *unstruct
 	if item == nil {
 		return nil
 	}
-	switch {
-	case desc.Group == "" && desc.Version == "v1" && desc.Kind == podspkg.Identity.Kind:
+	if desc.Group == "autoscaling" && desc.Kind == hpapkg.Identity.Kind {
+		if target := unstructuredHPAScaleTarget(item); target != nil {
+			return &ActionFacts{ScaleTarget: target}
+		}
+		return nil
+	}
+
+	gvk := schema.GroupVersionKind{Group: desc.Group, Version: desc.Version, Kind: desc.Kind}
+	switch gvk {
+	case schema.GroupVersionKind{Group: podspkg.Identity.Group, Version: podspkg.Identity.Version, Kind: podspkg.Identity.Kind}:
 		available := unstructuredHasForwardableContainerPorts(item.Object, "spec", "containers")
 		return &ActionFacts{PortForwardAvailable: &available}
-	case desc.Group == "" && desc.Version == "v1" && desc.Kind == servicepkg.Identity.Kind:
+	case schema.GroupVersionKind{Group: servicepkg.Identity.Group, Version: servicepkg.Identity.Version, Kind: servicepkg.Identity.Kind}:
 		available := unstructuredServiceHasForwardablePorts(item.Object)
 		return &ActionFacts{PortForwardAvailable: &available}
-	case desc.Group == "" && desc.Version == "v1" && desc.Kind == nodespkg.Identity.Kind:
+	case schema.GroupVersionKind{Group: nodespkg.Identity.Group, Version: nodespkg.Identity.Version, Kind: nodespkg.Identity.Kind}:
 		unschedulable, _, _ := unstructuredv1.NestedBool(item.Object, "spec", "unschedulable")
 		return &ActionFacts{Unschedulable: &unschedulable}
-	case desc.Group == "apps" && desc.Version == "v1" && desc.Kind == deploymentpkg.Identity.Kind:
+	case schema.GroupVersionKind{Group: deploymentpkg.Identity.Group, Version: deploymentpkg.Identity.Version, Kind: deploymentpkg.Identity.Kind}:
 		return unstructuredScalableWorkloadFacts(item, "spec", "template", "spec", "containers")
-	case desc.Group == "apps" && desc.Version == "v1" && desc.Kind == statefulsetpkg.Identity.Kind:
+	case schema.GroupVersionKind{Group: statefulsetpkg.Identity.Group, Version: statefulsetpkg.Identity.Version, Kind: statefulsetpkg.Identity.Kind}:
 		return unstructuredScalableWorkloadFacts(item, "spec", "template", "spec", "containers")
-	case desc.Group == "apps" && desc.Version == "v1" && desc.Kind == replicasetpkg.Identity.Kind:
+	case schema.GroupVersionKind{Group: replicasetpkg.Identity.Group, Version: replicasetpkg.Identity.Version, Kind: replicasetpkg.Identity.Kind}:
 		return unstructuredScalableWorkloadFacts(item, "spec", "template", "spec", "containers")
-	case desc.Group == "apps" && desc.Version == "v1" && desc.Kind == daemonsetpkg.Identity.Kind:
+	case schema.GroupVersionKind{Group: daemonsetpkg.Identity.Group, Version: daemonsetpkg.Identity.Version, Kind: daemonsetpkg.Identity.Kind}:
 		available := unstructuredHasForwardableContainerPorts(item.Object, "spec", "template", "spec", "containers")
 		return &ActionFacts{PortForwardAvailable: &available}
-	case desc.Group == "batch" && desc.Version == "v1" && desc.Kind == jobpkg.Identity.Kind:
+	case schema.GroupVersionKind{Group: jobpkg.Identity.Group, Version: jobpkg.Identity.Version, Kind: jobpkg.Identity.Kind}:
 		available := unstructuredHasForwardableContainerPorts(item.Object, "spec", "template", "spec", "containers")
 		return &ActionFacts{PortForwardAvailable: &available}
-	case desc.Group == "batch" && desc.Version == "v1" && desc.Kind == cronjobpkg.Identity.Kind:
+	case schema.GroupVersionKind{Group: cronjobpkg.Identity.Group, Version: cronjobpkg.Identity.Version, Kind: cronjobpkg.Identity.Kind}:
 		available := unstructuredHasForwardableContainerPorts(item.Object, "spec", "jobTemplate", "spec", "template", "spec", "containers")
 		facts := &ActionFacts{PortForwardAvailable: &available}
 		if suspended, found, _ := unstructuredv1.NestedBool(item.Object, "spec", "suspend"); found && suspended {
 			facts.Status = "Suspended"
 		}
 		return facts
-	case desc.Group == "autoscaling" && desc.Kind == hpapkg.Identity.Kind:
-		if target := unstructuredHPAScaleTarget(item); target != nil {
-			return &ActionFacts{ScaleTarget: target}
-		}
 	}
 	return nil
 }

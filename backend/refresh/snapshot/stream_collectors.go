@@ -189,31 +189,42 @@ func collectDescriptorTableRows[Row any](
 		if !sources[i].Available {
 			continue
 		}
-		indexer := indexerFor(d)
-		var objs []interface{}
-		if namespace == "" {
-			objs = indexer.List()
-		} else {
-			byNamespace, err := indexer.ByIndex(cache.NamespaceIndex, namespace)
-			if err != nil {
-				return nil, nil, 0, fmt.Errorf("%s: failed to list %s: %w", domainName, d.Resource, err)
-			}
-			objs = byNamespace
+		objects, err := descriptorObjects(indexerFor(d), namespace)
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("%s: failed to list %s: %w", domainName, d.Resource, err)
 		}
-		for _, obj := range objs {
-			item, ok := obj.(metav1.Object)
-			if !ok {
-				continue
-			}
-			row, ok := d.StreamRow(meta, item).(Row)
-			if !ok {
-				continue
-			}
-			rows = append(rows, row)
-			if v := resourceVersionOrTimestamp(item); v > version {
-				version = v
-			}
+		descriptorRows, descriptorVersion := projectDescriptorRows[Row](d, meta, objects)
+		rows = append(rows, descriptorRows...)
+		if descriptorVersion > version {
+			version = descriptorVersion
 		}
 	}
 	return rows, sources, version, nil
+}
+
+func descriptorObjects(indexer cache.Indexer, namespace string) ([]interface{}, error) {
+	if namespace == "" {
+		return indexer.List(), nil
+	}
+	return indexer.ByIndex(cache.NamespaceIndex, namespace)
+}
+
+func projectDescriptorRows[Row any](descriptor streamspec.Descriptor, meta ClusterMeta, objects []interface{}) ([]Row, uint64) {
+	rows := make([]Row, 0, len(objects))
+	var version uint64
+	for _, object := range objects {
+		item, ok := object.(metav1.Object)
+		if !ok {
+			continue
+		}
+		row, ok := descriptor.StreamRow(meta, item).(Row)
+		if !ok {
+			continue
+		}
+		rows = append(rows, row)
+		if itemVersion := resourceVersionOrTimestamp(item); itemVersion > version {
+			version = itemVersion
+		}
+	}
+	return rows, version
 }

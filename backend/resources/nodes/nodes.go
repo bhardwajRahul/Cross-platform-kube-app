@@ -25,6 +25,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	kubectldrain "k8s.io/kubectl/pkg/drain"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
@@ -278,45 +279,63 @@ func (s *Service) deleteOrEvictPodsWithoutWait(drainer *kubectldrain.Helper, pod
 		return nil
 	}
 
-	usingEviction := false
-	evictionGroupVersion := corev1.SchemeGroupVersion
-	if !drainer.DisableEviction {
-		discoveredGroupVersion, err := kubectldrain.CheckEvictionSupport(drainer.Client)
-		if err != nil {
-			return err
-		}
-		if !discoveredGroupVersion.Empty() {
-			usingEviction = true
-			evictionGroupVersion = discoveredGroupVersion
-		}
+	mode, err := resolvePodRemovalMode(drainer)
+	if err != nil {
+		return err
 	}
 
 	for _, pod := range pods {
 		if err := drainer.Ctx.Err(); err != nil {
 			return err
 		}
-		if drainer.OnPodDeletionOrEvictionStarted != nil {
-			activePod := pod
-			drainer.OnPodDeletionOrEvictionStarted(&activePod, usingEviction)
+		if err := removePodWithoutWait(drainer, pod, mode); err != nil {
+			return err
 		}
+	}
+	return nil
+}
 
-		var err error
-		if usingEviction {
-			err = drainer.EvictPod(pod, evictionGroupVersion)
-		} else {
-			err = drainer.DeletePod(pod)
-		}
-		if apierrors.IsNotFound(err) {
-			err = nil
-		}
+type podRemovalMode struct {
+	usingEviction bool
+	groupVersion  schema.GroupVersion
+}
 
-		if drainer.OnPodDeletionOrEvictionFinished != nil {
-			finishedPod := pod
-			drainer.OnPodDeletionOrEvictionFinished(&finishedPod, usingEviction, err)
-		}
-		if err != nil {
-			return fmt.Errorf("error when %s pod %s/%s: %w", drainOperationGerund(usingEviction), pod.Namespace, pod.Name, err)
-		}
+func resolvePodRemovalMode(drainer *kubectldrain.Helper) (podRemovalMode, error) {
+	mode := podRemovalMode{groupVersion: corev1.SchemeGroupVersion}
+	if drainer.DisableEviction {
+		return mode, nil
+	}
+	discoveredGroupVersion, err := kubectldrain.CheckEvictionSupport(drainer.Client)
+	if err != nil {
+		return podRemovalMode{}, err
+	}
+	if !discoveredGroupVersion.Empty() {
+		mode.usingEviction = true
+		mode.groupVersion = discoveredGroupVersion
+	}
+	return mode, nil
+}
+
+func removePodWithoutWait(drainer *kubectldrain.Helper, pod corev1.Pod, mode podRemovalMode) error {
+	if drainer.OnPodDeletionOrEvictionStarted != nil {
+		activePod := pod
+		drainer.OnPodDeletionOrEvictionStarted(&activePod, mode.usingEviction)
+	}
+	var err error
+	if mode.usingEviction {
+		err = drainer.EvictPod(pod, mode.groupVersion)
+	} else {
+		err = drainer.DeletePod(pod)
+	}
+	if apierrors.IsNotFound(err) {
+		err = nil
+	}
+	if drainer.OnPodDeletionOrEvictionFinished != nil {
+		finishedPod := pod
+		drainer.OnPodDeletionOrEvictionFinished(&finishedPod, mode.usingEviction, err)
+	}
+	if err != nil {
+		return fmt.Errorf("error when %s pod %s/%s: %w", drainOperationGerund(mode.usingEviction), pod.Namespace, pod.Name, err)
 	}
 	return nil
 }

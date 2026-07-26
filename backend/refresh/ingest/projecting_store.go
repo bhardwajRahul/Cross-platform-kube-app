@@ -220,28 +220,33 @@ func bundleIndexValues(projected interface{}) map[string][]string {
 		if name == "" {
 			continue
 		}
-		seen := make(map[string]struct{}, len(values))
-		next := make([]string, 0, len(values))
-		for _, value := range values {
-			if value == "" {
-				continue
-			}
-			if _, ok := seen[value]; ok {
-				continue
-			}
-			seen[value] = struct{}{}
-			next = append(next, value)
-		}
+		next := uniqueSortedIndexValues(values)
 		if len(next) == 0 {
 			continue
 		}
-		sort.Strings(next)
 		out[name] = next
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+func uniqueSortedIndexValues(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	sort.Strings(unique)
+	return unique
 }
 
 func (s *ProjectingStore) addIndexesForKey(key string, projected interface{}) {
@@ -358,50 +363,52 @@ func (s *ProjectingStore) hasSinks() bool {
 // non-nil. They assume the caller holds the write lock; a sink must not call back
 // into the store.
 func (s *ProjectingStore) emitUpsert(projected interface{}) {
-	if len(s.sinks) > 0 {
-		if table := tableHalf(projected); table != nil {
-			for _, sink := range s.sinks {
-				sink.Upsert(table)
-			}
-		}
-	}
-	if len(s.catalogSinks) > 0 {
-		if cat := catalogHalf(projected); cat != nil {
-			for _, sink := range s.catalogSinks {
-				sink.Upsert(cat)
-			}
-		}
-	}
-	if len(s.bundleSinks) > 0 {
-		if bundle, ok := projected.(Bundle); ok {
-			for _, sink := range s.bundleSinks {
-				sink.UpsertBundle(bundle)
-			}
-		}
-	}
+	emitSinkUpsert(s.sinks, tableHalf(projected))
+	emitSinkUpsert(s.catalogSinks, catalogHalf(projected))
+	emitBundleUpsert(s.bundleSinks, projected)
 }
 
 func (s *ProjectingStore) emitDelete(projected interface{}) {
-	if len(s.sinks) > 0 {
-		if table := tableHalf(projected); table != nil {
-			for _, sink := range s.sinks {
-				sink.Delete(table)
-			}
-		}
+	emitSinkDelete(s.sinks, tableHalf(projected))
+	emitSinkDelete(s.catalogSinks, catalogHalf(projected))
+	emitBundleDelete(s.bundleSinks, projected)
+}
+
+func emitSinkUpsert(sinks []Sink, value interface{}) {
+	if value == nil {
+		return
 	}
-	if len(s.catalogSinks) > 0 {
-		if cat := catalogHalf(projected); cat != nil {
-			for _, sink := range s.catalogSinks {
-				sink.Delete(cat)
-			}
-		}
+	for _, sink := range sinks {
+		sink.Upsert(value)
 	}
-	if len(s.bundleSinks) > 0 {
-		if bundle, ok := projected.(Bundle); ok {
-			for _, sink := range s.bundleSinks {
-				sink.DeleteBundle(bundle)
-			}
-		}
+}
+
+func emitSinkDelete(sinks []Sink, value interface{}) {
+	if value == nil {
+		return
+	}
+	for _, sink := range sinks {
+		sink.Delete(value)
+	}
+}
+
+func emitBundleUpsert(sinks []BundleSink, projected interface{}) {
+	bundle, ok := projected.(Bundle)
+	if !ok {
+		return
+	}
+	for _, sink := range sinks {
+		sink.UpsertBundle(bundle)
+	}
+}
+
+func emitBundleDelete(sinks []BundleSink, projected interface{}) {
+	bundle, ok := projected.(Bundle)
+	if !ok {
+		return
+	}
+	for _, sink := range sinks {
+		sink.DeleteBundle(bundle)
 	}
 }
 

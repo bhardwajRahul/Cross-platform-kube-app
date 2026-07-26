@@ -27,70 +27,88 @@ func (a *App) teardownRefreshSubsystem() {
 	subsystems := a.replaceRefreshSubsystems(nil)
 
 	for _, subsystem := range subsystems {
-		if subsystem == nil || subsystem.Manager == nil {
-			continue
-		}
-		subsystem.StopDoorbellNotifiers()
-		if subsystem.ResourceStream != nil {
-			subsystem.ResourceStream.Stop()
-		}
-		done := make(chan struct{})
-		go func(manager *refresh.Manager) {
-			ctx, cancel := context.WithTimeout(context.Background(), config.RefreshShutdownTimeout)
-			defer cancel()
-			if err := manager.Shutdown(ctx); err != nil {
-				a.logger.Warn(fmt.Sprintf("Failed to shutdown refresh manager: %v", err), logsources.Refresh)
-			}
-			close(done)
-		}(subsystem.Manager)
-		select {
-		case <-done:
-		case <-time.After(config.RefreshShutdownTimeout):
-			a.logger.Warn("Timed out waiting for refresh manager shutdown", logsources.Refresh)
-		}
+		a.shutdownRefreshSubsystem(subsystem)
 	}
 
 	a.refreshManager = nil
 	a.refreshAggregates.Store(nil)
 
 	serverDone := a.refreshServerDone
-	if a.refreshHTTPServer != nil {
-		done := make(chan struct{})
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), config.RefreshShutdownTimeout)
-			defer cancel()
-			if err := a.refreshHTTPServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				a.logger.Warn(fmt.Sprintf("Failed to shutdown refresh HTTP server: %v", err), logsources.Refresh)
-			}
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(config.RefreshShutdownTimeout):
-			a.logger.Warn("Timed out waiting for refresh HTTP server shutdown", logsources.Refresh)
-		}
-		a.refreshHTTPServer = nil
-	}
-
-	if serverDone != nil {
-		select {
-		case <-serverDone:
-		case <-time.After(config.RefreshShutdownTimeout):
-			a.logger.Warn("Timed out waiting for refresh server loop", logsources.Refresh)
-		}
-	}
+	a.shutdownRefreshHTTPServer()
+	a.waitForRefreshServerLoop(serverDone)
 	a.refreshServerDone = nil
 
-	if a.refreshListener != nil {
-		if err := a.refreshListener.Close(); err != nil {
-			a.logger.Debug(fmt.Sprintf("Failed to close refresh listener: %v", err), logsources.Refresh)
-		}
-		a.refreshListener = nil
-	}
+	a.closeRefreshListener()
 
 	a.sharedInformerFactory = nil
 	a.apiExtensionsInformerFactory = nil
 	a.refreshBaseURL = ""
+}
+
+func (a *App) shutdownRefreshSubsystem(subsystem *system.Subsystem) {
+	if subsystem == nil || subsystem.Manager == nil {
+		return
+	}
+	subsystem.StopDoorbellNotifiers()
+	if subsystem.ResourceStream != nil {
+		subsystem.ResourceStream.Stop()
+	}
+	done := make(chan struct{})
+	go func(manager *refresh.Manager) {
+		ctx, cancel := context.WithTimeout(context.Background(), config.RefreshShutdownTimeout)
+		defer cancel()
+		if err := manager.Shutdown(ctx); err != nil {
+			a.logger.Warn(fmt.Sprintf("Failed to shutdown refresh manager: %v", err), logsources.Refresh)
+		}
+		close(done)
+	}(subsystem.Manager)
+	select {
+	case <-done:
+	case <-time.After(config.RefreshShutdownTimeout):
+		a.logger.Warn("Timed out waiting for refresh manager shutdown", logsources.Refresh)
+	}
+}
+
+func (a *App) shutdownRefreshHTTPServer() {
+	if a.refreshHTTPServer == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func(server *http.Server) {
+		ctx, cancel := context.WithTimeout(context.Background(), config.RefreshShutdownTimeout)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			a.logger.Warn(fmt.Sprintf("Failed to shutdown refresh HTTP server: %v", err), logsources.Refresh)
+		}
+		close(done)
+	}(a.refreshHTTPServer)
+	select {
+	case <-done:
+	case <-time.After(config.RefreshShutdownTimeout):
+		a.logger.Warn("Timed out waiting for refresh HTTP server shutdown", logsources.Refresh)
+	}
+	a.refreshHTTPServer = nil
+}
+
+func (a *App) waitForRefreshServerLoop(serverDone <-chan struct{}) {
+	if serverDone == nil {
+		return
+	}
+	select {
+	case <-serverDone:
+	case <-time.After(config.RefreshShutdownTimeout):
+		a.logger.Warn("Timed out waiting for refresh server loop", logsources.Refresh)
+	}
+}
+
+func (a *App) closeRefreshListener() {
+	if a.refreshListener == nil {
+		return
+	}
+	if err := a.refreshListener.Close(); err != nil {
+		a.logger.Debug(fmt.Sprintf("Failed to close refresh listener: %v", err), logsources.Refresh)
+	}
+	a.refreshListener = nil
 }
 
 func (a *App) stopRefreshPermissionRevalidation(clusterID string) {
@@ -208,43 +226,44 @@ func (a *App) runClusterTransportRebuild(clusterID, reason string, cause error) 
 	if err := a.runSelectionMutation(
 		fmt.Sprintf("cluster-transport-rebuild:%s", clusterID),
 		func(_ *selectionMutation) error {
-			state := a.getTransportState(clusterID)
-
-			defer func() {
-				state.mu.Lock()
-				state.failureCount = 0
-				state.windowStart = time.Time{}
-				state.rebuildInProgress = false
-				state.mu.Unlock()
-			}()
-
-			if a.telemetryRecorder != nil {
-				a.telemetryRecorder.RecordTransportRebuild(fmt.Sprintf("cluster:%s - %s", clusterID, reason))
-			}
-
-			a.logger.Info(fmt.Sprintf("Starting transport rebuild for cluster %s", clusterID), logsources.KubernetesClient, clusterID, a.clusterNameForID(clusterID))
-
-			if err := a.runClusterOperation(context.Background(), clusterID, func(opCtx context.Context) error {
-				if err := opCtx.Err(); err != nil {
-					return err
-				}
-				// Use existing per-cluster rebuild mechanism.
-				a.rebuildClusterSubsystem(clusterID)
-				return opCtx.Err()
-			}); err != nil {
-				return err
-			}
-
-			if a.logger != nil {
-				msg := fmt.Sprintf("Transport rebuild complete for cluster %s", clusterID)
-				if cause != nil {
-					msg = fmt.Sprintf("%s after %v", msg, cause)
-				}
-				a.logger.Info(msg, logsources.KubernetesClient, clusterID, a.clusterNameForID(clusterID))
-			}
-			return nil
+			return a.rebuildClusterTransport(clusterID, reason, cause)
 		},
 	); err != nil {
 		a.logger.Warn(fmt.Sprintf("Transport rebuild coordination failed for cluster %s: %v", clusterID, err), logsources.KubernetesClient, clusterID, a.clusterNameForID(clusterID))
 	}
+}
+
+func (a *App) rebuildClusterTransport(clusterID, reason string, cause error) error {
+	state := a.getTransportState(clusterID)
+	defer func() {
+		state.mu.Lock()
+		state.failureCount = 0
+		state.windowStart = time.Time{}
+		state.rebuildInProgress = false
+		state.mu.Unlock()
+	}()
+
+	if a.telemetryRecorder != nil {
+		a.telemetryRecorder.RecordTransportRebuild(fmt.Sprintf("cluster:%s - %s", clusterID, reason))
+	}
+	a.logger.Info(fmt.Sprintf("Starting transport rebuild for cluster %s", clusterID), logsources.KubernetesClient, clusterID, a.clusterNameForID(clusterID))
+
+	if err := a.runClusterOperation(context.Background(), clusterID, func(opCtx context.Context) error {
+		if err := opCtx.Err(); err != nil {
+			return err
+		}
+		a.rebuildClusterSubsystem(clusterID)
+		return opCtx.Err()
+	}); err != nil {
+		return err
+	}
+
+	if a.logger != nil {
+		message := fmt.Sprintf("Transport rebuild complete for cluster %s", clusterID)
+		if cause != nil {
+			message = fmt.Sprintf("%s after %v", message, cause)
+		}
+		a.logger.Info(message, logsources.KubernetesClient, clusterID, a.clusterNameForID(clusterID))
+	}
+	return nil
 }

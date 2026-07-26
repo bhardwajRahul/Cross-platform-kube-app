@@ -344,32 +344,40 @@ func buildKubectlEditPatch(
 	versionedObject, err := kubescheme.Scheme.New(gvk)
 	switch {
 	case runtime.IsNotRegisteredError(err):
-		patch, patchErr := jsonpatch.CreateMergePatch(baseJSON, desiredJSON)
-		if patchErr != nil {
-			return nil, "", fmt.Errorf("failed to build merge patch: %w", patchErr)
-		}
-		var patchMap map[string]interface{}
-		if err := json.Unmarshal(patch, &patchMap); err != nil {
-			return nil, "", fmt.Errorf("failed to decode merge patch: %w", err)
-		}
-		for _, precondition := range preconditions {
-			if !precondition(patchMap) {
-				return nil, "", fmt.Errorf("at least one of apiVersion, kind, name, or managedFields was changed")
-			}
-		}
-		return patch, types.MergePatchType, nil
+		return buildJSONMergePatch(baseJSON, desiredJSON, preconditions)
 	case err != nil:
 		return nil, "", err
 	default:
-		patch, patchErr := strategicpatch.CreateTwoWayMergePatch(baseJSON, desiredJSON, versionedObject, preconditions...)
-		if patchErr != nil {
-			if mergepatch.IsPreconditionFailed(patchErr) {
-				return nil, "", fmt.Errorf("at least one of apiVersion, kind, name, or managedFields was changed")
-			}
-			return nil, "", fmt.Errorf("failed to build strategic merge patch: %w", patchErr)
+		return buildStrategicMergePatch(baseJSON, desiredJSON, versionedObject, preconditions)
+	}
+}
+
+func buildJSONMergePatch(baseJSON, desiredJSON []byte, preconditions []mergepatch.PreconditionFunc) ([]byte, types.PatchType, error) {
+	patch, err := jsonpatch.CreateMergePatch(baseJSON, desiredJSON)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to build merge patch: %w", err)
+	}
+	var patchMap map[string]interface{}
+	if err := json.Unmarshal(patch, &patchMap); err != nil {
+		return nil, "", fmt.Errorf("failed to decode merge patch: %w", err)
+	}
+	for _, precondition := range preconditions {
+		if !precondition(patchMap) {
+			return nil, "", fmt.Errorf("at least one of apiVersion, kind, name, or managedFields was changed")
 		}
+	}
+	return patch, types.MergePatchType, nil
+}
+
+func buildStrategicMergePatch(baseJSON, desiredJSON []byte, versionedObject runtime.Object, preconditions []mergepatch.PreconditionFunc) ([]byte, types.PatchType, error) {
+	patch, err := strategicpatch.CreateTwoWayMergePatch(baseJSON, desiredJSON, versionedObject, preconditions...)
+	if err == nil {
 		return patch, types.StrategicMergePatchType, nil
 	}
+	if mergepatch.IsPreconditionFailed(err) {
+		return nil, "", fmt.Errorf("at least one of apiVersion, kind, name, or managedFields was changed")
+	}
+	return nil, "", fmt.Errorf("failed to build strategic merge patch: %w", err)
 }
 
 func parseYAMLToUnstructured(content string) (*unstructured.Unstructured, error) {

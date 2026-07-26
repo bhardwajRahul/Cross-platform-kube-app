@@ -9,43 +9,47 @@ import (
 
 func enrichCatalogActionFacts(items map[string]Summary, allowed map[string]resourceDescriptor, failed map[string]error) {
 	hpaCoverageKnown := catalogHPACoverageKnown(allowed, failed)
-	managedTargets := make(map[string]struct{})
-	if hpaCoverageKnown {
-		for _, item := range items {
-			if item.ActionFacts == nil || item.ActionFacts.ScaleTarget == nil {
-				continue
-			}
-			managedTargets[actionTargetKey(
-				item.ActionFacts.ScaleTarget.Namespace,
-				item.ActionFacts.ScaleTarget.Group,
-				item.ActionFacts.ScaleTarget.Version,
-				item.ActionFacts.ScaleTarget.Kind,
-				item.ActionFacts.ScaleTarget.Name,
-			)] = struct{}{}
-		}
-	}
+	managedTargets := catalogManagedTargets(items, hpaCoverageKnown)
 
 	for key, item := range items {
-		if !isCatalogScalableWorkload(item) {
-			continue
+		if enriched, changed := enrichScalableWorkloadActionFacts(item, hpaCoverageKnown, managedTargets); changed {
+			items[key] = enriched
 		}
-		if !hpaCoverageKnown {
-			if item.ActionFacts != nil {
-				item.ActionFacts.HPAManaged = nil
-				items[key] = item
-			}
-			continue
-		}
-		managed := false
-		if _, ok := managedTargets[actionTargetKey(item.Ref.Namespace, item.Ref.Group, item.Ref.Version, item.Ref.Kind, item.Ref.Name)]; ok {
-			managed = true
-		}
-		if item.ActionFacts == nil {
-			item.ActionFacts = &ActionFacts{}
-		}
-		item.ActionFacts.HPAManaged = &managed
-		items[key] = item
 	}
+}
+
+func catalogManagedTargets(items map[string]Summary, coverageKnown bool) map[string]struct{} {
+	managedTargets := make(map[string]struct{})
+	if !coverageKnown {
+		return managedTargets
+	}
+	for _, item := range items {
+		if item.ActionFacts == nil || item.ActionFacts.ScaleTarget == nil {
+			continue
+		}
+		target := item.ActionFacts.ScaleTarget
+		managedTargets[actionTargetKey(target.Namespace, target.Group, target.Version, target.Kind, target.Name)] = struct{}{}
+	}
+	return managedTargets
+}
+
+func enrichScalableWorkloadActionFacts(item Summary, coverageKnown bool, managedTargets map[string]struct{}) (Summary, bool) {
+	if !isCatalogScalableWorkload(item) {
+		return item, false
+	}
+	if !coverageKnown {
+		if item.ActionFacts == nil {
+			return item, false
+		}
+		item.ActionFacts.HPAManaged = nil
+		return item, true
+	}
+	_, managed := managedTargets[actionTargetKey(item.Ref.Namespace, item.Ref.Group, item.Ref.Version, item.Ref.Kind, item.Ref.Name)]
+	if item.ActionFacts == nil {
+		item.ActionFacts = &ActionFacts{}
+	}
+	item.ActionFacts.HPAManaged = &managed
+	return item, true
 }
 
 func catalogHPACoverageKnown(allowed map[string]resourceDescriptor, failed map[string]error) bool {

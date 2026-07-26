@@ -72,12 +72,7 @@ func (a *App) registerResponseCacheInvalidation(subsystem *system.Subsystem, sel
 	// invalidation flows from an ingest Catalog-half sink instead of a factory
 	// informer handler. Register it once for all cut kinds.
 	ingestOwned := kindregistry.IngestOwnedGVRs()
-	if subsystem.IngestManager != nil {
-		sink := a.ingestResponseCacheSink(selectionKey)
-		for gvr := range ingestOwned {
-			subsystem.IngestManager.AddCatalogSink(gvr, sink)
-		}
-	}
+	a.registerIngestResponseCacheInvalidation(subsystem, selectionKey, ingestOwned)
 
 	// The ingest Catalog-half sink evicts a cut kind's own detail entry, but the Helm
 	// cache eviction switches on the typed Secret/ConfigMap (release labels/type) the
@@ -87,6 +82,33 @@ func (a *App) registerResponseCacheInvalidation(subsystem *system.Subsystem, sel
 	// cached Helm release/manifest/values.
 	a.registerHelmCacheInvalidation(subsystem.InformerFactory.HelmStorage(), selectionKey)
 
+	a.registerDescriptorResponseCacheInvalidation(shared, gateway, apiext, selectionKey, guard, perms, ingestOwned)
+	a.registerCustomResourceCacheInvalidation(subsystem, selectionKey)
+}
+
+func (a *App) registerIngestResponseCacheInvalidation(
+	subsystem *system.Subsystem,
+	selectionKey string,
+	ingestOwned map[schema.GroupVersionResource]struct{},
+) {
+	if subsystem.IngestManager == nil {
+		return
+	}
+	sink := a.ingestResponseCacheSink(selectionKey)
+	for gvr := range ingestOwned {
+		subsystem.IngestManager.AddCatalogSink(gvr, sink)
+	}
+}
+
+func (a *App) registerDescriptorResponseCacheInvalidation(
+	shared informers.SharedInformerFactory,
+	gateway gatewayinformers.SharedInformerFactory,
+	apiext apiextensionsinformers.SharedInformerFactory,
+	selectionKey string,
+	guard responseCacheInvalidationGuard,
+	perms permissions.ListWatchChecker,
+	ingestOwned map[schema.GroupVersionResource]struct{},
+) {
 	// Every detail-cacheable kind drives response-cache eviction. The kind registry
 	// is the single source; the informer is read generically from the factory its
 	// group implies (Gateway-API, apiextensions, or the core shared factory), so no
@@ -117,16 +139,19 @@ func (a *App) registerResponseCacheInvalidation(subsystem *system.Subsystem, sel
 		}
 		a.addResponseCacheInvalidationHandler(informer, selectionKey, d.Identity, guard)
 	}
+}
 
-	if subsystem.ResourceStream != nil {
-		// Use custom resource stream updates to evict cached YAML for dynamic resources.
-		subsystem.ResourceStream.SetCustomResourceCacheInvalidator(func(ref resourcemodel.ResourceRef) {
-			if ref.ClusterID == "" || ref.Group == "" || ref.Version == "" || ref.Kind == "" || ref.Name == "" {
-				return
-			}
-			a.invalidateResponseCacheForResource(selectionKey, ref)
-		})
+func (a *App) registerCustomResourceCacheInvalidation(subsystem *system.Subsystem, selectionKey string) {
+	if subsystem.ResourceStream == nil {
+		return
 	}
+	// Use custom resource stream updates to evict cached YAML for dynamic resources.
+	subsystem.ResourceStream.SetCustomResourceCacheInvalidator(func(ref resourcemodel.ResourceRef) {
+		if ref.ClusterID == "" || ref.Group == "" || ref.Version == "" || ref.Kind == "" || ref.Name == "" {
+			return
+		}
+		a.invalidateResponseCacheForResource(selectionKey, ref)
+	})
 }
 
 // gatewayAPIGroup and apiExtensionsGroup select the non-core informer factory for

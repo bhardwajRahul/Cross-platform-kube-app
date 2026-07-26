@@ -84,18 +84,7 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 
 	snapshot, err := s.snapshots.Build(ctx, domainName, scope)
 	if err != nil {
-		if status, ok := refresh.PermissionDeniedStatusFromError(err); ok {
-			writePermissionDenied(w, status, correlationID)
-			return
-		}
-		if apierrors.IsForbidden(err) {
-			wrapped := refresh.WrapPermissionDenied(err, domainName, "")
-			if status, ok := refresh.PermissionDeniedStatusFromError(wrapped); ok {
-				writePermissionDenied(w, status, correlationID)
-				return
-			}
-		}
-		writeError(w, http.StatusInternalServerError, err, correlationID)
+		writeSnapshotBuildError(w, err, domainName, correlationID)
 		return
 	}
 
@@ -118,6 +107,21 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(snapshot); err != nil {
 		writeError(w, http.StatusInternalServerError, err, correlationID)
 	}
+}
+
+func writeSnapshotBuildError(w http.ResponseWriter, err error, domainName, correlationID string) {
+	if status, ok := refresh.PermissionDeniedStatusFromError(err); ok {
+		writePermissionDenied(w, status, correlationID)
+		return
+	}
+	if apierrors.IsForbidden(err) {
+		wrapped := refresh.WrapPermissionDenied(err, domainName, "")
+		if status, ok := refresh.PermissionDeniedStatusFromError(wrapped); ok {
+			writePermissionDenied(w, status, correlationID)
+			return
+		}
+	}
+	writeError(w, http.StatusInternalServerError, err, correlationID)
 }
 
 func (s *Server) handleManualRefresh(w http.ResponseWriter, r *http.Request) {

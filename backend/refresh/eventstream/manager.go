@@ -40,6 +40,11 @@ type bufferedEvent struct {
 	entry    Entry
 }
 
+type eventDeliveryTarget struct {
+	id  uint64
+	sub *subscription
+}
+
 // eventBuffer is the per-scope resume buffer; the ring + replay logic is shared
 // via ringbuffer.Buffer.
 type eventBuffer = ringbuffer.Buffer[bufferedEvent]
@@ -259,7 +264,20 @@ func (m *Manager) handleEvent(obj interface{}) {
 }
 
 func (m *Manager) broadcast(scope string, entry Entry) {
+	observer, sequence, targets := m.prepareBroadcast(scope, entry)
+	if observer != nil && sequence > 0 {
+		observer(scope, sequence)
+	}
+	if len(targets) == 0 {
+		return
+	}
+	delivered, backlogDrops := m.deliverBroadcast(scope, targets, StreamEvent{Entry: entry, Sequence: sequence})
+	m.recordDelivery(scope, delivered, backlogDrops)
+}
+
+func (m *Manager) prepareBroadcast(scope string, entry Entry) (func(string, uint64), uint64, []eventDeliveryTarget) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	subscribers := m.subscribers[scope]
 	buffer := m.buffers[scope]
 	observer := m.signalObserver
@@ -276,33 +294,20 @@ func (m *Manager) broadcast(scope string, entry Entry) {
 		}
 		buffer.Add(bufferedEvent{sequence: sequence, entry: entry})
 	}
-	items := make([]struct {
-		id  uint64
-		sub *subscription
-	}, 0, len(subscribers))
+	targets := make([]eventDeliveryTarget, 0, len(subscribers))
 	for id, sub := range subscribers {
-		items = append(items, struct {
-			id  uint64
-			sub *subscription
-		}{id: id, sub: sub})
+		targets = append(targets, eventDeliveryTarget{id: id, sub: sub})
 	}
-	m.mu.Unlock()
-	if observer != nil && sequence > 0 {
-		observer(scope, sequence)
-	}
-	if len(items) == 0 {
-		return
-	}
-	streamEvent := StreamEvent{Entry: entry, Sequence: sequence}
+	return observer, sequence, targets
+}
 
+func (m *Manager) deliverBroadcast(scope string, targets []eventDeliveryTarget, streamEvent StreamEvent) (int, int) {
 	delivered := 0
 	backlogDrops := 0
-	closedCount := 0
-	for _, item := range items {
+	for _, item := range targets {
 		sub := item.sub
 		sent, closed, dropped := m.trySend(sub, streamEvent)
 		if closed {
-			closedCount++
 			go m.dropSubscriber(scope, item.id, sub)
 			continue
 		}
@@ -316,7 +321,7 @@ func (m *Manager) broadcast(scope string, entry Entry) {
 		m.logWarn("eventstream: subscriber channel full after drop attempt; closing")
 		go m.dropSubscriber(scope, item.id, sub)
 	}
-	m.recordDelivery(scope, delivered, backlogDrops)
+	return delivered, backlogDrops
 }
 
 // recordDelivery attributes delivery/backlog to the event scope (the diagnostics

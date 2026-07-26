@@ -588,37 +588,39 @@ type renderedField struct {
 func (r *renderer) renderFields(typeOf reflect.Type, inheritedOptional bool) ([]renderedField, error) {
 	fields := make([]renderedField, 0, typeOf.NumField())
 	for index := 0; index < typeOf.NumField(); index++ {
-		field := typeOf.Field(index)
-		name, optional, skip := jsonField(field)
-		if skip {
-			continue
-		}
-		if field.Anonymous && name == "" {
-			embedded := indirect(field.Type)
-			if embedded.Kind() != reflect.Struct {
-				return nil, fmt.Errorf("cannot flatten non-struct embedded field %s.%s", typeOf, field.Name)
-			}
-			nested, err := r.renderFields(embedded, inheritedOptional || optional)
-			if err != nil {
-				return nil, err
-			}
-			fields = append(fields, nested...)
-			continue
-		}
-		typeScript, err := r.typeScriptFieldType(field.Type, optional)
+		rendered, err := r.renderField(typeOf, typeOf.Field(index), inheritedOptional)
 		if err != nil {
-			return nil, fmt.Errorf("%s.%s: %w", typeOf, field.Name, err)
+			return nil, err
 		}
-		if name == "ref" && isCanonicalObjectRowType(typeOf) {
-			typeScript = "CanonicalResourceRef"
-		}
-		fields = append(fields, renderedField{
-			name:       name,
-			typeScript: typeScript,
-			optional:   inheritedOptional || optional,
-		})
+		fields = append(fields, rendered...)
 	}
 	return fields, nil
+}
+
+func (r *renderer) renderField(typeOf reflect.Type, field reflect.StructField, inheritedOptional bool) ([]renderedField, error) {
+	name, optional, skip := jsonField(field)
+	if skip {
+		return nil, nil
+	}
+	if field.Anonymous && name == "" {
+		embedded := indirect(field.Type)
+		if embedded.Kind() != reflect.Struct {
+			return nil, fmt.Errorf("cannot flatten non-struct embedded field %s.%s", typeOf, field.Name)
+		}
+		return r.renderFields(embedded, inheritedOptional || optional)
+	}
+	typeScript, err := r.typeScriptFieldType(field.Type, optional)
+	if err != nil {
+		return nil, fmt.Errorf("%s.%s: %w", typeOf, field.Name, err)
+	}
+	if name == "ref" && isCanonicalObjectRowType(typeOf) {
+		typeScript = "CanonicalResourceRef"
+	}
+	return []renderedField{{
+		name:       name,
+		typeScript: typeScript,
+		optional:   inheritedOptional || optional,
+	}}, nil
 }
 
 func (r *renderer) typeScriptFieldType(typeOf reflect.Type, optional bool) (string, error) {

@@ -124,31 +124,39 @@ func computeRunMarkers(cronJob *batchv1.CronJob, jobs *batchv1.JobList) (*metav1
 			continue
 		}
 
-		// Manually-triggered jobs are tagged by the CronJob controller
-		// with `cronjob.kubernetes.io/instantiate: manual`.
-		if job.Annotations["cronjob.kubernetes.io/instantiate"] == "manual" {
-			start := job.Status.StartTime
-			if start == nil {
-				t := job.CreationTimestamp
-				start = &t
-			}
-			if lastManual == nil || start.After(lastManual.Time) {
-				lastManual = start
-			}
-		}
+		lastManual = latestMarker(lastManual, manualRunMarker(job))
 
 		// A Job is "failed" when its backoffLimit is exhausted. Use
 		// CompletionTime when present, otherwise the failure-condition
 		// timestamp via Conditions, otherwise the Job's StartTime as
 		// a coarse fallback.
 		if isFailedJob(job) {
-			marker := failureTimestamp(job)
-			if marker != nil && (lastFailure == nil || marker.After(lastFailure.Time)) {
-				lastFailure = marker
-			}
+			lastFailure = latestMarker(lastFailure, failureTimestamp(job))
 		}
 	}
 	return lastManual, lastFailure
+}
+
+func manualRunMarker(job *batchv1.Job) *metav1.Time {
+	// Manually-triggered jobs are tagged by the CronJob controller.
+	if job.Annotations["cronjob.kubernetes.io/instantiate"] != "manual" {
+		return nil
+	}
+	if job.Status.StartTime != nil {
+		return job.Status.StartTime
+	}
+	created := job.CreationTimestamp
+	return &created
+}
+
+func latestMarker(current, candidate *metav1.Time) *metav1.Time {
+	if candidate == nil {
+		return current
+	}
+	if current == nil || candidate.After(current.Time) {
+		return candidate
+	}
+	return current
 }
 
 func isFailedJob(job *batchv1.Job) bool {

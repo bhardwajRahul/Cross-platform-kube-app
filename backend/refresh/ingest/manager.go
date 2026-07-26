@@ -120,6 +120,11 @@ type entry struct {
 	cancel context.CancelFunc
 }
 
+type ingestLaunchEntry struct {
+	gvr schema.GroupVersionResource
+	e   *entry
+}
+
 // ingestPart is one reflector of an entry: the cluster-wide "" part, or one
 // configured namespace's part under a namespace scope. Each part writes the
 // shared store through its own partition view, so its relists fully define
@@ -576,70 +581,81 @@ func (m *IngestManager) SetDynamicClient(dyn dynamic.Interface) {
 // filter denies is marked skipped (settled, empty store) and its reflector is not
 // launched.
 func (m *IngestManager) Start(ctx context.Context) {
-	type launchEntry struct {
-		gvr schema.GroupVersionResource
-		e   *entry
-	}
-	m.mu.Lock()
-	if m.cancel != nil {
-		m.mu.Unlock()
+	runCtx, entries, filter, started := m.beginRun(ctx)
+	if !started {
 		return
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	m.cancel = cancel
-	m.runCtx = runCtx
-	filter := m.permissionFilter
-	entries := make([]launchEntry, 0, len(m.entries))
-	for gvr, e := range m.entries {
-		entries = append(entries, launchEntry{gvr: gvr, e: e})
-	}
-	m.mu.Unlock()
-
-	// Stamp the readiness deadline from a single moment, so a kind whose initial
-	// relist never completes degrades out of the gate rather than blocking it.
-	m.startedAtMu.Lock()
-	m.startedAt = m.now()
-	m.startedAtMu.Unlock()
-
-	for _, le := range entries {
-		le := le
-		// Permission-skip per part: a kind (or a single scoped namespace of a
-		// kind) the identity cannot list/watch never launches its reflector
-		// (which would only 403-retry); it is excluded from the store's
-		// expected partitions so it does not block readiness — one denied
-		// namespace never blanks or blocks the others, mirroring the factory
-		// excluding a denied informer.
-		launched := make([]string, 0, len(le.e.parts))
-		for _, part := range le.e.parts {
-			if filter != nil && !filter(le.gvr.Group, le.gvr.Resource, part.namespace) {
-				part.skipped.Store(true)
-				if part.namespace == "" {
-					klog.V(2).Infof("ingest: skipping %s — identity cannot list/watch it (logged once)", le.gvr)
-				} else {
-					klog.V(2).Infof("ingest: skipping %s in %q — identity cannot list/watch it there (logged once)", le.gvr, part.namespace)
-				}
-				continue
-			}
-			launched = append(launched, part.namespace)
-		}
-		// Expected partitions must be declared BEFORE any reflector of the
-		// entry runs, so the store's sync gate counts exactly the launched set.
-		le.e.store.SetExpectedPartitions(launched)
-		for _, part := range le.e.parts {
-			if part.skipped.Load() {
-				continue
-			}
-			part := part
-			// Resume from a persisted resourceVersion when one was set (the store was
-			// restored full from disk); otherwise — the default — this is exactly
-			// part.reflector.Run.
-			go runWithResume(runCtx, part.lw, part.view, part.resumeRV, func() { part.reflector.Run(runCtx) })
-		}
+	m.markStarted()
+	for _, launch := range entries {
+		launchIngestEntry(runCtx, launch, filter)
 	}
 
 	// One log line when the initial syncs settle, naming the slowest kinds — the
 	// per-kind cold-start telemetry (see InitialSyncDurations).
 	go m.logInitialSyncSummary(runCtx)
+}
+
+func (m *IngestManager) beginRun(ctx context.Context) (context.Context, []ingestLaunchEntry, func(string, string, string) bool, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cancel != nil {
+		return nil, nil, nil, false
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	m.cancel = cancel
+	m.runCtx = runCtx
+	filter := m.permissionFilter
+	entries := make([]ingestLaunchEntry, 0, len(m.entries))
+	for gvr, e := range m.entries {
+		entries = append(entries, ingestLaunchEntry{gvr: gvr, e: e})
+	}
+	return runCtx, entries, filter, true
+}
+
+func (m *IngestManager) markStarted() {
+	// Stamp the readiness deadline from a single moment, so a kind whose initial
+	// relist never completes degrades out of the gate rather than blocking it.
+	m.startedAtMu.Lock()
+	m.startedAt = m.now()
+	m.startedAtMu.Unlock()
+}
+
+func launchIngestEntry(runCtx context.Context, launch ingestLaunchEntry, filter func(string, string, string) bool) {
+	launched := permittedIngestPartitions(launch, filter)
+	// Expected partitions must be declared BEFORE any reflector of the
+	// entry runs, so the store's sync gate counts exactly the launched set.
+	launch.e.store.SetExpectedPartitions(launched)
+	for _, part := range launch.e.parts {
+		if part.skipped.Load() {
+			continue
+		}
+		part := part
+		// Resume from a persisted resourceVersion when one was set (the store was
+		// restored full from disk); otherwise — the default — this is exactly
+		// part.reflector.Run.
+		go runWithResume(runCtx, part.lw, part.view, part.resumeRV, func() { part.reflector.Run(runCtx) })
+	}
+}
+
+func permittedIngestPartitions(launch ingestLaunchEntry, filter func(string, string, string) bool) []string {
+	launched := make([]string, 0, len(launch.e.parts))
+	for _, part := range launch.e.parts {
+		if filter != nil && !filter(launch.gvr.Group, launch.gvr.Resource, part.namespace) {
+			part.skipped.Store(true)
+			logSkippedIngestPart(launch.gvr, part.namespace)
+			continue
+		}
+		launched = append(launched, part.namespace)
+	}
+	return launched
+}
+
+func logSkippedIngestPart(gvr schema.GroupVersionResource, namespace string) {
+	if namespace == "" {
+		klog.V(2).Infof("ingest: skipping %s — identity cannot list/watch it (logged once)", gvr)
+		return
+	}
+	klog.V(2).Infof("ingest: skipping %s in %q — identity cannot list/watch it there (logged once)", gvr, namespace)
 }
 
 // SetResumeResourceVersion records the resourceVersion gvr's reflector should resume its

@@ -360,13 +360,7 @@ func (s *Service) fetchContainerLogs(namespace, podName, containerName string, i
 	pods := s.deps.KubernetesClient.CoreV1().Pods(namespace)
 	stream, err := containerLogsStreamFunc(pods, s.ctx(), podName, logOptions)
 	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "waiting to start") ||
-			strings.Contains(errStr, "container not found") ||
-			(strings.Contains(errStr, "previous terminated container") && strings.Contains(errStr, "not found")) ||
-			strings.Contains(errStr, "is not valid for pod") ||
-			strings.Contains(errStr, "ContainerCreating") ||
-			strings.Contains(errStr, "PodInitializing") {
+		if containerLogStreamUnavailable(err) {
 			return []types.ContainerLogsEntry{}, nil
 		}
 		return nil, fmt.Errorf("failed to get container logs stream: %w", err)
@@ -376,14 +370,7 @@ func (s *Service) fetchContainerLogs(namespace, podName, containerName string, i
 	var entries []types.ContainerLogsEntry
 	scanner := linescanner.New(stream)
 	for scanner.Scan() {
-		line := scanner.Text()
-		var timestamp, logLine string
-		if spaceIndex := strings.Index(line, " "); spaceIndex > 0 && spaceIndex < 31 {
-			timestamp = line[:spaceIndex]
-			logLine = line[spaceIndex+1:]
-		} else {
-			logLine = line
-		}
+		timestamp, logLine := splitContainerLogLine(scanner.Text())
 		if !lineFilter.Matches(logLine) {
 			continue
 		}
@@ -403,6 +390,24 @@ func (s *Service) fetchContainerLogs(namespace, podName, containerName string, i
 	}
 
 	return entries, nil
+}
+
+func containerLogStreamUnavailable(err error) bool {
+	errText := err.Error()
+	return strings.Contains(errText, "waiting to start") ||
+		strings.Contains(errText, "container not found") ||
+		(strings.Contains(errText, "previous terminated container") && strings.Contains(errText, "not found")) ||
+		strings.Contains(errText, "is not valid for pod") ||
+		strings.Contains(errText, "ContainerCreating") ||
+		strings.Contains(errText, "PodInitializing")
+}
+
+func splitContainerLogLine(line string) (string, string) {
+	spaceIndex := strings.Index(line, " ")
+	if spaceIndex <= 0 || spaceIndex >= 31 {
+		return "", line
+	}
+	return line[:spaceIndex], line[spaceIndex+1:]
 }
 
 func summarizeLogFetchErrors(prefix string, errs []error) string {

@@ -97,36 +97,8 @@ func (a *App) GetAppInfo() (*AppInfo, error) {
 		}), nil
 	}
 
-	// In dev mode, try to read version from wails.json
-	if Version == "dev" {
-		// Try multiple paths to find wails.json
-		paths := []string{
-			"wails.json",
-			"../wails.json",
-			"../../wails.json",
-			"/Volumes/git/personal/luxury-yacht/wails.json",
-			"/Users/john/git/personal/luxury-yacht/wails.json",
-		}
-
-		for _, path := range paths {
-			if data, err := os.ReadFile(path); err == nil {
-				var wailsConfig struct {
-					Info struct {
-						ProductVersion string `json:"productVersion"`
-					} `json:"info"`
-				}
-
-				if err := json.Unmarshal(data, &wailsConfig); err == nil && wailsConfig.Info.ProductVersion != "" {
-					return a.withUpdateInfo(&AppInfo{
-						Version:    wailsConfig.Info.ProductVersion + " (dev)",
-						BuildTime:  "dev",
-						GitCommit:  "dev",
-						IsBeta:     false,
-						ExpiryDate: "",
-					}), nil
-				}
-			}
-		}
+	if info := loadDevAppInfo(); info != nil {
+		return a.withUpdateInfo(info), nil
 	}
 
 	// Build app info
@@ -143,6 +115,42 @@ func (a *App) GetAppInfo() (*AppInfo, error) {
 	}
 
 	return a.withUpdateInfo(info), nil
+}
+
+func loadDevAppInfo() *AppInfo {
+	if Version != "dev" {
+		return nil
+	}
+
+	paths := []string{
+		"wails.json",
+		"../wails.json",
+		"../../wails.json",
+		"/Volumes/git/personal/luxury-yacht/wails.json",
+		"/Users/john/git/personal/luxury-yacht/wails.json",
+	}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var wailsConfig struct {
+			Info struct {
+				ProductVersion string `json:"productVersion"`
+			} `json:"info"`
+		}
+		if err := json.Unmarshal(data, &wailsConfig); err != nil || wailsConfig.Info.ProductVersion == "" {
+			continue
+		}
+		return &AppInfo{
+			Version:    wailsConfig.Info.ProductVersion + " (dev)",
+			BuildTime:  "dev",
+			GitCommit:  "dev",
+			IsBeta:     false,
+			ExpiryDate: "",
+		}
+	}
+	return nil
 }
 
 func (a *App) withUpdateInfo(info *AppInfo) *AppInfo {

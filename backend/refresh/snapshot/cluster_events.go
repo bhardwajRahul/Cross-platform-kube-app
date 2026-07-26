@@ -190,31 +190,9 @@ func (b *ClusterEventsBuilder) Build(ctx context.Context, scope string) (*refres
 		return nil, fmt.Errorf("cluster events cache has not finished syncing")
 	}
 
-	var entries []ClusterEventEntry
-	var version uint64
-	if b.maintained != nil {
-		// Serve from the informer-fed store (rows already projected + cluster-scope
-		// filtered at intake by projectClusterEventEntry) instead of listing + re-projecting.
-		entries = b.maintained.rows("", clusterEventsAvailableKinds)
-		version = b.maintained.snapshotVersion()
-	} else {
-		events, err := b.eventLister.List(labels.Everything())
-		if err != nil {
-			return nil, err
-		}
-		entries = make([]ClusterEventEntry, 0, len(events))
-		for _, evt := range events {
-			// projectClusterEventEntry skips namespaced events (cluster events involve
-			// cluster-scoped objects only) BEFORE building the expensive resource model.
-			entry, keep := projectClusterEventEntry(meta, evt)
-			if !keep {
-				continue
-			}
-			entries = append(entries, entry)
-			if v := resourceVersionOrTimestamp(evt); v > version {
-				version = v
-			}
-		}
+	entries, version, err := b.clusterEventEntries(meta)
+	if err != nil {
+		return nil, err
 	}
 
 	// Window-mode order is most-recent-first with a deterministic name tiebreak.
@@ -256,6 +234,33 @@ func (b *ClusterEventsBuilder) Build(ctx context.Context, scope string) (*refres
 		},
 		Stats: resolved.Stats,
 	}, nil
+}
+
+func (b *ClusterEventsBuilder) clusterEventEntries(meta ClusterMeta) ([]ClusterEventEntry, uint64, error) {
+	if b.maintained != nil {
+		// Serve from the informer-fed store (rows already projected + cluster-scope
+		// filtered at intake by projectClusterEventEntry) instead of listing + re-projecting.
+		return b.maintained.rows("", clusterEventsAvailableKinds), b.maintained.snapshotVersion(), nil
+	}
+	events, err := b.eventLister.List(labels.Everything())
+	if err != nil {
+		return nil, 0, err
+	}
+	entries := make([]ClusterEventEntry, 0, len(events))
+	var version uint64
+	for _, event := range events {
+		// projectClusterEventEntry skips namespaced events (cluster events involve
+		// cluster-scoped objects only) BEFORE building the expensive resource model.
+		entry, keep := projectClusterEventEntry(meta, event)
+		if !keep {
+			continue
+		}
+		entries = append(entries, entry)
+		if eventVersion := resourceVersionOrTimestamp(event); eventVersion > version {
+			version = eventVersion
+		}
+	}
+	return entries, version, nil
 }
 
 func eventTimestamp(evt *corev1.Event) time.Time {

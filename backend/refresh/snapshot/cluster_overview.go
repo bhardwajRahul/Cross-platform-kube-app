@@ -980,6 +980,17 @@ type clusterOverviewExtras struct {
 	unavailableResources []string
 }
 
+type clusterOverviewAvailability struct {
+	nodes      bool
+	pods       bool
+	namespaces bool
+}
+
+type clusterOverviewListerInputs struct {
+	namespaces []*corev1.Namespace
+	extras     clusterOverviewExtras
+}
+
 func applyClusterOverviewExtras(snapshot *refresh.Snapshot, extras clusterOverviewExtras) {
 	if snapshot == nil {
 		return
@@ -1005,80 +1016,10 @@ func (b *ClusterOverviewBuilder) buildFromListers(ctx context.Context, scope str
 	if err := b.waitForInformerSync(ctx); err != nil {
 		return nil, err
 	}
-
-	// Per-source runtime permission gates (issue #244): a denied primary source
-	// is dropped from the build and marked in the payload instead of failing
-	// the whole domain. The serve path injects the per-resource decisions into
-	// ctx (service.go ensurePermissions); absent decisions default to allowed.
-	// A permission-skipped ingest store (identity has list but not watch — the
-	// runtime list SSAR passes while the reflector never launches) counts as
-	// unavailable too, so its permanently empty store is not read as an empty
-	// cluster.
-	nodesAllowed := runtimeResourceAllowed(ctx, clusterOverviewDomainName, "", "nodes") &&
-		!(b.ingest != nil && b.ingest.PermissionSkippedFor(NodeGVR))
-	podsAllowed := runtimeResourceAllowed(ctx, clusterOverviewDomainName, "", "pods") &&
-		!(b.ingest != nil && b.ingest.PermissionSkippedFor(PodGVR))
-	namespacesAllowed := runtimeResourceAllowed(ctx, clusterOverviewDomainName, "", "namespaces")
-
-	type listResult[T any] struct {
-		items []*T
-		err   error
-	}
-
-	var (
-		namespaceRes listResult[corev1.Namespace]
-	)
-	var deploymentCount, statefulSetCount, daemonSetCount, cronJobCount int
-	recentEvents := make([]RecentEvent, 0)
-
-	tasks := []func(context.Context) error{
-		func(context.Context) error {
-			if b.namespaceLister == nil || !namespacesAllowed {
-				return nil
-			}
-			list, err := b.namespaceLister.List(labels.Everything())
-			namespaceRes.items = list
-			namespaceRes.err = err
-			return err
-		},
-		// Deployment/StatefulSet/DaemonSet/CronJob are cut to the ingest path: their counts
-		// are the number of projected catalog rows in each kind's ingest store, gated on the
-		// store having synced (the ingest equivalent of the prior informerSynced gate, so an
-		// unsynced store contributes 0 rather than an undercount).
-		func(context.Context) error {
-			deploymentCount = b.workloadIngestCount(DeploymentGVR)
-			return nil
-		},
-		func(context.Context) error {
-			statefulSetCount = b.workloadIngestCount(StatefulSetGVR)
-			return nil
-		},
-		func(context.Context) error {
-			daemonSetCount = b.workloadIngestCount(DaemonSetGVR)
-			return nil
-		},
-		func(context.Context) error {
-			cronJobCount = b.workloadIngestCount(CronJobGVR)
-			return nil
-		},
-		func(context.Context) error {
-			if b.eventLister == nil || !informerSynced(b.eventHasSynced) {
-				return nil
-			}
-			events, err := b.eventLister.List(labels.Everything())
-			if err != nil {
-				return err
-			}
-			recentEvents = buildRecentEvents(events, ClusterMetaFromContext(ctx))
-			return nil
-		},
-	}
-
-	if err := parallel.RunLimited(ctx, 4, tasks...); err != nil {
+	availability := b.clusterOverviewAvailability(ctx)
+	inputs, err := b.collectClusterOverviewListerInputs(ctx, availability)
+	if err != nil {
 		return nil, err
-	}
-	if namespaceRes.err != nil {
-		return nil, namespaceRes.err
 	}
 
 	// Nodes are cut to the ingest path: the per-node overview facts come from the projected
@@ -1087,29 +1028,95 @@ func (b *ClusterOverviewBuilder) buildFromListers(ctx context.Context, scope str
 	// count; a permission-skipped store settles empty). Pods likewise come from the ingest
 	// store: the projected PodAggregate rows plus the store's latest RV as the pod version
 	// watermark. A runtime-denied source is dropped even when its store still holds rows.
-	var nodeFacts []nodeOverviewFact
-	if nodesAllowed && b.ingest != nil && b.ingest.HasSyncedFor(NodeGVR) {
-		nodeFacts = nodeOverviewFactsFromIngest(b.ingest)
-	}
-	var podAggregates []streamrows.PodAggregate
-	var podVersion uint64
-	if podsAllowed {
-		podAggregates = podAggregatesFromIngest(b.ingest)
-		podVersion = podIngestVersion(b.ingest)
-	}
-	snapshot, err := buildClusterOverviewSnapshot(ctx, scope, nodeFacts, podAggregates, podVersion, namespaceRes.items, b.metrics, b.serverVersion, b.serverHost)
+	nodeFacts := b.clusterOverviewNodeFacts(availability.nodes)
+	podAggregates, podVersion := b.clusterOverviewPodInputs(availability.pods)
+	snapshot, err := buildClusterOverviewSnapshot(ctx, scope, nodeFacts, podAggregates, podVersion, inputs.namespaces, b.metrics, b.serverVersion, b.serverHost)
 	if err != nil {
 		return nil, err
 	}
-	applyClusterOverviewExtras(snapshot, clusterOverviewExtras{
-		totalDeployments:     deploymentCount,
-		totalStatefulSets:    statefulSetCount,
-		totalDaemonSets:      daemonSetCount,
-		totalCronJobs:        cronJobCount,
-		recentEvents:         recentEvents,
-		unavailableResources: clusterOverviewUnavailable(nodesAllowed, podsAllowed, namespacesAllowed),
-	})
+	inputs.extras.unavailableResources = clusterOverviewUnavailable(availability.nodes, availability.pods, availability.namespaces)
+	applyClusterOverviewExtras(snapshot, inputs.extras)
 	return snapshot, nil
+}
+
+func (b *ClusterOverviewBuilder) clusterOverviewAvailability(ctx context.Context) clusterOverviewAvailability {
+	// A permission-skipped ingest store has list but not watch permission, so its
+	// rows cannot represent the current cluster and the source remains unavailable.
+	return clusterOverviewAvailability{
+		nodes: runtimeResourceAllowed(ctx, clusterOverviewDomainName, "", "nodes") &&
+			!(b.ingest != nil && b.ingest.PermissionSkippedFor(NodeGVR)),
+		pods: runtimeResourceAllowed(ctx, clusterOverviewDomainName, "", "pods") &&
+			!(b.ingest != nil && b.ingest.PermissionSkippedFor(PodGVR)),
+		namespaces: runtimeResourceAllowed(ctx, clusterOverviewDomainName, "", "namespaces"),
+	}
+}
+
+func (b *ClusterOverviewBuilder) collectClusterOverviewListerInputs(ctx context.Context, availability clusterOverviewAvailability) (clusterOverviewListerInputs, error) {
+	inputs := clusterOverviewListerInputs{extras: clusterOverviewExtras{recentEvents: make([]RecentEvent, 0)}}
+	tasks := []func(context.Context) error{
+		func(context.Context) error {
+			var err error
+			inputs.namespaces, err = b.listClusterOverviewNamespaces(availability.namespaces)
+			return err
+		},
+		func(context.Context) error {
+			inputs.extras.totalDeployments = b.workloadIngestCount(DeploymentGVR)
+			return nil
+		},
+		func(context.Context) error {
+			inputs.extras.totalStatefulSets = b.workloadIngestCount(StatefulSetGVR)
+			return nil
+		},
+		func(context.Context) error {
+			inputs.extras.totalDaemonSets = b.workloadIngestCount(DaemonSetGVR)
+			return nil
+		},
+		func(context.Context) error {
+			inputs.extras.totalCronJobs = b.workloadIngestCount(CronJobGVR)
+			return nil
+		},
+		func(context.Context) error {
+			var err error
+			inputs.extras.recentEvents, err = b.listClusterOverviewRecentEvents(ctx)
+			return err
+		},
+	}
+	if err := parallel.RunLimited(ctx, 4, tasks...); err != nil {
+		return clusterOverviewListerInputs{}, err
+	}
+	return inputs, nil
+}
+
+func (b *ClusterOverviewBuilder) listClusterOverviewNamespaces(allowed bool) ([]*corev1.Namespace, error) {
+	if b.namespaceLister == nil || !allowed {
+		return nil, nil
+	}
+	return b.namespaceLister.List(labels.Everything())
+}
+
+func (b *ClusterOverviewBuilder) listClusterOverviewRecentEvents(ctx context.Context) ([]RecentEvent, error) {
+	if b.eventLister == nil || !informerSynced(b.eventHasSynced) {
+		return []RecentEvent{}, nil
+	}
+	events, err := b.eventLister.List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+	return buildRecentEvents(events, ClusterMetaFromContext(ctx)), nil
+}
+
+func (b *ClusterOverviewBuilder) clusterOverviewNodeFacts(allowed bool) []nodeOverviewFact {
+	if !allowed || b.ingest == nil || !b.ingest.HasSyncedFor(NodeGVR) {
+		return nil
+	}
+	return nodeOverviewFactsFromIngest(b.ingest)
+}
+
+func (b *ClusterOverviewBuilder) clusterOverviewPodInputs(allowed bool) ([]streamrows.PodAggregate, uint64) {
+	if !allowed {
+		return nil, 0
+	}
+	return podAggregatesFromIngest(b.ingest), podIngestVersion(b.ingest)
 }
 
 // buildRecentEvents filters events down to recent warnings and packages the

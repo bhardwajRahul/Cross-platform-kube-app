@@ -695,66 +695,26 @@ func (a *App) loadAppSettings() error {
 		return err
 	}
 
-	objPanelLogsBufferMaxSize := defaultObjPanelLogsBufferMaxSize
-	objPanelLogsTargetPerScopeLimit := defaultObjPanelLogsTargetPerScopeLimit
-	objPanelLogsTargetGlobalLimit := defaultObjPanelLogsTargetGlobalLimit
-	logAPITimestampFormat := defaultObjPanelLogsAPITimestampFormat
-	logAPITimestampUseLocalTimeZone := false
-	dimInactiveNamespaces := true
-	if settings.Preferences.DimInactiveNamespaces != nil {
-		dimInactiveNamespaces = *settings.Preferences.DimInactiveNamespaces
-	}
-	exclusiveNamespaces := true
-	if settings.Preferences.ExclusiveNamespaces != nil {
-		exclusiveNamespaces = *settings.Preferences.ExclusiveNamespaces
-	}
-	if settings.Preferences.ObjPanelLogs != nil && settings.Preferences.ObjPanelLogs.BufferMaxSize > 0 {
-		objPanelLogsBufferMaxSize = clampObjPanelLogsBufferMaxSize(settings.Preferences.ObjPanelLogs.BufferMaxSize)
-	}
-	if settings.Preferences.ObjPanelLogs != nil && settings.Preferences.ObjPanelLogs.TargetPerScopeLimit > 0 {
-		objPanelLogsTargetPerScopeLimit = clampObjPanelLogsTargetPerScopeLimit(settings.Preferences.ObjPanelLogs.TargetPerScopeLimit)
-	}
-	if settings.Preferences.ObjPanelLogs != nil && settings.Preferences.ObjPanelLogs.TargetGlobalLimit > 0 {
-		objPanelLogsTargetGlobalLimit = clampObjPanelLogsTargetGlobalLimit(settings.Preferences.ObjPanelLogs.TargetGlobalLimit)
-	}
-	if settings.Preferences.ObjPanelLogs != nil && settings.Preferences.ObjPanelLogs.APITimestampFormat != "" {
-		logAPITimestampFormat = settings.Preferences.ObjPanelLogs.APITimestampFormat
-	}
-	if settings.Preferences.ObjPanelLogs != nil {
-		logAPITimestampUseLocalTimeZone = settings.Preferences.ObjPanelLogs.UseLocalTimeZone
-	}
-	kubernetesClientQPS := defaultKubernetesClientQPS
-	kubernetesClientBurst := defaultKubernetesClientBurst
-	permissionSSRRFetchConcurrency := defaultPermissionSSRRFetchConcurrency
-	if settings.Preferences.KubernetesAPI != nil {
-		if settings.Preferences.KubernetesAPI.ClientQPS > 0 {
-			kubernetesClientQPS = clampKubernetesClientQPS(settings.Preferences.KubernetesAPI.ClientQPS)
-		}
-		if settings.Preferences.KubernetesAPI.ClientBurst > 0 {
-			kubernetesClientBurst = clampKubernetesClientBurst(settings.Preferences.KubernetesAPI.ClientBurst)
-		}
-		if settings.Preferences.KubernetesAPI.PermissionSSRRFetchConcurrency > 0 {
-			permissionSSRRFetchConcurrency = clampPermissionSSRRFetchConcurrency(settings.Preferences.KubernetesAPI.PermissionSSRRFetchConcurrency)
-		}
-	}
+	logSettings := resolveObjPanelLogSettings(settings.Preferences.ObjPanelLogs)
+	kubernetesAPISettings := resolveKubernetesAPISettings(settings.Preferences.KubernetesAPI)
 
 	a.appSettings = &AppSettings{
 		AppearanceMode:                           settings.Preferences.AppearanceMode,
 		SelectedKubeconfigs:                      append([]string(nil), settings.Kubeconfig.Selected...),
 		UseShortResourceNames:                    settings.Preferences.UseShortResourceNames,
-		DimInactiveNamespaces:                    dimInactiveNamespaces,
-		ExclusiveNamespaces:                      exclusiveNamespaces,
+		DimInactiveNamespaces:                    boolPreferenceOrDefault(settings.Preferences.DimInactiveNamespaces, true),
+		ExclusiveNamespaces:                      boolPreferenceOrDefault(settings.Preferences.ExclusiveNamespaces, true),
 		AutoRefreshEnabled:                       settings.Preferences.Refresh.Auto,
 		RefreshBackgroundClustersEnabled:         settings.Preferences.Refresh.Background,
 		MetricsRefreshIntervalMs:                 settings.Preferences.Refresh.MetricsIntervalMs,
-		KubernetesClientQPS:                      kubernetesClientQPS,
-		KubernetesClientBurst:                    kubernetesClientBurst,
-		PermissionSSRRFetchConcurrency:           permissionSSRRFetchConcurrency,
-		ObjPanelLogsBufferMaxSize:                objPanelLogsBufferMaxSize,
-		ObjPanelLogsTargetPerScopeLimit:          objPanelLogsTargetPerScopeLimit,
-		ObjPanelLogsTargetGlobalLimit:            objPanelLogsTargetGlobalLimit,
-		ObjPanelLogsAPITimestampFormat:           logAPITimestampFormat,
-		ObjPanelLogsAPITimestampUseLocalTimeZone: logAPITimestampUseLocalTimeZone,
+		KubernetesClientQPS:                      kubernetesAPISettings.clientQPS,
+		KubernetesClientBurst:                    kubernetesAPISettings.clientBurst,
+		PermissionSSRRFetchConcurrency:           kubernetesAPISettings.permissionSSRRFetchConcurrency,
+		ObjPanelLogsBufferMaxSize:                logSettings.bufferMaxSize,
+		ObjPanelLogsTargetPerScopeLimit:          logSettings.targetPerScopeLimit,
+		ObjPanelLogsTargetGlobalLimit:            logSettings.targetGlobalLimit,
+		ObjPanelLogsAPITimestampFormat:           logSettings.apiTimestampFormat,
+		ObjPanelLogsAPITimestampUseLocalTimeZone: logSettings.useLocalTimeZone,
 		GridTablePersistenceMode:                 settings.Preferences.GridTablePersistenceMode,
 		DefaultTablePageSize:                     settings.Preferences.DefaultTablePageSize,
 		DefaultObjectPanelPosition:               settings.Preferences.DefaultObjectPanelPosition,
@@ -776,14 +736,82 @@ func (a *App) loadAppSettings() error {
 		LinkColorDark:                            settings.Preferences.LinkColorDark,
 		Themes:                                   settings.Preferences.Themes,
 	}
-	containerlogs.SetPerScopeTargetLimit(objPanelLogsTargetPerScopeLimit)
+	containerlogs.SetPerScopeTargetLimit(logSettings.targetPerScopeLimit)
 	// The accessor guards the lazy init (subsystem builds run concurrently); creating
 	// on demand here is correct — the limit then applies to the limiter every
 	// subsystem receives.
 	if limiter := a.sharedContainerLogsTargetLimiter(); limiter != nil {
-		limiter.SetLimit(objPanelLogsTargetGlobalLimit)
+		limiter.SetLimit(logSettings.targetGlobalLimit)
 	}
 	return nil
+}
+
+type resolvedObjPanelLogSettings struct {
+	bufferMaxSize       int
+	targetPerScopeLimit int
+	targetGlobalLimit   int
+	apiTimestampFormat  string
+	useLocalTimeZone    bool
+}
+
+func resolveObjPanelLogSettings(settings *settingsObjPanelLogs) resolvedObjPanelLogSettings {
+	resolved := resolvedObjPanelLogSettings{
+		bufferMaxSize:       defaultObjPanelLogsBufferMaxSize,
+		targetPerScopeLimit: defaultObjPanelLogsTargetPerScopeLimit,
+		targetGlobalLimit:   defaultObjPanelLogsTargetGlobalLimit,
+		apiTimestampFormat:  defaultObjPanelLogsAPITimestampFormat,
+	}
+	if settings == nil {
+		return resolved
+	}
+	if settings.BufferMaxSize > 0 {
+		resolved.bufferMaxSize = clampObjPanelLogsBufferMaxSize(settings.BufferMaxSize)
+	}
+	if settings.TargetPerScopeLimit > 0 {
+		resolved.targetPerScopeLimit = clampObjPanelLogsTargetPerScopeLimit(settings.TargetPerScopeLimit)
+	}
+	if settings.TargetGlobalLimit > 0 {
+		resolved.targetGlobalLimit = clampObjPanelLogsTargetGlobalLimit(settings.TargetGlobalLimit)
+	}
+	if settings.APITimestampFormat != "" {
+		resolved.apiTimestampFormat = settings.APITimestampFormat
+	}
+	resolved.useLocalTimeZone = settings.UseLocalTimeZone
+	return resolved
+}
+
+type resolvedKubernetesAPISettings struct {
+	clientQPS                      int
+	clientBurst                    int
+	permissionSSRRFetchConcurrency int
+}
+
+func resolveKubernetesAPISettings(settings *settingsKubernetesAPI) resolvedKubernetesAPISettings {
+	resolved := resolvedKubernetesAPISettings{
+		clientQPS:                      defaultKubernetesClientQPS,
+		clientBurst:                    defaultKubernetesClientBurst,
+		permissionSSRRFetchConcurrency: defaultPermissionSSRRFetchConcurrency,
+	}
+	if settings == nil {
+		return resolved
+	}
+	if settings.ClientQPS > 0 {
+		resolved.clientQPS = clampKubernetesClientQPS(settings.ClientQPS)
+	}
+	if settings.ClientBurst > 0 {
+		resolved.clientBurst = clampKubernetesClientBurst(settings.ClientBurst)
+	}
+	if settings.PermissionSSRRFetchConcurrency > 0 {
+		resolved.permissionSSRRFetchConcurrency = clampPermissionSSRRFetchConcurrency(settings.PermissionSSRRFetchConcurrency)
+	}
+	return resolved
+}
+
+func boolPreferenceOrDefault(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 func (a *App) saveAppSettings() error {

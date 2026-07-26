@@ -169,13 +169,13 @@ func extractResourceDescriptors(resourceLists []*metav1.APIResourceList) []resou
 
 // ExtractDescriptors converts API resource discovery results into catalog descriptors.
 func ExtractDescriptors(resourceLists []*metav1.APIResourceList) []Descriptor {
-	excludedKinds := sets.NewString(
+	excludedKinds := sets.New[string](
 		"Event",
 		"ComponentStatus", // Deprecated since Kubernetes v1.19; avoid hitting the legacy endpoint.
 	)
 	// Metrics API resources don't have UIDs (they're computed on-the-fly, not stored in etcd).
 	// Exclude the entire metrics.k8s.io group to avoid pagination issues in the browse view.
-	excludedGroups := sets.NewString(
+	excludedGroups := sets.New[string](
 		"metrics.k8s.io",
 	)
 	result := make([]Descriptor, 0)
@@ -192,31 +192,36 @@ func ExtractDescriptors(resourceLists []*metav1.APIResourceList) []Descriptor {
 		}
 
 		for _, apiResource := range list.APIResources {
-			if strings.Contains(apiResource.Name, "/") {
-				continue
+			descriptor, ok := descriptorFromAPIResource(groupVersion, apiResource, excludedKinds)
+			if ok {
+				result = append(result, descriptor)
 			}
-			if apiResource.Kind == "" || excludedKinds.Has(apiResource.Kind) {
-				continue
-			}
-			if !containsVerb(apiResource.Verbs, "list") {
-				continue
-			}
-
-			scope := ScopeCluster
-			if apiResource.Namespaced {
-				scope = ScopeNamespace
-			}
-
-			result = append(result, Descriptor{
-				Group:      groupVersion.Group,
-				Version:    groupVersion.Version,
-				Resource:   apiResource.Name,
-				Kind:       apiResource.Kind,
-				Scope:      scope,
-				Namespaced: apiResource.Namespaced,
-			})
 		}
 	}
 
 	return result
+}
+
+func descriptorFromAPIResource(groupVersion schema.GroupVersion, apiResource metav1.APIResource, excludedKinds sets.Set[string]) (Descriptor, bool) {
+	if strings.Contains(apiResource.Name, "/") {
+		return Descriptor{}, false
+	}
+	if apiResource.Kind == "" || excludedKinds.Has(apiResource.Kind) {
+		return Descriptor{}, false
+	}
+	if !containsVerb(apiResource.Verbs, "list") {
+		return Descriptor{}, false
+	}
+	scope := ScopeCluster
+	if apiResource.Namespaced {
+		scope = ScopeNamespace
+	}
+	return Descriptor{
+		Group:      groupVersion.Group,
+		Version:    groupVersion.Version,
+		Resource:   apiResource.Name,
+		Kind:       apiResource.Kind,
+		Scope:      scope,
+		Namespaced: apiResource.Namespaced,
+	}, true
 }
