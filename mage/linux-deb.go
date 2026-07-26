@@ -73,7 +73,13 @@ func packageDeb(cfg BuildConfig, binPath, packagesDir string) error {
 	if err := sh.Copy(binDest, binPath); err != nil {
 		return fmt.Errorf("failed to copy binary into deb staging dir: %w", err)
 	}
-	if err := os.Chmod(binDest, 0o755); err != nil {
+	// 0755 is required, not incidental: dpkg-deb --build packages this staging
+	// tree's modes verbatim, and /usr/local/bin/<app> must be executable by
+	// every user on the installing machine. Narrowing it would ship a package
+	// only the owner could run. sh.Copy creates the destination 0644, so the
+	// bit has to be set explicitly here. NOSONAR - reviewed, world-executable
+	// is the intended mode for an installed binary.
+	if err := os.Chmod(binDest, 0o755); err != nil { //NOSONAR
 		return fmt.Errorf("failed to set executable bit on staged binary: %w", err)
 	}
 

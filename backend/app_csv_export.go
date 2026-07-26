@@ -89,7 +89,8 @@ func writeCSVFileAtomically(path string, content string) (os.FileInfo, error) {
 	if err := tempFile.Close(); err != nil {
 		return nil, fmt.Errorf("close CSV export: %w", err)
 	}
-	if err := os.Chmod(tempPath, 0o644); err != nil {
+	// Exported files are readable only by the owner.
+	if err := os.Chmod(tempPath, 0o600); err != nil {
 		return nil, fmt.Errorf("set CSV export permissions: %w", err)
 	}
 	info, err := os.Stat(tempPath)

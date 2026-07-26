@@ -19,7 +19,10 @@ func WebkitVersion() (string, error) {
 	versions := []string{"4.0", "4.1"}
 
 	for _, v := range versions {
-		cmd := exec.Command("pkg-config", "--exists", "webkit2gtk-"+v)
+		cmd, err := ToolCommand("pkg-config", "--exists", "webkit2gtk-"+v)
+		if err != nil {
+			return "", err
+		}
 		if err := cmd.Run(); err == nil {
 			return v, nil
 		}

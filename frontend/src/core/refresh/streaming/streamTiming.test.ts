@@ -1,9 +1,31 @@
 import { describe, expect, it, vi } from 'vitest';
 import { streamReconnectDelay } from './streamTiming';
 
+// Drives the unit random the delay derives its jitter from. The value is
+// written straight into the caller's Uint32Array, so `unit` maps onto the same
+// [0, 1) range Math.random would have produced.
+const mockUnitRandom = (unit: number) =>
+  vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation((array) => {
+    (array as Uint32Array)[0] = unit * 2 ** 32;
+    return array;
+  });
+
 describe('streamReconnectDelay', () => {
+  it('draws jitter from the platform CSPRNG, not Math.random', () => {
+    const random = mockUnitRandom(0.5);
+    const mathRandom = vi.spyOn(Math, 'random');
+
+    streamReconnectDelay(2, { jitterMs: 250 });
+
+    expect(random).toHaveBeenCalled();
+    expect(mathRandom).not.toHaveBeenCalled();
+
+    random.mockRestore();
+    mathRandom.mockRestore();
+  });
+
   it('uses exponential backoff with optional absolute jitter', () => {
-    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const random = mockUnitRandom(0.5);
 
     expect(streamReconnectDelay(2, { jitterMs: 250, minMs: 500 })).toBe(4125);
 
@@ -11,7 +33,7 @@ describe('streamReconnectDelay', () => {
   });
 
   it('supports proportional jitter for websocket reconnects', () => {
-    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const random = mockUnitRandom(0);
 
     expect(streamReconnectDelay(1, { jitterFactor: 0.2, round: true })).toBe(1600);
 

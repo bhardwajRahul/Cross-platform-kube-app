@@ -94,9 +94,6 @@ func packageRPM(cfg BuildConfig, binPath, packagesDir string) error {
 	if err := sh.Copy(sourceBin, binPath); err != nil {
 		return fmt.Errorf("failed to copy binary into rpm SOURCES: %w", err)
 	}
-	if err := os.Chmod(sourceBin, 0o755); err != nil {
-		return fmt.Errorf("failed to set executable bit on rpm source binary: %w", err)
-	}
 
 	sourceDesktop := filepath.Join(topDirAbs, "SOURCES", fmt.Sprintf("%s.desktop", cfg.AppShortName))
 	desktopTemplate := filepath.Join("mage", "rpm", "desktop.tmpl")

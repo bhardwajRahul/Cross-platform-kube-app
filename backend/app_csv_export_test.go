@@ -7,8 +7,10 @@ import (
 	"testing"
 )
 
-// The atomic write must produce a user-readable file (CreateTemp's 0600 would
-// make exports owner-only) with the full content durably written.
+// The atomic write must produce an owner-only file with the full content
+// durably written. Exports carry cluster resource data, so they stay unreadable
+// to other local accounts; the exporting user keeps read/write and can relax
+// the mode themselves.
 func TestWriteCSVFileAtomically(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "export.csv")
 
@@ -31,8 +33,8 @@ func TestWriteCSVFileAtomically(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stat failed: %v", err)
 		}
-		if stat.Mode().Perm() != 0o644 {
-			t.Fatalf("expected 0644 export file, got %v", stat.Mode().Perm())
+		if stat.Mode().Perm() != 0o600 {
+			t.Fatalf("expected 0600 export file, got %v", stat.Mode().Perm())
 		}
 	}
 }

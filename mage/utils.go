@@ -10,6 +10,19 @@ import (
 	"time"
 )
 
+// ToolCommand builds an exec.Cmd for a build tool, resolving it to an absolute
+// path first. Passing a bare name would leave the binary chosen by whatever
+// PATH happens to be set when the build runs; resolving up front pins the
+// choice and turns a missing tool into a named error instead of an opaque
+// "executable file not found" from the eventual Run.
+func ToolCommand(name string, args ...string) (*exec.Cmd, error) {
+	resolved, err := exec.LookPath(name)
+	if err != nil {
+		return nil, fmt.Errorf("%s not found in PATH: %w", name, err)
+	}
+	return exec.Command(resolved, args...), nil
+}
+
 // CheckNodeVersion reads .nvmrc and ensures the correct Node version is active.
 // Since nvm is a shell function (not a binary), we can't call "nvm use" from Go.
 // Instead, if the current node version doesn't match, we look for the correct
@@ -23,13 +36,14 @@ func CheckNodeVersion() error {
 	expected := strings.TrimSpace(string(data))
 	expected = strings.TrimPrefix(expected, "v")
 
-	// Check if the current node already matches.
-	nodeCmd := exec.Command("node", "--version")
-	out, err := nodeCmd.Output()
-	if err == nil {
-		actual := strings.TrimPrefix(strings.TrimSpace(string(out)), "v")
-		if actual == expected {
-			return nil
+	// Check if the current node already matches. Neither a missing node nor a
+	// failed --version is fatal here: the nvm lookup below is the fallback.
+	if nodeCmd, lookErr := ToolCommand("node", "--version"); lookErr == nil {
+		if out, runErr := nodeCmd.Output(); runErr == nil {
+			actual := strings.TrimPrefix(strings.TrimSpace(string(out)), "v")
+			if actual == expected {
+				return nil
+			}
 		}
 	}
 
@@ -92,7 +106,10 @@ func getBetaExpiryDays() (int, error) {
 
 // GitRevParse returns the short git commit hash of the current HEAD.
 func gitRevParse() string {
-	cmd := exec.Command("git", "rev-parse", "--short=9", "HEAD")
+	cmd, err := ToolCommand("git", "rev-parse", "--short=9", "HEAD")
+	if err != nil {
+		return ""
+	}
 	out, err := cmd.Output()
 	if err != nil {
 		return ""

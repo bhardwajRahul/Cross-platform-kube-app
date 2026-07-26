@@ -147,9 +147,25 @@ func (Clean) Build() error {
 
 // Cleans the Go cache
 func (Clean) GoCache() error {
-	goCacheDir, _ := exec.Command("go", "env", "GOCACHE").Output()
+	cmd, err := mage.ToolCommand("go", "env", "GOCACHE")
+	if err != nil {
+		return err
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("resolve GOCACHE: %w", err)
+	}
+	// `go env` terminates its value with a newline; passing that through would
+	// hand RemoveAll a path that cannot exist, which reports success while
+	// deleting nothing.
+	goCacheDir := strings.TrimSpace(string(out))
+	if goCacheDir == "" {
+		return fmt.Errorf("resolve GOCACHE: empty path")
+	}
 	fmt.Println("\n🧹 Cleaning Go cache...")
-	os.RemoveAll(string(goCacheDir))
+	if err := os.RemoveAll(goCacheDir); err != nil {
+		return fmt.Errorf("clean Go cache: %w", err)
+	}
 	return nil
 }
 
