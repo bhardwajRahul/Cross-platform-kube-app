@@ -41,16 +41,16 @@ const matchesSearch = (row: CapabilityBatchRow, query: string): boolean => {
         ...resources,
       ])
       .join(' ') ?? '';
+  let ssrrIncompleteText: 'incomplete' | 'complete' | null = null;
+  if (row.ssrrIncomplete !== null && row.ssrrIncomplete !== undefined) {
+    ssrrIncompleteText = row.ssrrIncomplete ? 'incomplete' : 'complete';
+  }
   return [
     row.scope,
     row.lastResult,
     row.lastError,
     row.method,
-    row.ssrrIncomplete === null || row.ssrrIncomplete === undefined
-      ? null
-      : row.ssrrIncomplete
-        ? 'incomplete'
-        : 'complete',
+    ssrrIncompleteText,
     row.ssrrRuleCount,
     row.ssarFallbackCount,
     row.totalChecks,
@@ -240,19 +240,21 @@ export const CapabilityChecksTable: React.FC<CapabilityChecksTableProps> = ({
               <th>Checks</th>
             </tr>
           </thead>
-          {totalRows === 0 ? (
+          {totalRows === 0 && (
             <tbody>
               <tr className="diagnostics-empty">
                 <td colSpan={COLUMN_COUNT}>No namespace capability requests recorded yet.</td>
               </tr>
             </tbody>
-          ) : filteredTotalRows === 0 ? (
+          )}
+          {totalRows > 0 && filteredTotalRows === 0 && (
             <tbody>
               <tr className="diagnostics-empty">
                 <td colSpan={COLUMN_COUNT}>No capability checks match the current search.</td>
               </tr>
             </tbody>
-          ) : (
+          )}
+          {filteredTotalRows > 0 && (
             <>
               {/* Current checks — Cluster + actively viewed namespace. */}
               <tbody>

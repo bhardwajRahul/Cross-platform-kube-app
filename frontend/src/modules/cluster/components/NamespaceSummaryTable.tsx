@@ -70,12 +70,17 @@ const workloadSearchText = (row: NamespaceTableRow): string => {
   return row.hasWorkloads ? 'Present' : 'None';
 };
 
-const warningEventText = (row: NamespaceTableRow): string =>
-  row.warningEventsState === 'available'
-    ? (row.warningEvents ?? 0) > 0
-      ? String(row.warningEvents)
-      : '-'
-    : unavailableSignalText(row.warningEventsState);
+const warningEventText = (row: NamespaceTableRow): string => {
+  if (row.warningEventsState === 'available') {
+    if ((row.warningEvents ?? 0) > 0) {
+      return String(row.warningEvents);
+    } else {
+      return '-';
+    }
+  } else {
+    return unavailableSignalText(row.warningEventsState);
+  }
+};
 
 const quotaPressureText = (row: NamespaceTableRow): string => {
   if (row.quotaPressureState !== 'available') {
@@ -242,12 +247,15 @@ const NamespaceSummaryTable: React.FC<NamespaceSummaryTableProps> = ({
           row.quotaPressureState === 'available'
             ? (row.quotaHighestUsedPercentage ?? 0)
             : undefined,
-        getClassName: (row) =>
-          row.quotaPressure === 'critical'
-            ? 'status-text error'
-            : row.quotaPressure === 'warning'
-              ? 'status-text warning'
-              : 'status-text',
+        getClassName: (row) => {
+          if (row.quotaPressure === 'critical') {
+            return 'status-text error';
+          } else if (row.quotaPressure === 'warning') {
+            return 'status-text warning';
+          } else {
+            return 'status-text';
+          }
+        },
       }),
       cf.createAgeColumn<NamespaceTableRow>()
     );

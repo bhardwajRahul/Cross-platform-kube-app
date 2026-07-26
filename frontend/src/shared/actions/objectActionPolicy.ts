@@ -191,12 +191,17 @@ export const resolveObjectActionPolicy = ({
     isCronJob && Boolean(handlers.trigger) && permissionAllows(permissions.trigger);
   const triggerDisabled = object.status === 'Suspended' || actionLoading;
 
-  const suspendActionId =
-    isCronJob && handlers.suspendToggle && permissionAllows(permissions.suspend)
-      ? object.status === 'Suspended'
-        ? OBJECT_ACTION_IDS.resume
-        : OBJECT_ACTION_IDS.suspend
-      : null;
+  let suspendActionId: ObjectActionPolicy['suspendActionId'];
+
+  if (isCronJob && handlers.suspendToggle && permissionAllows(permissions.suspend)) {
+    if (object.status === 'Suspended') {
+      suspendActionId = OBJECT_ACTION_IDS.resume;
+    } else {
+      suspendActionId = OBJECT_ACTION_IDS.suspend;
+    }
+  } else {
+    suspendActionId = null;
+  }
 
   const restartEnabled =
     Boolean(capability?.restart) &&
@@ -210,26 +215,37 @@ export const resolveObjectActionPolicy = ({
 
   const scaleAllowed = Boolean(capability?.scale) && permissionAllows(permissions.scale);
   const desiredReplicas = extractDesiredReplicas(object);
-  const scaleActionId: ObjectActionPolicy['scaleActionId'] =
-    scaleAllowed && object.hpaManaged === true
-      ? desiredReplicas === 0
-        ? OBJECT_ACTION_IDS.resumeFromZero
-        : OBJECT_ACTION_IDS.scaleToZero
-      : scaleAllowed && object.hpaManaged === false && handlers.scale
-        ? OBJECT_ACTION_IDS.scale
-        : null;
+  let scaleActionId: ObjectActionPolicy['scaleActionId'];
+
+  if (scaleAllowed && object.hpaManaged === true) {
+    if (desiredReplicas === 0) {
+      scaleActionId = OBJECT_ACTION_IDS.resumeFromZero;
+    } else {
+      scaleActionId = OBJECT_ACTION_IDS.scaleToZero;
+    }
+  } else if (scaleAllowed && object.hpaManaged === false && handlers.scale) {
+    scaleActionId = OBJECT_ACTION_IDS.scale;
+  } else {
+    scaleActionId = null;
+  }
+
   const scaleActionDisabled = Boolean(
     actionLoading ||
       (scaleActionId === OBJECT_ACTION_IDS.scaleToZero && !handlers.scaleToZero) ||
       (scaleActionId === OBJECT_ACTION_IDS.resumeFromZero && !handlers.resumeFromZero)
   );
 
-  const cordonActionId =
-    capability?.cordon && handlers.cordon && permissionAllows(permissions.cordon)
-      ? object.unschedulable
-        ? OBJECT_ACTION_IDS.uncordon
-        : OBJECT_ACTION_IDS.cordon
-      : null;
+  let cordonActionId: ObjectActionPolicy['cordonActionId'];
+
+  if (capability?.cordon && handlers.cordon && permissionAllows(permissions.cordon)) {
+    if (object.unschedulable) {
+      cordonActionId = OBJECT_ACTION_IDS.uncordon;
+    } else {
+      cordonActionId = OBJECT_ACTION_IDS.cordon;
+    }
+  } else {
+    cordonActionId = null;
+  }
 
   const drainEnabled =
     Boolean(capability?.drain) && Boolean(handlers.drain) && permissionAllows(permissions.drain);

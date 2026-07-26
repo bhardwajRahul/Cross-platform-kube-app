@@ -239,12 +239,16 @@ export function useGridTableColumnWidths<T>(
       const initialInput = initialColumnWidths?.[key] ?? null;
       const columnRaw = column?.width ?? null;
       const raw = columnRaw ?? initialInput;
-      const parsedRawValue =
-        typeof raw === 'number'
-          ? raw
-          : raw
-            ? parseWidthInputToNumber(raw as ColumnWidthInput)
-            : null;
+      let parsedRawValue: number | null;
+
+      if (typeof raw === 'number') {
+        parsedRawValue = raw;
+      } else if (raw) {
+        parsedRawValue = parseWidthInputToNumber(raw as ColumnWidthInput);
+      } else {
+        parsedRawValue = null;
+      }
+
       const autoActive = Boolean(column?.autoWidth) && !manual;
 
       let source: ColumnWidthState['source'] = 'column';

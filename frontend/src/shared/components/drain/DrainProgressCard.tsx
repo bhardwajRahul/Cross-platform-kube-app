@@ -62,6 +62,10 @@ export function DrainProgressCard({
 
   const elapsedMs = (progress.completedAt ?? now) - progress.startedAt;
   const timeoutMs = progress.timeoutSeconds ? progress.timeoutSeconds * 1000 : undefined;
+  const timeoutLabel = timeoutMs ? ` / ${formatElapsed(timeoutMs)}` : '';
+  const elapsedLabel = progress.completedAt
+    ? `Duration ${formatElapsed(elapsedMs)}`
+    : `Elapsed ${formatElapsed(elapsedMs)}${timeoutLabel}`;
 
   return (
     <div className="drain-progress-card">
@@ -71,13 +75,7 @@ export function DrainProgressCard({
         </span>
         <div className="drain-progress-card-meta">
           <span>Started {formatTimestamp(progress.startedAt)}</span>
-          <span data-test="drain-elapsed">
-            {progress.completedAt
-              ? `Duration ${formatElapsed(elapsedMs)}`
-              : `Elapsed ${formatElapsed(elapsedMs)}${
-                  timeoutMs ? ` / ${formatElapsed(timeoutMs)}` : ''
-                }`}
-          </span>
+          <span data-test="drain-elapsed">{elapsedLabel}</span>
           <span>{phaseLabel(progress.phase, isActive)}</span>
         </div>
         {!!showCancel && (
@@ -124,24 +122,25 @@ export function DrainProgressCard({
             {detailsOpen ? 'Hide' : 'Show'} event log ({job.events.length})
           </summary>
           <ul className="drain-progress-events">
-            {job.events.map((event) => (
-              <li
-                key={event.id}
-                className={`drain-progress-event${event.kind === 'error' ? ' error' : ''}`}
-              >
-                <span className="drain-progress-event-time">
-                  {formatTimestamp(event.timestamp)}
-                </span>
-                <span className="drain-progress-event-label">{event.phase || event.kind}</span>
-                <span className="drain-progress-event-message">
-                  {event.podNamespace && event.podName
-                    ? `${event.podNamespace}/${event.podName}${
-                        event.message ? ` – ${event.message}` : ''
-                      }`
-                    : event.message || '—'}
-                </span>
-              </li>
-            ))}
+            {job.events.map((event) => {
+              const messageSuffix = event.message ? ` – ${event.message}` : '';
+              const eventMessage =
+                event.podNamespace && event.podName
+                  ? `${event.podNamespace}/${event.podName}${messageSuffix}`
+                  : event.message || '—';
+              return (
+                <li
+                  key={event.id}
+                  className={`drain-progress-event${event.kind === 'error' ? ' error' : ''}`}
+                >
+                  <span className="drain-progress-event-time">
+                    {formatTimestamp(event.timestamp)}
+                  </span>
+                  <span className="drain-progress-event-label">{event.phase || event.kind}</span>
+                  <span className="drain-progress-event-message">{eventMessage}</span>
+                </li>
+              );
+            })}
           </ul>
         </details>
       )}
@@ -206,12 +205,16 @@ function summaryLine(progress: DrainProgress, usingDelete: boolean): string {
   const verb = usingDelete ? 'deleted' : 'evicted';
   const total = progress.totalPlanned;
   const seen = progress.totalSeen;
-  const head =
-    total !== null && total !== undefined
-      ? `${progress.done} of ${total} pods ${verb}`
-      : seen > 0
-        ? `${progress.done} of ${seen} pods ${verb}`
-        : 'Preparing drain…';
+  let head: string;
+
+  if (total !== null && total !== undefined) {
+    head = `${progress.done} of ${total} pods ${verb}`;
+  } else if (seen > 0) {
+    head = `${progress.done} of ${seen} pods ${verb}`;
+  } else {
+    head = 'Preparing drain…';
+  }
+
   const parts: string[] = [head];
   if (progress.inProgress > 0) {
     parts.push(`${progress.inProgress} in progress`);

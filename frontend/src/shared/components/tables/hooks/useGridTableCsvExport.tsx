@@ -81,11 +81,15 @@ export function useGridTableCsvExport<T>({
     }
   }, [canCopyToClipboard, columns, data, fetchAllRows, getTextContent, scheduleCopyReset]);
 
-  const title = fetchAllRows
-    ? 'Copy all matching rows to clipboard'
-    : hasAllLocalMatches
-      ? 'Copy all matching rows as CSV'
-      : 'Copy visible rows as CSV';
+  let title: string;
+
+  if (fetchAllRows) {
+    title = 'Copy all matching rows to clipboard';
+  } else if (hasAllLocalMatches) {
+    title = 'Copy all matching rows as CSV';
+  } else {
+    title = 'Copy visible rows as CSV';
+  }
 
   return useMemo<IconBarItem>(
     () => ({

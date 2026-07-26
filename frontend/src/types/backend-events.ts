@@ -83,14 +83,18 @@ export function getBackendErrorMessage(payload: BackendErrorPayload): string {
  */
 export function getBackendErrorKey(payload: BackendErrorPayload): string {
   const resourceKind = 'resourceKind' in payload ? payload.resourceKind : 'unknown';
-  const identifier =
-    'identifier' in payload
-      ? payload.identifier
-      : 'scope' in payload
-        ? payload.scope
-        : 'source' in payload
-          ? payload.source
-          : 'global';
+  let identifier: string;
+
+  if ('identifier' in payload) {
+    identifier = payload.identifier;
+  } else if ('scope' in payload) {
+    identifier = payload.scope;
+  } else if ('source' in payload) {
+    identifier = payload.source;
+  } else {
+    identifier = 'global';
+  }
+
   const message = getBackendErrorMessage(payload);
 
   return `${resourceKind}:${identifier}:${message}`;

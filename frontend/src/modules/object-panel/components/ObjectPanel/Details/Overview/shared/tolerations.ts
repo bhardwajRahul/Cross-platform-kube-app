@@ -51,7 +51,13 @@ export const parseToleration = (raw: string): ParsedToleration | null => {
     value = parts[2];
   }
 
-  const label = !key ? 'Exists' : key + (value ? `=${value}` : '') + (effect ? `:${effect}` : '');
+  let label: string;
+
+  if (!key) {
+    label = 'Exists';
+  } else {
+    label = key + (value ? `=${value}` : '') + (effect ? `:${effect}` : '');
+  }
 
   const tooltipParts: string[] = [];
   if (!key) {

@@ -321,6 +321,14 @@ export class ClusterWorkspaceStore {
       const previous = nextClusters.get(clusterId) ?? this.snapshot.clusters.get(clusterId);
       const parsedLifecycle = parseClusterLifecycleState(raw.lifecycle);
       const isLiveField = (field: string) => liveFields?.has(fieldKey(clusterId, field)) ?? false;
+      let health: ClusterWorkspaceClusterState['health'];
+      if (isLiveField('health')) {
+        health = previous?.health ?? 'unknown';
+      } else if (raw.health === 'healthy' || raw.health === 'degraded') {
+        health = raw.health;
+      } else {
+        health = 'unknown';
+      }
       const cluster: ClusterWorkspaceClusterState = {
         clusterId,
         clusterName: raw.clusterName || previous?.clusterName || clusterId,
@@ -328,11 +336,7 @@ export class ClusterWorkspaceStore {
         auth: isLiveField('auth')
           ? (previous?.auth ?? DEFAULT_CLUSTER_AUTH_STATE)
           : authStateFromWire(raw.auth ?? { state: 'unknown' }, raw.clusterName || clusterId),
-        health: isLiveField('health')
-          ? (previous?.health ?? 'unknown')
-          : raw.health === 'healthy' || raw.health === 'degraded'
-            ? raw.health
-            : 'unknown',
+        health,
         scopeRevision: isLiveField('scope')
           ? (previous?.scopeRevision ?? 0)
           : (raw.scopeRevision ?? 0),

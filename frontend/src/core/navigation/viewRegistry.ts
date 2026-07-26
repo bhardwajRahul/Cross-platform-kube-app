@@ -257,11 +257,15 @@ export const getViewDescriptor = (
   scope: ViewScope,
   id: string
 ): RegisteredViewDescriptor | undefined => {
-  const descriptors: readonly RegisteredViewDescriptor[] =
-    scope === 'global'
-      ? GLOBAL_VIEW_DESCRIPTORS
-      : scope === 'cluster'
-        ? CLUSTER_VIEW_DESCRIPTORS
-        : NAMESPACE_VIEW_DESCRIPTORS;
+  let descriptors: readonly RegisteredViewDescriptor[];
+
+  if (scope === 'global') {
+    descriptors = GLOBAL_VIEW_DESCRIPTORS;
+  } else if (scope === 'cluster') {
+    descriptors = CLUSTER_VIEW_DESCRIPTORS;
+  } else {
+    descriptors = NAMESPACE_VIEW_DESCRIPTORS;
+  }
+
   return descriptors.find((descriptor) => descriptor.id === id);
 };

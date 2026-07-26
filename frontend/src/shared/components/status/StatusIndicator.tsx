@@ -53,12 +53,15 @@ const StatusIndicator: React.FC<StatusIndicatorProps> = ({
   hideTitle,
   closeSignal,
 }) => {
-  const actionItems =
-    actions && actions.length > 0
-      ? actions
-      : actionLabel && onAction
-        ? [{ label: actionLabel, onClick: onAction }]
-        : [];
+  let actionItems: StatusIndicatorAction[];
+
+  if (actions && actions.length > 0) {
+    actionItems = actions;
+  } else if (actionLabel && onAction) {
+    actionItems = [{ label: actionLabel, onClick: onAction }];
+  } else {
+    actionItems = [];
+  }
 
   /* Build the rich tooltip content matching the existing popover layout */
   const tooltipContent = (

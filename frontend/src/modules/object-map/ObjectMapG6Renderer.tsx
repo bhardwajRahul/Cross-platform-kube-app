@@ -165,6 +165,14 @@ const ObjectMapDebugGridOverlay: React.FC<{ grid: ObjectMapDebugGridState }> = (
     grid.origin[0] <= width &&
     grid.origin[1] >= 0 &&
     grid.origin[1] <= height;
+  const lineClassName = (line: ObjectMapDebugGridLine): string => {
+    if (line.origin) {
+      return 'object-map__debug-grid-axis';
+    }
+    return line.major
+      ? 'object-map__debug-grid-line object-map__debug-grid-line--major'
+      : 'object-map__debug-grid-line';
+  };
 
   return (
     <svg
@@ -177,13 +185,7 @@ const ObjectMapDebugGridOverlay: React.FC<{ grid: ObjectMapDebugGridState }> = (
       {grid.verticalLines.map((line) => (
         <line
           key={`x-${line.value}`}
-          className={
-            line.origin
-              ? 'object-map__debug-grid-axis'
-              : line.major
-                ? 'object-map__debug-grid-line object-map__debug-grid-line--major'
-                : 'object-map__debug-grid-line'
-          }
+          className={lineClassName(line)}
           x1={line.screen}
           y1={0}
           x2={line.screen}
@@ -193,13 +195,7 @@ const ObjectMapDebugGridOverlay: React.FC<{ grid: ObjectMapDebugGridState }> = (
       {grid.horizontalLines.map((line) => (
         <line
           key={`y-${line.value}`}
-          className={
-            line.origin
-              ? 'object-map__debug-grid-axis'
-              : line.major
-                ? 'object-map__debug-grid-line object-map__debug-grid-line--major'
-                : 'object-map__debug-grid-line'
-          }
+          className={lineClassName(line)}
           x1={0}
           y1={line.screen}
           x2={width}

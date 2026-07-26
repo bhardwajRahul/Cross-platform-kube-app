@@ -9,6 +9,7 @@
 import ActiveFilterChips, { type ActiveFilterChip } from '@shared/components/ActiveFilterChips';
 import ClusterDataPausedState from '@shared/components/ClusterDataPausedState';
 import { Dropdown, type DropdownOption } from '@shared/components/dropdowns/Dropdown';
+import { normalizeDropdownValue } from '@shared/components/dropdowns/dropdownValue';
 import {
   ALL_MULTISELECT_FILTER,
   filterSelectionValues,
@@ -202,8 +203,15 @@ const formatTimestampForMode = (
 };
 
 // Build a display label for a container, appending :init for init containers
-const formatContainerLabel = (container: string, isInit: boolean, isEphemeral: boolean): string =>
-  isInit ? `${container}:init` : isEphemeral ? `${container} (debug)` : container;
+const formatContainerLabel = (container: string, isInit: boolean, isEphemeral: boolean): string => {
+  if (isInit) {
+    return `${container}:init`;
+  } else if (isEphemeral) {
+    return `${container} (debug)`;
+  } else {
+    return container;
+  }
+};
 
 const parseContainerLabel = (
   label: string
@@ -294,12 +302,15 @@ const toContainerFilterValueForKind = (
   container: string,
   isInit: boolean,
   isEphemeral: boolean
-): string =>
-  isInit
-    ? toInitContainerFilterValue(container)
-    : isEphemeral
-      ? toDebugContainerFilterValue(container)
-      : toContainerFilterValue(container);
+): string => {
+  if (isInit) {
+    return toInitContainerFilterValue(container);
+  } else if (isEphemeral) {
+    return toDebugContainerFilterValue(container);
+  } else {
+    return toContainerFilterValue(container);
+  }
+};
 
 const summarizeWorkloadSelection = (
   selectedValues: string[],
@@ -1117,14 +1128,15 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
 
     const trimmedTextFilter = textFilter.trim();
     if (trimmedTextFilter) {
+      let label = `Text: ${trimmedTextFilter}`;
+      if (regexMatches) {
+        label = hasInvalidRegex
+          ? `Regex: ${trimmedTextFilter} (invalid expression)`
+          : `Regex: ${trimmedTextFilter}`;
+      }
       chips.push({
         key: 'text-filter',
-        label:
-          regexMatches && hasInvalidRegex
-            ? `Regex: ${trimmedTextFilter} (invalid expression)`
-            : regexMatches
-              ? `Regex: ${trimmedTextFilter}`
-              : `Text: ${trimmedTextFilter}`,
+        label,
         removeLabel: 'Clear text filter',
         onRemove: () => dispatch({ type: 'SET_TEXT_FILTER', payload: '' }),
       });
@@ -1931,6 +1943,38 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     );
   }
 
+  let copyIconFeedback: 'success' | 'error' | null = null;
+  if (copyFeedback === 'copied') {
+    copyIconFeedback = 'success';
+  } else if (copyFeedback === 'error') {
+    copyIconFeedback = 'error';
+  }
+
+  let renderedLogContent: React.ReactNode = emptyStateMessage;
+  if (isParsedView) {
+    renderedLogContent = (
+      <ParsedLogTable
+        rows={parsedContainerLogs}
+        columns={tableColumns}
+        expandedRows={expandedRows}
+        onToggleRow={handleToggleParsedRow}
+      />
+    );
+  } else if (displayLogs) {
+    renderedLogContent = (
+      <RawLogViewer
+        rows={renderedDisplayRows}
+        scrollContainerRef={logsContentRef}
+        wrapText={wrapText}
+        renderRow={renderRawLogRow}
+        virtualizationThreshold={RAW_LOG_VIRTUALIZATION_THRESHOLD}
+        virtualizationOverscan={RAW_LOG_VIRTUALIZATION_OVERSCAN}
+        estimateRowHeight={RAW_LOG_ESTIMATE_ROW_HEIGHT}
+        verticalPaddingPx={RAW_LOG_VERTICAL_PADDING_PX}
+      />
+    );
+  }
+
   return (
     <>
       <div className="object-panel-tab-content">
@@ -1949,7 +1993,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
                       dispatch({
                         type: 'SET_SELECTED_FILTERS',
                         payload: logFilterSelectionFromDropdownValues(
-                          Array.isArray(value) ? value : value ? [value] : [],
+                          normalizeDropdownValue(value),
                           selectorOptions
                         ),
                       })
@@ -1958,10 +2002,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
                     showBulkActions
                     placeholder={isPendingLogs ? 'Loading logs…' : 'All Logs'}
                     renderValue={(value, options) =>
-                      summarizeWorkloadSelection(
-                        Array.isArray(value) ? value : value ? [value] : [],
-                        options
-                      )
+                      summarizeWorkloadSelection(normalizeDropdownValue(value), options)
                     }
                     size="compact"
                     className="logs-viewer-selector-dropdown"
@@ -2143,12 +2184,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
                       title: 'Copy current log buffer to clipboard (Shift+C)',
                       ariaLabel: 'Copy to clipboard',
                       disabled: !hasCopyableContent,
-                      feedback:
-                        copyFeedback === 'copied'
-                          ? 'success'
-                          : copyFeedback === 'error'
-                            ? 'error'
-                            : null,
+                      feedback: copyIconFeedback,
                     },
                   ] satisfies IconBarItem[]
                 }
@@ -2177,27 +2213,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
 
           <div className="logs-viewer-content-frame">
             <div className="logs-viewer-content selectable" ref={logsContentRef} tabIndex={-1}>
-              {isParsedView ? (
-                <ParsedLogTable
-                  rows={parsedContainerLogs}
-                  columns={tableColumns}
-                  expandedRows={expandedRows}
-                  onToggleRow={handleToggleParsedRow}
-                />
-              ) : displayLogs ? (
-                <RawLogViewer
-                  rows={renderedDisplayRows}
-                  scrollContainerRef={logsContentRef}
-                  wrapText={wrapText}
-                  renderRow={renderRawLogRow}
-                  virtualizationThreshold={RAW_LOG_VIRTUALIZATION_THRESHOLD}
-                  virtualizationOverscan={RAW_LOG_VIRTUALIZATION_OVERSCAN}
-                  estimateRowHeight={RAW_LOG_ESTIMATE_ROW_HEIGHT}
-                  verticalPaddingPx={RAW_LOG_VERTICAL_PADDING_PX}
-                />
-              ) : (
-                emptyStateMessage
-              )}
+              {renderedLogContent}
             </div>
             {!isTailFollowing && (
               <button

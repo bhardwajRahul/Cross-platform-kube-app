@@ -63,19 +63,25 @@ function stripPanelFromAllGroups(state: TabGroupState, panelId: string): TabGrou
   const bottomTabs = state.bottom.tabs.filter((id) => id !== panelId);
 
   // For docked groups, if the active tab was removed, pick the last tab or null.
-  const rightActive =
-    state.right.activeTab === panelId
-      ? (rightTabs[rightTabs.length - 1] ?? null)
-      : rightTabs.includes(state.right.activeTab ?? '')
-        ? state.right.activeTab
-        : (rightTabs[rightTabs.length - 1] ?? null);
+  let rightActive: string | null;
 
-  const bottomActive =
-    state.bottom.activeTab === panelId
-      ? (bottomTabs[bottomTabs.length - 1] ?? null)
-      : bottomTabs.includes(state.bottom.activeTab ?? '')
-        ? state.bottom.activeTab
-        : (bottomTabs[bottomTabs.length - 1] ?? null);
+  if (state.right.activeTab === panelId) {
+    rightActive = rightTabs[rightTabs.length - 1] ?? null;
+  } else if (rightTabs.includes(state.right.activeTab ?? '')) {
+    rightActive = state.right.activeTab;
+  } else {
+    rightActive = rightTabs[rightTabs.length - 1] ?? null;
+  }
+
+  let bottomActive: string | null;
+
+  if (state.bottom.activeTab === panelId) {
+    bottomActive = bottomTabs[bottomTabs.length - 1] ?? null;
+  } else if (bottomTabs.includes(state.bottom.activeTab ?? '')) {
+    bottomActive = state.bottom.activeTab;
+  } else {
+    bottomActive = bottomTabs[bottomTabs.length - 1] ?? null;
+  }
 
   // For floating groups, remove the panel and destroy empty groups.
   const floating: FloatingTabGroup[] = [];
@@ -85,12 +91,16 @@ function stripPanelFromAllGroups(state: TabGroupState, panelId: string): TabGrou
       // Destroy empty floating groups.
       continue;
     }
-    const activeTab =
-      group.activeTab === panelId
-        ? (tabs[tabs.length - 1] ?? null)
-        : tabs.includes(group.activeTab ?? '')
-          ? group.activeTab
-          : (tabs[tabs.length - 1] ?? null);
+    let activeTab: string | null;
+
+    if (group.activeTab === panelId) {
+      activeTab = tabs[tabs.length - 1] ?? null;
+    } else if (tabs.includes(group.activeTab ?? '')) {
+      activeTab = group.activeTab;
+    } else {
+      activeTab = tabs[tabs.length - 1] ?? null;
+    }
+
     floating.push({ ...group, tabs, activeTab });
   }
 

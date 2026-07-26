@@ -46,11 +46,13 @@ export function useGridTableHeaderActions<T>({
       if (!sortConfig || sortConfig.key !== columnKey) {
         return null;
       }
-      return (
-        <span className="sort-indicator">
-          {sortConfig.direction === 'asc' ? '↑' : sortConfig.direction === 'desc' ? '↓' : ''}
-        </span>
-      );
+      let indicator = '';
+      if (sortConfig.direction === 'asc') {
+        indicator = '↑';
+      } else if (sortConfig.direction === 'desc') {
+        indicator = '↓';
+      }
+      return <span className="sort-indicator">{indicator}</span>;
     },
     [sortConfig]
   );

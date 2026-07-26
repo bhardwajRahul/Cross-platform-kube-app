@@ -15,8 +15,16 @@ export interface ObjectYamlErrorPayload {
 }
 
 export const parseObjectYamlError = (err: unknown): ObjectYamlErrorPayload | null => {
-  const rawMessage =
-    err instanceof Error ? err.message : typeof err === 'string' ? err : String(err);
+  let rawMessage: string;
+
+  if (err instanceof Error) {
+    rawMessage = err.message;
+  } else if (typeof err === 'string') {
+    rawMessage = err;
+  } else {
+    rawMessage = String(err);
+  }
+
   if (!rawMessage.startsWith(OBJECT_YAML_ERROR_PREFIX)) {
     return null;
   }

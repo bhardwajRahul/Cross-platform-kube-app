@@ -61,16 +61,20 @@ export const defaultGetNamespace = (row: unknown): string | null => {
   }
   const ref = asRecord(record.ref);
   const item = asRecord(record.item);
-  const value =
-    typeof record.namespaceDisplay === 'string'
-      ? record.namespaceDisplay
-      : typeof ref?.namespace === 'string'
-        ? ref.namespace
-        : typeof record.namespace === 'string'
-          ? record.namespace
-          : typeof item?.namespace === 'string'
-            ? item.namespace
-            : null;
+  let value: string | null;
+
+  if (typeof record.namespaceDisplay === 'string') {
+    value = record.namespaceDisplay;
+  } else if (typeof ref?.namespace === 'string') {
+    value = ref.namespace;
+  } else if (typeof record.namespace === 'string') {
+    value = record.namespace;
+  } else if (typeof item?.namespace === 'string') {
+    value = item.namespace;
+  } else {
+    value = null;
+  }
+
   if (isTableNoValueText(value)) {
     return '';
   }

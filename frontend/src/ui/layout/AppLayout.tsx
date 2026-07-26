@@ -78,6 +78,14 @@ const AppLogsPanel = withLazyBoundary(
   'Loading Application Logs Panel...'
 );
 
+const WelcomeContent: React.FC = () => (
+  <div className="welcome">
+    <img src={captainK8s} alt="Captain K8s" className="welcome-logo" width={1024} height={1024} />
+    <img src={logo} alt="Luxury Yacht" className="welcome-logo" width={827} height={500} />
+    <p>Select a view from the sidebar to get started</p>
+  </div>
+);
+
 // ObjectPanel is imported eagerly because panels are only rendered on-demand
 // (when openPanels has entries). A lazy boundary would flash a loading spinner
 // on the first click before the chunk loads.
@@ -143,6 +151,71 @@ export const AppLayout: React.FC = () => {
     });
   }, []);
 
+  let routeContent: React.ReactNode = null;
+  if (hasActiveClusters) {
+    if (viewState.viewType === 'global') {
+      routeContent = (
+        <RouteErrorBoundary routeName="global">
+          <GlobalViews activeView={viewState.activeGlobalTab} />
+        </RouteErrorBoundary>
+      );
+    } else if (viewState.viewType === 'cluster') {
+      if (viewState.activeClusterTab === 'browse') {
+        routeContent = (
+          <RouteErrorBoundary routeName="browse">
+            <div className="view-content">
+              <BrowseView />
+            </div>
+          </RouteErrorBoundary>
+        );
+      } else {
+        routeContent = (
+          <RouteErrorBoundary routeName="cluster">
+            <ClusterResourcesManager
+              activeTab={viewState.activeClusterTab}
+              onTabChange={viewState.setActiveClusterView}
+            />
+          </RouteErrorBoundary>
+        );
+      }
+    } else if (viewState.viewType === 'namespace') {
+      const selectedNamespace = namespace.selectedNamespace;
+      if (!selectedNamespace) {
+        routeContent = <WelcomeContent />;
+      } else if (isAllNamespaces(selectedNamespace)) {
+        routeContent = (
+          <RouteErrorBoundary routeName="namespace-all">
+            <NamespaceResourcesProvider namespace={selectedNamespace}>
+              <AllNamespacesView activeTab={viewState.activeNamespaceTab} />
+            </NamespaceResourcesProvider>
+          </RouteErrorBoundary>
+        );
+      } else {
+        routeContent = (
+          <RouteErrorBoundary routeName="namespace">
+            <NamespaceResourcesProvider namespace={selectedNamespace}>
+              <NamespaceResourcesViews
+                namespace={selectedNamespace}
+                activeTab={viewState.activeNamespaceTab || 'workloads'}
+                onTabChange={(tab: NamespaceViewType) => viewState.setActiveNamespaceTab(tab)}
+              />
+            </NamespaceResourcesProvider>
+          </RouteErrorBoundary>
+        );
+      }
+    } else if (viewState.viewType === 'overview') {
+      routeContent = (
+        <RouteErrorBoundary routeName="cluster-overview">
+          <div className="view-content view-content--cluster-overview">
+            <ClusterOverview clusterContext={kubeconfig.selectedKubeconfig || 'Default'} />
+          </div>
+        </RouteErrorBoundary>
+      );
+    } else {
+      routeContent = <WelcomeContent />;
+    }
+  }
+
   return (
     <div className="app-container">
       <AppHeader />
@@ -179,98 +252,7 @@ export const AppLayout: React.FC = () => {
 
         <div className="content">
           <div ref={contentBodyRef} className="content-body" data-app-region="content">
-            <div className="content-body__main">
-              {hasActiveClusters ? (
-                viewState.viewType === 'global' ? (
-                  <RouteErrorBoundary routeName="global">
-                    <GlobalViews activeView={viewState.activeGlobalTab} />
-                  </RouteErrorBoundary>
-                ) : viewState.viewType === 'cluster' ? (
-                  viewState.activeClusterTab === 'browse' ? (
-                    <RouteErrorBoundary routeName="browse">
-                      <div className="view-content">
-                        <BrowseView />
-                      </div>
-                    </RouteErrorBoundary>
-                  ) : (
-                    <RouteErrorBoundary routeName="cluster">
-                      <ClusterResourcesManager
-                        activeTab={viewState.activeClusterTab}
-                        onTabChange={viewState.setActiveClusterView}
-                      />
-                    </RouteErrorBoundary>
-                  )
-                ) : viewState.viewType === 'namespace' ? (
-                  namespace.selectedNamespace ? (
-                    isAllNamespaces(namespace.selectedNamespace) ? (
-                      <RouteErrorBoundary routeName="namespace-all">
-                        <NamespaceResourcesProvider namespace={namespace.selectedNamespace}>
-                          <AllNamespacesView activeTab={viewState.activeNamespaceTab} />
-                        </NamespaceResourcesProvider>
-                      </RouteErrorBoundary>
-                    ) : (
-                      <RouteErrorBoundary routeName="namespace">
-                        <NamespaceResourcesProvider namespace={namespace.selectedNamespace}>
-                          <NamespaceResourcesViews
-                            namespace={namespace.selectedNamespace}
-                            activeTab={viewState.activeNamespaceTab || 'workloads'}
-                            onTabChange={(tab: NamespaceViewType) =>
-                              viewState.setActiveNamespaceTab(tab)
-                            }
-                          />
-                        </NamespaceResourcesProvider>
-                      </RouteErrorBoundary>
-                    )
-                  ) : (
-                    <div className="welcome">
-                      <img
-                        src={captainK8s}
-                        alt="Captain K8s"
-                        className="welcome-logo"
-                        width={1024}
-                        height={1024}
-                      />
-                      <img
-                        src={logo}
-                        alt="Luxury Yacht"
-                        className="welcome-logo"
-                        width={827}
-                        height={500}
-                      />
-
-                      <p>Select a view from the sidebar to get started</p>
-                    </div>
-                  )
-                ) : viewState.viewType === 'overview' ? (
-                  <RouteErrorBoundary routeName="cluster-overview">
-                    <div className="view-content view-content--cluster-overview">
-                      <ClusterOverview
-                        clusterContext={kubeconfig.selectedKubeconfig || 'Default'}
-                      />
-                    </div>
-                  </RouteErrorBoundary>
-                ) : (
-                  <div className="welcome">
-                    <img
-                      src={captainK8s}
-                      alt="Captain K8s"
-                      className="welcome-logo"
-                      width={1024}
-                      height={1024}
-                    />
-                    <img
-                      src={logo}
-                      alt="Luxury Yacht"
-                      className="welcome-logo"
-                      width={827}
-                      height={500}
-                    />
-
-                    <p>Select a view from the sidebar to get started</p>
-                  </div>
-                )
-              ) : null}
-            </div>
+            <div className="content-body__main">{routeContent}</div>
           </div>
         </div>
         {!hasActiveClusters && (
@@ -365,6 +347,13 @@ interface FocusDebugInfo {
   path: string;
 }
 
+const formatDisabledState = (disabled: boolean | null): string => {
+  if (disabled === null) {
+    return 'n/a';
+  }
+  return disabled ? 'true' : 'false';
+};
+
 const serializeFocusInfo = (focusInfo: FocusDebugInfo) =>
   [
     ['Summary', focusInfo.summary],
@@ -375,7 +364,7 @@ const serializeFocusInfo = (focusInfo: FocusDebugInfo) =>
     ['Id', focusInfo.id ?? 'none'],
     ['Classes', focusInfo.classes ?? 'none'],
     ['Tab Index', focusInfo.tabIndex !== null ? String(focusInfo.tabIndex) : 'none'],
-    ['Disabled', focusInfo.disabled === null ? 'n/a' : focusInfo.disabled ? 'true' : 'false'],
+    ['Disabled', formatDisabledState(focusInfo.disabled)],
     ['Focus Area', focusInfo.focusArea ?? 'none'],
     ['Surface', focusInfo.surface ?? 'none'],
     ['Path', focusInfo.path],
@@ -608,9 +597,7 @@ const KeyboardFocusOverlay: React.FC<OverlayCloseProps> = ({ onClose }) => {
       </div>
       <div className="debug-overlay__section">
         <div className="debug-overlay__label">Disabled</div>
-        <div className="debug-overlay__value">
-          {focusInfo.disabled === null ? 'n/a' : focusInfo.disabled ? 'true' : 'false'}
-        </div>
+        <div className="debug-overlay__value">{formatDisabledState(focusInfo.disabled)}</div>
       </div>
       <div className="debug-overlay__section">
         <div className="debug-overlay__label">Focus Area</div>
@@ -820,8 +807,13 @@ const formatObjectMapDebugBounds = (bounds: ObjectMapDebugSnapshot['layout']['bo
 const formatObjectMapDebugVector = (value: [number, number]): string =>
   `${value[0].toFixed(1)}, ${value[1].toFixed(1)}`;
 
-const formatObjectMapDebugMs = (value: number | null): string =>
-  value === null ? 'unknown' : `${value.toFixed(value < 10 ? 2 : 1)} ms`;
+const formatObjectMapDebugMs = (value: number | null): string => {
+  if (value === null) {
+    return 'unknown';
+  } else {
+    return `${value.toFixed(value < 10 ? 2 : 1)} ms`;
+  }
+};
 
 const MapDebugOverlay: React.FC<OverlayCloseProps> = ({ onClose }) => {
   const maps = useObjectMapDebugSnapshots();

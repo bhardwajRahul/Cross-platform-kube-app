@@ -49,12 +49,15 @@ const parseSvgSize = (source: string): { gridSize: string; defaultSize: string }
   const viewBoxParts = viewBox?.split(/\s+/).map(Number);
   const width = source.match(/\bwidth=["']([^"']+)["']/)?.[1];
   const height = source.match(/\bheight=["']([^"']+)["']/)?.[1];
-  const gridSize =
-    viewBoxParts && viewBoxParts.length === 4
-      ? `${viewBoxParts[2]}x${viewBoxParts[3]}`
-      : width && height
-        ? `${width}x${height}`
-        : 'unknown';
+  let gridSize: string;
+
+  if (viewBoxParts && viewBoxParts.length === 4) {
+    gridSize = `${viewBoxParts[2]}x${viewBoxParts[3]}`;
+  } else if (width && height) {
+    gridSize = `${width}x${height}`;
+  } else {
+    gridSize = 'unknown';
+  }
 
   return {
     gridSize,

@@ -447,9 +447,14 @@ export function useAnchorOnUnmatchedFocusRequest<TRow>({
       return;
     }
     const request = anchoredRequestRef.current;
-    const target = request
-      ? `${request.kind} ${request.namespace ? `${request.namespace}/` : ''}${request.name}`
-      : 'The requested object';
+    let target: string;
+
+    if (request) {
+      target = `${request.kind} ${request.namespace ? `${request.namespace}/` : ''}${request.name}`;
+    } else {
+      target = 'The requested object';
+    }
+
     // Loud, inline-adjacent truth (degraded states must be visible): the jump
     // landed on page 1 because the object is not in this view.
     errorHandler.handle(

@@ -511,15 +511,23 @@ const NodeLogsTab = ({
   const displayedLogCount = isParsedView
     ? parsedLogs.length
     : filteredLines.filter((line) => line.length > 0).length;
-  const countLabel = selectedSource
-    ? `${displayedLogCount} matching log${displayedLogCount === 1 ? '' : 's'}`
-    : 'Select a log source';
+  let countLabel: string;
+
+  if (selectedSource) {
+    countLabel = `${displayedLogCount} matching log${displayedLogCount === 1 ? '' : 's'}`;
+  } else {
+    countLabel = 'Select a log source';
+  }
+
+  let rowCount = 0;
+  if (content.length > 0) {
+    rowCount = isParsedView ? parsedLogs.length : renderedDisplayRows.length;
+  }
 
   const { resetScrollRestoration } = useLogScrollRestoration({
     rootRef: logsContentRef,
     isParsedView,
-    rowCount:
-      content.length === 0 ? 0 : isParsedView ? parsedLogs.length : renderedDisplayRows.length,
+    rowCount,
     tailFollowSignal: `${selectedSource?.path ?? ''}:${parsedLogs.length}:${renderedDisplayRows.length}`,
     cacheKey: panelId,
     getScrollTop: getLogViewerScrollTop,
@@ -635,6 +643,62 @@ const NodeLogsTab = ({
           </div>
         </div>
       </div>
+    );
+  }
+
+  let copyIconFeedback: 'success' | 'error' | null = null;
+  if (copyFeedback === 'copied') {
+    copyIconFeedback = 'success';
+  } else if (copyFeedback === 'error') {
+    copyIconFeedback = 'error';
+  }
+
+  let renderedLogContent: React.ReactNode;
+  if (error) {
+    renderedLogContent = <div className="logs-viewer-display-error">{error}</div>;
+  } else if (!selectedSource) {
+    renderedLogContent = (
+      <div className="logs-viewer-display-loading">Select a log source to view logs.</div>
+    );
+  } else if (loading && !hasLoadedContent) {
+    renderedLogContent = <div className="logs-viewer-display-loading">Loading logs…</div>;
+  } else if (hasInvalidRegex) {
+    renderedLogContent = (
+      <div className="logs-viewer-display-error">Enter a valid regular expression.</div>
+    );
+  } else if (filteredLines.length === 0) {
+    renderedLogContent = (
+      <div className="logs-viewer-display-loading">
+        {content.length === 0
+          ? 'No logs returned for this source.'
+          : 'No log lines match the current filter.'}
+      </div>
+    );
+  } else if (!isParsedView) {
+    renderedLogContent = (
+      <RawLogViewer
+        rows={renderedDisplayRows}
+        scrollContainerRef={logsContentRef}
+        wrapText={wrapText}
+        renderRow={(row, index) => (
+          <div className="log-viewer-line">
+            {renderMessageContent(row.line, `node-log-line-${index}`)}
+          </div>
+        )}
+      />
+    );
+  } else if (!canParseLogs) {
+    renderedLogContent = (
+      <div className="logs-viewer-display-loading">No JSON log lines match the current filter.</div>
+    );
+  } else {
+    renderedLogContent = (
+      <ParsedLogTable
+        rows={parsedLogs}
+        columns={tableColumns}
+        expandedRows={expandedRows}
+        onToggleRow={handleToggleParsedRow}
+      />
     );
   }
 
@@ -820,12 +884,7 @@ const NodeLogsTab = ({
                     title: 'Copy to clipboard',
                     ariaLabel: 'Copy to clipboard',
                     disabled: !hasCopyableContent,
-                    feedback:
-                      copyFeedback === 'copied'
-                        ? 'success'
-                        : copyFeedback === 'error'
-                          ? 'error'
-                          : null,
+                    feedback: copyIconFeedback,
                   },
                 ] satisfies IconBarItem[]
               }
@@ -850,45 +909,7 @@ const NodeLogsTab = ({
         )}
 
         <div ref={logsContentRef} className="logs-viewer-content selectable" tabIndex={-1}>
-          {error ? (
-            <div className="logs-viewer-display-error">{error}</div>
-          ) : !selectedSource ? (
-            <div className="logs-viewer-display-loading">Select a log source to view logs.</div>
-          ) : loading && !hasLoadedContent ? (
-            <div className="logs-viewer-display-loading">Loading logs…</div>
-          ) : hasInvalidRegex ? (
-            <div className="logs-viewer-display-error">Enter a valid regular expression.</div>
-          ) : filteredLines.length === 0 ? (
-            <div className="logs-viewer-display-loading">
-              {content.length === 0
-                ? 'No logs returned for this source.'
-                : 'No log lines match the current filter.'}
-            </div>
-          ) : isParsedView ? (
-            !canParseLogs ? (
-              <div className="logs-viewer-display-loading">
-                No JSON log lines match the current filter.
-              </div>
-            ) : (
-              <ParsedLogTable
-                rows={parsedLogs}
-                columns={tableColumns}
-                expandedRows={expandedRows}
-                onToggleRow={handleToggleParsedRow}
-              />
-            )
-          ) : (
-            <RawLogViewer
-              rows={renderedDisplayRows}
-              scrollContainerRef={logsContentRef}
-              wrapText={wrapText}
-              renderRow={(row, index) => (
-                <div className="log-viewer-line">
-                  {renderMessageContent(row.line, `node-log-line-${index}`)}
-                </div>
-              )}
-            />
-          )}
+          {renderedLogContent}
         </div>
       </div>
     </div>

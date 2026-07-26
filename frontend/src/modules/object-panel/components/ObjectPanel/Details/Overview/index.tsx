@@ -186,6 +186,12 @@ const Overview: React.FC<OverviewProps> = (props) => {
     if (!objectData) {
       return null;
     }
+    let status: string | undefined;
+    if (props.suspend === true) {
+      status = 'Suspended';
+    } else if (typeof props.status === 'string') {
+      status = props.status;
+    }
     return {
       kind: objectData.kind,
       name: objectData.name,
@@ -194,12 +200,7 @@ const Overview: React.FC<OverviewProps> = (props) => {
       clusterName: objectData.clusterName,
       group: objectData.group,
       version: objectData.version,
-      status:
-        props.suspend === true
-          ? 'Suspended'
-          : typeof props.status === 'string'
-            ? props.status
-            : undefined,
+      status,
       ready: props.ready !== undefined && props.ready !== null ? String(props.ready) : undefined,
       desiredReplicas: currentScaleReplicas,
       hpaManaged,

@@ -490,7 +490,7 @@ export function Tabs({
               aria-controls={tab.ariaControls}
               aria-disabled={tab.disabled || undefined}
               aria-label={tab.ariaLabel}
-              tabIndex={disableRovingTabIndex ? -1 : isFocusStop ? 0 : -1}
+              tabIndex={disableRovingTabIndex || !isFocusStop ? -1 : 0}
               className={`tab-item${isActive ? ' tab-item--active' : ''}${isCloseable ? ' tab-item--closeable' : ''}`}
               onClick={() => {
                 if (!tab.disabled) {

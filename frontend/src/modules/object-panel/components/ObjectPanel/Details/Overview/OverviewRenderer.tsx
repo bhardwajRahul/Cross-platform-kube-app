@@ -55,11 +55,16 @@ function renderField<T>(
     return null;
   }
 
-  const rawValue = field.render
-    ? field.render(data, context)
-    : field.field
-      ? (data[field.field] as React.ReactNode)
-      : undefined;
+  let rawValue: React.ReactNode;
+
+  if (field.render) {
+    rawValue = field.render(data, context);
+  } else if (field.field) {
+    rawValue = data[field.field] as React.ReactNode;
+  } else {
+    rawValue = undefined;
+  }
+
   const value = field.mono ? <span className="overview-value-mono">{rawValue}</span> : rawValue;
   return (
     <OverviewItem

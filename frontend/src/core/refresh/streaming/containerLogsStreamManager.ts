@@ -453,17 +453,28 @@ export class ContainerLogsStreamManager {
     const shouldReplace = payload.reset && incoming.length > 0;
     const previousMeta = this.bufferMeta.get(scope);
     const previousTotal = previousMeta?.total ?? existing.length;
-    let totalItems = shouldReplace
-      ? mode === 'stream'
-        ? Math.max(previousTotal, incoming.length)
-        : incoming.length
-      : previousTotal + incoming.length;
+    let totalItems: number;
 
-    let nextEntries = shouldReplace
-      ? incoming
-      : payload.reset
-        ? existing
-        : existing.concat(incoming);
+    if (shouldReplace) {
+      if (mode === 'stream') {
+        totalItems = Math.max(previousTotal, incoming.length);
+      } else {
+        totalItems = incoming.length;
+      }
+    } else {
+      totalItems = previousTotal + incoming.length;
+    }
+
+    let nextEntries: ContainerLogsEntry[];
+
+    if (shouldReplace) {
+      nextEntries = incoming;
+    } else if (payload.reset) {
+      nextEntries = existing;
+    } else {
+      nextEntries = existing.concat(incoming);
+    }
+
     let truncated = previousMeta?.truncated ?? false;
     if (nextEntries.length > this.maxBufferSize) {
       truncated = true;

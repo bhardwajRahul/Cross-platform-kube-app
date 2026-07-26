@@ -74,14 +74,19 @@ export const logFilterSelectionToDropdownValues = (
   const values = normalized.values;
   const selectedPods = values.filter(isPodValue);
   const selectedContainers = values.filter(isContainerValue);
-  return [
-    ...(values.includes(LOG_PODS_NONE_FILTER) ? [] : selectedPods.length > 0 ? selectedPods : pods),
-    ...(values.includes(LOG_CONTAINERS_NONE_FILTER)
-      ? []
-      : selectedContainers.length > 0
-        ? selectedContainers
-        : containers),
-  ];
+  let resolvedPods = pods;
+  if (values.includes(LOG_PODS_NONE_FILTER)) {
+    resolvedPods = [];
+  } else if (selectedPods.length > 0) {
+    resolvedPods = selectedPods;
+  }
+  let resolvedContainers = containers;
+  if (values.includes(LOG_CONTAINERS_NONE_FILTER)) {
+    resolvedContainers = [];
+  } else if (selectedContainers.length > 0) {
+    resolvedContainers = selectedContainers;
+  }
+  return [...resolvedPods, ...resolvedContainers];
 };
 
 export const logFilterSelectionMatchesNone = (selection: MultiSelectFilterSelection): boolean =>

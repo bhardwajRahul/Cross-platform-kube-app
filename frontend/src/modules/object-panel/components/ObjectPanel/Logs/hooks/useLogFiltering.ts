@@ -137,13 +137,15 @@ export function useLogFiltering({
         selectedContainers.size > 0 ||
         selectedDebugContainers.size > 0
       ) {
-        entries = entries.filter((entry) =>
-          entry.isInit
-            ? selectedInitContainers.has(entry.container)
-            : entry.isEphemeral
-              ? selectedDebugContainers.has(entry.container)
-              : selectedContainers.has(entry.container)
-        );
+        entries = entries.filter((entry) => {
+          if (entry.isInit) {
+            return selectedInitContainers.has(entry.container);
+          } else if (entry.isEphemeral) {
+            return selectedDebugContainers.has(entry.container);
+          } else {
+            return selectedContainers.has(entry.container);
+          }
+        });
       }
     }
 

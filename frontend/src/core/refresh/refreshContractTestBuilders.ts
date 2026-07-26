@@ -39,12 +39,16 @@ const workloadRef = (
   namespace: string,
   clusterId?: string
 ): CanonicalResourceRef => {
-  const identity =
-    kind === 'Job' || kind === 'CronJob'
-      ? { group: 'batch', resource: `${kind.toLowerCase()}s` }
-      : kind === 'Pod'
-        ? { group: '', resource: 'pods' }
-        : { group: 'apps', resource: `${kind.toLowerCase()}s` };
+  let identity: { group: string; resource: string };
+
+  if (kind === 'Job' || kind === 'CronJob') {
+    identity = { group: 'batch', resource: `${kind.toLowerCase()}s` };
+  } else if (kind === 'Pod') {
+    identity = { group: '', resource: 'pods' };
+  } else {
+    identity = { group: 'apps', resource: `${kind.toLowerCase()}s` };
+  }
+
   return builtInRef(kind, identity.resource, name, namespace, identity.group, clusterId);
 };
 

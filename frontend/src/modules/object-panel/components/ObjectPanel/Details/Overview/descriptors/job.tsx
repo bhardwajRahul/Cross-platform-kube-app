@@ -169,11 +169,16 @@ const RunSummary: React.FC<RunSummaryProps> = ({
   return (
     <div className="run-summary">
       {rows.map((r) => {
-        const tooltip = r.iso
-          ? formatLocalDateTime(r.iso)
-          : r.retention
-            ? RETENTION_TOOLTIP
-            : undefined;
+        let tooltip: string | undefined;
+
+        if (r.iso) {
+          tooltip = formatLocalDateTime(r.iso);
+        } else if (r.retention) {
+          tooltip = RETENTION_TOOLTIP;
+        } else {
+          tooltip = undefined;
+        }
+
         const value = <span className="run-summary-value">{r.value}</span>;
         return (
           <div key={r.label} className="run-summary-row">

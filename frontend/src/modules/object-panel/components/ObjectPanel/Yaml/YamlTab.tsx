@@ -92,7 +92,16 @@ const renderYamlDiff = (
       <pre>
         {visibleLines.map((line, index) => {
           const lineKeyIndex = showFullDiff ? index : diff.lines.indexOf(line);
-          const prefix = line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' ';
+          let prefix: string;
+
+          if (line.type === 'added') {
+            prefix = '+';
+          } else if (line.type === 'removed') {
+            prefix = '-';
+          } else {
+            prefix = ' ';
+          }
+
           const left =
             line.leftLineNumber !== undefined && line.leftLineNumber !== null
               ? line.leftLineNumber.toString().padStart(4, ' ')
@@ -320,28 +329,77 @@ const YamlTab: React.FC<YamlTabProps> = ({
 
   const hasYamlError = Boolean(lintError) || hasServerYamlError;
   const disableSave = isSaving || hasYamlError;
-  const yamlToolbarItems = useMemo<IconBarItem[]>(
-    () => [
+  const yamlToolbarItems = useMemo<IconBarItem[]>(() => {
+    let managedFieldsTitle = 'Show managedFields';
+    let managedFieldsAriaLabel = managedFieldsTitle;
+    if (isEditing) {
+      managedFieldsTitle = 'managedFields unavailable while editing';
+      managedFieldsAriaLabel = 'managedFields toggle unavailable while editing';
+    } else if (showManagedFields) {
+      managedFieldsTitle = 'Hide managedFields';
+      managedFieldsAriaLabel = managedFieldsTitle;
+    }
+
+    let editItems: IconBarItem[] = [];
+    if (isEditing) {
+      editItems = [
+        {
+          type: 'action',
+          id: 'cancel-edit',
+          icon: <YamlCancelIcon width={16} height={16} />,
+          onClick: handleCancelClick,
+          title: 'Cancel edit',
+          ariaLabel: 'Cancel edit',
+          disabled: isSaving,
+        },
+        {
+          type: 'action',
+          id: 'save-yaml',
+          icon: <YamlSaveIcon width={16} height={16} />,
+          onClick: handleSaveClick,
+          title: isSaving ? 'Saving YAML' : 'Save YAML',
+          ariaLabel: 'Save YAML',
+          disabled: disableSave,
+        },
+      ];
+    } else if (canEdit) {
+      editItems = [
+        {
+          type: 'action',
+          id: 'edit-yaml',
+          icon: <YamlEditIcon width={16} height={16} />,
+          onClick: handleEnterEditClick,
+          title: 'Edit YAML',
+          ariaLabel: 'Edit YAML',
+        },
+      ];
+    } else if (editDisabledReason) {
+      editItems = [
+        {
+          type: 'action',
+          id: 'edit-yaml-disabled',
+          icon: <YamlEditIcon width={16} height={16} />,
+          onClick: () => undefined,
+          title: editDisabledReason,
+          ariaLabel: `Edit YAML unavailable: ${editDisabledReason}`,
+          disabled: true,
+        },
+      ];
+    }
+
+    return [
       {
-        type: 'toggle' as const,
+        type: 'toggle',
         id: 'managed-fields',
         icon: <YamlManagedFieldsIcon width={16} height={16} />,
         active: showManagedFields && !isEditing,
         onClick: handleToggleManagedFields,
-        title: isEditing
-          ? 'managedFields unavailable while editing'
-          : showManagedFields
-            ? 'Hide managedFields'
-            : 'Show managedFields',
-        ariaLabel: isEditing
-          ? 'managedFields toggle unavailable while editing'
-          : showManagedFields
-            ? 'Hide managedFields'
-            : 'Show managedFields',
+        title: managedFieldsTitle,
+        ariaLabel: managedFieldsAriaLabel,
         disabled: isEditing,
       },
       {
-        type: 'toggle' as const,
+        type: 'toggle',
         id: 'wrap-lines',
         icon: <WrapTextIcon width={20} height={20} />,
         active: wrapLines,
@@ -349,67 +407,22 @@ const YamlTab: React.FC<YamlTabProps> = ({
         title: wrapLines ? 'Disable YAML line wrapping' : 'Enable YAML line wrapping',
         ariaLabel: 'Wrap YAML lines',
       },
-      ...(isEditing
-        ? [
-            {
-              type: 'action' as const,
-              id: 'cancel-edit',
-              icon: <YamlCancelIcon width={16} height={16} />,
-              onClick: handleCancelClick,
-              title: 'Cancel edit',
-              ariaLabel: 'Cancel edit',
-              disabled: isSaving,
-            },
-            {
-              type: 'action' as const,
-              id: 'save-yaml',
-              icon: <YamlSaveIcon width={16} height={16} />,
-              onClick: handleSaveClick,
-              title: isSaving ? 'Saving YAML' : 'Save YAML',
-              ariaLabel: 'Save YAML',
-              disabled: disableSave,
-            },
-          ]
-        : canEdit
-          ? [
-              {
-                type: 'action' as const,
-                id: 'edit-yaml',
-                icon: <YamlEditIcon width={16} height={16} />,
-                onClick: handleEnterEditClick,
-                title: 'Edit YAML',
-                ariaLabel: 'Edit YAML',
-              },
-            ]
-          : editDisabledReason
-            ? [
-                {
-                  type: 'action' as const,
-                  id: 'edit-yaml-disabled',
-                  icon: <YamlEditIcon width={16} height={16} />,
-                  onClick: () => undefined,
-                  title: editDisabledReason,
-                  ariaLabel: `Edit YAML unavailable: ${editDisabledReason}`,
-                  disabled: true,
-                },
-              ]
-            : []),
-    ],
-    [
-      canEdit,
-      disableSave,
-      editDisabledReason,
-      handleCancelClick,
-      handleEnterEditClick,
-      handleSaveClick,
-      handleToggleLineWrapping,
-      handleToggleManagedFields,
-      isEditing,
-      isSaving,
-      showManagedFields,
-      wrapLines,
-    ]
-  );
+      ...editItems,
+    ];
+  }, [
+    canEdit,
+    disableSave,
+    editDisabledReason,
+    handleCancelClick,
+    handleEnterEditClick,
+    handleSaveClick,
+    handleToggleLineWrapping,
+    handleToggleManagedFields,
+    isEditing,
+    isSaving,
+    showManagedFields,
+    wrapLines,
+  ]);
 
   if (yamlLoading) {
     return (

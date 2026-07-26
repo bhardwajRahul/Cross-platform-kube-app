@@ -242,10 +242,13 @@ export const useModalFocusTrap = ({
       const active = document.activeElement as HTMLElement | null;
       const currentIndex = items.findIndex((item) => item === active || item.contains(active));
       const fallbackIndex = event.shiftKey ? items.length - 1 : 0;
-      const nextIndex =
-        currentIndex === -1
-          ? fallbackIndex
-          : (currentIndex + (event.shiftKey ? -1 : 1) + items.length) % items.length;
+      let nextIndex: number;
+
+      if (currentIndex === -1) {
+        nextIndex = fallbackIndex;
+      } else {
+        nextIndex = (currentIndex + (event.shiftKey ? -1 : 1) + items.length) % items.length;
+      }
 
       event.preventDefault();
       event.stopPropagation();

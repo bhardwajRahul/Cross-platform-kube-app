@@ -65,8 +65,13 @@ const COLUMN_SIZING: ColumnSizingMap = {
   age: { autoWidth: true },
 };
 
-const workloadNameFromOwner = (pod: PodSnapshotEntry) =>
-  pod.ownerName ? `${pod.ownerName}${pod.ownerKind ? ` (${pod.ownerKind})` : ''}` : '—';
+const workloadNameFromOwner = (pod: PodSnapshotEntry) => {
+  if (pod.ownerName) {
+    return `${pod.ownerName}${pod.ownerKind ? ` (${pod.ownerKind})` : ''}`;
+  } else {
+    return '—';
+  }
+};
 
 export const PodsTab: React.FC<PodsTabProps> = ({ isActive }) => {
   const { openWithObject, objectData } = useObjectPanel();

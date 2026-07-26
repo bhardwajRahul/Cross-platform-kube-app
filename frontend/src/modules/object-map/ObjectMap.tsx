@@ -12,6 +12,7 @@ import type { ObjectMapReference, ObjectMapSnapshotPayload } from '@core/refresh
 import ContextMenu, { type ContextMenuItem } from '@shared/components/ContextMenu';
 import type { DropdownOption } from '@shared/components/dropdowns/Dropdown';
 import { Dropdown } from '@shared/components/dropdowns/Dropdown';
+import { normalizeDropdownValue } from '@shared/components/dropdowns/dropdownValue';
 import {
   ALL_MULTISELECT_FILTER,
   filterSelectionFromDropdownValues,
@@ -220,8 +221,9 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
 
   const handleKindsChange = useCallback(
     (value: string | string[]) => {
-      const values = Array.isArray(value) ? value : value ? [value] : [];
-      setSelectedKinds(filterSelectionFromDropdownValues(values, visibleState.kindOptions));
+      setSelectedKinds(
+        filterSelectionFromDropdownValues(normalizeDropdownValue(value), visibleState.kindOptions)
+      );
     },
     [visibleState.kindOptions]
   );
@@ -237,7 +239,16 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
   );
 
   const renderKindsValue = useCallback((value: string | string[], _options: DropdownOption[]) => {
-    const count = Array.isArray(value) ? value.length : value ? 1 : 0;
+    let count: number;
+
+    if (Array.isArray(value)) {
+      count = value.length;
+    } else if (value) {
+      count = 1;
+    } else {
+      count = 0;
+    }
+
     return count > 0 ? `Kinds (${count})` : 'Kinds';
   }, []);
 
@@ -351,8 +362,7 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
       status: actionFacts?.status,
       unschedulable: actionFacts?.unschedulable,
       portForwardAvailable: actionFacts?.portForwardAvailable,
-      hpaManaged:
-        actionFacts?.hpaManaged === true ? true : actionFacts?.hpaManaged === false ? false : null,
+      hpaManaged: typeof actionFacts?.hpaManaged === 'boolean' ? actionFacts.hpaManaged : null,
       desiredReplicas: actionFacts?.desiredReplicas,
     };
   }, [contextMenu, nodeByReference]);

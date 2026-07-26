@@ -91,13 +91,17 @@ export const buildBrowseCatalogPlan = ({
   const sortScope = catalogSortScope(sort);
   const selectedNamespaces = filters.namespaces ?? [];
   const hasUserNamespaceScope = isNamespaceScoped || selectedNamespaces.length > 0;
-  const namespacesToQuery = clusterScopedOnly
-    ? ['cluster']
-    : isNamespaceScoped
-      ? pinnedNamespaces
-      : selectedNamespaces.length > 0
-        ? selectedNamespaces
-        : availableNamespaces;
+  let namespacesToQuery: string[];
+
+  if (clusterScopedOnly) {
+    namespacesToQuery = ['cluster'];
+  } else if (isNamespaceScoped) {
+    namespacesToQuery = pinnedNamespaces;
+  } else if (selectedNamespaces.length > 0) {
+    namespacesToQuery = selectedNamespaces;
+  } else {
+    namespacesToQuery = availableNamespaces;
+  }
 
   const baseScope = buildCatalogScope({
     limit: pageLimit,
@@ -116,11 +120,16 @@ export const buildBrowseCatalogPlan = ({
     normalizeCatalogScope(baseScope, pageLimit, pinnedNamespaces, clusterId) ??
     buildClusterScope(clusterId ?? undefined, baseScope);
 
-  const metadataNamespaces = clusterScopedOnly
-    ? ['cluster']
-    : isNamespaceScoped
-      ? pinnedNamespaces
-      : [];
+  let metadataNamespaces: string[];
+
+  if (clusterScopedOnly) {
+    metadataNamespaces = ['cluster'];
+  } else if (isNamespaceScoped) {
+    metadataNamespaces = pinnedNamespaces;
+  } else {
+    metadataNamespaces = [];
+  }
+
   const metadataBaseScope = buildCatalogScope({
     limit: 1,
     resourceScope,

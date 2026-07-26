@@ -116,15 +116,17 @@ export const BrokerReadsTable: React.FC<BrokerReadsTableProps> = ({ rows, summar
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {rows.length === 0 && (
               <tr className="diagnostics-empty">
                 <td colSpan={14}>No brokered reads recorded yet.</td>
               </tr>
-            ) : filteredRows.length === 0 ? (
+            )}
+            {rows.length > 0 && filteredRows.length === 0 && (
               <tr className="diagnostics-empty">
                 <td colSpan={14}>No brokered reads match the current filters.</td>
               </tr>
-            ) : (
+            )}
+            {filteredRows.length > 0 &&
               filteredRows.map((row) => (
                 <tr key={row.key}>
                   <td>{row.broker}</td>
@@ -161,8 +163,7 @@ export const BrokerReadsTable: React.FC<BrokerReadsTableProps> = ({ rows, summar
                     <TableCellValue>{row.lastError}</TableCellValue>
                   </td>
                 </tr>
-              ))
-            )}
+              ))}
           </tbody>
         </table>
       </div>

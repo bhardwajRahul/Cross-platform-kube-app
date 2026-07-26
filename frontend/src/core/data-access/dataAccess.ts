@@ -174,15 +174,13 @@ export const acquireRefreshDomainLease = ({
   preserveState?: boolean;
   demand?: RefreshDemand;
 }): void => {
-  refreshOrchestrator.acquireScopedDomainLease(
-    domain,
-    scope,
-    demand === 'snapshot'
-      ? preserveState
-        ? { preserveState }
-        : undefined
-      : { preserveState, demand }
-  );
+  let options: { preserveState: boolean; demand?: RefreshDemand } | undefined;
+  if (demand !== 'snapshot') {
+    options = { preserveState, demand };
+  } else if (preserveState) {
+    options = { preserveState };
+  }
+  refreshOrchestrator.acquireScopedDomainLease(domain, scope, options);
 };
 
 export const releaseRefreshDomainLease = ({
@@ -196,15 +194,13 @@ export const releaseRefreshDomainLease = ({
   preserveState?: boolean;
   demand?: RefreshDemand;
 }): void => {
-  refreshOrchestrator.releaseScopedDomainLease(
-    domain,
-    scope,
-    demand === 'snapshot'
-      ? preserveState
-        ? { preserveState }
-        : undefined
-      : { preserveState, demand }
-  );
+  let options: { preserveState: boolean; demand?: RefreshDemand } | undefined;
+  if (demand !== 'snapshot') {
+    options = { preserveState, demand };
+  } else if (preserveState) {
+    options = { preserveState };
+  }
+  refreshOrchestrator.releaseScopedDomainLease(domain, scope, options);
 };
 
 export const resetRefreshDomain = (domain: RefreshDomain, scope: string): void => {

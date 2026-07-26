@@ -246,12 +246,17 @@ export const computeObjectMapTooltipLayout = ({
   }, 0);
   const rowOffsets = rows.reduce<number[]>((offsets, _row, index) => {
     const previousOffset = offsets[index - 1] ?? firstRowOffset;
-    const offset =
-      index === 0
-        ? firstRowOffset
-        : previousOffset +
-          rowGap +
-          (rows[index - 1]?.type === 'relationship' ? palette.tooltipRelationshipBottomPadding : 0);
+    let offset: number;
+
+    if (index === 0) {
+      offset = firstRowOffset;
+    } else {
+      offset =
+        previousOffset +
+        rowGap +
+        (rows[index - 1]?.type === 'relationship' ? palette.tooltipRelationshipBottomPadding : 0);
+    }
+
     offsets.push(offset);
     return offsets;
   }, []);

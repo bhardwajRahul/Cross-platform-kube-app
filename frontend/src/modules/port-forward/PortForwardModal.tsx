@@ -301,10 +301,11 @@ const PortForwardModal = ({ target, onClose, onStarted }: PortForwardModalProps)
         {/* Container Port Selection */}
         <div className="port-forward-field">
           <span className="port-forward-field-label">Container Port</span>
-          {isLoadingPorts ? (
+          {!!isLoadingPorts && (
             // Loading indicator while fetching ports
             <div className="port-forward-loading">Loading available ports...</div>
-          ) : hasPredefinedPorts ? (
+          )}
+          {!isLoadingPorts && hasPredefinedPorts && (
             // Radio buttons for predefined ports
             <div className="port-forward-port-options">
               {availablePorts.map((portInfo) => (
@@ -334,7 +335,8 @@ const PortForwardModal = ({ target, onClose, onStarted }: PortForwardModalProps)
                 </label>
               ))}
             </div>
-          ) : (
+          )}
+          {!isLoadingPorts && !hasPredefinedPorts && (
             // Manual input for container port
             <div className="port-forward-input-group">
               <input

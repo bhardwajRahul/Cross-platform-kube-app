@@ -85,11 +85,15 @@ export default function ResourceInventoryTable<T>({
   // exception: they are a designed, settled state (a typed 403 from a domain
   // the identity cannot read — e.g. under a namespace scope), so they render
   // the shared "Insufficient permissions" message in place.
-  const emptyMessageForState = render.isEmpty
-    ? emptyMessage
-    : render.error
-      ? resolveEmptyStateMessage(render.error, 'Unable to load data')
-      : undefined;
+  let emptyMessageForState: string | undefined;
+
+  if (render.isEmpty) {
+    emptyMessageForState = emptyMessage;
+  } else if (render.error) {
+    emptyMessageForState = resolveEmptyStateMessage(render.error, 'Unable to load data');
+  } else {
+    emptyMessageForState = undefined;
+  }
 
   return (
     <>

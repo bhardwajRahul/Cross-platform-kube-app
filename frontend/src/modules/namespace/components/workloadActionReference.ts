@@ -8,8 +8,15 @@
 import { buildRequiredObjectReference } from '@shared/utils/objectIdentity';
 import type { WorkloadData } from './NsViewWorkloads.helpers';
 
-export const normalizeWorkloadHPAManaged = (value: WorkloadData['hpaManaged'] | null) =>
-  value === true ? true : value === false ? false : null;
+export const normalizeWorkloadHPAManaged = (value: WorkloadData['hpaManaged'] | null) => {
+  if (value === true) {
+    return true;
+  } else if (value === false) {
+    return false;
+  } else {
+    return null;
+  }
+};
 
 export const buildWorkloadActionReference = (
   row: WorkloadData,

@@ -191,9 +191,8 @@ const renderMetric = (
     metricName = target.metric || 'Pods Metric';
   } else if (kind === 'object') {
     const objName = target.object || target.describedObject || '';
-    metricName = target.metric
-      ? `${target.metric}${objName ? ` (${objName})` : ''}`
-      : objName || 'Object Metric';
+    const objectSuffix = objName ? ` (${objName})` : '';
+    metricName = target.metric ? `${target.metric}${objectSuffix}` : objName || 'Object Metric';
   } else if (kind === 'external') {
     metricName = target.metric || 'External Metric';
   } else {

@@ -253,18 +253,25 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
   });
 
   // Resolve the correct min constraints for the current dock mode.
-  const resolvedMinWidth =
-    panelState.position === 'right'
-      ? constraints.right.minWidth
-      : panelState.position === 'floating'
-        ? constraints.floating.minWidth
-        : 0;
-  const resolvedMinHeight =
-    panelState.position === 'bottom'
-      ? constraints.bottom.minHeight
-      : panelState.position === 'floating'
-        ? constraints.floating.minHeight
-        : 0;
+  let resolvedMinWidth: number;
+
+  if (panelState.position === 'right') {
+    resolvedMinWidth = constraints.right.minWidth;
+  } else if (panelState.position === 'floating') {
+    resolvedMinWidth = constraints.floating.minWidth;
+  } else {
+    resolvedMinWidth = 0;
+  }
+
+  let resolvedMinHeight: number;
+
+  if (panelState.position === 'bottom') {
+    resolvedMinHeight = constraints.bottom.minHeight;
+  } else if (panelState.position === 'floating') {
+    resolvedMinHeight = constraints.floating.minHeight;
+  } else {
+    resolvedMinHeight = 0;
+  }
 
   const {
     isDragging,

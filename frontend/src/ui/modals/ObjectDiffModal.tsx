@@ -621,14 +621,25 @@ const ObjectDiffModal: React.FC<ObjectDiffModalProps> = ({
     () => new Map(rightVisibleItems.map((item) => [item.ref.uid, item])),
     [rightVisibleItems]
   );
-  const leftSelection = leftObjectUid
-    ? (leftObjectMap.get(leftObjectUid) ??
-      (leftSelectedObject?.ref.uid === leftObjectUid ? leftSelectedObject : null))
-    : null;
-  const rightSelection = rightObjectUid
-    ? (rightObjectMap.get(rightObjectUid) ??
-      (rightSelectedObject?.ref.uid === rightObjectUid ? rightSelectedObject : null))
-    : null;
+  let leftSelection: CatalogItem | null;
+
+  if (leftObjectUid) {
+    leftSelection =
+      leftObjectMap.get(leftObjectUid) ??
+      (leftSelectedObject?.ref.uid === leftObjectUid ? leftSelectedObject : null);
+  } else {
+    leftSelection = null;
+  }
+
+  let rightSelection: CatalogItem | null;
+
+  if (rightObjectUid) {
+    rightSelection =
+      rightObjectMap.get(rightObjectUid) ??
+      (rightSelectedObject?.ref.uid === rightObjectUid ? rightSelectedObject : null);
+  } else {
+    rightSelection = null;
+  }
 
   const leftNamespaceLoading = leftBaseEnabled && isSnapshotLoading(leftBaseCatalog.state.status);
   const rightNamespaceLoading =

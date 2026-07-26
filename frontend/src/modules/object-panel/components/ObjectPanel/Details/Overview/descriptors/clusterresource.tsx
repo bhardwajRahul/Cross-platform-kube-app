@@ -235,14 +235,15 @@ export const namespaceDescriptor: OverviewDescriptor<NamespaceDetails> = {
         field: 'hasWorkloads',
         derivedFrom: ['workloadsUnknown'],
         label: 'Has Workloads',
-        render: (d) =>
-          d.workloadsUnknown ? (
-            <span className="status-text warning">Unknown</span>
-          ) : d.hasWorkloads ? (
-            'Yes'
-          ) : (
-            'No'
-          ),
+        render: (d) => {
+          if (d.workloadsUnknown) {
+            return <span className="status-text warning">Unknown</span>;
+          } else if (d.hasWorkloads) {
+            return 'Yes';
+          } else {
+            return 'No';
+          }
+        },
       },
     ],
   },

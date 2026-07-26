@@ -64,15 +64,28 @@ const ErrorNotificationItem: React.FC<ErrorNotificationItemProps> = ({
   }, [error]);
 
   const isTop = stackPosition === 0;
-  const autoDismissClass = error.autoDismiss
-    ? error.autoDismissTimeout && error.autoDismissTimeout >= 10000
-      ? 'error-notification--auto-dismiss-long'
-      : 'error-notification--auto-dismiss-short'
-    : '';
+  let autoDismissClass: string;
+
+  if (error.autoDismiss) {
+    if (error.autoDismissTimeout && error.autoDismissTimeout >= 10000) {
+      autoDismissClass = 'error-notification--auto-dismiss-long';
+    } else {
+      autoDismissClass = 'error-notification--auto-dismiss-short';
+    }
+  } else {
+    autoDismissClass = '';
+  }
+
   const stackStyle = {
     '--notification-stack-index': `${stackPosition}`,
     '--notification-stack-count': `${stackSize}`,
   } as React.CSSProperties;
+  let copyButtonTitle = 'Copy error';
+  if (copyFeedback === 'copied') {
+    copyButtonTitle = 'Copied';
+  } else if (copyFeedback === 'error') {
+    copyButtonTitle = 'Copy failed';
+  }
 
   return (
     <div
@@ -96,13 +109,7 @@ const ErrorNotificationItem: React.FC<ErrorNotificationItemProps> = ({
             copyFeedback === 'copied' ? ' error-notification-copy--copied' : ''
           }${copyFeedback === 'error' ? ' error-notification-copy--error' : ''}`}
           onClick={handleCopyError}
-          title={
-            copyFeedback === 'copied'
-              ? 'Copied'
-              : copyFeedback === 'error'
-                ? 'Copy failed'
-                : 'Copy error'
-          }
+          title={copyButtonTitle}
           aria-label="Copy error"
         >
           <CopyIcon width={16} height={16} />

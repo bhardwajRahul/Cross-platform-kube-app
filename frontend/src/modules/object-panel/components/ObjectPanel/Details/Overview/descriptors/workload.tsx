@@ -211,11 +211,15 @@ const resolvePodStateCounts = (
       desiredCount = Math.max(desiredCount, normalizedPodCount);
     }
   }
-  const availableCount = usePodSummary
-    ? normalizedReadyPodCount
-    : typeof available === 'number'
-      ? available
-      : null;
+  let availableCount: number | null;
+
+  if (usePodSummary) {
+    availableCount = normalizedReadyPodCount;
+  } else if (typeof available === 'number') {
+    availableCount = available;
+  } else {
+    availableCount = null;
+  }
 
   if (
     desiredCount === null ||
@@ -962,19 +966,25 @@ const statefulSetItems: OverviewItemSpec<StatefulSetDetails>[] = [
               fullWidth
               value={
                 <div className="overview-condition-list">
-                  {Object.entries(retention).map(([phase, policy]) => (
-                    <StatusChip
-                      key={phase}
-                      variant={policy === 'Delete' ? 'warning' : 'info'}
-                      tooltip={
-                        policy === 'Delete'
-                          ? `PVCs are deleted when ${phase === 'whenScaled' ? 'pods are scaled down' : 'the StatefulSet is deleted'}. Data is lost.`
-                          : `PVCs are kept when ${phase === 'whenScaled' ? 'pods are scaled down' : 'the StatefulSet is deleted'}.`
-                      }
-                    >
-                      {phase}: {policy}
-                    </StatusChip>
-                  ))}
+                  {Object.entries(retention).map(([phase, policy]) => {
+                    const phaseDescription =
+                      phase === 'whenScaled'
+                        ? 'pods are scaled down'
+                        : 'the StatefulSet is deleted';
+                    const tooltip =
+                      policy === 'Delete'
+                        ? `PVCs are deleted when ${phaseDescription}. Data is lost.`
+                        : `PVCs are kept when ${phaseDescription}.`;
+                    return (
+                      <StatusChip
+                        key={phase}
+                        variant={policy === 'Delete' ? 'warning' : 'info'}
+                        tooltip={tooltip}
+                      >
+                        {phase}: {policy}
+                      </StatusChip>
+                    );
+                  })}
                 </div>
               }
             />

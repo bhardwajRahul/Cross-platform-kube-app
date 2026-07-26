@@ -550,6 +550,16 @@ export function useCommandPaletteCommands() {
       const isActive = selectedKubeconfigs.includes(configValue);
       const label = `${config.name}:${config.context}`;
       const isInvalid = config.invalid;
+      let description = 'Switch to this context';
+      if (isInvalid) {
+        description = `Invalid: ${config.invalidReason || 'unusable context'}`;
+      } else if (config.name !== config.context) {
+        description = `From ${config.name}`;
+      }
+      let icon: string | undefined;
+      if (!isInvalid && isActive) {
+        icon = '✓';
+      }
 
       return {
         id: `kubeconfig-${configValue}`,
@@ -567,13 +577,9 @@ export function useCommandPaletteCommands() {
             )}
           </span>
         ),
-        description: isInvalid
-          ? `Invalid: ${config.invalidReason || 'unusable context'}`
-          : config.name !== config.context
-            ? `From ${config.name}`
-            : 'Switch to this context',
+        description,
         category: 'Kubeconfigs',
-        icon: isInvalid ? undefined : isActive ? '✓' : undefined,
+        icon,
         action: () => {
           if (isInvalid) {
             return; // A structurally-invalid context can't be opened.

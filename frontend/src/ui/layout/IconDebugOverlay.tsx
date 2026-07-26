@@ -126,8 +126,15 @@ const IconDebugPreview: React.FC<{
 const getAriaSort = (
   sort: IconDebugSortState | null,
   column: IconDebugSortColumn
-): 'none' | 'ascending' | 'descending' =>
-  sort?.column !== column ? 'none' : sort.direction === 'asc' ? 'ascending' : 'descending';
+): 'none' | 'ascending' | 'descending' => {
+  if (sort?.column !== column) {
+    return 'none';
+  } else if (sort.direction === 'asc') {
+    return 'ascending';
+  } else {
+    return 'descending';
+  }
+};
 
 const IconDebugColGroup: React.FC = () => (
   <colgroup>
@@ -178,6 +185,12 @@ export const IconDebugOverlay: React.FC<IconDebugOverlayProps> = ({ onClose }) =
 
   const renderSortHeader = (column: IconDebugSortColumn, label: string) => {
     const direction = sort?.column === column ? sort.direction : null;
+    let sortIndicator = '';
+    if (direction === 'asc') {
+      sortIndicator = '▲';
+    } else if (direction === 'desc') {
+      sortIndicator = '▼';
+    }
     return (
       <button
         type="button"
@@ -187,7 +200,7 @@ export const IconDebugOverlay: React.FC<IconDebugOverlayProps> = ({ onClose }) =
       >
         <span>{label}</span>
         <span className="icon-debug-table__sort-indicator" aria-hidden="true">
-          {direction === 'asc' ? '▲' : direction === 'desc' ? '▼' : ''}
+          {sortIndicator}
         </span>
       </button>
     );

@@ -536,12 +536,16 @@ export function useBrowseCatalog({
                 : 1;
             currentPageTokenRef.current = payload.self || null;
           } else {
-            nextPageIndex =
-              direction === 'next'
-                ? pageIndexRef.current + 1
-                : direction === 'previous'
-                  ? Math.max(1, pageIndexRef.current - 1)
-                  : pageIndexRef.current;
+            switch (direction) {
+              case 'next':
+                nextPageIndex = pageIndexRef.current + 1;
+                break;
+              case 'previous':
+                nextPageIndex = Math.max(1, pageIndexRef.current - 1);
+                break;
+              default:
+                nextPageIndex = pageIndexRef.current;
+            }
             currentPageTokenRef.current = nextPageIndex > 1 ? token : null;
           }
           pageIndexRef.current = nextPageIndex;

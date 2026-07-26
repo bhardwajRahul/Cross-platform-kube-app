@@ -123,6 +123,12 @@ function PortForwardsPanel() {
   const renderActionButton = (session: PortForwardSession) => {
     const isStopping = stoppingIds.has(session.id);
     const isError = session.status === 'error';
+    let actionLabel = 'Stop';
+    if (isStopping) {
+      actionLabel = '...';
+    } else if (isError) {
+      actionLabel = 'Remove';
+    }
 
     return (
       <button
@@ -133,7 +139,7 @@ function PortForwardsPanel() {
         title={isError ? 'Remove session' : 'Stop port forward'}
         aria-label={isError ? 'Remove session' : 'Stop port forward'}
       >
-        {isStopping ? '...' : isError ? 'Remove' : 'Stop'}
+        {actionLabel}
       </button>
     );
   };

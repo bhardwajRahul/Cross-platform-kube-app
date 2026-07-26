@@ -614,11 +614,16 @@ const DiffViewer: React.FC<DiffViewerProps> = ({
         return;
       }
       const target = event.target as HTMLElement | null;
-      const side = target?.closest('.object-diff-cell-left')
-        ? 'left'
-        : target?.closest('.object-diff-cell-right')
-          ? 'right'
-          : null;
+      let side: 'left' | 'right' | null;
+
+      if (target?.closest('.object-diff-cell-left')) {
+        side = 'left';
+      } else if (target?.closest('.object-diff-cell-right')) {
+        side = 'right';
+      } else {
+        side = null;
+      }
+
       if (!side) {
         return;
       }

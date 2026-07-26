@@ -109,8 +109,16 @@ export function useTableSort<T>(
         return { key, direction: targetDirection };
       }
       if (prev.key === key) {
-        const nextDirection =
-          prev.direction === 'asc' ? 'desc' : prev.direction === 'desc' ? null : 'asc';
+        let nextDirection: SortDirection;
+
+        if (prev.direction === 'asc') {
+          nextDirection = 'desc';
+        } else if (prev.direction === 'desc') {
+          nextDirection = null;
+        } else {
+          nextDirection = 'asc';
+        }
+
         return { key, direction: nextDirection };
       }
       return { key, direction: defaultDirection };

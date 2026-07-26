@@ -30,10 +30,13 @@ export function useNamespaceColumnLink<T extends NamespaceColumnRow>(
         setSidebarSelection({ type: 'namespace', value: namespace });
         setActiveNamespaceTab(tab);
       },
-      getClassName: (item: T) =>
-        ((getNamespace ? getNamespace(item) : item.ref.namespace) ?? '').trim()
-          ? 'object-panel-link'
-          : undefined,
+      getClassName: (item: T) => {
+        if (((getNamespace ? getNamespace(item) : item.ref.namespace) ?? '').trim()) {
+          return 'object-panel-link';
+        } else {
+          return undefined;
+        }
+      },
       isInteractive: (item: T) =>
         Boolean(((getNamespace ? getNamespace(item) : item.ref.namespace) ?? '').trim()),
     }),

@@ -117,12 +117,15 @@ const BrowseView: React.FC<BrowseViewProps> = ({
   const showNamespaceColumn = scope === 'all-namespaces';
   // For cluster scope, only show cluster-scoped objects (not namespace-scoped)
   const clusterScopedOnly = isClusterScoped;
-  const diagnosticsLabel =
-    scope === 'namespace'
-      ? 'Namespace Browse'
-      : isClusterScoped
-        ? 'Cluster Browse'
-        : 'All Namespaces Browse';
+  let diagnosticsLabel: string;
+
+  if (scope === 'namespace') {
+    diagnosticsLabel = 'Namespace Browse';
+  } else if (isClusterScoped) {
+    diagnosticsLabel = 'Cluster Browse';
+  } else {
+    diagnosticsLabel = 'All Namespaces Browse';
+  }
 
   // Build pinned namespaces array: empty for cluster/all-namespaces, single item for namespace scope
   const pinnedNamespaces = useMemo(() => {
@@ -213,12 +216,7 @@ const BrowseView: React.FC<BrowseViewProps> = ({
           status: actionFacts?.status,
           unschedulable: actionFacts?.unschedulable,
           portForwardAvailable: actionFacts?.portForwardAvailable,
-          hpaManaged:
-            actionFacts?.hpaManaged === true
-              ? true
-              : actionFacts?.hpaManaged === false
-                ? false
-                : null,
+          hpaManaged: typeof actionFacts?.hpaManaged === 'boolean' ? actionFacts.hpaManaged : null,
           desiredReplicas: actionFacts?.desiredReplicas,
         })
       );
@@ -433,11 +431,12 @@ const BrowseView: React.FC<BrowseViewProps> = ({
   // Resolve class names and messages
   const resolvedTableClassName =
     tableClassName ?? (isNamespaceScoped ? 'gridtable-namespace-browse' : 'gridtable-browse');
+  const browseScopeDescription = isNamespaceScoped ? 'in this namespace' : 'in any namespaces';
   const resolvedEmptyMessage =
     emptyMessage ??
     (isClusterScoped
       ? 'No cluster-scoped objects found'
-      : `No objects found ${isNamespaceScoped ? 'in this namespace' : 'in any namespaces'}`);
+      : `No objects found ${browseScopeDescription}`);
   const resolvedLoadingMessage =
     loadingMessage ?? (isNamespaceScoped ? 'Loading resources...' : 'Loading browse catalog...');
 

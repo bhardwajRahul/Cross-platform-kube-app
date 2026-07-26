@@ -295,12 +295,16 @@ const DrainNodeModal = ({
       );
       await refreshMaintenance();
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : typeof error === 'string'
-            ? error
-            : 'Unknown error';
+      let message: string;
+
+      if (error instanceof Error) {
+        message = error.message;
+      } else if (typeof error === 'string') {
+        message = error;
+      } else {
+        message = 'Unknown error';
+      }
+
       setDrainError(message);
       errorHandler.handle(error instanceof Error ? error : new Error(message || 'Drain failed'), {
         source: 'drain-modal',
@@ -321,12 +325,16 @@ const DrainNodeModal = ({
       await CancelDrainNodeJob(clusterId, activeDrainJob.id);
       await refreshMaintenance();
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : typeof error === 'string'
-            ? error
-            : 'Unknown error';
+      let message: string;
+
+      if (error instanceof Error) {
+        message = error.message;
+      } else if (typeof error === 'string') {
+        message = error;
+      } else {
+        message = 'Unknown error';
+      }
+
       setDrainError(message);
       errorHandler.handle(
         error instanceof Error ? error : new Error(message || 'Cancel drain failed'),
@@ -352,7 +360,15 @@ const DrainNodeModal = ({
   // Initial state — no jobs at all — gets a 'Cancel' label on the close
   // button; once a job exists the secondary action is 'Close' instead.
   const closeLabel = mostRecentJob ? 'Close' : 'Cancel';
-  const startLabel = drainPending ? 'Starting…' : isRetry ? 'Retry' : 'Drain';
+  let startLabel: string;
+
+  if (drainPending) {
+    startLabel = 'Starting…';
+  } else if (isRetry) {
+    startLabel = 'Retry';
+  } else {
+    startLabel = 'Drain';
+  }
 
   return (
     <ModalSurface

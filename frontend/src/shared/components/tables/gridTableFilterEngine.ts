@@ -251,11 +251,15 @@ export function applyGridTableFilters<T>({
     }
 
     const searchValuesRaw = accessors.getSearchText?.(row) ?? defaultGetSearchText(row);
-    const searchValues = Array.isArray(searchValuesRaw)
-      ? searchValuesRaw.slice()
-      : typeof searchValuesRaw === 'string'
-        ? [searchValuesRaw]
-        : [];
+    let searchValues: unknown[];
+
+    if (Array.isArray(searchValuesRaw)) {
+      searchValues = searchValuesRaw.slice();
+    } else if (typeof searchValuesRaw === 'string') {
+      searchValues = [searchValuesRaw];
+    } else {
+      searchValues = [];
+    }
 
     if (kindValue) {
       searchValues.push(kindValue);

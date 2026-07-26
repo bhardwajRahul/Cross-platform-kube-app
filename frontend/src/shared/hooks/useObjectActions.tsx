@@ -237,12 +237,16 @@ export function buildObjectActionItems({
 
   // Scale
   if (policy.scaleActionId) {
-    const scaleHandler =
-      policy.scaleActionId === OBJECT_ACTION_IDS.resumeFromZero
-        ? handlers.onResumeFromZero
-        : policy.scaleActionId === OBJECT_ACTION_IDS.scaleToZero
-          ? handlers.onScaleToZero
-          : handlers.onScale;
+    let scaleHandler: ObjectActionHandlers['onScale'];
+
+    if (policy.scaleActionId === OBJECT_ACTION_IDS.resumeFromZero) {
+      scaleHandler = handlers.onResumeFromZero;
+    } else if (policy.scaleActionId === OBJECT_ACTION_IDS.scaleToZero) {
+      scaleHandler = handlers.onScaleToZero;
+    } else {
+      scaleHandler = handlers.onScale;
+    }
+
     menuItems.push({
       actionId: policy.scaleActionId,
       label: objectActionLabel(policy.scaleActionId),

@@ -39,10 +39,13 @@ export const AuthFailureOverlayContent: React.FC<AuthFailureOverlayContentProps>
   // The recovery loop never stops, so the message is the same throughout:
   // the cluster reconnects on its own once the problem is resolved, and the
   // countdown says when the next automatic recheck happens.
-  const recheckMessage =
-    secondsUntilRetry > 0
-      ? `Next retry in ${secondsUntilRetry} second${secondsUntilRetry !== 1 ? 's' : ''}.`
-      : 'Rechecking now…';
+  let recheckMessage: string;
+
+  if (secondsUntilRetry > 0) {
+    recheckMessage = `Next retry in ${secondsUntilRetry} second${secondsUntilRetry !== 1 ? 's' : ''}.`;
+  } else {
+    recheckMessage = 'Rechecking now…';
+  }
 
   // Prefer the sanitized, provider-neutral summary over the raw reason, which
   // may contain provider stderr. Fall back to the raw reason only when no
@@ -59,7 +62,7 @@ export const AuthFailureOverlayContent: React.FC<AuthFailureOverlayContentProps>
         // run. Point at the kubeconfig contract, not at any specific provider.
         <p className="auth-failure-message">
           This kubeconfig asks Kubernetes to run{' '}
-          <code className="auth-failure-command">{execCommand}</code> for credentials. Install that
+          <code className="auth-failure-command">{execCommand}</code>for credentials. Install that
           command, add it to your PATH, or update the kubeconfig, then retry.
         </p>
       ) : (

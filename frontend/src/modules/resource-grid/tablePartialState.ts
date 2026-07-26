@@ -17,12 +17,15 @@ export const buildLocalPartialDataLabel = ({
   sourceVerb = 'is',
 }: LocalPartialLabelOptions): string => {
   const warnings = cleanWarnings(stats);
-  const windowLabel =
-    warnings.length > 0
-      ? warnings.join(' ')
-      : stats?.truncated && stats.totalItems && stats.totalItems > stats.itemCount
-        ? `Showing ${stats.itemCount} of ${stats.totalItems} rows.`
-        : fallback;
+  let windowLabel: string;
+
+  if (warnings.length > 0) {
+    windowLabel = warnings.join(' ');
+  } else if (stats?.truncated && stats.totalItems && stats.totalItems > stats.itemCount) {
+    windowLabel = `Showing ${stats.itemCount} of ${stats.totalItems} rows.`;
+  } else {
+    windowLabel = fallback;
+  }
 
   return `${windowLabel} ${sourceLabel} ${sourceVerb} a bounded local window. Search, filters, sort, copy, and actions apply only to the visible rows.`;
 };

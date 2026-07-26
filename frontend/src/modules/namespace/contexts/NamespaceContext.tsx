@@ -265,42 +265,61 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
       const createdAtMs = (ns.creationTimestamp || 0) * 1000;
       const age = formatAge(createdAtMs || Date.now());
       const workloadsUnknown = Boolean(ns.workloadsUnknown);
-      const workloadSummary = workloadsUnknown
-        ? 'Workloads: Unknown'
-        : ns.hasWorkloads
-          ? 'Workloads: Present'
-          : 'Workloads: None';
+      let workloadSummary: string;
+
+      if (workloadsUnknown) {
+        workloadSummary = 'Workloads: Unknown';
+      } else if (ns.hasWorkloads) {
+        workloadSummary = 'Workloads: Present';
+      } else {
+        workloadSummary = 'Workloads: None';
+      }
+
       const unhealthyWorkloads = ns.unhealthyWorkloads ?? 0;
       const warningEvents = ns.warningEvents ?? 0;
       const warningEventsState = ns.warningEventsState ?? 'unavailable';
-      const warningEventSummary =
-        warningEventsState === 'available'
-          ? String(warningEvents)
-          : warningEventsState === 'loading'
-            ? 'Loading'
-            : 'Unavailable';
+      let warningEventSummary: string;
+
+      if (warningEventsState === 'available') {
+        warningEventSummary = String(warningEvents);
+      } else if (warningEventsState === 'loading') {
+        warningEventSummary = 'Loading';
+      } else {
+        warningEventSummary = 'Unavailable';
+      }
+
       const cpuUsageMilli = ns.cpuUsageMilli ?? 0;
       const memoryUsageBytes = ns.memoryUsageBytes ?? 0;
       const utilizationState = namespaceMetricsDomain.data?.metricsState ?? 'unavailable';
       const usageDisplay = namespaceAggregateUsageDisplay(cpuUsageMilli, memoryUsageBytes);
-      const utilizationSummary =
-        utilizationState === 'available'
-          ? `${usageDisplay.cpu} CPU, ${usageDisplay.memory} memory${namespaceMetricsBanner ? ` (${namespaceMetricsBanner.message})` : ''}`
-          : utilizationState === 'loading'
-            ? (namespaceMetricsBanner?.message ?? 'Collecting')
-            : (namespaceMetricsDomain.data?.metrics?.lastError?.trim() ?? 'Unavailable');
+      let utilizationSummary: string;
+
+      if (utilizationState === 'available') {
+        utilizationSummary = `${usageDisplay.cpu} CPU, ${usageDisplay.memory} memory${namespaceMetricsBanner ? ` (${namespaceMetricsBanner.message})` : ''}`;
+      } else if (utilizationState === 'loading') {
+        utilizationSummary = namespaceMetricsBanner?.message ?? 'Collecting';
+      } else {
+        utilizationSummary =
+          namespaceMetricsDomain.data?.metrics?.lastError?.trim() ?? 'Unavailable';
+      }
+
       const quotaCount = ns.quotaCount ?? 0;
       const quotaHighestUsedPercentage = ns.quotaHighestUsedPercentage ?? 0;
       const quotaPressure = ns.quotaPressure ?? '';
       const quotaPressureState = ns.quotaPressureState ?? 'unavailable';
-      const quotaSummary =
-        quotaPressureState === 'available'
-          ? quotaCount > 0
-            ? `${quotaHighestUsedPercentage}%`
-            : 'No quotas'
-          : quotaPressureState === 'loading'
-            ? 'Loading'
-            : 'Unavailable';
+      let quotaSummary: string;
+
+      if (quotaPressureState === 'available') {
+        if (quotaCount > 0) {
+          quotaSummary = `${quotaHighestUsedPercentage}%`;
+        } else {
+          quotaSummary = 'No quotas';
+        }
+      } else if (quotaPressureState === 'loading') {
+        quotaSummary = 'Loading';
+      } else {
+        quotaSummary = 'Unavailable';
+      }
 
       return {
         name: ns.ref.name,

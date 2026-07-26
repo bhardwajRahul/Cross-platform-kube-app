@@ -121,15 +121,17 @@ export const EffectivePermissionsTable: React.FC<PermissionsTableProps> = ({ row
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {rows.length === 0 && (
               <tr className="diagnostics-empty">
                 <td colSpan={10}>No capability data available yet.</td>
               </tr>
-            ) : filteredRows.length === 0 ? (
+            )}
+            {rows.length > 0 && filteredRows.length === 0 && (
               <tr className="diagnostics-empty">
                 <td colSpan={10}>No permissions match the current search.</td>
               </tr>
-            ) : (
+            )}
+            {filteredRows.length > 0 &&
               visibleRows.map((row) => (
                 <tr
                   key={row.id}
@@ -171,8 +173,7 @@ export const EffectivePermissionsTable: React.FC<PermissionsTableProps> = ({ row
                     <TableCellValue>{row.reason ?? TABLE_NO_VALUE_TEXT}</TableCellValue>
                   </td>
                 </tr>
-              ))
-            )}
+              ))}
           </tbody>
         </table>
       </div>

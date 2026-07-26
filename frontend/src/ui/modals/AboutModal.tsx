@@ -77,6 +77,33 @@ const AboutModal: React.FC<AboutModalProps> = React.memo(({ isOpen, onClose }) =
     return null;
   }
 
+  let updateStatus: React.ReactNode = null;
+  if (appInfo?.update?.isUpdateAvailable) {
+    updateStatus = (
+      <p className="about-update-available">
+        Update available:{' '}
+        <a
+          href={appInfo.update.releaseUrl}
+          onClick={(e) => {
+            e.preventDefault();
+            const releaseUrl = appInfo.update?.releaseUrl;
+            if (releaseUrl) {
+              BrowserOpenURL(releaseUrl);
+            }
+          }}
+        >
+          {appInfo.update.latestVersion}
+        </a>
+      </p>
+    );
+  } else if (appInfo?.update && !appInfo.update.error) {
+    updateStatus = (
+      <p className="about-up-to-date">
+        <span className="about-up-to-date-icon">&#x2714;</span> Up to date
+      </p>
+    );
+  }
+
   return (
     <ModalSurface
       modalRef={modalRef}
@@ -105,29 +132,7 @@ const AboutModal: React.FC<AboutModalProps> = React.memo(({ isOpen, onClose }) =
             <p>
               <strong>Version {appInfo?.version || 'Loading...'}</strong>
             </p>
-            {appInfo?.update ? (
-              appInfo.update.isUpdateAvailable ? (
-                <p className="about-update-available">
-                  Update available:{' '}
-                  <a
-                    href={appInfo.update.releaseUrl}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      const releaseUrl = appInfo.update?.releaseUrl;
-                      if (releaseUrl) {
-                        BrowserOpenURL(releaseUrl);
-                      }
-                    }}
-                  >
-                    {appInfo.update.latestVersion}
-                  </a>
-                </p>
-              ) : !appInfo.update.error ? (
-                <p className="about-up-to-date">
-                  <span className="about-up-to-date-icon">&#x2714;</span> Up to date
-                </p>
-              ) : null
-            ) : null}
+            {updateStatus}
             {appInfo?.isBeta && appInfo?.expiryDate ? (
               <p className="about-beta-expiry">
                 Beta expires: {new Date(appInfo.expiryDate).toLocaleDateString()}

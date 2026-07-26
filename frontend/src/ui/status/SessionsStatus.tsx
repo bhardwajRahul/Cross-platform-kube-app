@@ -331,6 +331,12 @@ const SessionsStatus: React.FC = () => {
                         { label: 'namespace', value: session.namespace || '-' },
                         { label: 'pod', value: session.podName || '-' },
                       ];
+                      let actionIcon: React.ReactNode = <StopSquareIcon />;
+                      if (isStopping) {
+                        actionIcon = '…';
+                      } else if (isError) {
+                        actionIcon = <CloseIcon width={14} height={14} />;
+                      }
                       return (
                         <div
                           key={session.id}
@@ -386,13 +392,7 @@ const SessionsStatus: React.FC = () => {
                               title={isError ? undefined : 'Stop port forward'}
                               aria-label={isError ? 'Remove session' : 'Stop port forward'}
                             >
-                              {isStopping ? (
-                                '…'
-                              ) : isError ? (
-                                <CloseIcon width={14} height={14} />
-                              ) : (
-                                <StopSquareIcon />
-                              )}
+                              {actionIcon}
                             </button>
                           </div>
                         </div>

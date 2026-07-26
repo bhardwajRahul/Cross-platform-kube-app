@@ -450,12 +450,20 @@ export const CommandPalette = memo(function CommandPaletteComponent({
   const resultsId = 'command-palette-results';
   const selectedOptionId =
     paletteItems.length > 0 ? `command-palette-option-${selectedIndex}` : undefined;
-  const inputLabel =
-    selectMode === 'namespaces'
-      ? 'Select a namespace'
-      : selectMode === 'kubeconfigs'
-        ? 'Select a kubeconfig'
-        : 'Search commands and Kubernetes objects';
+  let inputLabel: string;
+  let inputPlaceholder: string;
+
+  if (selectMode === 'namespaces') {
+    inputLabel = 'Select a namespace';
+    inputPlaceholder = 'Select a namespace...';
+  } else if (selectMode === 'kubeconfigs') {
+    inputLabel = 'Select a kubeconfig';
+    inputPlaceholder = 'Select a kubeconfig...';
+  } else {
+    inputLabel = 'Search commands and Kubernetes objects';
+    inputPlaceholder = 'Type a command or search...';
+  }
+
   const paletteItemCount = paletteItems.length;
 
   const hasCommandResults = filteredCommands.length > 0;
@@ -960,13 +968,7 @@ export const CommandPalette = memo(function CommandPaletteComponent({
             ref={inputRef}
             type="text"
             className="command-palette-input"
-            placeholder={
-              selectMode === 'namespaces'
-                ? 'Select a namespace...'
-                : selectMode === 'kubeconfigs'
-                  ? 'Select a kubeconfig...'
-                  : 'Type a command or search...'
-            }
+            placeholder={inputPlaceholder}
             value={searchQuery}
             role="combobox"
             aria-label={inputLabel}

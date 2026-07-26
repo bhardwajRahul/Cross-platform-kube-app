@@ -115,15 +115,16 @@ export function useGridTablePersistence<T>({
   }, []);
 
   useEffect(() => {
+    let persistenceNamespace: string | null | undefined = namespace ?? null;
+    if (isNamespaceScoped && persistenceMode === 'shared') {
+      persistenceNamespace = '__shared__';
+    } else if (isNamespaceScoped) {
+      persistenceNamespace = namespace;
+    }
     const keyParts: GridTablePersistenceKeyParts = {
       clusterHash,
       viewId,
-      namespace:
-        isNamespaceScoped && persistenceMode === 'shared'
-          ? '__shared__'
-          : isNamespaceScoped
-            ? namespace
-            : (namespace ?? null),
+      namespace: persistenceNamespace,
     };
     const key = enabled ? buildGridTableStorageKey(keyParts) : null;
     setStorageKey(key);

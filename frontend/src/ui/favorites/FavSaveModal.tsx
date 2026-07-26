@@ -10,6 +10,7 @@ import { useKubeconfig } from '@modules/kubernetes/config/KubeconfigContext';
 import { ALL_NAMESPACES_SCOPE } from '@modules/namespace/constants';
 import { useNamespace } from '@modules/namespace/contexts/NamespaceContext';
 import { Dropdown, type DropdownOption } from '@shared/components/dropdowns/Dropdown';
+import { normalizeDropdownValue } from '@shared/components/dropdowns/dropdownValue';
 import {
   ALL_MULTISELECT_FILTER,
   filterSelectionFromDropdownValues,
@@ -190,7 +191,7 @@ const FavoritePaneFilters: React.FC<FavoritePaneFiltersProps> = ({
                 displayValue={semanticSelectionDisplayValue(selection)}
                 onChange={(value) => {
                   const next = filterSelectionFromDropdownValues(
-                    Array.isArray(value) ? value : value ? [value] : [],
+                    normalizeDropdownValue(value),
                     options
                   );
                   if (queryKey) {

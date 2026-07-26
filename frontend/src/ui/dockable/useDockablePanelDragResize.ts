@@ -451,16 +451,20 @@ export function useDockablePanelDragResize(options: DockablePanelDragResizeOptio
       if (isMaximized || panelState.position !== 'floating') {
         return;
       }
-      const direction =
-        event.key === 'ArrowLeft'
-          ? { x: -1, y: 0 }
-          : event.key === 'ArrowRight'
-            ? { x: 1, y: 0 }
-            : event.key === 'ArrowUp'
-              ? { x: 0, y: -1 }
-              : event.key === 'ArrowDown'
-                ? { x: 0, y: 1 }
-                : null;
+      let direction: { x: number; y: number } | null;
+
+      if (event.key === 'ArrowLeft') {
+        direction = { x: -1, y: 0 };
+      } else if (event.key === 'ArrowRight') {
+        direction = { x: 1, y: 0 };
+      } else if (event.key === 'ArrowUp') {
+        direction = { x: 0, y: -1 };
+      } else if (event.key === 'ArrowDown') {
+        direction = { x: 0, y: 1 };
+      } else {
+        direction = null;
+      }
+
       if (!direction) {
         return;
       }

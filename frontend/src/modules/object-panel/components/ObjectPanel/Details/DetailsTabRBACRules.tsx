@@ -92,17 +92,17 @@ const Rules: React.FC<RBACRulesProps> = ({ policyRules }) => {
             const hasResources = resources.length > 0;
             const hasNonResourceURLs = nonResourceURLs.length > 0;
             const hasResourceNames = resourceNames.length > 0;
+            let resourceTitle: React.ReactNode = '(no resources)';
+            if (hasResources) {
+              resourceTitle = joinRuleValues(resources);
+            } else if (hasNonResourceURLs) {
+              resourceTitle = joinRuleValues(nonResourceURLs);
+            }
 
             return (
               <div key={key} className="rules-card">
                 <div className="rules-card-header">
-                  <span className="rules-card-title">
-                    {hasResources
-                      ? joinRuleValues(resources)
-                      : hasNonResourceURLs
-                        ? joinRuleValues(nonResourceURLs)
-                        : '(no resources)'}
-                  </span>
+                  <span className="rules-card-title">{resourceTitle}</span>
                   {hasResources && (
                     <span className="rules-card-meta">
                       in{' '}

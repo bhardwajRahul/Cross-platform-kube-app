@@ -123,7 +123,15 @@ export const calculateResourceMetrics = (
   const allocatable = parseValue(data.allocatable);
 
   // Determine scale based on context
-  const scale = allocatable > 0 ? allocatable : limit > 0 ? limit : Math.max(usage, request * 1.2);
+  let scale: number;
+
+  if (allocatable > 0) {
+    scale = allocatable;
+  } else if (limit > 0) {
+    scale = limit;
+  } else {
+    scale = Math.max(usage, request * 1.2);
+  }
 
   // Calculate true percentages. Rendering code clamps these only when using
   // them as CSS widths or marker positions.

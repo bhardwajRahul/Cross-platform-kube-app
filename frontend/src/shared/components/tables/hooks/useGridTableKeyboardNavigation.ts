@@ -46,12 +46,18 @@ export function useGridTableKeyboardNavigation({
         return false;
       }
       lastNavigationMethodRef.current = 'keyboard';
-      const base =
-        focusedRowIndex === null || focusedRowIndex === undefined
-          ? delta > 0
-            ? -1
-            : tableDataLength
-          : focusedRowIndex;
+      let base: number;
+
+      if (focusedRowIndex === null || focusedRowIndex === undefined) {
+        if (delta > 0) {
+          base = -1;
+        } else {
+          base = tableDataLength;
+        }
+      } else {
+        base = focusedRowIndex;
+      }
+
       const next = Math.min(Math.max(base + delta, 0), tableDataLength - 1);
       focusByIndex(next);
       return true;

@@ -285,6 +285,11 @@ export const toObjectMapG6Data = (
       const states = objectMapG6NodeState(node, selectionState);
       const isDimmed = states.includes('dimmed');
 
+      let cardCollapseBadgeText: string | undefined;
+      if (badge) {
+        cardCollapseBadgeText = badge.expanded ? '\u2212' : `+${badge.hiddenCount}`;
+      }
+
       return {
         id: node.id,
         type: OBJECT_MAP_G6_CARD_NODE,
@@ -326,11 +331,7 @@ export const toObjectMapG6Data = (
           cardKindBadgeLetterSpacing: kindBadgeStyle.letterSpacing,
           cardKindBadgePaddingX: kindBadgeStyle.paddingX,
           cardKindBadgePaddingY: kindBadgeStyle.paddingY,
-          cardCollapseBadgeText: badge
-            ? badge.expanded
-              ? '\u2212'
-              : `+${badge.hiddenCount}`
-            : undefined,
+          cardCollapseBadgeText,
           cardCollapseBadgeFill: palette.backgroundSecondary,
           cardCollapseBadgeTextFill: palette.textSecondary,
           cardCollapseBadgeStroke: palette.textTertiary,

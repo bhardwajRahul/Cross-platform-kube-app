@@ -1034,6 +1034,11 @@ const ShellTab: React.FC<ShellTabProps> = ({
     },
   ];
 
+  let connectionButtonLabel = 'Connect';
+  if (startDebugContainer) {
+    connectionButtonLabel = debugCreating ? 'Creating...' : 'Start';
+  }
+
   return (
     <div className="object-panel-shell-tab">
       {!hasActiveSession && (
@@ -1178,7 +1183,7 @@ const ShellTab: React.FC<ShellTabProps> = ({
                   : false
               }
             >
-              {startDebugContainer ? (debugCreating ? 'Creating...' : 'Start') : 'Connect'}
+              {connectionButtonLabel}
             </button>
           </div>
         </div>

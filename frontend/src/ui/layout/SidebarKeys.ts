@@ -315,7 +315,18 @@ export const useSidebarKeyboardControls = ({
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         const delta = event.key === 'ArrowDown' ? 1 : -1;
         const origin = cursorIndex === -1 ? selectionIndex : cursorIndex;
-        const start = origin === -1 ? (delta > 0 ? -1 : items.length) : origin;
+        let start: number;
+
+        if (origin === -1) {
+          if (delta > 0) {
+            start = -1;
+          } else {
+            start = items.length;
+          }
+        } else {
+          start = origin;
+        }
+
         const nextIndex = Math.min(Math.max(start + delta, 0), items.length - 1);
         const element = focusItemByIndex(nextIndex);
         const targetDescriptor = describeElementTarget(element);

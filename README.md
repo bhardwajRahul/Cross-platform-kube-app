@@ -1,5 +1,10 @@
 # Luxury Yacht
 
+[![Copilot](https://github.com/luxury-yacht/app/actions/workflows/agents/copilot-pull-request-reviewer/badge.svg)](https://github.com/luxury-yacht/app/actions/workflows/agents/copilot-pull-request-reviewer)
+[![CodeQL](https://github.com/luxury-yacht/app/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/luxury-yacht/app/actions/workflows/github-code-scanning/codeql)
+[![Quality gate status](https://sonarcloud.io/api/project_badges/measure?project=luxury-yacht_app&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=luxury-yacht_app)
+[![Release](https://github.com/luxury-yacht/app/actions/workflows/release.yml/badge.svg)](https://github.com/luxury-yacht/app/actions/workflows/release.yml)
+
 Luxury Yacht is a cross-platform GUI desktop app for managing Kubernetes clusters and resources.
 
 ![Screen shot of Luxury Yacht](https://luxury-yacht.app/images/screenshots/object-panel-right-dark.png)

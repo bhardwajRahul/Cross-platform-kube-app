@@ -930,24 +930,37 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
             ? `Error (${telemetryInfo.failureCount})`
             : `Success (${telemetryInfo.successCount})`;
         })();
-        const streamTelemetryStatus =
-          isResourceStreamDomain && streamTelemetry
-            ? streamTelemetry.errorCount > 0
-              ? `Stream Error (${streamTelemetry.errorCount})`
-              : streamTelemetry.droppedMessages > 0
-                ? `Stream Dropped (${streamTelemetry.droppedMessages})`
-                : 'Stream OK'
-            : null;
+        let streamTelemetryStatus: string | null;
+
+        if (isResourceStreamDomain && streamTelemetry) {
+          if (streamTelemetry.errorCount > 0) {
+            streamTelemetryStatus = `Stream Error (${streamTelemetry.errorCount})`;
+          } else if (streamTelemetry.droppedMessages > 0) {
+            streamTelemetryStatus = `Stream Dropped (${streamTelemetry.droppedMessages})`;
+          } else {
+            streamTelemetryStatus = 'Stream OK';
+          }
+        } else {
+          streamTelemetryStatus = null;
+        }
+
         // Show resource stream health alongside snapshot and telemetry summaries.
         const streamHealth =
           isResourceStreamDomain && effectiveScope
             ? toStreamHealthSummary(resourceStreamManager.getHealthSnapshot(domain, effectiveScope))
             : resolveStreamTelemetryHealth(streamTelemetry);
-        const streamHealthStatus = streamHealth
-          ? streamHealth.reason === 'inactive'
-            ? 'Stream inactive'
-            : `Stream ${streamHealth.status}`
-          : null;
+        let streamHealthStatus: string | null;
+
+        if (streamHealth) {
+          if (streamHealth.reason === 'inactive') {
+            streamHealthStatus = 'Stream inactive';
+          } else {
+            streamHealthStatus = `Stream ${streamHealth.status}`;
+          }
+        } else {
+          streamHealthStatus = null;
+        }
+
         const telemetryStatus = [snapshotTelemetryStatus, streamTelemetryStatus, streamHealthStatus]
           .filter(Boolean)
           .join(' • ');
@@ -991,15 +1004,24 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
           telemetryTooltipParts.length > 0 ? telemetryTooltipParts.join('\n') : undefined;
         const successCount = metricsInfo?.successCount ?? (hasMetricsFlag ? 0 : undefined);
         const failureCount = metricsInfo?.failureCount ?? (hasMetricsFlag ? 0 : undefined);
-        const metricsStatus = hasMetricsFlag
-          ? metricsInfo
-            ? metricsInfo.lastError
-              ? `Error (${failureCount} fails)`
-              : metricsInfo.stale
-                ? `Unavailable (${failureCount} fails)`
-                : `OK (${successCount} polls)`
-            : 'N/A'
-          : '—';
+        let metricsStatus: string;
+
+        if (hasMetricsFlag) {
+          if (metricsInfo) {
+            if (metricsInfo.lastError) {
+              metricsStatus = `Error (${failureCount} fails)`;
+            } else if (metricsInfo.stale) {
+              metricsStatus = `Unavailable (${failureCount} fails)`;
+            } else {
+              metricsStatus = `OK (${successCount} polls)`;
+            }
+          } else {
+            metricsStatus = 'N/A';
+          }
+        } else {
+          metricsStatus = '—';
+        }
+
         const tooltipLines: string[] = [];
         if (metricsInfo) {
           tooltipLines.push(`Successful polls: ${successCount}`);
@@ -1012,12 +1034,16 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
             tooltipLines.push('Metrics are up to date');
           }
         }
-        const metricsTooltip =
-          tooltipLines.length > 0
-            ? tooltipLines.join('\n')
-            : hasMetricsFlag
-              ? 'No metrics available'
-              : 'Not applicable';
+        let metricsTooltip: string;
+
+        if (tooltipLines.length > 0) {
+          metricsTooltip = tooltipLines.join('\n');
+        } else if (hasMetricsFlag) {
+          metricsTooltip = 'No metrics available';
+        } else {
+          metricsTooltip = 'Not applicable';
+        }
+
         const data = asRecord(state.data);
         let count = (() => {
           if (!data) {
@@ -1086,13 +1112,13 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
         let totalItems = stats?.totalItems ?? (truncated ? count : undefined);
         let warnings = (stats?.warnings ?? []).filter((warning) => warning?.trim().length);
         if (domain === 'catalog') {
-          const catalogTotal =
-            stats?.totalItems ??
-            (typeof data?.total === 'number'
-              ? data.total
-              : Array.isArray(data?.items)
-                ? data.items.length
-                : 0);
+          let catalogDataTotal = 0;
+          if (typeof data?.total === 'number') {
+            catalogDataTotal = data.total;
+          } else if (Array.isArray(data?.items)) {
+            catalogDataTotal = data.items.length;
+          }
+          const catalogTotal = stats?.totalItems ?? catalogDataTotal;
           count = catalogTotal;
           totalItems = catalogTotal;
           truncated = false;
@@ -1833,6 +1859,16 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
     },
   });
 
+  const contentByTab: Record<DiagnosticsTabId, React.ReactNode> = {
+    'refresh-domains': refreshDomainsContent,
+    streams: streamsContent,
+    'k8s-api': kubernetesAPIContent,
+    'table-performance': tablePerformanceContent,
+    'capability-checks': capabilityChecksContent,
+    'effective-permissions': effectivePermissionsContent,
+    'broker-reads': brokerReadsContent,
+  };
+
   return (
     <DockablePanel
       panelRef={panelRef}
@@ -1854,21 +1890,7 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
         textTransform="uppercase"
         disableRovingTabIndex
       />
-      <div className="diagnostics-scroll-area">
-        {activeTab === 'refresh-domains'
-          ? refreshDomainsContent
-          : activeTab === 'streams'
-            ? streamsContent
-            : activeTab === 'k8s-api'
-              ? kubernetesAPIContent
-              : activeTab === 'table-performance'
-                ? tablePerformanceContent
-                : activeTab === 'capability-checks'
-                  ? capabilityChecksContent
-                  : activeTab === 'effective-permissions'
-                    ? effectivePermissionsContent
-                    : brokerReadsContent}
-      </div>
+      <div className="diagnostics-scroll-area">{contentByTab[activeTab]}</div>
     </DockablePanel>
   );
 };

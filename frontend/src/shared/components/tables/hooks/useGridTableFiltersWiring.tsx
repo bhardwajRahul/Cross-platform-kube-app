@@ -6,6 +6,7 @@
  */
 
 import type { DropdownOption } from '@shared/components/dropdowns/Dropdown';
+import { normalizeDropdownValue } from '@shared/components/dropdowns/dropdownValue';
 import type { IconBarItem } from '@shared/components/IconBar/IconBar';
 import type {
   GridColumnDefinition,
@@ -121,36 +122,32 @@ export function useGridTableFiltersWiring<T>({
     }
   }, [filteringEnabled]);
 
-  const normalizeDropdownValue = useCallback((value: string | string[]) => {
-    return Array.isArray(value) ? value : value ? [value] : [];
-  }, []);
-
   const handleKindDropdownChange = useCallback(
     (value: string | string[]) => {
       handleFilterKindsChange(normalizeDropdownValue(value));
     },
-    [handleFilterKindsChange, normalizeDropdownValue]
+    [handleFilterKindsChange]
   );
 
   const handleNamespaceDropdownChange = useCallback(
     (value: string | string[]) => {
       handleFilterNamespacesChange(normalizeDropdownValue(value));
     },
-    [handleFilterNamespacesChange, normalizeDropdownValue]
+    [handleFilterNamespacesChange]
   );
 
   const handleClusterDropdownChange = useCallback(
     (value: string | string[]) => {
       handleFilterClustersChange(normalizeDropdownValue(value));
     },
-    [handleFilterClustersChange, normalizeDropdownValue]
+    [handleFilterClustersChange]
   );
 
   const handleQueryFacetDropdownChange = useCallback(
     (key: string, value: string | string[]) => {
       handleFilterQueryFacetChange(key, normalizeDropdownValue(value));
     },
-    [handleFilterQueryFacetChange, normalizeDropdownValue]
+    [handleFilterQueryFacetChange]
   );
 
   const searchInputId = useId();
@@ -172,7 +169,7 @@ export function useGridTableFiltersWiring<T>({
         }`}
       >
         <span className="dropdown-filter-check">
-          {isActionOption(option) ? '' : isSelected ? '✓' : ''}
+          {!isActionOption(option) && isSelected ? '✓' : ''}
         </span>
         <span className="dropdown-filter-label">{option.label}</span>
       </span>

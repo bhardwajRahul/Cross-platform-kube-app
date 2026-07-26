@@ -103,12 +103,16 @@ const TablePaginationControls: React.FC<TablePaginationControlsProps> = ({
   const rangeStart =
     totalCount === 0 || visibleItemCount === 0 ? 0 : (pageIndex - 1) * pageSize + 1;
   const rawRangeEnd = (pageIndex - 1) * pageSize + visibleItemCount;
-  const rangeEnd =
-    totalCount === 0 || visibleItemCount === 0
-      ? 0
-      : totalIsExact
-        ? Math.min(rawRangeEnd, Math.max(totalCount, 0))
-        : rawRangeEnd;
+  let rangeEnd: number;
+
+  if (totalCount === 0 || visibleItemCount === 0) {
+    rangeEnd = 0;
+  } else if (totalIsExact) {
+    rangeEnd = Math.min(rawRangeEnd, Math.max(totalCount, 0));
+  } else {
+    rangeEnd = rawRangeEnd;
+  }
+
   const rangeLabel =
     rangeStart > 0 && rangeEnd >= rangeStart
       ? `${formatCount(rangeStart)}-${formatCount(rangeEnd)}`

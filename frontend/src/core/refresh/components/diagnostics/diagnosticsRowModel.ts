@@ -406,16 +406,20 @@ export const buildBrokerReadRows = (
 ): BrokerReadRow[] => {
   return diagnostics.map((entry) => {
     const updatedInfo = formatLastUpdated(entry.lastCompletedAt);
-    const lastStatus =
-      entry.inFlightCount > 0
-        ? 'In Flight'
-        : entry.lastStatus === 'never'
-          ? '—'
-          : entry.lastStatus === 'blocked'
-            ? 'Blocked'
-            : entry.lastStatus === 'error'
-              ? 'Error'
-              : 'Success';
+    let lastStatus: string;
+
+    if (entry.inFlightCount > 0) {
+      lastStatus = 'In Flight';
+    } else if (entry.lastStatus === 'never') {
+      lastStatus = '—';
+    } else if (entry.lastStatus === 'blocked') {
+      lastStatus = 'Blocked';
+    } else if (entry.lastStatus === 'error') {
+      lastStatus = 'Error';
+    } else {
+      lastStatus = 'Success';
+    }
+
     const broker = entry.broker === 'data-access' ? 'Cluster Data' : 'App State';
     const label = entry.label ?? formatBrokerReadLabel(entry.resource);
     const scopeInfo = resolveScope(entry.recentScopes);
@@ -480,8 +484,16 @@ export const buildCapabilityBatchRows = (
       const age = formatLastUpdated(entry.lastRunCompletedAt);
       const lastDurationDisplay = formatDurationMs(entry.lastRunDurationMs);
       const runtimeDisplay = formatDurationMs(runtimeMs);
-      const lastResultLabel =
-        entry.lastResult === 'success' ? 'Success' : entry.lastResult === 'error' ? 'Error' : '—';
+      let lastResultLabel: string;
+
+      if (entry.lastResult === 'success') {
+        lastResultLabel = 'Success';
+      } else if (entry.lastResult === 'error') {
+        lastResultLabel = 'Error';
+      } else {
+        lastResultLabel = '—';
+      }
+
       const descriptorCount = entry.lastDescriptors.length;
       const totalChecks =
         entry.totalChecks && entry.totalChecks > 0 ? entry.totalChecks : descriptorCount;
@@ -606,7 +618,16 @@ export const buildPermissionRows = (params: {
 
   const allPermissionRows = Array.from(permissionMap.values()).map((status) => {
     const scope = status.descriptor.namespace ? status.descriptor.namespace : 'Cluster';
-    const allowedLabel = status.pending ? 'Pending' : status.allowed ? 'True' : 'False';
+    let allowedLabel: string;
+
+    if (status.pending) {
+      allowedLabel = 'Pending';
+    } else if (status.allowed) {
+      allowedLabel = 'True';
+    } else {
+      allowedLabel = 'False';
+    }
+
     const reason = status.reason ?? status.error ?? undefined;
     const descriptorKey = status.id;
     const activity = capabilityDescriptorIndex.get(descriptorKey);
@@ -811,12 +832,16 @@ export const buildEventStreamSummary = (params: {
   if (eventStreamTelemetry) {
     const updatedInfo = formatLastUpdated(eventStreamTelemetry.lastConnect);
     const newestInfo = formatLastUpdated(eventStreamTelemetry.lastEvent);
-    const className =
-      eventStreamTelemetry.errorCount > 0
-        ? 'diagnostics-summary-error'
-        : eventStreamTelemetry.droppedMessages > 0
-          ? 'diagnostics-summary-warning'
-          : undefined;
+    let className: string | undefined;
+
+    if (eventStreamTelemetry.errorCount > 0) {
+      className = 'diagnostics-summary-error';
+    } else if (eventStreamTelemetry.droppedMessages > 0) {
+      className = 'diagnostics-summary-warning';
+    } else {
+      className = undefined;
+    }
+
     const tooltipParts: string[] = [];
     if (eventStreamTelemetry.lastError) {
       tooltipParts.push(eventStreamTelemetry.lastError);
@@ -867,12 +892,16 @@ export const buildCatalogSummary = (params: {
   if (catalogStreamTelemetry) {
     const updatedInfo = formatLastUpdated(catalogStreamTelemetry.lastConnect);
     const newestInfo = formatLastUpdated(catalogStreamTelemetry.lastEvent);
-    const className =
-      catalogStreamTelemetry.errorCount > 0
-        ? 'diagnostics-summary-error'
-        : catalogStreamTelemetry.droppedMessages > 0
-          ? 'diagnostics-summary-warning'
-          : undefined;
+    let className: string | undefined;
+
+    if (catalogStreamTelemetry.errorCount > 0) {
+      className = 'diagnostics-summary-error';
+    } else if (catalogStreamTelemetry.droppedMessages > 0) {
+      className = 'diagnostics-summary-warning';
+    } else {
+      className = undefined;
+    }
+
     const tooltipParts: string[] = [];
     if (catalogStreamTelemetry.lastError) {
       tooltipParts.push(catalogStreamTelemetry.lastError);

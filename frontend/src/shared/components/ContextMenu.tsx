@@ -184,11 +184,13 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ items, position, onClose }) =
         focusedIndex >= 0 ? `context-menu-${menuId}-item-${focusedIndex}` : undefined
       }
     >
-      {withStableListKeys(items, (item) =>
-        item.divider
-          ? 'divider'
-          : item.actionId || `${item.header ? 'header' : 'item'}:${item.label}`
-      ).map(({ key, value: item }, index) => {
+      {withStableListKeys(items, (item) => {
+        if (item.divider) {
+          return 'divider';
+        } else {
+          return item.actionId || `${item.header ? 'header' : 'item'}:${item.label}`;
+        }
+      }).map(({ key, value: item }, index) => {
         if (item.divider) {
           return <hr key={key} className="context-menu-divider" />;
         }
