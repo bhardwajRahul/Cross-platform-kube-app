@@ -28,6 +28,12 @@ describe('toPlainReleaseNotes', () => {
     expect(toPlainReleaseNotes('![screenshot](https://example.com/s.png)')).toBe('');
   });
 
+  it('leaves malformed media intact while continuing to process later links', () => {
+    expect(toPlainReleaseNotes('![broken] trailing [valid](https://example.com)')).toBe(
+      '![broken] trailing valid'
+    );
+  });
+
   it('normalizes list bullets to • and preserves indentation', () => {
     expect(toPlainReleaseNotes('- one\n* two\n+ three')).toBe('• one\n• two\n• three');
     expect(toPlainReleaseNotes('  - nested')).toBe('  • nested');

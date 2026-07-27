@@ -183,6 +183,48 @@ func TestCheckerStaleWhileRevalidate(t *testing.T) {
 	require.Equal(t, DecisionSourceCache, decision.Source)
 }
 
+func TestCheckerStaleRefreshPreservesContextValuesAndAddsDeadline(t *testing.T) {
+	type contextKey string
+	type observedContext struct {
+		value       string
+		hasDeadline bool
+	}
+
+	var callCount atomic.Int64
+	observed := make(chan observedContext, 1)
+	checker := NewCheckerWithReview("cluster-a", time.Minute, func(ctx context.Context, _, _, _, _ string) (bool, error) {
+		if callCount.Add(1) == 1 {
+			return true, nil
+		}
+		_, hasDeadline := ctx.Deadline()
+		value, _ := ctx.Value(contextKey("request-id")).(string)
+		observed <- observedContext{
+			value:       value,
+			hasDeadline: hasDeadline,
+		}
+		return true, nil
+	})
+
+	now := time.Date(2024, 5, 1, 10, 0, 0, 0, time.UTC)
+	checker.now = func() time.Time { return now }
+	_, err := checker.Can(context.Background(), "", "pods", "list")
+	require.NoError(t, err)
+
+	now = now.Add(time.Minute + 15*time.Second)
+	requestCtx := context.WithValue(context.Background(), contextKey("request-id"), "stale-refresh")
+	decision, err := checker.Can(requestCtx, "", "pods", "list")
+	require.NoError(t, err)
+	require.Equal(t, DecisionSourceStale, decision.Source)
+
+	select {
+	case got := <-observed:
+		require.Equal(t, "stale-refresh", got.value)
+		require.True(t, got.hasDeadline)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stale permission refresh")
+	}
+}
+
 func TestCheckerStaleGracePeriodExpired(t *testing.T) {
 	callCount := 0
 	checker := NewCheckerWithReview("cluster-a", time.Minute, func(context.Context, string, string, string, string) (bool, error) {

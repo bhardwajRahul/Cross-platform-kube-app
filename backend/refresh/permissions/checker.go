@@ -308,19 +308,14 @@ func (c *Checker) canInNamespace(ctx context.Context, group, resource, verb, nam
 // triggerBackgroundRefresh fires an async SSAR call (deduplicated via singleflight)
 // to refresh an expired cache entry without blocking the caller.
 func (c *Checker) triggerBackgroundRefresh(ctx context.Context, key, group, resource, verb, namespace string) {
-	// Use a detached context so the background call outlives the request.
-	bgCtx := context.Background()
-	if _, hasDeadline := ctx.Deadline(); hasDeadline {
-		var cancel context.CancelFunc
-		bgCtx, cancel = context.WithTimeout(bgCtx, config.PermissionCheckTimeout)
-		// cancel is invoked after the goroutine completes.
-		go func() {
-			defer cancel()
-			c.doBackgroundRefresh(bgCtx, key, group, resource, verb, namespace)
-		}()
-		return
-	}
-	go c.doBackgroundRefresh(bgCtx, key, group, resource, verb, namespace)
+	// Detach cancellation so stale-while-revalidate can finish after the caller
+	// returns, while retaining context values and bounding the background work.
+	ctx = ensureContext(ctx)
+	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), config.PermissionCheckTimeout)
+	go func() {
+		defer cancel()
+		c.doBackgroundRefresh(bgCtx, key, group, resource, verb, namespace)
+	}()
 }
 
 // doBackgroundRefresh executes the SSAR call and stores the result via singleflight.

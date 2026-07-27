@@ -110,8 +110,8 @@ const fallbackHash = (input: string): string => {
   let h1 = 0xdeadbeef ^ input.length;
   let h2 = 0x41c6ce57 ^ input.length;
 
-  for (let i = 0; i < input.length; i += 1) {
-    const ch = input.charCodeAt(i);
+  for (const character of input) {
+    const ch = character.codePointAt(0) ?? 0;
     h1 = Math.imul(h1 ^ ch, 2654435761);
     h2 = Math.imul(h2 ^ ch, 1597334677);
   }

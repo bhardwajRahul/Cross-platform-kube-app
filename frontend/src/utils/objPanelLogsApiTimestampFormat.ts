@@ -35,9 +35,31 @@ const SUPPORTED_DAYJS_TOKENS = [
 ].sort((a, b) => b.length - a.length);
 
 const truncateObjPanelLogsApiTimestampToMillis = (timestamp: string): string => {
-  const match = timestamp.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d+)(.*)$/);
-  if (match) {
-    const [, dateTime, nanos, rest] = match;
+  const dateTimeLength = 19;
+  const separatorByIndex: Record<number, string> = { 4: '-', 7: '-', 10: 'T', 13: ':', 16: ':' };
+  let hasDateTimeShape = timestamp.length > dateTimeLength && timestamp[dateTimeLength] === '.';
+  for (let index = 0; hasDateTimeShape && index < dateTimeLength; index += 1) {
+    const separator = separatorByIndex[index];
+    const character = timestamp[index];
+    hasDateTimeShape = separator
+      ? character === separator
+      : character !== undefined && character >= '0' && character <= '9';
+  }
+  if (hasDateTimeShape) {
+    let nanosEnd = dateTimeLength + 1;
+    while (
+      timestamp[nanosEnd] !== undefined &&
+      timestamp[nanosEnd] >= '0' &&
+      timestamp[nanosEnd] <= '9'
+    ) {
+      nanosEnd += 1;
+    }
+    const nanos = timestamp.slice(dateTimeLength + 1, nanosEnd);
+    if (!nanos) {
+      return timestamp;
+    }
+    const dateTime = timestamp.slice(0, dateTimeLength);
+    const rest = timestamp.slice(nanosEnd);
     const millis = nanos.substring(0, 3).padEnd(3, '0');
     return `${dateTime}.${millis}${rest}`;
   }

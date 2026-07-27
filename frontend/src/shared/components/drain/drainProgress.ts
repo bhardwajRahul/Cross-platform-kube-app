@@ -69,7 +69,11 @@ const POD_ERROR_PHASES: ReadonlySet<DrainEventPhase> = new Set<DrainEventPhase>(
   'delete-error',
 ]);
 
-const PLAN_COUNT_PATTERN = /(\d+)\s+pods?/i;
+const isAsciiDigit = (character: string | undefined): boolean =>
+  character !== undefined && character >= '0' && character <= '9';
+
+const isWhitespace = (character: string | undefined): boolean =>
+  character !== undefined && character.trim().length === 0;
 
 const STATUS_RANK: Record<DrainPodStatus, number> = {
   'in-progress': 0,
@@ -85,12 +89,31 @@ export function parsePlanCount(message?: string): number | undefined {
   if (!message) {
     return undefined;
   }
-  const match = PLAN_COUNT_PATTERN.exec(message);
-  if (!match) {
-    return undefined;
+
+  let cursor = 0;
+  while (cursor < message.length) {
+    if (!isAsciiDigit(message[cursor])) {
+      cursor += 1;
+      continue;
+    }
+    const amountStart = cursor;
+    while (isAsciiDigit(message[cursor])) {
+      cursor += 1;
+    }
+    const amountEnd = cursor;
+    if (!isWhitespace(message[cursor])) {
+      continue;
+    }
+    while (isWhitespace(message[cursor])) {
+      cursor += 1;
+    }
+    if (message.slice(cursor, cursor + 3).toLowerCase() !== 'pod') {
+      continue;
+    }
+    const value = Number.parseInt(message.slice(amountStart, amountEnd), 10);
+    return Number.isFinite(value) ? value : undefined;
   }
-  const value = Number.parseInt(match[1], 10);
-  return Number.isFinite(value) ? value : undefined;
+  return undefined;
 }
 
 function podKey(namespace: string, name: string): string {

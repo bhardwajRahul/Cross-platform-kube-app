@@ -84,6 +84,7 @@ import {
   logFilterSelectionToDropdownValues,
   pruneLogFilterSelectionToOptions,
 } from './logFilterSelection';
+import { parseBracketedLogPrefix } from './logLineMetadata';
 import { buildLogSearchRegex, isValidRegexPattern } from './logSearch';
 import {
   getLogViewerPrefs,
@@ -1517,21 +1518,24 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
         let workingLine = line;
         let timestampPrefix = '';
         if (showTimestamps) {
-          const podTimestampMatch = line.match(/^(\[[^\]]+\]\s*)(.*)$/);
-          if (podTimestampMatch) {
-            timestampPrefix = podTimestampMatch[1] ?? '';
-            workingLine = podTimestampMatch[2] ?? '';
+          const timestampMetadata = parseBracketedLogPrefix(line);
+          if (timestampMetadata) {
+            timestampPrefix = timestampMetadata.prefix;
+            workingLine = timestampMetadata.remainder;
           }
         }
 
-        const containerMatch = workingLine.match(/^\[([^\]]+)\]\s*(.*)$/);
-        const showContainerMeta =
-          containerMatch &&
-          selectedContainerFilterCount !== 1 &&
-          !(selectedContainerFilterCount === 0 && singlePodSelectableContainerCount === 1);
+        const containerMetadata = parseBracketedLogPrefix(workingLine);
+        const showContainerMeta = Boolean(
+          containerMetadata &&
+            selectedContainerFilterCount !== 1 &&
+            !(selectedContainerFilterCount === 0 && singlePodSelectableContainerCount === 1)
+        );
         if (timestampPrefix || showContainerMeta) {
-          const containerLabel = showContainerMeta && containerMatch ? containerMatch[1] : '';
-          const remainder = showContainerMeta && containerMatch ? containerMatch[2] : workingLine;
+          const containerLabel =
+            showContainerMeta && containerMetadata ? containerMetadata.label : '';
+          const remainder =
+            showContainerMeta && containerMetadata ? containerMetadata.remainder : workingLine;
           return (
             <div className="log-viewer-line">
               {!!timestampPrefix && <span className="log-viewer-metadata">{timestampPrefix}</span>}

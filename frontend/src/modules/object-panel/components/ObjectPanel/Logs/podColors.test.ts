@@ -34,4 +34,8 @@ describe('podColors', () => {
       hashPodColorIndex('api-7', palette.length)
     );
   });
+
+  it('hashes Unicode pod names by code point', () => {
+    expect(hashPodColorIndex('api-😀', palette.length)).toBe(18);
+  });
 });

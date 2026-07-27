@@ -16,9 +16,9 @@ export const toPlainReleaseNotes = (markdown: string): string => {
   const transformed = lines.map((line) => {
     let text = line;
     // Images have no place in a text preview — drop them entirely.
-    text = text.replace(/!\[[^\]]*\]\([^)]*\)/g, '');
+    text = replaceMarkdownMedia(text, '![', false);
     // Links [text](url) -> text.
-    text = text.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+    text = replaceMarkdownMedia(text, '[', true);
     // Horizontal rules (---, ***, ___) become a blank line.
     if (/^\s*([-*_])\1{2,}\s*$/.test(text)) {
       return '';
@@ -49,4 +49,38 @@ export const toPlainReleaseNotes = (markdown: string): string => {
     end -= 1;
   }
   return collapsed.slice(start, end);
+};
+const replaceMarkdownMedia = (input: string, marker: '![' | '[', keepLabel: boolean): string => {
+  let output = '';
+  let cursor = 0;
+  while (cursor < input.length) {
+    const markerStart = input.indexOf(marker, cursor);
+    if (markerStart === -1) {
+      output += input.slice(cursor);
+      break;
+    }
+    const labelStart = markerStart + marker.length;
+    const labelEnd = input.indexOf(']', labelStart);
+    if (labelEnd === -1) {
+      output += input.slice(cursor);
+      break;
+    }
+    if (input[labelEnd + 1] !== '(') {
+      output += input.slice(cursor, labelStart);
+      cursor = labelStart;
+      continue;
+    }
+    const targetEnd = input.indexOf(')', labelEnd + 2);
+    if (targetEnd === -1) {
+      output += input.slice(cursor);
+      break;
+    }
+
+    output += input.slice(cursor, markerStart);
+    if (keepLabel) {
+      output += input.slice(labelStart, labelEnd);
+    }
+    cursor = targetEnd + 1;
+  }
+  return output;
 };

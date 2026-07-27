@@ -35,6 +35,7 @@ import type {
 } from '@/core/refresh/types';
 import { nodeRowCpuValue, nodeRowMemoryValue } from '@/core/resource-metrics';
 import { useShortNames } from '@/hooks/useShortNames';
+import { parseCompactAgeToSeconds } from '@/utils/ageFormatter';
 import { resolveEmptyStateMessage } from '@/utils/emptyState';
 import { getDisplayKind } from '@/utils/kindAliasMap';
 import {
@@ -49,35 +50,6 @@ import {
 interface NodesViewProps {
   error?: string | null;
 }
-
-const NODE_AGE_UNITS_IN_SECONDS: Record<string, number> = {
-  y: 365 * 24 * 60 * 60,
-  mo: 30 * 24 * 60 * 60,
-  d: 24 * 60 * 60,
-  h: 60 * 60,
-  m: 60,
-  s: 1,
-};
-
-const parseNodeAgeToSeconds = (age?: string): number => {
-  if (!age || age === '—' || age === '-') {
-    return 0;
-  }
-  if (age === 'future' || age === 'now') {
-    return 0;
-  }
-  let total = 0;
-  const matches = age.match(/(\d+)(y|mo|d|h|m|s)/g);
-  for (const match of matches ?? []) {
-    const parsed = match.match(/(\d+)(y|mo|d|h|m|s)/);
-    if (!parsed) {
-      continue;
-    }
-    const [, amount, unit] = parsed;
-    total += Number(amount) * (NODE_AGE_UNITS_IN_SECONDS[unit] ?? 0);
-  }
-  return total;
-};
 
 const parseNodePodsUsed = (pods?: string | number | null): number => {
   if (typeof pods === 'number') {
@@ -276,7 +248,7 @@ const NodesViewGrid: React.FC<NodesViewProps> = React.memo(({ error }) => {
         sortValue: (row: ClusterNodeRow) =>
           typeof row.ageTimestamp === 'number' && Number.isFinite(row.ageTimestamp)
             ? Math.max(0, Math.floor((ageSortNow - row.ageTimestamp) / 1000))
-            : parseNodeAgeToSeconds(row.age),
+            : parseCompactAgeToSeconds(row.age),
       },
     ];
 

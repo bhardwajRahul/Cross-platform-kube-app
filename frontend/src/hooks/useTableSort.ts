@@ -8,6 +8,7 @@
 
 import { recordGridTablePerformanceSample } from '@shared/components/tables/performance/gridTablePerformanceStore';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { parseCompactAgeToSeconds } from '@/utils/ageFormatter';
 
 export type SortDirection = 'asc' | 'desc' | null;
 
@@ -35,39 +36,6 @@ const getNow = (): number =>
     : Date.now();
 
 const areSortValuesEqual = (a: unknown, b: unknown): boolean => Object.is(a, b);
-
-// Parse Kubernetes-style age strings into seconds for sorting.
-const parseAge = (ageStr: string): number => {
-  if (!ageStr || ageStr === '-') {
-    return 0;
-  }
-
-  const units: Record<string, number> = {
-    y: 365 * 86400,
-    mo: 30 * 86400,
-    d: 86400,
-    h: 3600,
-    m: 60,
-    s: 1,
-  };
-
-  let totalSeconds = 0;
-  const matches = ageStr.match(/(\d+)(y|mo|d|h|m|s)/g);
-
-  if (matches) {
-    for (const match of matches) {
-      const matchResult = match.match(/(\d+)(y|mo|d|h|m|s)/);
-      if (matchResult) {
-        const [, num, unit] = matchResult;
-        if (num && unit && units[unit]) {
-          totalSeconds += Number.parseInt(num, 10) * units[unit];
-        }
-      }
-    }
-  }
-
-  return totalSeconds;
-};
 
 interface SortCacheEntry<T> {
   key: string;
@@ -183,7 +151,7 @@ export function useTableSort<T>(
         : (item as Record<string, unknown>)[effectiveSort.key];
       const normalizedValue =
         effectiveSort.key.toLowerCase() === 'age' && typeof rawValue === 'string'
-          ? parseAge(rawValue)
+          ? parseCompactAgeToSeconds(rawValue)
           : rawValue;
       const key = rowIdentity?.(item, index);
       if (key) {

@@ -87,7 +87,13 @@ function formatResultCountLabel(
 }
 
 function queryFacetChipType(facet: GridTableQueryFacetDefinition): string {
-  const unrestrictedLabel = /^All\s+(.+)$/i.exec(facet.placeholder.trim())?.[1] ?? facet.label;
+  const placeholder = facet.placeholder.trim();
+  const suffix = placeholder.slice(3);
+  const trimmedSuffix = suffix.trimStart();
+  const hasAllPrefix = placeholder.slice(0, 3).toLowerCase() === 'all';
+  const hasWhitespaceSeparator = suffix.length > trimmedSuffix.length;
+  const unrestrictedLabel =
+    hasAllPrefix && hasWhitespaceSeparator && trimmedSuffix ? trimmedSuffix : facet.label;
   return unrestrictedLabel.charAt(0).toUpperCase() + unrestrictedLabel.slice(1);
 }
 

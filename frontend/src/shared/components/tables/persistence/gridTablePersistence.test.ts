@@ -9,10 +9,11 @@ import type {
   ColumnWidthState,
   GridColumnDefinition,
 } from '@shared/components/tables/GridTable.types';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildGridTableStorageKey,
   buildPersistedStateForSave,
+  computeClusterHash,
   prunePersistedState,
 } from './gridTablePersistence';
 
@@ -35,6 +36,10 @@ const sampleWidthState: ColumnWidthState = {
 };
 
 describe('gridTablePersistence', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('builds a composite key with encoded segments', () => {
     const key = buildGridTableStorageKey({
       clusterHash: 'abc123',
@@ -61,6 +66,11 @@ describe('gridTablePersistence', () => {
     // Both keys contain their respective cluster hash.
     expect(keyA).toContain('cluster-a-hash');
     expect(keyB).toContain('cluster-b-hash');
+  });
+
+  it('hashes Unicode cluster identities by code point in the crypto fallback', async () => {
+    vi.stubGlobal('crypto', undefined);
+    await expect(computeClusterHash('cluster-😀')).resolves.toBe('a3649d57d06a');
   });
 
   it('prunes persisted state against current columns, filters, and rows', () => {

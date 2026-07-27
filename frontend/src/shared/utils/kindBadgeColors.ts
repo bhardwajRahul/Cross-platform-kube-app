@@ -40,8 +40,8 @@ const hashKindColorIndex = (kind: string, paletteSize: number): number => {
     return 0;
   }
   let hash = FNV_OFFSET;
-  for (let i = 0; i < kind.length; i += 1) {
-    hash ^= kind.charCodeAt(i);
+  for (const character of kind) {
+    hash ^= character.codePointAt(0) ?? 0;
     hash = Math.imul(hash, FNV_PRIME);
   }
   return (hash >>> 0) % paletteSize;

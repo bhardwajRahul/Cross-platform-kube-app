@@ -1,3 +1,44 @@
+const COMPACT_AGE_UNITS_IN_SECONDS: Record<string, number> = {
+  y: 365 * 86400,
+  mo: 30 * 86400,
+  d: 86400,
+  h: 3600,
+  m: 60,
+  s: 1,
+};
+
+const isAsciiDigit = (character: string | undefined): boolean =>
+  character !== undefined && character >= '0' && character <= '9';
+
+/** Parses compact Kubernetes durations such as `1d2h` without regex backtracking. */
+export function parseCompactAgeToSeconds(age: string | null | undefined): number {
+  if (!age || age === '-' || age === '—' || age === 'future' || age === 'now') {
+    return 0;
+  }
+
+  let totalSeconds = 0;
+  let cursor = 0;
+  while (cursor < age.length) {
+    if (!isAsciiDigit(age[cursor])) {
+      cursor += 1;
+      continue;
+    }
+
+    const amountStart = cursor;
+    while (isAsciiDigit(age[cursor])) {
+      cursor += 1;
+    }
+    const unit = age.startsWith('mo', cursor) ? 'mo' : age[cursor];
+    const multiplier = unit ? COMPACT_AGE_UNITS_IN_SECONDS[unit] : undefined;
+    if (multiplier !== undefined) {
+      totalSeconds += Number.parseInt(age.slice(amountStart, cursor), 10) * multiplier;
+      cursor += unit.length;
+    }
+  }
+
+  return totalSeconds;
+}
+
 /**
  * Formats a timestamp into a human-readable age string
  * @param timestamp - The timestamp to format (Date, string, or number)

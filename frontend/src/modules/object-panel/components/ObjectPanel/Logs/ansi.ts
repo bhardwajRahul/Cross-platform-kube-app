@@ -207,9 +207,12 @@ const applySgrCodes = (
 ): ActiveAnsiState => {
   const state = cloneState(currentState);
   const normalizedCodes = codes.length > 0 ? codes : [0];
+  let skipThroughIndex = -1;
 
-  for (let i = 0; i < normalizedCodes.length; i += 1) {
-    const code = normalizedCodes[i];
+  for (const [index, code] of normalizedCodes.entries()) {
+    if (index <= skipThroughIndex) {
+      continue;
+    }
     switch (code) {
       case 0:
         state.color = undefined;
@@ -255,10 +258,10 @@ const applySgrCodes = (
         state.backgroundColor = undefined;
         break;
       case 38:
-        i = applyExtendedColor(normalizedCodes, i, state, 'fg', terminalTheme);
+        skipThroughIndex = applyExtendedColor(normalizedCodes, index, state, 'fg', terminalTheme);
         break;
       case 48:
-        i = applyExtendedColor(normalizedCodes, i, state, 'bg', terminalTheme);
+        skipThroughIndex = applyExtendedColor(normalizedCodes, index, state, 'bg', terminalTheme);
         break;
       default:
         if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) {

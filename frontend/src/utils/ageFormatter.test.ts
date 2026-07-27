@@ -7,11 +7,20 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { formatAge, formatFullDate } from './ageFormatter';
+import { formatAge, formatFullDate, parseCompactAgeToSeconds } from './ageFormatter';
 
 describe('ageFormatter', () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('parses compact Kubernetes ages in one pass', () => {
+    expect(parseCompactAgeToSeconds('1y2mo3d4h5m6s')).toBe(
+      365 * 86400 + 2 * 30 * 86400 + 3 * 86400 + 4 * 3600 + 5 * 60 + 6
+    );
+    expect(parseCompactAgeToSeconds('prefix 12h suffix 3m')).toBe(12 * 3600 + 3 * 60);
+    expect(parseCompactAgeToSeconds('future')).toBe(0);
+    expect(parseCompactAgeToSeconds('-')).toBe(0);
   });
 
   it('formats durations into compact age strings', () => {

@@ -23,25 +23,71 @@ export interface ParsedToleration {
   tooltip?: string;
 }
 
+const extractTimedSuffix = (value: string): { remaining: string; seconds: string | undefined } => {
+  if (!value.endsWith('s')) {
+    return { remaining: value, seconds: undefined };
+  }
+
+  let cursor = value.length - 1;
+  const secondsEnd = cursor;
+  while (cursor > 0 && value[cursor - 1] >= '0' && value[cursor - 1] <= '9') {
+    cursor -= 1;
+  }
+  if (cursor === secondsEnd) {
+    return { remaining: value, seconds: undefined };
+  }
+  const secondsStart = cursor;
+
+  const whitespaceAfterForEnd = cursor;
+  while (cursor > 0 && value[cursor - 1]?.trim() === '') {
+    cursor -= 1;
+  }
+  if (cursor === whitespaceAfterForEnd || value.slice(Math.max(0, cursor - 3), cursor) !== 'for') {
+    return { remaining: value, seconds: undefined };
+  }
+  cursor -= 3;
+
+  const whitespaceBeforeForEnd = cursor;
+  while (cursor > 0 && value[cursor - 1]?.trim() === '') {
+    cursor -= 1;
+  }
+  if (cursor === whitespaceBeforeForEnd) {
+    return { remaining: value, seconds: undefined };
+  }
+
+  return {
+    remaining: value.slice(0, cursor).trim(),
+    seconds: value.slice(secondsStart, secondsEnd),
+  };
+};
+
+const extractEffectSuffix = (value: string): { remaining: string; effect: string | undefined } => {
+  if (!value.endsWith(')')) {
+    return { remaining: value, effect: undefined };
+  }
+  const openingParenthesis = value.lastIndexOf('(');
+  if (openingParenthesis === -1 || openingParenthesis === value.length - 2) {
+    return { remaining: value, effect: undefined };
+  }
+  return {
+    remaining: value.slice(0, openingParenthesis).trim(),
+    effect: value.slice(openingParenthesis + 1, -1),
+  };
+};
+
 export const parseToleration = (raw: string): ParsedToleration | null => {
   let remaining = raw.trim();
   if (!remaining) {
     return null;
   }
 
-  let seconds: string | undefined;
-  const secondsMatch = remaining.match(/\s+for\s+(\d+)s$/);
-  if (secondsMatch) {
-    seconds = secondsMatch[1];
-    remaining = remaining.slice(0, secondsMatch.index).trim();
-  }
+  const timedSuffix = extractTimedSuffix(remaining);
+  const seconds = timedSuffix.seconds;
+  remaining = timedSuffix.remaining;
 
-  let effect: string | undefined;
-  const effectMatch = remaining.match(/\s*\(([^)]+)\)$/);
-  if (effectMatch) {
-    effect = effectMatch[1];
-    remaining = remaining.slice(0, effectMatch.index).trim();
-  }
+  const effectSuffix = extractEffectSuffix(remaining);
+  const effect = effectSuffix.effect;
+  remaining = effectSuffix.remaining;
 
   let key: string | undefined;
   let value: string | undefined;
