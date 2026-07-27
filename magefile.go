@@ -346,11 +346,14 @@ func (QC) Trivy() error {
 	return sh.RunV("trivy", "fs", "--exit-code", "1", "--severity", "CRITICAL,HIGH", ".")
 }
 
-// Resets application settings
+// Resets application settings and cached data
 func (QC) Reset() error {
 	fmt.Println("\n🔄 Resetting application settings...")
-	os.RemoveAll(os.Getenv("HOME") + "/.config/luxury-yacht")
-	return nil
+	dirs, err := mage.ResetAppState(cfg.AppShortName)
+	for _, dir := range dirs {
+		fmt.Printf("   %s\n", dir)
+	}
+	return err
 }
 
 // Runs all checks that could cause a release to fail.
