@@ -58,7 +58,9 @@ func (s *Service) ctx() (context.Context, context.CancelFunc) {
 		base = context.Background()
 	}
 	if _, hasDeadline := base.Deadline(); hasDeadline {
-		return base, func() {}
+		return base, func() {
+			// The caller owns the existing deadline; no derived context needs cancellation.
+		}
 	}
 	return context.WithTimeout(base, config.EndpointSliceLookupTimeout)
 }

@@ -19,8 +19,11 @@ import (
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
 )
 
-const logPermissionResource = "core/pods/log"
-const transportDropWarning = "Live container logs stream dropped one or more log entries due to client backlog. These lines were not intentionally filtered."
+const (
+	containerLogsDomain   = "container-logs"
+	logPermissionResource = "core/pods/log"
+	transportDropWarning  = "Live container logs stream dropped one or more log entries due to client backlog. These lines were not intentionally filtered."
+)
 
 // Handler exposes an SSE endpoint for streaming pod/workload logs.
 type Handler struct {
@@ -103,7 +106,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Send an immediate "connected" event so the frontend knows the stream is active
 	// This prevents the UI from staying in loading state when there are no initial logs
 	connectedPayload := EventPayload{
-		Domain:      "container-logs",
+		Domain:      containerLogsDomain,
 		Scope:       opts.ScopeString,
 		Sequence:    sequence,
 		GeneratedAt: time.Now().UnixMilli(),
@@ -134,7 +137,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.streamer.logger.Warn(fmt.Sprintf("containerlogsstream: initial tail failed: %v", err), logsources.ContainerLogsStream)
 		if status := permissionDeniedStatus(err); status != nil {
 			payload := EventPayload{
-				Domain:       "container-logs",
+				Domain:       containerLogsDomain,
 				Scope:        opts.ScopeString,
 				Sequence:     sequence,
 				GeneratedAt:  time.Now().UnixMilli(),
@@ -155,7 +158,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// (even if there are no logs). This allows the frontend to distinguish between
 	// "still loading" and "no logs available".
 	event := EventPayload{
-		Domain:      "container-logs",
+		Domain:      containerLogsDomain,
 		Scope:       opts.ScopeString,
 		Sequence:    sequence,
 		GeneratedAt: time.Now().UnixMilli(),
@@ -220,7 +223,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return false
 		}
 		payload := EventPayload{
-			Domain:      "container-logs",
+			Domain:      containerLogsDomain,
 			Scope:       opts.ScopeString,
 			Sequence:    sequence,
 			GeneratedAt: time.Now().UnixMilli(),
@@ -244,7 +247,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if delivered > 0 {
 			event := EventPayload{
-				Domain:      "container-logs",
+				Domain:      containerLogsDomain,
 				Scope:       opts.ScopeString,
 				Sequence:    sequence,
 				GeneratedAt: time.Now().UnixMilli(),
@@ -287,7 +290,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			errPayload := EventPayload{
-				Domain:      "container-logs",
+				Domain:      containerLogsDomain,
 				Scope:       opts.ScopeString,
 				Sequence:    sequence,
 				GeneratedAt: time.Now().UnixMilli(),
@@ -557,7 +560,7 @@ func permissionDeniedStatus(err error) *refresh.PermissionDeniedStatus {
 	}
 	if apierrors.IsForbidden(err) {
 		wrapped := permissionDeniedError{
-			domain:   "container-logs",
+			domain:   containerLogsDomain,
 			resource: logPermissionResource,
 			message:  err.Error(),
 		}

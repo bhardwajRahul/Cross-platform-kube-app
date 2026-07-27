@@ -16,6 +16,8 @@ import (
 	"k8s.io/client-go/util/homedir"
 )
 
+const clusterDisconnectedReason = "cluster disconnected"
+
 type kubeconfigWatchDirectory struct {
 	dir         string
 	unfiltered  bool
@@ -480,7 +482,7 @@ func (a *App) CloseCluster(selectionOrClusterID string) error {
 		remainingSelections = append(remainingSelections, selection)
 	}
 
-	a.cleanupClusterRuntimeOperations(targetClusterID, "cluster disconnected")
+	a.cleanupClusterRuntimeOperations(targetClusterID, clusterDisconnectedReason)
 	if !found {
 		return nil
 	}
@@ -663,7 +665,7 @@ func (a *App) clearKubeconfigSelection() error {
 		mgr.Shutdown()
 	}
 	for clusterID := range clusterIDs {
-		a.cleanupClusterRuntimeOperations(clusterID, "cluster disconnected")
+		a.cleanupClusterRuntimeOperations(clusterID, clusterDisconnectedReason)
 		a.removeClusterWorkspaceState(clusterID)
 	}
 	a.teardownRefreshSubsystem()
@@ -1071,7 +1073,7 @@ func (a *App) applySelectionPrune(
 		mgr.Shutdown()
 	}
 	for _, id := range removedClusterIDs {
-		a.cleanupClusterRuntimeOperations(id, "cluster disconnected")
+		a.cleanupClusterRuntimeOperations(id, clusterDisconnectedReason)
 		a.removeClusterWorkspaceState(id)
 	}
 

@@ -22,6 +22,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+const helmReleaseAPIGroup = "helm.sh"
+
 type objectDetailProvider struct {
 	app *App
 }
@@ -127,7 +129,7 @@ func sameGVK(a, b schema.GroupVersionKind) bool {
 }
 
 func isHelmReleaseGVK(gvk schema.GroupVersionKind) bool {
-	return strings.TrimSpace(gvk.Group) == "helm.sh" &&
+	return strings.TrimSpace(gvk.Group) == helmReleaseAPIGroup &&
 		strings.TrimSpace(gvk.Version) == "v3" &&
 		strings.EqualFold(strings.TrimSpace(gvk.Kind), "HelmRelease")
 }
@@ -365,7 +367,7 @@ func cachedHelmDetail[T any](
 		ctx,
 		resolved.deps,
 		resolved.selectionKey,
-		schema.GroupVersionKind{Group: "helm.sh", Version: "v3", Kind: kind},
+		schema.GroupVersionKind{Group: helmReleaseAPIGroup, Version: "v3", Kind: kind},
 		namespace,
 		name,
 	)
@@ -426,7 +428,7 @@ func (p *objectDetailProvider) cachedHelmReleaseRevision(
 		resolved.deps.Context,
 		resolved.deps,
 		resolved.selectionKey,
-		schema.GroupVersionKind{Group: "helm.sh", Version: "v3", Kind: "HelmRelease"},
+		schema.GroupVersionKind{Group: helmReleaseAPIGroup, Version: "v3", Kind: "HelmRelease"},
 		namespace,
 		name,
 	) {

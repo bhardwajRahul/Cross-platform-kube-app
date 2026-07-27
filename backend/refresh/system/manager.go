@@ -47,6 +47,8 @@ import (
 	"github.com/luxury-yacht/app/backend/resources/common"
 )
 
+const metricsAPIGroup = "metrics.k8s.io"
+
 // PermissionIssue captures domains that could not be registered due to missing permissions or transient errors.
 type PermissionIssue struct {
 	Domain   string // The domain that encountered a permission issue.
@@ -291,16 +293,16 @@ func logPermissionSkip(domainName, group, resource string) {
 
 func newMetricsServices(cfg Config, gate *permissionGate, recorder *telemetry.Recorder, issues *permissionIssueRecorder) (refresh.MetricsPoller, metrics.Provider) {
 	checks := []listCheck{
-		{group: "metrics.k8s.io", resource: "nodes"},
-		{group: "metrics.k8s.io", resource: "pods"},
+		{group: metricsAPIGroup, resource: "nodes"},
+		{group: metricsAPIGroup, resource: "pods"},
 	}
 	results := gate.runListChecks(checks)
 	metricErrors := gate.listErrors(results)
-	issues.append("metrics-poller", "metrics.k8s.io/nodes,pods", metricErrors...)
+	issues.append("metrics-poller", metricsAPIGroup+"/nodes,pods", metricErrors...)
 	if len(metricErrors) == 0 && gate.allListAllowed(results) {
 		return newEnabledMetricsServices(cfg, recorder)
 	}
-	logPermissionSkip("metrics-poller", "metrics.k8s.io", "nodes/pods")
+	logPermissionSkip("metrics-poller", metricsAPIGroup, "nodes/pods")
 	return newDisabledMetricsServices(cfg, gate, results, recorder)
 }
 
@@ -312,8 +314,8 @@ func newEnabledMetricsServices(cfg Config, recorder *telemetry.Recorder) (refres
 }
 
 func newDisabledMetricsServices(cfg Config, gate *permissionGate, results []listCheckResult, recorder *telemetry.Recorder) (refresh.MetricsPoller, metrics.Provider) {
-	nodesErr := gate.listErrFor(results, "metrics.k8s.io", "nodes")
-	podsErr := gate.listErrFor(results, "metrics.k8s.io", "pods")
+	nodesErr := gate.listErrFor(results, metricsAPIGroup, "nodes")
+	podsErr := gate.listErrFor(results, metricsAPIGroup, "pods")
 	reason, detail := disabledMetricsReason(gate.listAllowedByKey(results), nodesErr, podsErr)
 	applog.Warn(cfg.Logger, detail, "Metrics")
 	disabled := metrics.NewDisabledPoller(recorder, reason)
@@ -323,9 +325,10 @@ func newDisabledMetricsServices(cfg Config, gate *permissionGate, results []list
 func disabledMetricsReason(allowed map[string]bool, nodesErr, podsErr error) (string, string) {
 	if nodesErr == nil && podsErr == nil {
 		return "Insufficient permissions for Metrics API", fmt.Sprintf(
-			"metrics polling disabled: access denied for metrics.k8s.io (nodesAllowed=%t podsAllowed=%t)",
-			allowed["metrics.k8s.io/nodes"],
-			allowed["metrics.k8s.io/pods"],
+			"metrics polling disabled: access denied for %s (nodesAllowed=%t podsAllowed=%t)",
+			metricsAPIGroup,
+			allowed[metricsAPIGroup+"/nodes"],
+			allowed[metricsAPIGroup+"/pods"],
 		)
 	}
 	return "Metrics API not found (metrics-server)", fmt.Sprintf(
@@ -344,8 +347,8 @@ func restServerHost(cfg *rest.Config) string {
 
 func registerSubsystemDomains(factory *informer.Factory, gate *permissionGate, runtimePerms *permissions.Checker, registrations []domainRegistration) error {
 	preflight := preflightRequests(registrations, []informer.PermissionRequest{
-		{Group: "metrics.k8s.io", Resource: "nodes", Verb: "list"},
-		{Group: "metrics.k8s.io", Resource: "pods", Verb: "list"},
+		{Group: metricsAPIGroup, Resource: "nodes", Verb: "list"},
+		{Group: metricsAPIGroup, Resource: "pods", Verb: "list"},
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), config.PermissionPreflightTimeout)
 	defer cancel()

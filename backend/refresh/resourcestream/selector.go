@@ -26,6 +26,10 @@ const (
 	// decoded solely by refresh.ParseObjectScope). Used by the object-events
 	// doorbell, whose subscriptions are per-panel-object.
 	StreamScopeObject StreamScopeKind = "object"
+
+	namespaceScopePrefix = "namespace:"
+	namespaceAllScope    = namespaceScopePrefix + "all"
+	workloadScopePrefix  = "workload:"
 )
 
 // StreamSelector is the typed subscription identity for a resource stream.
@@ -153,17 +157,17 @@ func (s StreamSelector) String() string {
 	case StreamScopeCluster:
 		return ""
 	case StreamScopeAllNamespace:
-		return "namespace:all"
+		return namespaceAllScope
 	case StreamScopeNamespace:
-		return "namespace:" + s.Namespace
+		return namespaceScopePrefix + s.Namespace
 	case StreamScopeNode:
 		return "node:" + s.Node
 	case StreamScopeWorkload:
 		if s.Workload == nil {
-			return "workload:"
+			return workloadScopePrefix
 		}
 		return fmt.Sprintf(
-			"workload:%s:%s:%s:%s:%s",
+			workloadScopePrefix+"%s:%s:%s:%s:%s",
 			s.Workload.Namespace,
 			s.Workload.Group,
 			s.Workload.Version,
@@ -181,8 +185,8 @@ func parsePodSelector(selector StreamSelector, scope string) (StreamSelector, er
 		return StreamSelector{}, fmt.Errorf("pods scope is required")
 	}
 	switch {
-	case strings.HasPrefix(scope, "namespace:"):
-		value := strings.TrimSpace(strings.TrimLeft(strings.TrimPrefix(scope, "namespace:"), ":"))
+	case strings.HasPrefix(scope, namespaceScopePrefix):
+		value := strings.TrimSpace(strings.TrimLeft(strings.TrimPrefix(scope, namespaceScopePrefix), ":"))
 		if value == "" {
 			return StreamSelector{}, fmt.Errorf("pods namespace scope is required")
 		}
@@ -203,8 +207,8 @@ func parsePodSelector(selector StreamSelector, scope string) (StreamSelector, er
 		selector.Node = value
 		return selector, nil
 
-	case strings.HasPrefix(scope, "workload:"):
-		value := strings.TrimSpace(strings.TrimLeft(strings.TrimPrefix(scope, "workload:"), ":"))
+	case strings.HasPrefix(scope, workloadScopePrefix):
+		value := strings.TrimSpace(strings.TrimLeft(strings.TrimPrefix(scope, workloadScopePrefix), ":"))
 		parts := strings.Split(value, ":")
 		if len(parts) != 5 {
 			return StreamSelector{}, fmt.Errorf("pods workload scope requires namespace:group:version:kind:name")
@@ -235,8 +239,8 @@ func parseNamespaceSelector(selector StreamSelector, scope string) (StreamSelect
 	if value == "" {
 		return StreamSelector{}, fmt.Errorf("%s scope is required", selector.Domain)
 	}
-	if strings.HasPrefix(value, "namespace:") {
-		value = strings.TrimSpace(strings.TrimLeft(strings.TrimPrefix(value, "namespace:"), ":"))
+	if strings.HasPrefix(value, namespaceScopePrefix) {
+		value = strings.TrimSpace(strings.TrimLeft(strings.TrimPrefix(value, namespaceScopePrefix), ":"))
 	}
 	if value == "" {
 		return StreamSelector{}, fmt.Errorf("%s scope is required", selector.Domain)

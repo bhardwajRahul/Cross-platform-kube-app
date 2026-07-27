@@ -7,7 +7,18 @@ var Noop Logger = noopLogger{}
 
 type noopLogger struct{}
 
-func (noopLogger) Debug(string, ...string) {}
-func (noopLogger) Info(string, ...string)  {}
-func (noopLogger) Warn(string, ...string)  {}
-func (noopLogger) Error(string, ...string) {}
+func (noopLogger) Debug(string, ...string) {
+	// Intentionally discard debug messages.
+}
+
+func (noopLogger) Info(string, ...string) {
+	// Intentionally discard informational messages.
+}
+
+func (noopLogger) Warn(string, ...string) {
+	// Intentionally discard warning messages.
+}
+
+func (noopLogger) Error(string, ...string) {
+	// Intentionally discard error messages.
+}

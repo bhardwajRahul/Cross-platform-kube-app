@@ -53,16 +53,17 @@ import (
 )
 
 const (
-	domainPods                 = "pods"
-	domainWorkloads            = "namespace-workloads"
-	domainNamespaceConfig      = "namespace-config"
-	domainNamespaceNetwork     = "namespace-network"
-	domainNamespaceRBAC        = "namespace-rbac"
-	domainNamespaceCustom      = "namespace-custom"
-	domainNamespaceHelm        = "namespace-helm"
-	domainNamespaceAutoscaling = "namespace-autoscaling"
-	domainNamespaceQuotas      = "namespace-quotas"
-	domainNamespaceStorage     = "namespace-storage"
+	customResourceDefinitionAPIGroup = "apiextensions.k8s.io"
+	domainPods                       = "pods"
+	domainWorkloads                  = "namespace-workloads"
+	domainNamespaceConfig            = "namespace-config"
+	domainNamespaceNetwork           = "namespace-network"
+	domainNamespaceRBAC              = "namespace-rbac"
+	domainNamespaceCustom            = "namespace-custom"
+	domainNamespaceHelm              = "namespace-helm"
+	domainNamespaceAutoscaling       = "namespace-autoscaling"
+	domainNamespaceQuotas            = "namespace-quotas"
+	domainNamespaceStorage           = "namespace-storage"
 	// Cluster-scoped domains stream resources without namespace scopes.
 	domainClusterRBAC     = "cluster-rbac"
 	domainClusterStorage  = "cluster-storage"
@@ -376,7 +377,7 @@ func (m *Manager) initCustomResourceInformers(factory *informer.Factory) {
 		return
 	}
 	// CustomResourceDefinitions are cluster-scoped — gate on permissions.
-	if m.permissions != nil && !m.permissions.CanListWatch("apiextensions.k8s.io", "customresourcedefinitions") {
+	if m.permissions != nil && !m.permissions.CanListWatch(customResourceDefinitionAPIGroup, "customresourcedefinitions") {
 		return
 	}
 	apiextFactory := factory.APIExtensionsInformerFactory()
@@ -442,7 +443,7 @@ func (m *Manager) broadcastCustomDomainCompletes(oldCRD *apiextensionsv1.CustomR
 		if domain == "" {
 			continue
 		}
-		ref := m.resourceRefForObject(crd, "apiextensions.k8s.io", "v1", "CustomResourceDefinition", "customresourcedefinitions")
+		ref := m.resourceRefForObject(crd, customResourceDefinitionAPIGroup, "v1", "CustomResourceDefinition", "customresourcedefinitions")
 		targets[domain] = completeTarget{resourceVersion: crd.ResourceVersion, ref: &ref}
 	}
 	for domain, target := range targets {
@@ -457,7 +458,7 @@ func (m *Manager) broadcastCustomDomainComplete(domain, resourceVersion string, 
 		case domainClusterCustom:
 			scopes = scopesForCluster()
 		case domainNamespaceCustom:
-			scopes = []string{"namespace:all"}
+			scopes = []string{namespaceAllScope}
 		default:
 			return
 		}
@@ -633,7 +634,7 @@ func (m *Manager) handleClusterCRD(obj interface{}, updateType MessageType) {
 		return
 	}
 
-	ref := m.resourceRefForObject(crd, "apiextensions.k8s.io", "v1", "CustomResourceDefinition", "customresourcedefinitions")
+	ref := m.resourceRefForObject(crd, customResourceDefinitionAPIGroup, "v1", "CustomResourceDefinition", "customresourcedefinitions")
 	update := m.newObjectRowUpdate(updateType, domainClusterCRDs, crd, ref, apiextensionspkg.BuildStreamSummary(m.clusterMeta, crd))
 
 	m.broadcast(domainClusterCRDs, scopesForCluster(), update)
@@ -1276,7 +1277,7 @@ func replicaSetDeploymentOwnerName(rs *appsv1.ReplicaSet) string {
 func scopesForPod(summary snapshot.PodSummary) []string {
 	scopes := make([]string, 0, 5)
 	if summary.Ref.Namespace != "" {
-		scopes = append(scopes, fmt.Sprintf("namespace:%s", summary.Ref.Namespace), "namespace:all")
+		scopes = append(scopes, fmt.Sprintf("namespace:%s", summary.Ref.Namespace), namespaceAllScope)
 	}
 	if summary.Node != "" {
 		scopes = append(scopes, fmt.Sprintf("node:%s", summary.Node))
@@ -1316,9 +1317,9 @@ func scopesForCluster() []string {
 
 func scopesForNamespace(namespace string) []string {
 	if strings.TrimSpace(namespace) == "" {
-		return []string{"namespace:all"}
+		return []string{namespaceAllScope}
 	}
-	return []string{fmt.Sprintf("namespace:%s", namespace), "namespace:all"}
+	return []string{fmt.Sprintf("namespace:%s", namespace), namespaceAllScope}
 }
 
 func uniqueScopes(scopes []string) []string {

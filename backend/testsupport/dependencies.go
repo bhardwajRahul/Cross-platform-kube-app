@@ -110,8 +110,10 @@ func WithDepsSelection(configPath, contextName string) DependenciesOption {
 // NewResourceDependencies returns a fully-populated Dependencies bundle suitable for resource services.
 func NewResourceDependencies(opts ...DependenciesOption) common.Dependencies {
 	builder := dependenciesBuilder{
-		ctx:          context.Background(),
-		setMetrics:   func(metricsclient.Interface) {},
+		ctx: context.Background(),
+		setMetrics: func(metricsclient.Interface) {
+			// The default test dependency does not retain a metrics client.
+		},
 		ensureClient: func(string) error { return nil },
 		ensureAPIExtensions: func(string) error {
 			return nil

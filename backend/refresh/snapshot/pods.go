@@ -169,7 +169,9 @@ type PodSnapshot struct {
 // podHealthFilterModes are the "health" predicate values whose scope counts the
 // frontend needs (badge + pending-filter restore). Counting via the predicate
 // keeps each count consistent with the filter it gates.
-var podHealthFilterModes = []string{"unhealthy", "restarts", "not-ready"}
+const podNotReadyFilter = "not-ready"
+
+var podHealthFilterModes = []string{"unhealthy", "restarts", podNotReadyFilter}
 
 // podSummaryUnhealthy reports whether a pod row should count as unhealthy. It is
 // the single source for the "unhealthy" notion shared by the scope count and the
@@ -177,7 +179,7 @@ var podHealthFilterModes = []string{"unhealthy", "restarts", "not-ready"}
 func podSummaryUnhealthy(pod PodSummary) bool {
 	presentation := strings.ToLower(strings.TrimSpace(pod.StatusPresentation))
 	return presentation == "warning" || presentation == "error" ||
-		presentation == "not-ready" || presentation == "terminating"
+		presentation == podNotReadyFilter || presentation == "terminating"
 }
 
 func podQueryCapabilities() ResourceQueryCapabilities {
@@ -650,7 +652,7 @@ func podTableQueryAdapter() typedTableQueryAdapter[PodSummary] {
 				switch strings.ToLower(strings.TrimSpace(value)) {
 				case "restarts":
 					return pod.Restarts > 0
-				case "not-ready":
+				case podNotReadyFilter:
 					ready, total, ok := parseReadyPair(pod.Ready)
 					status := strings.ToLower(strings.TrimSpace(pod.Status))
 					return ok && total > 0 && ready < total && status != "completed"

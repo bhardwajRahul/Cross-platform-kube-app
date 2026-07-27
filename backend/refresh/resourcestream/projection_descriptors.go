@@ -51,6 +51,11 @@ type ResourceDescriptor struct {
 	Resource string
 }
 
+const (
+	fullResourceRefUpdateIdentity = "ref (full ResourceRef)"
+	namespaceSelectorShape        = "clusterId + namespace"
+)
+
 // ProjectionDescriptors returns a defensive copy of the authored projection
 // metadata. Its consumers are the cross-package contract guards that lock the
 // descriptors to refresh-domain-contract.json (see registrations_test.go).
@@ -71,7 +76,7 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 		ScopeKind:        "pod",
 		SelectorShape:    "clusterId + namespace/name or namespace:*",
 		RowIdentity:      "clusterId + /v1 Pod namespace/name",
-		UpdateIdentity:   "ref (full ResourceRef)",
+		UpdateIdentity:   fullResourceRefUpdateIdentity,
 		PrimaryResources: []ResourceDescriptor{fromIdentity(podspkg.Identity)},
 		RelatedResources: []ResourceDescriptor{fromIdentity(replicasetpkg.Identity)},
 		// The metric clock joins live usage onto served rows at serve (snapshot
@@ -85,9 +90,9 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 	domainWorkloads: {
 		Domain:         domainWorkloads,
 		ScopeKind:      "namespace",
-		SelectorShape:  "clusterId + namespace",
+		SelectorShape:  namespaceSelectorShape,
 		RowIdentity:    "clusterId + full workload GVK namespace/name",
-		UpdateIdentity: "ref (full ResourceRef)",
+		UpdateIdentity: fullResourceRefUpdateIdentity,
 		PrimaryResources: []ResourceDescriptor{
 			fromIdentity(deploymentpkg.Identity),
 			fromIdentity(statefulsetpkg.Identity),
@@ -116,9 +121,9 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 	domainNamespaceNetwork: {
 		Domain:               domainNamespaceNetwork,
 		ScopeKind:            "namespace",
-		SelectorShape:        "clusterId + namespace",
+		SelectorShape:        namespaceSelectorShape,
 		RowIdentity:          "clusterId + full network GVK namespace/name",
-		UpdateIdentity:       "ref (full ResourceRef)",
+		UpdateIdentity:       fullResourceRefUpdateIdentity,
 		PrimaryResources:     streamResourceDescriptors(domainNamespaceNetwork),
 		RelatedResources:     []ResourceDescriptor{fromIdentity(endpointslicepkg.Identity)},
 		SourceClocks:         []Source{SourceObject},
@@ -136,9 +141,9 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 	domainNamespaceCustom: {
 		Domain:               domainNamespaceCustom,
 		ScopeKind:            "namespace",
-		SelectorShape:        "clusterId + namespace",
+		SelectorShape:        namespaceSelectorShape,
 		RowIdentity:          "clusterId + CRD-backed GVK namespace/name",
-		UpdateIdentity:       "ref (full ResourceRef)",
+		UpdateIdentity:       fullResourceRefUpdateIdentity,
 		PrimaryResources:     []ResourceDescriptor{},
 		RelatedResources:     []ResourceDescriptor{fromIdentity(apiextensionspkg.Identity)},
 		SourceClocks:         []Source{SourceObject},
@@ -150,9 +155,9 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 	domainNamespaceHelm: {
 		Domain:               domainNamespaceHelm,
 		ScopeKind:            "namespace",
-		SelectorShape:        "clusterId + namespace",
+		SelectorShape:        namespaceSelectorShape,
 		RowIdentity:          "clusterId + helm.sh/v3 HelmRelease namespace/name",
-		UpdateIdentity:       "ref (full ResourceRef)",
+		UpdateIdentity:       fullResourceRefUpdateIdentity,
 		PrimaryResources:     streamResourceDescriptors(domainNamespaceHelm),
 		RelatedResources:     streamResourceDescriptors(domainNamespaceHelm),
 		SourceClocks:         []Source{SourceObject},
@@ -204,7 +209,7 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 		ScopeKind:            "cluster",
 		SelectorShape:        "clusterId",
 		RowIdentity:          "clusterId + CRD-backed GVK name",
-		UpdateIdentity:       "ref (full ResourceRef)",
+		UpdateIdentity:       fullResourceRefUpdateIdentity,
 		PrimaryResources:     []ResourceDescriptor{},
 		RelatedResources:     []ResourceDescriptor{fromIdentity(apiextensionspkg.Identity)},
 		SourceClocks:         []Source{SourceObject},
@@ -218,7 +223,7 @@ var projectionDescriptors = map[string]ProjectionDescriptor{
 		ScopeKind:            "cluster",
 		SelectorShape:        "clusterId",
 		RowIdentity:          "clusterId + /v1 Node name",
-		UpdateIdentity:       "ref (full ResourceRef)",
+		UpdateIdentity:       fullResourceRefUpdateIdentity,
 		PrimaryResources:     []ResourceDescriptor{fromIdentity(nodespkg.Identity)},
 		RelatedResources:     []ResourceDescriptor{fromIdentity(podspkg.Identity)},
 		SourceClocks:         []Source{SourceObject, SourceMetric},
@@ -233,9 +238,9 @@ func namespaceDescriptor(domain, projection string, primary, related []ResourceD
 	return ProjectionDescriptor{
 		Domain:               domain,
 		ScopeKind:            "namespace",
-		SelectorShape:        "clusterId + namespace",
+		SelectorShape:        namespaceSelectorShape,
 		RowIdentity:          "clusterId + full GVK namespace/name",
-		UpdateIdentity:       "ref (full ResourceRef)",
+		UpdateIdentity:       fullResourceRefUpdateIdentity,
 		PrimaryResources:     primary,
 		RelatedResources:     related,
 		SourceClocks:         []Source{SourceObject},
@@ -252,7 +257,7 @@ func clusterDescriptor(domain, projection string, primary []ResourceDescriptor) 
 		ScopeKind:            "cluster",
 		SelectorShape:        "clusterId",
 		RowIdentity:          "clusterId + full GVK name",
-		UpdateIdentity:       "ref (full ResourceRef)",
+		UpdateIdentity:       fullResourceRefUpdateIdentity,
 		PrimaryResources:     primary,
 		SourceClocks:         []Source{SourceObject},
 		Projection:           projection,

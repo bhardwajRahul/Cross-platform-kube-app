@@ -35,6 +35,8 @@ import (
 const (
 	namespaceNetworkDomainName       = "namespace-network"
 	errNamespaceNetworkScopeRequired = "namespace scope is required"
+	namespaceNetworkDiscoveryGroup   = "discovery.k8s.io"
+	namespaceNetworkNetworkingGroup  = "networking.k8s.io"
 )
 
 // NamespaceNetworkBuilder constructs summaries for namespace-scoped network resources.
@@ -154,9 +156,9 @@ func RegisterNamespaceNetworkDomainWithGatewayAPI(
 	builder := &NamespaceNetworkBuilder{
 		networkIngest:          ingestManager,
 		includeServices:        allowed.Allows("", "services"),
-		includeEndpointSlices:  allowed.Allows("discovery.k8s.io", "endpointslices"),
-		includeIngresses:       allowed.Allows("networking.k8s.io", "ingresses"),
-		includeNetworkPolicies: allowed.Allows("networking.k8s.io", "networkpolicies"),
+		includeEndpointSlices:  allowed.Allows(namespaceNetworkDiscoveryGroup, "endpointslices"),
+		includeIngresses:       allowed.Allows(namespaceNetworkNetworkingGroup, "ingresses"),
+		includeNetworkPolicies: allowed.Allows(namespaceNetworkNetworkingGroup, "networkpolicies"),
 		collectIndexer:         collectIndexer,
 		maintained:             maintained,
 	}
@@ -186,9 +188,9 @@ func (b *NamespaceNetworkBuilder) Build(ctx context.Context, scope string) (*ref
 	// permission (the gate the typed listers' presence used to imply). Availability gates
 	// which cut kinds' own-rows the maintained store serves for this request.
 	servicesAvailable := b.includeServices && runtimeResourceAllowed(ctx, namespaceNetworkDomainName, "", "services")
-	endpointSlicesAvailable := b.includeEndpointSlices && runtimeResourceAllowed(ctx, namespaceNetworkDomainName, "discovery.k8s.io", "endpointslices")
-	ingressesAvailable := b.includeIngresses && runtimeResourceAllowed(ctx, namespaceNetworkDomainName, "networking.k8s.io", "ingresses")
-	networkPoliciesAvailable := b.includeNetworkPolicies && runtimeResourceAllowed(ctx, namespaceNetworkDomainName, "networking.k8s.io", "networkpolicies")
+	endpointSlicesAvailable := b.includeEndpointSlices && runtimeResourceAllowed(ctx, namespaceNetworkDomainName, namespaceNetworkDiscoveryGroup, "endpointslices")
+	ingressesAvailable := b.includeIngresses && runtimeResourceAllowed(ctx, namespaceNetworkDomainName, namespaceNetworkNetworkingGroup, "ingresses")
+	networkPoliciesAvailable := b.includeNetworkPolicies && runtimeResourceAllowed(ctx, namespaceNetworkDomainName, namespaceNetworkNetworkingGroup, "networkpolicies")
 
 	// The Service endpoint-count join is a SERVE-time cross-kind join: it sums each Service's
 	// correlated EndpointSlices' ready endpoint addresses from the ingest source's Aggregate
@@ -241,7 +243,7 @@ func (b *NamespaceNetworkBuilder) Build(ctx context.Context, scope string) (*ref
 	// EndpointSlice first, then the descriptor kinds in registry order.
 	sources := append([]typedTableResourceSource{
 		{Kind: service.Identity.Kind, Group: "", Resource: "services", Available: servicesAvailable},
-		{Kind: endpointslice.Identity.Kind, Group: "discovery.k8s.io", Resource: "endpointslices", Available: endpointSlicesAvailable, QueryKinds: []string{endpointslice.Identity.Kind, service.Identity.Kind}},
+		{Kind: endpointslice.Identity.Kind, Group: namespaceNetworkDiscoveryGroup, Resource: "endpointslices", Available: endpointSlicesAvailable, QueryKinds: []string{endpointslice.Identity.Kind, service.Identity.Kind}},
 	}, descriptorSources...)
 
 	issues := typedTableQueryResourceIssues(ctx, namespaceNetworkDomainName, query, sources)

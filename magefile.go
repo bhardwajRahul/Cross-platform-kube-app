@@ -17,6 +17,8 @@ import (
 
 var cfg = mage.NewBuildConfig()
 
+const npmPrefixArg = "--prefix"
+
 // ===============================
 // Debugging Stuff
 // ===============================
@@ -124,7 +126,7 @@ func (Deps) Npm() error {
 		return err
 	}
 	fmt.Println("Installing npm dependencies...")
-	return sh.RunV("npm", "install", "--prefix", cfg.FrontendDir)
+	return sh.RunV("npm", "install", npmPrefixArg, cfg.FrontendDir)
 }
 
 // ===============================
@@ -206,7 +208,7 @@ func Storybook() error {
 		return err
 	}
 	fmt.Println("Starting Storybook...")
-	return sh.Run("npm", "run", "storybook", "--prefix", cfg.FrontendDir)
+	return sh.Run("npm", "run", "storybook", npmPrefixArg, cfg.FrontendDir)
 }
 
 // ===============================
@@ -263,7 +265,7 @@ func (QC) Lint() error {
 		return err
 	}
 	fmt.Println("\n🔎 Running npm linter...")
-	return sh.RunV("npm", "run", "check", "--prefix", cfg.FrontendDir)
+	return sh.RunV("npm", "run", "check", npmPrefixArg, cfg.FrontendDir)
 }
 
 // Runs the npm linter with fix
@@ -275,7 +277,7 @@ func (QC) LintFix() error {
 		return err
 	}
 	fmt.Println("\n🔧 Running npm linter with fix...")
-	return sh.RunV("npm", "run", "check:fix", "--prefix", cfg.FrontendDir)
+	return sh.RunV("npm", "run", "check:fix", npmPrefixArg, cfg.FrontendDir)
 }
 
 // Runs the npm typechecker
@@ -287,7 +289,7 @@ func (QC) Typecheck() error {
 		return err
 	}
 	fmt.Println("\n🔎 Running npm typecheck...")
-	return sh.RunV("npm", "run", "typecheck", "--prefix", cfg.FrontendDir)
+	return sh.RunV("npm", "run", "typecheck", npmPrefixArg, cfg.FrontendDir)
 }
 
 // Checks npm package updates
@@ -394,7 +396,7 @@ func (Test) Frontend() error {
 		return err
 	}
 	fmt.Println("\n🔎 Running frontend tests...")
-	return sh.RunV("npm", "run", "test", "--prefix", cfg.FrontendDir)
+	return sh.RunV("npm", "run", "test", npmPrefixArg, cfg.FrontendDir)
 }
 
 // Runs frontend tests with coverage
@@ -406,7 +408,7 @@ func (Test) FrontendCoverage() error {
 		return err
 	}
 	fmt.Println("\n🔎 Running frontend tests with coverage report...")
-	return sh.RunV("npm", "run", "test", "--prefix", cfg.FrontendDir, "--", "--coverage")
+	return sh.RunV("npm", "run", "test", npmPrefixArg, cfg.FrontendDir, "--", "--coverage")
 }
 
 // Runs all tests

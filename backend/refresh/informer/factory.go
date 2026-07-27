@@ -480,7 +480,9 @@ func (f *Factory) Shutdown() error {
 	// Ensure any in-progress Start has completed before clearing fields.
 	// The context should already be cancelled by the caller, so the settle
 	// loop inside Start will return quickly.
-	f.once.Do(func() {})
+	f.once.Do(func() {
+		// Wait for a concurrent Start call without performing another initialization.
+	})
 
 	f.syncedMu.Lock()
 	f.synced = false

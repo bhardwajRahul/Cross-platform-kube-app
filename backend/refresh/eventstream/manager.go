@@ -102,7 +102,9 @@ func (m *Manager) Subscribe(scope string) (<-chan StreamEvent, context.CancelFun
 	id, sub, ok := m.addSubscriberLocked(scope)
 	m.mu.Unlock()
 	if !ok {
-		return nil, func() {}
+		return nil, func() {
+			// No subscriber was created, so cancellation has no work to perform.
+		}
 	}
 
 	return sub.ch, func() { m.dropSubscriber(scope, id, sub) }
@@ -120,7 +122,9 @@ func (m *Manager) SubscribeWithResume(
 	if since == 0 {
 		ch, cancel := m.Subscribe(scope)
 		if ch == nil {
-			return nil, nil, func() {}, false, true
+			return nil, nil, func() {
+				// No subscriber was created, so cancellation has no work to perform.
+			}, false, true
 		}
 		return nil, ch, cancel, true, false
 	}
@@ -139,7 +143,9 @@ func (m *Manager) SubscribeWithResume(
 	id, sub, limitOK := m.addSubscriberLocked(scope)
 	m.mu.Unlock()
 	if !limitOK {
-		return nil, nil, func() {}, false, true
+		return nil, nil, func() {
+			// No subscriber was created, so cancellation has no work to perform.
+		}, false, true
 	}
 
 	events := make([]StreamEvent, 0, len(items))

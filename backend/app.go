@@ -196,9 +196,11 @@ func NewApp() *App {
 		shellSessions:            make(map[string]*shellSession),
 		portForwardSessions:      make(map[string]*portForwardSessionInternal),
 		runtimeOperations:        newRuntimeOperationRegistry(),
-		eventEmitter:             func(context.Context, string, ...interface{}) {},
-		clusterHealth:            make(map[string]ClusterHealthState),
-		clusterScopeRevisions:    make(map[string]uint64),
+		eventEmitter: func(context.Context, string, ...interface{}) {
+			// Events are ignored until the runtime emitter is installed.
+		},
+		clusterHealth:         make(map[string]ClusterHealthState),
+		clusterScopeRevisions: make(map[string]uint64),
 	}
 	app.kubeClientInitializer = func() error {
 		return app.initKubernetesClient()

@@ -103,7 +103,9 @@ func permissionCheckContext(ctx context.Context) (context.Context, context.Cance
 		ctx = context.Background()
 	}
 	if _, hasDeadline := ctx.Deadline(); hasDeadline {
-		return ctx, func() {}
+		return ctx, func() {
+			// The caller owns the existing deadline; no derived context needs cancellation.
+		}
 	}
 	return context.WithTimeout(ctx, config.PermissionCheckTimeout)
 }

@@ -19,6 +19,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
+const (
+	connectionRefusedReason = "connection refused"
+	connectionResetReason   = "connection reset"
+)
+
 var fetchRetrySleep = time.Sleep
 
 // contextSleep allows tests to stub or override; defaults to a context-aware sleep.
@@ -228,11 +233,11 @@ func isRetryableFetchError(err error) (bool, string) {
 		}
 		if urlErr.Err != nil {
 			lowered := strings.ToLower(urlErr.Err.Error())
-			if strings.Contains(lowered, "connection refused") {
-				return true, "connection refused"
+			if strings.Contains(lowered, connectionRefusedReason) {
+				return true, connectionRefusedReason
 			}
-			if strings.Contains(lowered, "connection reset") {
-				return true, "connection reset"
+			if strings.Contains(lowered, connectionResetReason) {
+				return true, connectionResetReason
 			}
 			if strings.Contains(lowered, "no such host") {
 				return true, "dns lookup failure"
@@ -248,7 +253,7 @@ func isRetryableFetchError(err error) (bool, string) {
 	}
 
 	lowered := strings.ToLower(err.Error())
-	for _, token := range []string{"connection refused", "connection reset", "no such host", "server misbehaving", "i/o timeout", "tls handshake"} {
+	for _, token := range []string{connectionRefusedReason, connectionResetReason, "no such host", "server misbehaving", "i/o timeout", "tls handshake"} {
 		if strings.Contains(lowered, token) {
 			return true, token
 		}

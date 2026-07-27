@@ -7,6 +7,8 @@ import (
 	"github.com/luxury-yacht/app/backend/refresh"
 )
 
+const namespaceSnapshotScopePrefix = "namespace:"
+
 // NamespaceSnapshotScope is the parsed identity for namespace-scoped snapshot
 // builders. Namespace is empty only when AllNamespaces is true.
 type NamespaceSnapshotScope struct {
@@ -27,7 +29,7 @@ func parseNamespaceSnapshotScope(scope, requiredMessage string) (NamespaceSnapsh
 		return NamespaceSnapshotScope{
 			ClusterID:      clusterID,
 			AllNamespaces:  true,
-			CanonicalScope: refresh.JoinClusterScope(clusterID, "namespace:all"),
+			CanonicalScope: refresh.JoinClusterScope(clusterID, namespaceSnapshotScopePrefix+"all"),
 		}, nil
 	}
 
@@ -38,15 +40,15 @@ func parseNamespaceSnapshotScope(scope, requiredMessage string) (NamespaceSnapsh
 	return NamespaceSnapshotScope{
 		ClusterID:      clusterID,
 		Namespace:      namespace,
-		CanonicalScope: refresh.JoinClusterScope(clusterID, "namespace:"+namespace),
+		CanonicalScope: refresh.JoinClusterScope(clusterID, namespaceSnapshotScopePrefix+namespace),
 	}, nil
 }
 
 func parseNamespaceScopeValue(scope, requiredMessage string) (string, error) {
 	_, scopeValue := refresh.SplitClusterScope(scope)
 	namespace := strings.TrimSpace(scopeValue)
-	if strings.HasPrefix(namespace, "namespace:") {
-		namespace = strings.TrimPrefix(namespace, "namespace:")
+	if strings.HasPrefix(namespace, namespaceSnapshotScopePrefix) {
+		namespace = strings.TrimPrefix(namespace, namespaceSnapshotScopePrefix)
 		namespace = strings.TrimLeft(namespace, ":")
 	}
 	namespace = strings.TrimSpace(namespace)
@@ -62,8 +64,8 @@ func isAllNamespaceScope(scope string) bool {
 	if value == "" {
 		return false
 	}
-	if strings.HasPrefix(value, "namespace:") {
-		value = strings.TrimLeft(strings.TrimPrefix(value, "namespace:"), ":")
+	if strings.HasPrefix(value, namespaceSnapshotScopePrefix) {
+		value = strings.TrimLeft(strings.TrimPrefix(value, namespaceSnapshotScopePrefix), ":")
 	}
 	switch value {
 	case "all", "*":

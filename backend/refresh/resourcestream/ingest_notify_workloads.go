@@ -156,7 +156,9 @@ func (s jobPodOwnerHealBundleSink) UpsertBundle(bundle ingest.Bundle) {
 	)
 }
 
-func (s jobPodOwnerHealBundleSink) DeleteBundle(ingest.Bundle) {}
+func (s jobPodOwnerHealBundleSink) DeleteBundle(ingest.Bundle) {
+	// Deletion requires no owner-healing rewrite because the pod row is removed.
+}
 
 // workloadNotifyCatalogSink adapts the workloads signal-only broadcast to an ingest
 // Catalog-half Sink. The reflector delivers the projected catalog Summary (never the source

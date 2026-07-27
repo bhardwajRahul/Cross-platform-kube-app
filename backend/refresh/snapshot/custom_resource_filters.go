@@ -17,15 +17,17 @@ type firstClassCRDKey struct {
 	kind     string
 }
 
+const firstClassGatewayAPIGroup = "gateway.networking.k8s.io"
+
 var firstClassCustomResourceDefinitions = map[firstClassCRDKey]struct{}{
-	{group: "gateway.networking.k8s.io", resource: "gatewayclasses", kind: "GatewayClass"}:         {},
-	{group: "gateway.networking.k8s.io", resource: "gateways", kind: gatewaypkg.Identity.Kind}:     {},
-	{group: "gateway.networking.k8s.io", resource: "httproutes", kind: httproutepkg.Identity.Kind}: {},
-	{group: "gateway.networking.k8s.io", resource: "grpcroutes", kind: grpcroutepkg.Identity.Kind}: {},
-	{group: "gateway.networking.k8s.io", resource: "tlsroutes", kind: tlsroutepkg.Identity.Kind}:   {},
-	{group: "gateway.networking.k8s.io", resource: "listenersets", kind: "ListenerSet"}:            {},
-	{group: "gateway.networking.k8s.io", resource: "referencegrants", kind: "ReferenceGrant"}:      {},
-	{group: "gateway.networking.k8s.io", resource: "backendtlspolicies", kind: "BackendTLSPolicy"}: {},
+	{group: firstClassGatewayAPIGroup, resource: "gatewayclasses", kind: "GatewayClass"}:         {},
+	{group: firstClassGatewayAPIGroup, resource: "gateways", kind: gatewaypkg.Identity.Kind}:     {},
+	{group: firstClassGatewayAPIGroup, resource: "httproutes", kind: httproutepkg.Identity.Kind}: {},
+	{group: firstClassGatewayAPIGroup, resource: "grpcroutes", kind: grpcroutepkg.Identity.Kind}: {},
+	{group: firstClassGatewayAPIGroup, resource: "tlsroutes", kind: tlsroutepkg.Identity.Kind}:   {},
+	{group: firstClassGatewayAPIGroup, resource: "listenersets", kind: "ListenerSet"}:            {},
+	{group: firstClassGatewayAPIGroup, resource: "referencegrants", kind: "ReferenceGrant"}:      {},
+	{group: firstClassGatewayAPIGroup, resource: "backendtlspolicies", kind: "BackendTLSPolicy"}: {},
 }
 
 // IsFirstClassCustomResourceDefinition reports whether a CRD is rendered by a

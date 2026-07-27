@@ -59,6 +59,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+const builtinStorageAPIGroup = "storage.k8s.io"
+
 // BuiltinResource describes one built-in Kubernetes resource identity.
 type BuiltinResource struct {
 	Group      string
@@ -122,9 +124,9 @@ var BuiltinResources = []BuiltinResource{
 	fromIdentity(poddisruptionbudget.Identity),
 
 	fromIdentity(storageclass.Identity),
-	builtin("storage.k8s.io", "v1", "CSIDriver", "csidrivers", false),               // catalog-only: no resource package
-	builtin("storage.k8s.io", "v1", "CSINode", "csinodes", false),                   // catalog-only: no resource package
-	builtin("storage.k8s.io", "v1", "VolumeAttachment", "volumeattachments", false), // catalog-only: no resource package
+	builtin(builtinStorageAPIGroup, "v1", "CSIDriver", "csidrivers", false),               // catalog-only: no resource package
+	builtin(builtinStorageAPIGroup, "v1", "CSINode", "csinodes", false),                   // catalog-only: no resource package
+	builtin(builtinStorageAPIGroup, "v1", "VolumeAttachment", "volumeattachments", false), // catalog-only: no resource package
 
 	fromIdentity(admission.MutatingIdentity),
 	fromIdentity(admission.ValidatingIdentity),

@@ -38,6 +38,11 @@ const (
 	BackendPortForward    BackendAction = "startPortForward"
 	BackendDebugContainer BackendAction = "createDebugContainer"
 	BackendRollback       BackendAction = "rollback"
+
+	scaleFrontendPermission = "target workload scale update"
+	scaleBackendPermission  = "resourcePermissionCheck(target-workload-scale, update)"
+	scaleDeniedReason       = "scale permission state"
+	nodePatchPermissionID   = "node-patch"
 )
 
 type PermissionTemplate struct {
@@ -93,13 +98,13 @@ var Definitions = []Definition{
 	{Key: "resume", ID: Resume, Label: "Resume", BackendAction: BackendSuspend, PayloadFields: []PayloadField{"suspend"}, Permission: fixedPermission("suspend", "suspend", "patch", "batch", "v1", "CronJob", "", true, true), FrontendPermission: "batch/v1 CronJob patch", BackendPermission: "resourcePermissionCheck(cronjob, patch)", DeniedReason: "suspend permission state"},
 	{Key: "restart", ID: Restart, Label: "Restart", BackendAction: BackendRestart, Permission: sourcePermission("restart", "restart", "patch"), FrontendPermission: "target workload patch", BackendPermission: "resourcePermissionCheck(target-workload, patch)", DeniedReason: "restart permission state"},
 	{Key: "rollback", ID: Rollback, Label: "Rollback", BackendAction: BackendRollback, PayloadFields: []PayloadField{"revision"}, Permission: sourcePermission("rollback", "rollback", "update"), FrontendPermission: "target workload update", BackendPermission: "resourcePermissionCheck(target-workload, update)", DeniedReason: "rollback permission state"},
-	{Key: "scale", ID: Scale, Label: "Scale", BackendAction: BackendScale, PayloadFields: []PayloadField{"replicas"}, Permission: &PermissionTemplate{ID: "scale", Slot: "scale", Verb: "update", Subresource: "scale", Namespace: true, Name: true}, FrontendPermission: "target workload scale update", BackendPermission: "resourcePermissionCheck(target-workload-scale, update)", DeniedReason: "scale permission state"},
-	{Key: "scaleToZero", ID: ScaleToZero, Label: "Scale to 0", BackendAction: BackendScale, PayloadFields: []PayloadField{"replicas"}, Permission: &PermissionTemplate{ID: "scale", Slot: "scale", Verb: "update", Subresource: "scale", Namespace: true, Name: true}, FrontendPermission: "target workload scale update", BackendPermission: "resourcePermissionCheck(target-workload-scale, update)", DeniedReason: "scale permission state"},
-	{Key: "resumeFromZero", ID: ResumeFromZero, Label: "Resume from 0", BackendAction: BackendScale, PayloadFields: []PayloadField{"replicas"}, Permission: &PermissionTemplate{ID: "scale", Slot: "scale", Verb: "update", Subresource: "scale", Namespace: true, Name: true}, FrontendPermission: "target workload scale update", BackendPermission: "resourcePermissionCheck(target-workload-scale, update)", DeniedReason: "scale permission state"},
+	{Key: "scale", ID: Scale, Label: "Scale", BackendAction: BackendScale, PayloadFields: []PayloadField{"replicas"}, Permission: &PermissionTemplate{ID: "scale", Slot: "scale", Verb: "update", Subresource: "scale", Namespace: true, Name: true}, FrontendPermission: scaleFrontendPermission, BackendPermission: scaleBackendPermission, DeniedReason: scaleDeniedReason},
+	{Key: "scaleToZero", ID: ScaleToZero, Label: "Scale to 0", BackendAction: BackendScale, PayloadFields: []PayloadField{"replicas"}, Permission: &PermissionTemplate{ID: "scale", Slot: "scale", Verb: "update", Subresource: "scale", Namespace: true, Name: true}, FrontendPermission: scaleFrontendPermission, BackendPermission: scaleBackendPermission, DeniedReason: scaleDeniedReason},
+	{Key: "resumeFromZero", ID: ResumeFromZero, Label: "Resume from 0", BackendAction: BackendScale, PayloadFields: []PayloadField{"replicas"}, Permission: &PermissionTemplate{ID: "scale", Slot: "scale", Verb: "update", Subresource: "scale", Namespace: true, Name: true}, FrontendPermission: scaleFrontendPermission, BackendPermission: scaleBackendPermission, DeniedReason: scaleDeniedReason},
 	{Key: "portForward", ID: PortForward, Label: "Port Forward", BackendAction: BackendPortForward, PayloadFields: []PayloadField{"portForward"}, Permission: fixedPermission("port-forward", "portForward", "create", "", "v1", "Pod", "portforward", true, false), FrontendPermission: "core/v1 Pod portforward create", BackendPermission: "resourcePermissionCheck(pod-portforward, create)", DeniedReason: "port-forward permission state"},
-	{Key: "cordon", ID: Cordon, Label: "Cordon", BackendAction: BackendCordon, Permission: fixedPermission("node-patch", "cordon", "patch", "", "v1", "Node", "", false, false), FrontendPermission: "core/v1 Node get and patch", BackendPermission: "resourcePermissionCheck(node, get) and resourcePermissionCheck(node, patch)", DeniedReason: "cordon permission state"},
-	{Key: "uncordon", ID: Uncordon, Label: "Uncordon", BackendAction: BackendUncordon, Permission: fixedPermission("node-patch", "cordon", "patch", "", "v1", "Node", "", false, false), FrontendPermission: "core/v1 Node get and patch", BackendPermission: "resourcePermissionCheck(node, get) and resourcePermissionCheck(node, patch)", DeniedReason: "cordon permission state"},
-	{Key: "drain", ID: Drain, Label: "Drain", BackendAction: BackendStartDrain, PayloadFields: []PayloadField{"drainOptions"}, Permission: fixedPermission("node-patch", "drain", "patch", "", "v1", "Node", "", false, false), FrontendPermission: "core/v1 Node get+patch and Pod eviction create or Pod delete", BackendPermission: "resourcePermissionCheck(node, get) and resourcePermissionCheck(node, patch) and resourcePermissionCheck(pod-eviction, create optional) and resourcePermissionCheck(pod-delete, delete optional)", DeniedReason: "drain permission state"},
+	{Key: "cordon", ID: Cordon, Label: "Cordon", BackendAction: BackendCordon, Permission: fixedPermission(nodePatchPermissionID, "cordon", "patch", "", "v1", "Node", "", false, false), FrontendPermission: "core/v1 Node get and patch", BackendPermission: "resourcePermissionCheck(node, get) and resourcePermissionCheck(node, patch)", DeniedReason: "cordon permission state"},
+	{Key: "uncordon", ID: Uncordon, Label: "Uncordon", BackendAction: BackendUncordon, Permission: fixedPermission(nodePatchPermissionID, "cordon", "patch", "", "v1", "Node", "", false, false), FrontendPermission: "core/v1 Node get and patch", BackendPermission: "resourcePermissionCheck(node, get) and resourcePermissionCheck(node, patch)", DeniedReason: "cordon permission state"},
+	{Key: "drain", ID: Drain, Label: "Drain", BackendAction: BackendStartDrain, PayloadFields: []PayloadField{"drainOptions"}, Permission: fixedPermission(nodePatchPermissionID, "drain", "patch", "", "v1", "Node", "", false, false), FrontendPermission: "core/v1 Node get+patch and Pod eviction create or Pod delete", BackendPermission: "resourcePermissionCheck(node, get) and resourcePermissionCheck(node, patch) and resourcePermissionCheck(pod-eviction, create optional) and resourcePermissionCheck(pod-delete, delete optional)", DeniedReason: "drain permission state"},
 	{Key: "delete", ID: Delete, Label: "Delete", BackendAction: BackendDelete, Permission: sourcePermission("delete", "delete", "delete"), FrontendPermission: "target object delete", BackendPermission: "resourcePermissionCheck(target, delete)", DeniedReason: "delete permission state"},
 }
 
@@ -124,7 +129,7 @@ var BackendOnlyActions = []BackendActionDefinition{
 
 var NodePermissions = []PermissionTemplate{
 	*fixedPermission("node-get", "cordon", "get", "", "v1", "Node", "", false, false),
-	*fixedPermission("node-patch", "cordon", "patch", "", "v1", "Node", "", false, false),
+	*fixedPermission(nodePatchPermissionID, "cordon", "patch", "", "v1", "Node", "", false, false),
 	*fixedPermission("pod-eviction-create", "drain", "create", "", "v1", "Pod", "eviction", false, false),
 	*fixedPermission("pod-delete", "drain", "delete", "", "v1", "Pod", "", false, false),
 }

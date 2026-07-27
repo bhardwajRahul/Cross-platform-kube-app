@@ -18,6 +18,8 @@ import (
 	"github.com/luxury-yacht/app/backend/refresh/snapshot"
 )
 
+const coreNamespacesPermissionResource = "core/namespaces"
+
 // registrationDeps bundles dependencies needed to register refresh domains.
 type registrationDeps struct {
 	registry        *domain.Registry      // Domain registry for managing domain lifecycles
@@ -314,7 +316,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 		// overview instead of a permission-denied placeholder.
 		listWatchRegistration(listWatchDomainConfig{
 			name:          "cluster-overview",
-			issueResource: "core/namespaces",
+			issueResource: coreNamespacesPermissionResource,
 			logGroup:      "",
 			logResource:   "nodes/namespaces",
 			checks: []listWatchCheck{
@@ -768,14 +770,14 @@ func namespacesRegistration(deps registrationDeps) domainRegistration {
 	}
 	return listWatchRegistration(listWatchDomainConfig{
 		name:          "namespaces",
-		issueResource: "core/namespaces",
+		issueResource: coreNamespacesPermissionResource,
 		logGroup:      "",
 		logResource:   "namespaces",
 		checks: []listWatchCheck{
 			{group: "", resource: "namespaces"},
 		},
 		registerInformer: registerScopedOrUnscoped,
-		deniedReason:     "core/namespaces",
+		deniedReason:     coreNamespacesPermissionResource,
 	})
 }
 
