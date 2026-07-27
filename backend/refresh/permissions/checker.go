@@ -310,9 +310,9 @@ func (c *Checker) canInNamespace(ctx context.Context, group, resource, verb, nam
 func (c *Checker) triggerBackgroundRefresh(ctx context.Context, key, group, resource, verb, namespace string) {
 	// Detach cancellation so stale-while-revalidate can finish after the caller
 	// returns, while retaining context values and bounding the background work.
-	ctx = ensureContext(ctx)
-	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), config.PermissionCheckTimeout)
+	refreshParentCtx := context.WithoutCancel(ensureContext(ctx))
 	go func() {
+		bgCtx, cancel := context.WithTimeout(refreshParentCtx, config.PermissionCheckTimeout)
 		defer cancel()
 		c.doBackgroundRefresh(bgCtx, key, group, resource, verb, namespace)
 	}()
