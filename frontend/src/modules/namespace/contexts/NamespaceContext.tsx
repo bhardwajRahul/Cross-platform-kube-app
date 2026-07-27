@@ -295,7 +295,8 @@ export const NamespaceProvider: React.FC<NamespaceProviderProps> = ({ children }
       let utilizationSummary: string;
 
       if (utilizationState === 'available') {
-        utilizationSummary = `${usageDisplay.cpu} CPU, ${usageDisplay.memory} memory${namespaceMetricsBanner ? ` (${namespaceMetricsBanner.message})` : ''}`;
+        const bannerSummary = namespaceMetricsBanner ? ` (${namespaceMetricsBanner.message})` : '';
+        utilizationSummary = `${usageDisplay.cpu} CPU, ${usageDisplay.memory} memory${bannerSummary}`;
       } else if (utilizationState === 'loading') {
         utilizationSummary = namespaceMetricsBanner?.message ?? 'Collecting';
       } else {

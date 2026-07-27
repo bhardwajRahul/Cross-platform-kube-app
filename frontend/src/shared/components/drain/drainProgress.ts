@@ -72,8 +72,7 @@ const POD_ERROR_PHASES: ReadonlySet<DrainEventPhase> = new Set<DrainEventPhase>(
 const isAsciiDigit = (character: string | undefined): boolean =>
   character !== undefined && character >= '0' && character <= '9';
 
-const isWhitespace = (character: string | undefined): boolean =>
-  character !== undefined && character.trim().length === 0;
+const isWhitespace = (character: string | undefined): boolean => character?.trim().length === 0;
 
 const STATUS_RANK: Record<DrainPodStatus, number> = {
   'in-progress': 0,

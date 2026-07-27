@@ -203,35 +203,46 @@ const formatTimestampForMode = (
   }
 };
 
-// Build a display label for a container, appending :init for init containers
-const formatContainerLabel = (container: string, isInit: boolean, isEphemeral: boolean): string => {
-  if (isInit) {
-    return `${container}:init`;
-  } else if (isEphemeral) {
-    return `${container} (debug)`;
-  } else {
-    return container;
+type LogContainerKind = 'regular' | 'init' | 'ephemeral';
+
+interface LogContainerTraits {
+  isInit?: boolean;
+  isEphemeral?: boolean;
+}
+
+const logContainerKind = (traits: LogContainerTraits): LogContainerKind => {
+  if (traits.isInit) {
+    return 'init';
   }
+  if (traits.isEphemeral) {
+    return 'ephemeral';
+  }
+  return 'regular';
 };
 
-const parseContainerLabel = (
-  label: string
-): { name: string; isInit: boolean; isEphemeral: boolean } => {
+const CONTAINER_LABEL_SUFFIX: Record<LogContainerKind, string> = {
+  regular: '',
+  init: ':init',
+  ephemeral: ' (debug)',
+};
+
+const formatContainerLabel = (container: string, kind: LogContainerKind): string =>
+  `${container}${CONTAINER_LABEL_SUFFIX[kind]}`;
+
+const parseContainerLabel = (label: string): { name: string; kind: LogContainerKind } => {
   if (label.endsWith(':init')) {
     return {
       name: label.slice(0, -':init'.length),
-      isInit: true,
-      isEphemeral: false,
+      kind: 'init',
     };
   }
   if (label.endsWith(' (debug)')) {
     return {
       name: label.slice(0, -' (debug)'.length),
-      isInit: false,
-      isEphemeral: true,
+      kind: 'ephemeral',
     };
   }
-  return { name: label, isInit: false, isEphemeral: false };
+  return { name: label, kind: 'regular' };
 };
 
 const POD_FILTER_PREFIX = 'pod:';
@@ -299,19 +310,15 @@ const toContainerFilterValue = (container: string): string =>
   `${CONTAINER_FILTER_PREFIX}${container}`;
 const toDebugContainerFilterValue = (container: string): string =>
   `${DEBUG_FILTER_PREFIX}${container}`;
-const toContainerFilterValueForKind = (
-  container: string,
-  isInit: boolean,
-  isEphemeral: boolean
-): string => {
-  if (isInit) {
-    return toInitContainerFilterValue(container);
-  } else if (isEphemeral) {
-    return toDebugContainerFilterValue(container);
-  } else {
-    return toContainerFilterValue(container);
-  }
+
+const CONTAINER_FILTER_VALUE: Record<LogContainerKind, (container: string) => string> = {
+  regular: toContainerFilterValue,
+  init: toInitContainerFilterValue,
+  ephemeral: toDebugContainerFilterValue,
 };
+
+const toContainerFilterValueForKind = (container: string, kind: LogContainerKind): string =>
+  CONTAINER_FILTER_VALUE[kind](container);
 
 const summarizeWorkloadSelection = (
   selectedValues: string[],
@@ -516,12 +523,12 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     [selectedFilters]
   );
   const handleSelectContainerFilter = useCallback(
-    (container: string, isInit: boolean, isEphemeral: boolean) => {
+    (container: string, kind: LogContainerKind) => {
       dispatch({
         type: 'SET_SELECTED_FILTERS',
         payload: logFilterSelectionForOnlyContainer(
           selectedFilters,
-          toContainerFilterValueForKind(container, isInit, isEphemeral)
+          toContainerFilterValueForKind(container, kind)
         ),
       });
     },
@@ -1349,11 +1356,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       const timestampPrefix = timestamp ? `[${timestamp}] ` : '';
 
       if (isWorkload) {
-        const containerLabel = formatContainerLabel(
-          entry.container,
-          entry.isInit,
-          Boolean(entry.isEphemeral)
-        );
+        const containerLabel = formatContainerLabel(entry.container, logContainerKind(entry));
         const formatted = `[${entry.pod}/${containerLabel}] ${displayContent}`;
         return timestampPrefix + formatted;
       }
@@ -1362,11 +1365,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
         selectedContainerFilterCount !== 1 &&
         !(selectedContainerFilterCount === 0 && singlePodSelectableContainerCount === 1)
       ) {
-        const containerLabel = formatContainerLabel(
-          entry.container,
-          entry.isInit,
-          Boolean(entry.isEphemeral)
-        );
+        const containerLabel = formatContainerLabel(entry.container, logContainerKind(entry));
         const formatted = `[${containerLabel}] ${displayContent}`;
         return timestampPrefix + formatted;
       }
@@ -1496,8 +1495,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
                       const parsedContainerLabel = parseContainerLabel(container);
                       handleSelectContainerFilter(
                         parsedContainerLabel.name,
-                        parsedContainerLabel.isInit,
-                        parsedContainerLabel.isEphemeral
+                        parsedContainerLabel.kind
                       );
                     })()
                   }
@@ -1550,8 +1548,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
                         const parsedContainerLabel = parseContainerLabel(containerLabel);
                         handleSelectContainerFilter(
                           parsedContainerLabel.name,
-                          parsedContainerLabel.isInit,
-                          parsedContainerLabel.isEphemeral
+                          parsedContainerLabel.kind
                         );
                       })()
                     }
@@ -1766,6 +1763,8 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       autoSizeMaxWidth: PARSED_METADATA_AUTOSIZE_MAX_WIDTH,
       render: (item: ParsedLogEntry) => {
         const container = item.container;
+        const containerKind = logContainerKind(item);
+        const containerLabel = container ? formatContainerLabel(container, containerKind) : '';
         return container ? (
           <button
             type="button"
@@ -1777,14 +1776,10 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
             }
             onClick={(event) => {
               event.stopPropagation();
-              handleSelectContainerFilter(
-                container,
-                Boolean(item.isInit),
-                Boolean(item.isEphemeral)
-              );
+              handleSelectContainerFilter(container, containerKind);
             }}
-            title={`Show only logs from container ${formatContainerLabel(container, Boolean(item.isInit), Boolean(item.isEphemeral))}`}
-            aria-label={`Show only logs from container ${formatContainerLabel(container, Boolean(item.isInit), Boolean(item.isEphemeral))}`}
+            title={`Show only logs from container ${containerLabel}`}
+            aria-label={`Show only logs from container ${containerLabel}`}
           >
             {container}
           </button>

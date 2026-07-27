@@ -217,10 +217,10 @@ const resolveObjectActionPermissions = (
 
 interface NavigationHandlerOptions {
   object: ObjectActionData;
-  onOpen?: ObjectActionControllerOptions['onOpen'];
-  onOpenObjectMap?: ObjectActionControllerOptions['onOpenObjectMap'];
-  onNavigateView?: ObjectActionControllerOptions['onNavigateView'];
-  onViewInvolvedObject?: ObjectActionControllerOptions['onViewInvolvedObject'];
+  onOpen: ObjectActionControllerOptions['onOpen'];
+  onOpenObjectMap: ObjectActionControllerOptions['onOpenObjectMap'];
+  onNavigateView: ObjectActionControllerOptions['onNavigateView'];
+  onViewInvolvedObject: ObjectActionControllerOptions['onViewInvolvedObject'];
   openWithObject: ReturnType<typeof useObjectPanel>['openWithObject'];
   navigateToView: ReturnType<typeof useNavigateToView>['navigateToView'];
 }
@@ -263,7 +263,7 @@ interface ActionExecutionOptions {
   object: ObjectActionData;
   action: string;
   execute: () => Promise<unknown>;
-  onAfterAction?: ObjectActionControllerOptions['onAfterAction'];
+  onAfterAction: ObjectActionControllerOptions['onAfterAction'];
 }
 
 const executeObjectAction = async ({
@@ -356,7 +356,7 @@ interface ControllerHandlerOptions extends NavigationHandlerOptions {
   handlerOverrides?: ObjectActionHandlers;
   perObjectHandlers?: PerObjectHandlers;
   setters: DefaultHandlerSetters;
-  onAfterAction?: ObjectActionControllerOptions['onAfterAction'];
+  onAfterAction: ObjectActionControllerOptions['onAfterAction'];
 }
 
 const buildControllerHandlers = (options: ControllerHandlerOptions): ObjectActionHandlers => {

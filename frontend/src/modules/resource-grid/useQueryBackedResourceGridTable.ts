@@ -450,7 +450,10 @@ export function useAnchorOnUnmatchedFocusRequest<TRow>({
     let target: string;
 
     if (request) {
-      target = `${request.kind} ${request.namespace ? `${request.namespace}/` : ''}${request.name}`;
+      const namespacedName = request.namespace
+        ? `${request.namespace}/${request.name}`
+        : request.name;
+      target = `${request.kind} ${namespacedName}`;
     } else {
       target = 'The requested object';
     }

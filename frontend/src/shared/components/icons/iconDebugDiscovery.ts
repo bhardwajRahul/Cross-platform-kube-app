@@ -51,7 +51,7 @@ const parseSvgSize = (source: string): { gridSize: string; defaultSize: string }
   const height = source.match(/\bheight=["']([^"']+)["']/)?.[1];
   let gridSize: string;
 
-  if (viewBoxParts && viewBoxParts.length === 4) {
+  if (viewBoxParts?.length === 4) {
     gridSize = `${viewBoxParts[2]}x${viewBoxParts[3]}`;
   } else if (width && height) {
     gridSize = `${width}x${height}`;

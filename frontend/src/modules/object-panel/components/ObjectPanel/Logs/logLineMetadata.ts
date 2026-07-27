@@ -5,7 +5,7 @@ export interface BracketedLogPrefix {
 }
 
 export const parseBracketedLogPrefix = (line: string): BracketedLogPrefix | null => {
-  if (line[0] !== '[') {
+  if (!line.startsWith('[')) {
     return null;
   }
 

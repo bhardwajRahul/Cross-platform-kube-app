@@ -67,7 +67,8 @@ const COLUMN_SIZING: ColumnSizingMap = {
 
 const workloadNameFromOwner = (pod: PodSnapshotEntry) => {
   if (pod.ownerName) {
-    return `${pod.ownerName}${pod.ownerKind ? ` (${pod.ownerKind})` : ''}`;
+    const ownerKindSuffix = pod.ownerKind ? ` (${pod.ownerKind})` : '';
+    return `${pod.ownerName}${ownerKindSuffix}`;
   } else {
     return '—';
   }
