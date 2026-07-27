@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"runtime"
@@ -294,70 +295,44 @@ func addDebugOverlayMenuItem(debugMenu *menu.Menu, app *App, label string, key s
 // createWindowMenu creates the Window menu with OS-specific items
 func createWindowMenu(appMenu *menu.Menu, app *App) {
 	windowMenu := appMenu.AddSubmenu("Window")
+	addWindowMenuAction(windowMenu, app, "Minimize", keys.CmdOrCtrl("m"), wailsRuntime.WindowMinimise)
+	switch runtime.GOOS {
+	case "darwin":
+		addDarwinWindowMenu(windowMenu, app)
+	case "windows":
+		addWindowMenuAction(windowMenu, app, "Maximize", nil, wailsRuntime.WindowMaximise)
+		addWindowMenuAction(windowMenu, app, "Restore", nil, wailsRuntime.WindowUnmaximise)
+	default: // linux and other unix-like systems
+		addWindowMenuAction(windowMenu, app, "Maximize", nil, wailsRuntime.WindowToggleMaximise)
+	}
+}
 
-	// Minimize is common to all platforms
-	windowMenu.AddText("Minimize", keys.CmdOrCtrl("m"), func(_ *menu.CallbackData) {
+func addWindowMenuAction(windowMenu *menu.Menu, app *App, label string, accelerator *keys.Accelerator, action func(context.Context)) {
+	windowMenu.AddText(label, accelerator, func(_ *menu.CallbackData) {
 		go func() {
 			if app.Ctx != nil {
-				wailsRuntime.WindowMinimise(app.Ctx)
+				action(app.Ctx)
 			}
 		}()
 	})
+}
 
-	switch runtime.GOOS {
-	case "darwin":
-		// macOS specific Window menu items
-		windowMenu.AddText("Zoom", nil, func(_ *menu.CallbackData) {
-			go func() {
-				if app.Ctx != nil {
-					wailsRuntime.WindowToggleMaximise(app.Ctx)
-				}
-			}()
-		})
+func addDarwinWindowMenu(windowMenu *menu.Menu, app *App) {
+	addWindowMenuAction(windowMenu, app, "Zoom", nil, wailsRuntime.WindowToggleMaximise)
+	windowMenu.AddSeparator()
+	windowMenu.AddText("Bring All to Front", nil, func(_ *menu.CallbackData) {
+		go bringAllWindowsToFront(app)
+	})
+	windowMenu.AddSeparator()
+}
 
-		windowMenu.AddSeparator()
-
-		windowMenu.AddText("Bring All to Front", nil, func(_ *menu.CallbackData) {
-			go func() {
-				if app.Ctx != nil {
-					wailsRuntime.WindowShow(app.Ctx)
-					wailsRuntime.WindowSetAlwaysOnTop(app.Ctx, true)
-					wailsRuntime.WindowSetAlwaysOnTop(app.Ctx, false)
-				}
-			}()
-		})
-
-		// Separator for macOS to insert "Enter Full Screen" and window list
-		windowMenu.AddSeparator()
-
-	case "windows":
-		// Windows specific Window menu items
-		windowMenu.AddText("Maximize", nil, func(_ *menu.CallbackData) {
-			go func() {
-				if app.Ctx != nil {
-					wailsRuntime.WindowMaximise(app.Ctx)
-				}
-			}()
-		})
-
-		windowMenu.AddText("Restore", nil, func(_ *menu.CallbackData) {
-			go func() {
-				if app.Ctx != nil {
-					wailsRuntime.WindowUnmaximise(app.Ctx)
-				}
-			}()
-		})
-
-	default: // linux and other unix-like systems
-		// Linux specific Window menu items
-		windowMenu.AddText("Maximize", nil, func(_ *menu.CallbackData) {
-			go func() {
-				if app.Ctx != nil {
-					wailsRuntime.WindowToggleMaximise(app.Ctx)
-				}
-			}()
-		})
+func bringAllWindowsToFront(app *App) {
+	if app.Ctx == nil {
+		return
 	}
+	wailsRuntime.WindowShow(app.Ctx)
+	wailsRuntime.WindowSetAlwaysOnTop(app.Ctx, true)
+	wailsRuntime.WindowSetAlwaysOnTop(app.Ctx, false)
 }
 
 // createHelpMenu creates the Help menu for Windows and Linux (macOS uses the app menu instead)

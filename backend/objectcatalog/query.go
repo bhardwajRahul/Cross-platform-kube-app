@@ -249,35 +249,59 @@ func countMatchingDescriptorsWithOptions(descriptors []Descriptor, matcher kindM
 	if matcher == nil && !opts.CustomOnly && len(opts.Groups) == 0 && len(opts.ResourceScopes) == 0 {
 		return len(descriptors)
 	}
+	descriptorMatcher := newDescriptorQueryMatcher(matcher, opts)
 	count := 0
-	groups := make(map[string]struct{}, len(opts.Groups))
-	for _, group := range normalizeCatalogAPIGroups(opts.Groups) {
-		groups[group] = struct{}{}
-	}
-	resourceScopes := make(map[string]struct{}, len(opts.ResourceScopes))
-	for _, scope := range normalizeCatalogResourceScopes(opts.ResourceScopes) {
-		resourceScopes[scope] = struct{}{}
-	}
 	for _, desc := range descriptors {
-		if opts.CustomOnly {
-			if _, builtin := catalogQueryBuiltinKeys[identityKey(desc.Group, desc.Version, desc.Kind)]; builtin {
-				continue
-			}
+		if descriptorMatcher.matches(desc) {
+			count++
 		}
-		if matcher != nil && !matcher(desc.Kind, desc.Group, desc.Version, desc.Resource) {
-			continue
-		}
-		if len(opts.Groups) > 0 {
-			if _, ok := groups[catalogAPIGroupFacetValue(desc.Group)]; !ok {
-				continue
-			}
-		}
-		if len(opts.ResourceScopes) > 0 {
-			if _, ok := resourceScopes[strings.ToLower(string(desc.Scope))]; !ok {
-				continue
-			}
-		}
-		count++
 	}
 	return count
+}
+
+type descriptorQueryMatcher struct {
+	kindMatcher    kindMatcher
+	customOnly     bool
+	filterGroups   bool
+	filterScopes   bool
+	groups         map[string]struct{}
+	resourceScopes map[string]struct{}
+}
+
+func newDescriptorQueryMatcher(matcher kindMatcher, opts QueryOptions) descriptorQueryMatcher {
+	result := descriptorQueryMatcher{
+		kindMatcher: matcher, customOnly: opts.CustomOnly,
+		filterGroups: len(opts.Groups) > 0, filterScopes: len(opts.ResourceScopes) > 0,
+		groups: make(map[string]struct{}, len(opts.Groups)), resourceScopes: make(map[string]struct{}, len(opts.ResourceScopes)),
+	}
+	for _, group := range normalizeCatalogAPIGroups(opts.Groups) {
+		result.groups[group] = struct{}{}
+	}
+	for _, scope := range normalizeCatalogResourceScopes(opts.ResourceScopes) {
+		result.resourceScopes[scope] = struct{}{}
+	}
+	return result
+}
+
+func (m descriptorQueryMatcher) matches(desc Descriptor) bool {
+	if m.customOnly && descriptorIsBuiltin(desc) {
+		return false
+	}
+	if m.kindMatcher != nil && !m.kindMatcher(desc.Kind, desc.Group, desc.Version, desc.Resource) {
+		return false
+	}
+	if m.filterGroups && !stringSetContains(m.groups, catalogAPIGroupFacetValue(desc.Group)) {
+		return false
+	}
+	return !m.filterScopes || stringSetContains(m.resourceScopes, strings.ToLower(string(desc.Scope)))
+}
+
+func descriptorIsBuiltin(desc Descriptor) bool {
+	_, builtin := catalogQueryBuiltinKeys[identityKey(desc.Group, desc.Version, desc.Kind)]
+	return builtin
+}
+
+func stringSetContains(values map[string]struct{}, value string) bool {
+	_, ok := values[value]
+	return ok
 }

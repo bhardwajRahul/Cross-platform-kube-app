@@ -210,45 +210,62 @@ func domainReadinessResources(registrations []domainRegistration) map[string][]s
 	compositions := domainpermissions.CompositionByDomain()
 	result := make(map[string][]string, len(registrations))
 	for _, registration := range registrations {
-		seen := make(map[string]struct{})
-		add := func(group, resource string) {
-			seen[permissions.ResourceKey(group, resource)] = struct{}{}
-		}
+		resources := make(readinessResourceSet)
 		if composition, ok := compositions[registration.name]; ok {
-			for _, resource := range composition.Runtime {
-				add(resource.Group, resource.Resource)
-			}
-			for _, resource := range composition.Stream {
-				add(resource.Group, resource.Resource)
-			}
+			resources.addComposition(composition.Runtime)
+			resources.addComposition(composition.Stream)
 		}
-		if registration.list != nil {
-			for _, check := range registration.list.checks {
-				add(check.group, check.resource)
-			}
-		}
-		if registration.listWatch != nil {
-			for _, check := range registration.listWatch.checks {
-				add(check.group, check.resource)
-			}
-		}
-		for _, check := range registration.preflightList {
-			add(check.group, check.resource)
-		}
-		for _, check := range registration.preflightListWatch {
-			add(check.group, check.resource)
-		}
-		if len(seen) == 0 {
+		resources.addRegistration(registration)
+		if len(resources) == 0 {
 			continue
 		}
-		keys := make([]string, 0, len(seen))
-		for key := range seen {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		result[registration.name] = keys
+		result[registration.name] = resources.sorted()
 	}
 	return result
+}
+
+type readinessResourceSet map[string]struct{}
+
+func (s readinessResourceSet) add(group, resource string) {
+	s[permissions.ResourceKey(group, resource)] = struct{}{}
+}
+
+func (s readinessResourceSet) addComposition(resources []domainpermissions.Resource) {
+	for _, resource := range resources {
+		s.add(resource.Group, resource.Resource)
+	}
+}
+
+func (s readinessResourceSet) addRegistration(registration domainRegistration) {
+	if registration.list != nil {
+		s.addListChecks(registration.list.checks)
+	}
+	if registration.listWatch != nil {
+		s.addListWatchChecks(registration.listWatch.checks)
+	}
+	s.addListChecks(registration.preflightList)
+	s.addListWatchChecks(registration.preflightListWatch)
+}
+
+func (s readinessResourceSet) addListChecks(checks []listCheck) {
+	for _, check := range checks {
+		s.add(check.group, check.resource)
+	}
+}
+
+func (s readinessResourceSet) addListWatchChecks(checks []listWatchCheck) {
+	for _, check := range checks {
+		s.add(check.group, check.resource)
+	}
+}
+
+func (s readinessResourceSet) sorted() []string {
+	keys := make([]string, 0, len(s))
+	for key := range s {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // domainRegistrations returns the ordered domain registration table.

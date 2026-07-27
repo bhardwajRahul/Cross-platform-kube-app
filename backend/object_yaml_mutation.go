@@ -185,42 +185,12 @@ func prepareMutationContextWithDependencies(
 	selectionKey string,
 	req ObjectYAMLMutationRequest,
 ) (*mutationContext, error) {
-	if deps.KubernetesClient == nil || deps.DynamicClient == nil {
-		return nil, fmt.Errorf("kubernetes client not initialized")
-	}
-	if ctx == nil {
-		ctx = deps.Context
-		if ctx == nil {
-			ctx = context.Background()
-		}
-	}
-
-	trimmedBaseYAML := strings.TrimSpace(req.BaseYAML)
-	trimmedYAML := strings.TrimSpace(req.YAML)
-	if trimmedBaseYAML == "" || trimmedYAML == "" {
-		return nil, fmt.Errorf("baseline YAML and edited YAML are required")
-	}
-
-	if strings.TrimSpace(req.Kind) == "" || strings.TrimSpace(req.APIVersion) == "" {
-		return nil, fmt.Errorf("apiVersion and kind are required")
-	}
-	if strings.TrimSpace(req.Name) == "" {
-		return nil, fmt.Errorf("metadata.name is required")
-	}
-
-	base, err := parseYAMLToUnstructured(trimmedBaseYAML)
+	ctx, err := objectMutationContext(ctx, deps)
 	if err != nil {
 		return nil, err
 	}
-	desired, err := parseYAMLToUnstructured(trimmedYAML)
+	base, desired, err := parseMutationObjects(req)
 	if err != nil {
-		return nil, err
-	}
-
-	if err := validateMutationObject(base, req, "baseline YAML"); err != nil {
-		return nil, err
-	}
-	if err := validateMutationObject(desired, req, "edited YAML"); err != nil {
 		return nil, err
 	}
 
@@ -229,66 +199,126 @@ func prepareMutationContextWithDependencies(
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve resource mapping for %s: %w", gvk.String(), err)
 	}
-
-	var resource dynamic.ResourceInterface
-	if isNamespaced {
-		namespace := desired.GetNamespace()
-		if namespace == "" {
-			return nil, fmt.Errorf("namespaced resources require metadata.namespace")
-		}
-		resource = deps.DynamicClient.Resource(gvr).Namespace(namespace)
-	} else {
-		resource = deps.DynamicClient.Resource(gvr)
-		desired.SetNamespace("")
+	resource, err := mutationResourceForObject(deps.DynamicClient, gvr, isNamespaced, desired)
+	if err != nil {
+		return nil, err
 	}
-
 	current, err := resource.Get(ctx, req.Name, metav1.GetOptions{})
 	if err != nil {
 		return nil, wrapKubernetesError(err, "failed to fetch live object")
 	}
-
-	if current.GetResourceVersion() == "" {
-		return nil, fmt.Errorf("live object is missing resourceVersion; cannot safely edit")
-	}
-
-	if req.UID != "" && string(current.GetUID()) != req.UID {
-		currentYAML, err := normalizeObjectYAML(current)
-		if err != nil {
-			return nil, err
-		}
-		return nil, &objectYAMLError{
-			Code:                   "ObjectUIDMismatch",
-			Message:                fmt.Sprintf("object identity changed since editing began: current uid is %s, editor tracked %s", current.GetUID(), req.UID),
-			CurrentYAML:            currentYAML,
-			CurrentResourceVersion: current.GetResourceVersion(),
-		}
-	}
-
-	if isNamespaced && current.GetNamespace() != desired.GetNamespace() {
-		return nil, fmt.Errorf("live object namespace %s does not match YAML namespace %s", namespaceLabel(current.GetNamespace()), namespaceLabel(desired.GetNamespace()))
+	if err := validateCurrentMutationObject(current, desired, req, isNamespaced); err != nil {
+		return nil, err
 	}
 
 	if err := objectyaml.EnforceFieldPolicy(base, desired); err != nil {
 		return nil, err
 	}
 	objectyaml.PreserveFields(base, desired, current)
-
 	patch, patchType, err := buildKubectlEditPatch(gvk, base, desired)
 	if err != nil {
 		return nil, err
 	}
 
 	return &mutationContext{
-		request:      req,
-		base:         base,
-		desired:      desired,
-		resource:     resource,
-		current:      current,
-		gvr:          gvr,
-		isNamespaced: isNamespaced,
-		patch:        patch,
-		patchType:    patchType,
+		request: req, base: base, desired: desired, resource: resource, current: current,
+		gvr: gvr, isNamespaced: isNamespaced, patch: patch, patchType: patchType,
 	}, nil
+}
+
+func objectMutationContext(ctx context.Context, deps common.Dependencies) (context.Context, error) {
+	if deps.KubernetesClient == nil || deps.DynamicClient == nil {
+		return nil, fmt.Errorf("kubernetes client not initialized")
+	}
+	if ctx != nil {
+		return ctx, nil
+	}
+	if deps.Context != nil {
+		return deps.Context, nil
+	}
+	return context.Background(), nil
+}
+
+func parseMutationObjects(req ObjectYAMLMutationRequest) (*unstructured.Unstructured, *unstructured.Unstructured, error) {
+	trimmedBaseYAML := strings.TrimSpace(req.BaseYAML)
+	trimmedYAML := strings.TrimSpace(req.YAML)
+	if trimmedBaseYAML == "" || trimmedYAML == "" {
+		return nil, nil, fmt.Errorf("baseline YAML and edited YAML are required")
+	}
+	if strings.TrimSpace(req.Kind) == "" || strings.TrimSpace(req.APIVersion) == "" {
+		return nil, nil, fmt.Errorf("apiVersion and kind are required")
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, nil, fmt.Errorf("metadata.name is required")
+	}
+
+	base, err := parseYAMLToUnstructured(trimmedBaseYAML)
+	if err != nil {
+		return nil, nil, err
+	}
+	desired, err := parseYAMLToUnstructured(trimmedYAML)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := validateMutationObject(base, req, "baseline YAML"); err != nil {
+		return nil, nil, err
+	}
+	if err := validateMutationObject(desired, req, "edited YAML"); err != nil {
+		return nil, nil, err
+	}
+	return base, desired, nil
+}
+
+func dynamicResourceForScope(client dynamic.Interface, gvr schema.GroupVersionResource, namespaced bool, namespace string) (dynamic.ResourceInterface, error) {
+	if namespaced {
+		if strings.TrimSpace(namespace) == "" {
+			return nil, fmt.Errorf("namespaced resources require metadata.namespace")
+		}
+		return client.Resource(gvr).Namespace(namespace), nil
+	}
+	return client.Resource(gvr), nil
+}
+
+func mutationResourceForObject(
+	client dynamic.Interface,
+	gvr schema.GroupVersionResource,
+	namespaced bool,
+	desired *unstructured.Unstructured,
+) (dynamic.ResourceInterface, error) {
+	resource, err := dynamicResourceForScope(client, gvr, namespaced, desired.GetNamespace())
+	if err != nil {
+		return nil, err
+	}
+	if !namespaced {
+		desired.SetNamespace("")
+	}
+	return resource, nil
+}
+
+func validateCurrentMutationObject(
+	current, desired *unstructured.Unstructured,
+	req ObjectYAMLMutationRequest,
+	isNamespaced bool,
+) error {
+	if current.GetResourceVersion() == "" {
+		return fmt.Errorf("live object is missing resourceVersion; cannot safely edit")
+	}
+	if req.UID != "" && string(current.GetUID()) != req.UID {
+		currentYAML, err := normalizeObjectYAML(current)
+		if err != nil {
+			return err
+		}
+		return &objectYAMLError{
+			Code:                   "ObjectUIDMismatch",
+			Message:                fmt.Sprintf("object identity changed since editing began: current uid is %s, editor tracked %s", current.GetUID(), req.UID),
+			CurrentYAML:            currentYAML,
+			CurrentResourceVersion: current.GetResourceVersion(),
+		}
+	}
+	if isNamespaced && current.GetNamespace() != desired.GetNamespace() {
+		return fmt.Errorf("live object namespace %s does not match YAML namespace %s", namespaceLabel(current.GetNamespace()), namespaceLabel(desired.GetNamespace()))
+	}
+	return nil
 }
 
 func validateMutationObject(obj *unstructured.Unstructured, req ObjectYAMLMutationRequest, label string) error {

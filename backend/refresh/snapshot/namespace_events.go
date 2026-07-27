@@ -154,7 +154,6 @@ func RegisterNamespaceEventsDomain(reg *domain.Registry, factory informers.Share
 
 // Build assembles event summaries for a namespace.
 func (b *NamespaceEventsBuilder) Build(ctx context.Context, scope string) (*refresh.Snapshot, error) {
-	_ = ctx
 	meta := ClusterMetaFromContext(ctx)
 	clusterID, trimmed := refresh.SplitClusterScope(scope)
 	baseScope, query, err := parseTypedTableQueryScope(clusterID, strings.TrimSpace(trimmed), namespaceEventsDomainName, "")
@@ -165,57 +164,17 @@ func (b *NamespaceEventsBuilder) Build(ctx context.Context, scope string) (*refr
 	if err != nil {
 		return nil, err
 	}
-
 	// Wait out the informer's initial sync (bounded by the request context)
 	// instead of listing an unsynced cache: the first request after connect is
 	// slower, never wrong. See ClusterEventsBuilder.Build.
 	if b.eventsSynced != nil && !cache.WaitForCacheSync(ctx.Done(), b.eventsSynced) {
 		return nil, fmt.Errorf("namespace events cache has not finished syncing")
 	}
-	var summaries []EventSummary
-	var version uint64
-	if b.maintained != nil {
-		// Serve from the informer-fed store (rows projected + empty-involved-namespace
-		// filtered at intake) instead of listing + re-projecting. The adapter filters by
-		// ObjectNamespace without changing the Event resource identity in Ref.
-		ns := ""
-		if !parsedScope.AllNamespaces {
-			ns = parsedScope.Namespace
-		}
-		summaries = b.maintained.rowsInNamespace(ns)
-		version = b.maintained.snapshotVersion()
-	} else {
-		var events []*corev1.Event
-		events, err = b.eventLister.List(labels.Everything())
-		if err != nil {
-			return nil, err
-		}
-		summaries = make([]EventSummary, 0, len(events))
-		for _, event := range events {
-			summary, keep := projectNamespaceEventSummary(meta, event)
-			if !keep {
-				continue
-			}
-			if !parsedScope.AllNamespaces && summary.ObjectNamespace != parsedScope.Namespace {
-				continue
-			}
-			summaries = append(summaries, summary)
-			if v := resourceVersionOrTimestamp(event); v > version {
-				version = v
-			}
-		}
+	summaries, version, err := b.collectNamespaceEventSummaries(meta, parsedScope)
+	if err != nil {
+		return nil, err
 	}
-
-	// Window-mode order is most-recent-first with a deterministic name tiebreak.
-	// Apply it before resolving so the engine's query branch (which sorts by the
-	// request's SortField) and the window branch both serve a stable order.
-	sort.Slice(summaries, func(i, j int) bool {
-		if summaries[i].AgeTimestamp != summaries[j].AgeTimestamp {
-			return summaries[i].AgeTimestamp > summaries[j].AgeTimestamp
-		}
-		return summaries[i].Ref.Name < summaries[j].Ref.Name
-	})
-
+	sortNamespaceEventSummaries(summaries)
 	resolved := resolveTypedSnapshotPageViaStore(
 		namespaceEventsDomainName,
 		summaries,
@@ -228,6 +187,57 @@ func (b *NamespaceEventsBuilder) Build(ctx context.Context, scope string) (*refr
 		func(e EventSummary) string { return e.Kind },
 		nil,
 	)
+	return namespaceEventsSnapshot(meta, clusterID, trimmed, parsedScope, query, resolved, version), nil
+}
+
+func (b *NamespaceEventsBuilder) collectNamespaceEventSummaries(meta ClusterMeta, parsedScope NamespaceSnapshotScope) ([]EventSummary, uint64, error) {
+	if b.maintained != nil {
+		// Serve from the informer-fed store (rows projected + empty-involved-namespace
+		// filtered at intake) instead of listing + re-projecting. The adapter filters by
+		// ObjectNamespace without changing the Event resource identity in Ref.
+		ns := ""
+		if !parsedScope.AllNamespaces {
+			ns = parsedScope.Namespace
+		}
+		return b.maintained.rowsInNamespace(ns), b.maintained.snapshotVersion(), nil
+	}
+	events, err := b.eventLister.List(labels.Everything())
+	if err != nil {
+		return nil, 0, err
+	}
+	summaries, version := projectNamespaceEventSummaries(meta, events, parsedScope)
+	return summaries, version, nil
+}
+
+func projectNamespaceEventSummaries(meta ClusterMeta, events []*corev1.Event, parsedScope NamespaceSnapshotScope) ([]EventSummary, uint64) {
+	summaries := make([]EventSummary, 0, len(events))
+	var version uint64
+	for _, event := range events {
+		summary, keep := projectNamespaceEventSummary(meta, event)
+		if !keep || (!parsedScope.AllNamespaces && summary.ObjectNamespace != parsedScope.Namespace) {
+			continue
+		}
+		summaries = append(summaries, summary)
+		if value := resourceVersionOrTimestamp(event); value > version {
+			version = value
+		}
+	}
+	return summaries, version
+}
+
+func sortNamespaceEventSummaries(summaries []EventSummary) {
+	// Window-mode order is most-recent-first with a deterministic name tiebreak.
+	// Apply it before resolving so the engine's query branch (which sorts by the
+	// request's SortField) and the window branch both serve a stable order.
+	sort.Slice(summaries, func(i, j int) bool {
+		if summaries[i].AgeTimestamp != summaries[j].AgeTimestamp {
+			return summaries[i].AgeTimestamp > summaries[j].AgeTimestamp
+		}
+		return summaries[i].Ref.Name < summaries[j].Ref.Name
+	})
+}
+
+func namespaceEventsSnapshot(meta ClusterMeta, clusterID, trimmed string, parsedScope NamespaceSnapshotScope, query typedTableQuery, resolved typedSnapshotPage[EventSummary], version uint64) *refresh.Snapshot {
 	// The query branch echoes the raw request scope; the window branch reports the
 	// canonical namespace scope (matching the pre-cutover returns).
 	snapshotScope := parsedScope.CanonicalScope
@@ -244,5 +254,5 @@ func (b *NamespaceEventsBuilder) Build(ctx context.Context, scope string) (*refr
 			Rows:                  resolved.Rows,
 		},
 		Stats: resolved.Stats,
-	}, nil
+	}
 }

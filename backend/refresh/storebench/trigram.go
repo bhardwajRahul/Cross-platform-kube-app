@@ -108,40 +108,19 @@ func (t *TrigramIndex) Search(sub string, limit int) []uint32 {
 	tgs := appendTrigrams(nil, lower)
 
 	if len(tgs) == 0 { // sub shorter than a trigram: linear fallback
-		out := make([]uint32, 0, limit)
-		for rowID, name := range t.names {
-			if strings.Contains(name, lower) {
-				out = append(out, rowID)
-				if len(out) >= limit {
-					break
-				}
-			}
-		}
-		return out
+		return t.linearSearch(lower, limit)
 	}
-
-	// Pick the smallest posting set among the query trigrams to iterate.
-	var smallest map[uint32]struct{}
-	for _, tg := range tgs {
-		p := t.postings[tg]
-		if p == nil {
-			return nil // a query trigram is absent -> no matches
-		}
-		if smallest == nil || len(p) < len(smallest) {
-			smallest = p
-		}
+	smallest, ok := t.smallestPosting(tgs)
+	if !ok {
+		return nil
 	}
+	return t.searchCandidates(smallest, tgs, lower, limit)
+}
 
+func (t *TrigramIndex) linearSearch(lower string, limit int) []uint32 {
 	out := make([]uint32, 0, limit)
-	for rowID := range smallest {
-		inAll := true
-		for _, tg := range tgs {
-			if _, present := t.postings[tg][rowID]; !present {
-				inAll = false
-				break
-			}
-		}
-		if inAll && strings.Contains(t.names[rowID], lower) {
+	for rowID, name := range t.names {
+		if strings.Contains(name, lower) {
 			out = append(out, rowID)
 			if len(out) >= limit {
 				break
@@ -149,4 +128,40 @@ func (t *TrigramIndex) Search(sub string, limit int) []uint32 {
 		}
 	}
 	return out
+}
+
+func (t *TrigramIndex) smallestPosting(trigrams []uint32) (map[uint32]struct{}, bool) {
+	var smallest map[uint32]struct{}
+	for _, trigram := range trigrams {
+		posting := t.postings[trigram]
+		if posting == nil {
+			return nil, false
+		}
+		if smallest == nil || len(posting) < len(smallest) {
+			smallest = posting
+		}
+	}
+	return smallest, true
+}
+
+func (t *TrigramIndex) searchCandidates(candidates map[uint32]struct{}, trigrams []uint32, lower string, limit int) []uint32 {
+	out := make([]uint32, 0, limit)
+	for rowID := range candidates {
+		if t.matchesAllTrigrams(rowID, trigrams) && strings.Contains(t.names[rowID], lower) {
+			out = append(out, rowID)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out
+}
+
+func (t *TrigramIndex) matchesAllTrigrams(rowID uint32, trigrams []uint32) bool {
+	for _, trigram := range trigrams {
+		if _, present := t.postings[trigram][rowID]; !present {
+			return false
+		}
+	}
+	return true
 }

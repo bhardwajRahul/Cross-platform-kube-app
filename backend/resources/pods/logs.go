@@ -30,28 +30,22 @@ var containerLogsStreamFunc = func(pods corev1client.PodInterface, ctx context.C
 	return pods.GetLogs(podName, opts).Stream(ctx)
 }
 
+type containerLogFetchPlan struct {
+	lineFilter     containerlogs.LineFilter
+	podNameFilter  containerlogs.PodNameFilter
+	selection      containerlogs.ScopeSelection
+	containerState containerlogs.ContainerStateFilter
+}
+
 // FetchContainerLogs aggregates logs from pods or workloads based on the provided request.
 func (s *Service) FetchContainerLogs(req types.ContainerLogsFetchRequest) types.ContainerLogsFetchResponse {
 	if s.deps.KubernetesClient == nil {
 		return types.ContainerLogsFetchResponse{Error: "kubernetes client not initialized"}
 	}
 
-	if req.TailLines <= 0 {
-		req.TailLines = 1000
-	}
-
-	lineFilter, err := containerlogs.NewLineFilter(strings.TrimSpace(req.Include), strings.TrimSpace(req.Exclude))
+	plan, err := prepareContainerLogFetch(&req)
 	if err != nil {
-		return types.ContainerLogsFetchResponse{Error: fmt.Sprintf("invalid log filter: %v", err)}
-	}
-	podNameFilter, err := containerlogs.NewPodNameFilter(strings.TrimSpace(req.PodInclude), strings.TrimSpace(req.PodExclude))
-	if err != nil {
-		return types.ContainerLogsFetchResponse{Error: fmt.Sprintf("invalid pod filter: %v", err)}
-	}
-	selection := containerlogs.ParseScopeSelection(req.SelectedFilters)
-	containerState, err := containerlogs.ParseContainerStateFilter(req.ContainerState)
-	if err != nil {
-		return types.ContainerLogsFetchResponse{Error: fmt.Sprintf("invalid container state filter: %v", err)}
+		return types.ContainerLogsFetchResponse{Error: err.Error()}
 	}
 	if req.MatchNone {
 		if _, err := s.resolveLogTarget(req); err != nil {
@@ -60,52 +54,78 @@ func (s *Service) FetchContainerLogs(req types.ContainerLogsFetchRequest) types.
 		return types.ContainerLogsFetchResponse{}
 	}
 
-	pods, err := s.resolveTargetPodObjects(req, podNameFilter, selection)
+	pods, err := s.resolveTargetPodObjects(req, plan.podNameFilter, plan.selection)
 	if err != nil {
 		return types.ContainerLogsFetchResponse{Error: err.Error()}
 	}
-	targets, totalTargets := containerlogs.SelectTargets(
-		pods,
-		containerlogs.ContainerSelectionOptions{
-			Filter:           req.Container,
-			IncludeInit:      boolValueOrDefault(req.IncludeInit, true),
-			IncludeEphemeral: boolValueOrDefault(req.IncludeEphemeral, true),
-			StateFilter:      containerState,
-			Selection:        selection,
-		},
-		containerlogs.GetPerScopeTargetLimit(),
-	)
+	targets, totalTargets := selectContainerLogTargets(pods, req, plan)
 	warnings := containerlogs.BuildTargetLimitWarnings(len(targets), totalTargets)
-
-	var allEntries []types.ContainerLogsEntry
-	var podErrors []error
-	for _, target := range targets {
-		entries, err := s.fetchContainerLogs(
-			target.Namespace,
-			target.PodName,
-			target.Container.Name,
-			target.Container.IsInit,
-			target.Container.IsEphemeral,
-			req.TailLines,
-			req.Previous,
-			req.SinceSeconds,
-			lineFilter,
-		)
-		if err != nil {
-			s.logWarn(fmt.Sprintf("Failed to fetch logs for container %s/%s: %v", target.PodName, target.Container.Name, err))
-			podErrors = append(podErrors, fmt.Errorf("pod %s container %s: %w", target.PodName, target.Container.Name, err))
-			continue
-		}
-		allEntries = append(allEntries, entries...)
-	}
+	allEntries, podErrors := s.fetchSelectedContainerLogs(targets, req, plan.lineFilter)
 
 	if len(allEntries) == 0 && len(podErrors) > 0 {
 		return types.ContainerLogsFetchResponse{Error: summarizeLogFetchErrors("failed to fetch logs", podErrors)}
 	}
+	sortContainerLogEntries(allEntries)
+	return types.ContainerLogsFetchResponse{Entries: allEntries, Warnings: warnings}
+}
 
-	sort.Slice(allEntries, func(i, j int) bool {
-		ti, errI := time.Parse(time.RFC3339Nano, allEntries[i].Timestamp)
-		tj, errJ := time.Parse(time.RFC3339Nano, allEntries[j].Timestamp)
+func prepareContainerLogFetch(req *types.ContainerLogsFetchRequest) (containerLogFetchPlan, error) {
+	if req.TailLines <= 0 {
+		req.TailLines = 1000
+	}
+	lineFilter, err := containerlogs.NewLineFilter(strings.TrimSpace(req.Include), strings.TrimSpace(req.Exclude))
+	if err != nil {
+		return containerLogFetchPlan{}, fmt.Errorf("invalid log filter: %v", err)
+	}
+	podNameFilter, err := containerlogs.NewPodNameFilter(strings.TrimSpace(req.PodInclude), strings.TrimSpace(req.PodExclude))
+	if err != nil {
+		return containerLogFetchPlan{}, fmt.Errorf("invalid pod filter: %v", err)
+	}
+	containerState, err := containerlogs.ParseContainerStateFilter(req.ContainerState)
+	if err != nil {
+		return containerLogFetchPlan{}, fmt.Errorf("invalid container state filter: %v", err)
+	}
+	return containerLogFetchPlan{
+		lineFilter: lineFilter, podNameFilter: podNameFilter,
+		selection: containerlogs.ParseScopeSelection(req.SelectedFilters), containerState: containerState,
+	}, nil
+}
+
+func selectContainerLogTargets(pods []*corev1.Pod, req types.ContainerLogsFetchRequest, plan containerLogFetchPlan) ([]containerlogs.SelectedTarget, int) {
+	return containerlogs.SelectTargets(pods, containerlogs.ContainerSelectionOptions{
+		Filter: req.Container, IncludeInit: boolValueOrDefault(req.IncludeInit, true),
+		IncludeEphemeral: boolValueOrDefault(req.IncludeEphemeral, true),
+		StateFilter:      plan.containerState, Selection: plan.selection,
+	}, containerlogs.GetPerScopeTargetLimit())
+}
+
+func (s *Service) fetchSelectedContainerLogs(
+	targets []containerlogs.SelectedTarget,
+	req types.ContainerLogsFetchRequest,
+	lineFilter containerlogs.LineFilter,
+) ([]types.ContainerLogsEntry, []error) {
+	var entries []types.ContainerLogsEntry
+	var fetchErrors []error
+	for _, target := range targets {
+		fetched, err := s.fetchContainerLogs(
+			target.Namespace, target.PodName, target.Container.Name,
+			target.Container.IsInit, target.Container.IsEphemeral,
+			req.TailLines, req.Previous, req.SinceSeconds, lineFilter,
+		)
+		if err != nil {
+			s.logWarn(fmt.Sprintf("Failed to fetch logs for container %s/%s: %v", target.PodName, target.Container.Name, err))
+			fetchErrors = append(fetchErrors, fmt.Errorf("pod %s container %s: %w", target.PodName, target.Container.Name, err))
+			continue
+		}
+		entries = append(entries, fetched...)
+	}
+	return entries, fetchErrors
+}
+
+func sortContainerLogEntries(entries []types.ContainerLogsEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		ti, errI := time.Parse(time.RFC3339Nano, entries[i].Timestamp)
+		tj, errJ := time.Parse(time.RFC3339Nano, entries[j].Timestamp)
 		if errI == nil && errJ == nil {
 			return ti.Before(tj)
 		}
@@ -117,8 +137,6 @@ func (s *Service) FetchContainerLogs(req types.ContainerLogsFetchRequest) types.
 		}
 		return i < j
 	})
-
-	return types.ContainerLogsFetchResponse{Entries: allEntries, Warnings: warnings}
 }
 
 // PodContainers returns container names (including init containers) for the specified pod.

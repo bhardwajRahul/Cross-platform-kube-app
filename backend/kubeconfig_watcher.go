@@ -17,6 +17,18 @@ type watchedPath struct {
 	filterFiles map[string]struct{}
 }
 
+type kubeconfigWatchDebounce struct {
+	timer        *time.Timer
+	timerChannel <-chan time.Time
+	changedPaths map[string]struct{}
+}
+
+type mergedWatchedPath struct {
+	dir         string
+	filterFiles map[string]struct{}
+	unfiltered  bool
+}
+
 type kubeconfigWatcher struct {
 	app       *App
 	watcher   *fsnotify.Watcher
@@ -50,74 +62,85 @@ func newKubeconfigWatcher(app *App, onChange func([]string)) (*kubeconfigWatcher
 
 func (w *kubeconfigWatcher) eventLoop() {
 	defer close(w.stoppedCh)
-
-	var debounceTimer *time.Timer
-	var debounceCh <-chan time.Time
-	changedPaths := make(map[string]struct{})
-
-	flush := func() {
-		if len(changedPaths) == 0 || w.onChange == nil {
-			return
-		}
-		paths := make([]string, 0, len(changedPaths))
-		for p := range changedPaths {
-			paths = append(paths, p)
-		}
-		changedPaths = make(map[string]struct{})
-		w.onChange(paths)
-	}
+	debounce := newKubeconfigWatchDebounce()
 
 	for {
 		select {
 		case <-w.stopCh:
-			if debounceTimer != nil {
-				debounceTimer.Stop()
-			}
+			debounce.stop()
 			return
 
 		case event, ok := <-w.watcher.Events:
 			if !ok {
 				return
 			}
-			if !isRelevantFSEvent(event) {
-				continue
+			if isRelevantFSEvent(event) && w.acceptsEventPath(event.Name) {
+				debounce.record(event.Name)
 			}
-
-			filename := filepath.Base(event.Name)
-			dir := filepath.Dir(event.Name)
-
-			w.mu.Lock()
-			if filters, hasFilters := w.fileFilters[dir]; hasFilters {
-				if _, accepted := filters[filename]; !accepted {
-					w.mu.Unlock()
-					continue
-				}
-			} else if shouldSkipKubeconfigName(filename) {
-				w.mu.Unlock()
-				continue
-			}
-			w.mu.Unlock()
-
-			changedPaths[filepath.Clean(event.Name)] = struct{}{}
-			if debounceTimer != nil {
-				debounceTimer.Stop()
-			}
-			debounceTimer = time.NewTimer(config.KubeconfigWatcherDebounceInterval)
-			debounceCh = debounceTimer.C
 
 		case _, ok := <-w.watcher.Errors:
 			if !ok {
 				return
 			}
-			if w.app != nil {
-				w.app.logger.Warn("kubeconfig watcher error", logsources.KubeconfigWatcher)
-			}
+			w.logWatcherError()
 
-		case <-debounceCh:
-			debounceCh = nil
-			flush()
+		case <-debounce.timerChannel:
+			debounce.flush(w.onChange)
 		}
 	}
+}
+
+func (w *kubeconfigWatcher) logWatcherError() {
+	if w.app != nil {
+		w.app.logger.Warn("kubeconfig watcher error", logsources.KubeconfigWatcher)
+	}
+}
+
+func newKubeconfigWatchDebounce() *kubeconfigWatchDebounce {
+	return &kubeconfigWatchDebounce{changedPaths: make(map[string]struct{})}
+}
+
+func (d *kubeconfigWatchDebounce) record(path string) {
+	d.changedPaths[filepath.Clean(path)] = struct{}{}
+	if d.timer != nil {
+		d.timer.Stop()
+	}
+	d.timer = time.NewTimer(config.KubeconfigWatcherDebounceInterval)
+	d.timerChannel = d.timer.C
+}
+
+func (d *kubeconfigWatchDebounce) flush(onChange func([]string)) {
+	d.timerChannel = nil
+	if len(d.changedPaths) == 0 || onChange == nil {
+		return
+	}
+
+	paths := make([]string, 0, len(d.changedPaths))
+	for path := range d.changedPaths {
+		paths = append(paths, path)
+	}
+	d.changedPaths = make(map[string]struct{})
+	onChange(paths)
+}
+
+func (d *kubeconfigWatchDebounce) stop() {
+	if d.timer != nil {
+		d.timer.Stop()
+	}
+}
+
+func (w *kubeconfigWatcher) acceptsEventPath(path string) bool {
+	filename := filepath.Base(path)
+	dir := filepath.Dir(path)
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	filters, hasFilters := w.fileFilters[dir]
+	if !hasFilters {
+		return !shouldSkipKubeconfigName(filename)
+	}
+	_, accepted := filters[filename]
+	return accepted
 }
 
 func isRelevantFSEvent(event fsnotify.Event) bool {
@@ -128,17 +151,16 @@ func (w *kubeconfigWatcher) updateWatchedPaths(paths []watchedPath) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	currentDirs := make(map[string]struct{}, len(w.watched))
-	for _, wp := range w.watched {
-		currentDirs[wp.dir] = struct{}{}
-	}
+	currentDirs := watchedPathDirectories(w.watched)
+	merged := mergeWatchedPaths(paths)
+	desiredDirs := mergedWatchedPathDirectories(merged)
+	w.reconcileWatchedDirectories(currentDirs, desiredDirs)
+	w.replaceWatchedPaths(merged)
+	return nil
+}
 
-	type mergedEntry struct {
-		dir         string
-		filterFiles map[string]struct{}
-		unfiltered  bool
-	}
-	merged := make(map[string]*mergedEntry, len(paths))
+func mergeWatchedPaths(paths []watchedPath) map[string]*mergedWatchedPath {
+	merged := make(map[string]*mergedWatchedPath, len(paths))
 	for _, wp := range paths {
 		info, err := os.Stat(wp.dir)
 		if err != nil || !info.IsDir() {
@@ -147,31 +169,48 @@ func (w *kubeconfigWatcher) updateWatchedPaths(paths []watchedPath) error {
 
 		entry, ok := merged[wp.dir]
 		if !ok {
-			entry = &mergedEntry{dir: wp.dir}
+			entry = &mergedWatchedPath{dir: wp.dir}
 			merged[wp.dir] = entry
 		}
-
-		if len(wp.filterFiles) == 0 {
-			entry.unfiltered = true
-			entry.filterFiles = nil
-			continue
-		}
-		if entry.unfiltered {
-			continue
-		}
-		if entry.filterFiles == nil {
-			entry.filterFiles = make(map[string]struct{})
-		}
-		for name := range wp.filterFiles {
-			entry.filterFiles[name] = struct{}{}
-		}
+		mergeWatchedPathFilters(entry, wp.filterFiles)
 	}
+	return merged
+}
 
-	desiredDirs := make(map[string]struct{}, len(merged))
-	for dir := range merged {
-		desiredDirs[dir] = struct{}{}
+func mergeWatchedPathFilters(entry *mergedWatchedPath, filters map[string]struct{}) {
+	if len(filters) == 0 {
+		entry.unfiltered = true
+		entry.filterFiles = nil
+		return
 	}
+	if entry.unfiltered {
+		return
+	}
+	if entry.filterFiles == nil {
+		entry.filterFiles = make(map[string]struct{})
+	}
+	for name := range filters {
+		entry.filterFiles[name] = struct{}{}
+	}
+}
 
+func watchedPathDirectories(paths []watchedPath) map[string]struct{} {
+	directories := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		directories[path.dir] = struct{}{}
+	}
+	return directories
+}
+
+func mergedWatchedPathDirectories(paths map[string]*mergedWatchedPath) map[string]struct{} {
+	directories := make(map[string]struct{}, len(paths))
+	for dir := range paths {
+		directories[dir] = struct{}{}
+	}
+	return directories
+}
+
+func (w *kubeconfigWatcher) reconcileWatchedDirectories(currentDirs, desiredDirs map[string]struct{}) {
 	for dir := range currentDirs {
 		if _, ok := desiredDirs[dir]; ok {
 			continue
@@ -186,7 +225,9 @@ func (w *kubeconfigWatcher) updateWatchedPaths(paths []watchedPath) error {
 			w.app.logger.Warn("Failed to watch directory: "+dir, logsources.KubeconfigWatcher)
 		}
 	}
+}
 
+func (w *kubeconfigWatcher) replaceWatchedPaths(merged map[string]*mergedWatchedPath) {
 	w.watched = make([]watchedPath, 0, len(merged))
 	w.fileFilters = make(map[string]map[string]struct{})
 	for _, entry := range merged {
@@ -197,8 +238,6 @@ func (w *kubeconfigWatcher) updateWatchedPaths(paths []watchedPath) error {
 		}
 		w.watched = append(w.watched, wp)
 	}
-
-	return nil
 }
 
 func (w *kubeconfigWatcher) stop() {

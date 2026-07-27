@@ -630,59 +630,77 @@ func (a *App) FindCatalogObjectByUID(clusterID, uid string) (*objectcatalog.Summ
 
 const catalogCustomHydrationConcurrency = 16
 
+type catalogHydrationRequest struct {
+	row  snapshot.ResourceQueryRow
+	gvr  schema.GroupVersionResource
+	name string
+}
+
 // HydrateCatalogCustomRows fetches rich custom-resource row facts for the
 // current catalog page. It intentionally works only on caller-provided page
 // rows so production Custom tables keep catalog-backed paging without starting
 // the legacy full CRD fanout domains.
 func (a *App) HydrateCatalogCustomRows(clusterID string, rows []snapshot.ResourceQueryRow) ([]snapshot.CustomResourceSummary, error) {
+	ctx, client, meta, requests, err := a.prepareCatalogHydration(clusterID, rows)
+	if err != nil {
+		return nil, err
+	}
+	result, included := hydrateCatalogRequests(ctx, client, meta, requests)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return compactCatalogHydrationResults(result, included), nil
+}
+
+func (a *App) prepareCatalogHydration(clusterID string, rows []snapshot.ResourceQueryRow) (context.Context, dynamic.Interface, snapshot.ClusterMeta, []catalogHydrationRequest, error) {
 	if a == nil {
-		return nil, fmt.Errorf("app is not initialised")
+		return nil, nil, snapshot.ClusterMeta{}, nil, fmt.Errorf("app is not initialised")
 	}
 	trimmedClusterID := strings.TrimSpace(clusterID)
 	if trimmedClusterID == "" {
-		return nil, fmt.Errorf("cluster ID is required")
+		return nil, nil, snapshot.ClusterMeta{}, nil, fmt.Errorf("cluster ID is required")
 	}
 	clients := a.clusterClientsForID(trimmedClusterID)
 	if clients == nil || clients.dynamicClient == nil {
-		return nil, fmt.Errorf("dynamic client unavailable for cluster %q", trimmedClusterID)
+		return nil, nil, snapshot.ClusterMeta{}, nil, fmt.Errorf("dynamic client unavailable for cluster %q", trimmedClusterID)
 	}
 	meta := snapshot.ClusterMeta{ClusterID: clients.meta.ID, ClusterName: clients.meta.Name}
 	ctx := a.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	type hydrationRequest struct {
-		row  snapshot.ResourceQueryRow
-		gvr  schema.GroupVersionResource
-		name string
-	}
-	requests := make([]hydrationRequest, 0, len(rows))
+	requests := make([]catalogHydrationRequest, 0, len(rows))
 	for _, row := range rows {
-		// Every object reference crossing this boundary must carry clusterId. The
-		// catalog page rows always populate it, so a blank value is a programming
-		// error rather than a case to paper over with the request clusterId.
-		rowClusterID := strings.TrimSpace(row.ClusterID)
-		if rowClusterID == "" {
-			return nil, fmt.Errorf("custom row %q is missing clusterId", row.Name)
+		request, err := catalogHydrationRequestForRow(trimmedClusterID, row)
+		if err != nil {
+			return nil, nil, snapshot.ClusterMeta{}, nil, err
 		}
-		if rowClusterID != trimmedClusterID {
-			return nil, fmt.Errorf("row clusterId %q does not match request clusterId %q", row.ClusterID, trimmedClusterID)
-		}
-		if strings.TrimSpace(row.Kind) == "" || strings.TrimSpace(row.Version) == "" || strings.TrimSpace(row.Resource) == "" {
-			return nil, fmt.Errorf("custom row %q is missing kind, version, or resource", row.Name)
-		}
-		gvr := schema.GroupVersionResource{
-			Group:    strings.TrimSpace(row.Group),
-			Version:  strings.TrimSpace(row.Version),
-			Resource: strings.TrimSpace(row.Resource),
-		}
-		name := strings.TrimSpace(row.Name)
-		if name == "" {
-			return nil, fmt.Errorf("custom row is missing name")
-		}
-		requests = append(requests, hydrationRequest{row: row, gvr: gvr, name: name})
+		requests = append(requests, request)
 	}
+	return ctx, clients.dynamicClient, meta, requests, nil
+}
 
+func catalogHydrationRequestForRow(clusterID string, row snapshot.ResourceQueryRow) (catalogHydrationRequest, error) {
+	rowClusterID := strings.TrimSpace(row.ClusterID)
+	if rowClusterID == "" {
+		return catalogHydrationRequest{}, fmt.Errorf("custom row %q is missing clusterId", row.Name)
+	}
+	if rowClusterID != clusterID {
+		return catalogHydrationRequest{}, fmt.Errorf("row clusterId %q does not match request clusterId %q", row.ClusterID, clusterID)
+	}
+	if strings.TrimSpace(row.Kind) == "" || strings.TrimSpace(row.Version) == "" || strings.TrimSpace(row.Resource) == "" {
+		return catalogHydrationRequest{}, fmt.Errorf("custom row %q is missing kind, version, or resource", row.Name)
+	}
+	name := strings.TrimSpace(row.Name)
+	if name == "" {
+		return catalogHydrationRequest{}, fmt.Errorf("custom row is missing name")
+	}
+	return catalogHydrationRequest{row: row, name: name, gvr: schema.GroupVersionResource{
+		Group: strings.TrimSpace(row.Group), Version: strings.TrimSpace(row.Version), Resource: strings.TrimSpace(row.Resource),
+	}}, nil
+}
+
+func hydrateCatalogRequests(ctx context.Context, client dynamic.Interface, meta snapshot.ClusterMeta, requests []catalogHydrationRequest) ([]snapshot.CustomResourceSummary, []bool) {
 	result := make([]snapshot.CustomResourceSummary, len(requests))
 	included := make([]bool, len(requests))
 	sem := make(chan struct{}, catalogCustomHydrationConcurrency)
@@ -699,7 +717,7 @@ func (a *App) HydrateCatalogCustomRows(clusterID string, rows []snapshot.Resourc
 			case <-ctx.Done():
 				return
 			}
-			summary, ok := hydrateCatalogCustomRow(ctx, clients.dynamicClient, meta, req.row, req.gvr, req.name)
+			summary, ok := hydrateCatalogCustomRow(ctx, client, meta, req.row, req.gvr, req.name)
 			if !ok {
 				return
 			}
@@ -708,18 +726,17 @@ func (a *App) HydrateCatalogCustomRows(clusterID string, rows []snapshot.Resourc
 		}()
 	}
 	wg.Wait()
-	// A canceled request leaves rows un-hydrated; report the cancellation
-	// instead of returning a silently partial "complete" result.
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+	return result, included
+}
+
+func compactCatalogHydrationResults(result []snapshot.CustomResourceSummary, included []bool) []snapshot.CustomResourceSummary {
 	compacted := make([]snapshot.CustomResourceSummary, 0, len(result))
 	for index, summary := range result {
 		if included[index] {
 			compacted = append(compacted, summary)
 		}
 	}
-	return compacted, nil
+	return compacted
 }
 
 func hydrateCatalogCustomRow(

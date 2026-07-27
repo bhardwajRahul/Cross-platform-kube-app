@@ -130,54 +130,8 @@ type summaryChunk struct {
 
 // NewService constructs a catalog service with the provided dependencies and options.
 func NewService(deps Dependencies, opts *Options) *Service {
-	serviceOpts := Options{
-		ResyncInterval:             config.ObjectCatalogResyncInterval,
-		FailedSyncRetryInterval:    config.ObjectCatalogFailedSyncRetryInterval,
-		PageSize:                   config.ObjectCatalogPageSize,
-		ListWorkers:                adjustedListWorkers(),
-		NamespaceWorkers:           config.ObjectCatalogNamespaceWorkers,
-		InformerPromotionThreshold: config.ObjectCatalogInformerPromotionThreshold,
-		EvictionTTL:                config.ObjectCatalogEvictionTTL,
-		StreamingBatchSize:         config.ObjectCatalogStreamingBatchSize,
-		StreamingFlushInterval:     config.ObjectCatalogStreamingFlushInterval,
-		EnableReactiveUpdates:      true,
-	}
-	if opts != nil {
-		if opts.ResyncInterval > 0 {
-			serviceOpts.ResyncInterval = opts.ResyncInterval
-		}
-		if opts.FailedSyncRetryInterval > 0 {
-			serviceOpts.FailedSyncRetryInterval = opts.FailedSyncRetryInterval
-		}
-		if opts.PageSize > 0 {
-			serviceOpts.PageSize = opts.PageSize
-		}
-		if opts.ListWorkers > 0 {
-			serviceOpts.ListWorkers = opts.ListWorkers
-		}
-		if opts.NamespaceWorkers > 0 {
-			serviceOpts.NamespaceWorkers = opts.NamespaceWorkers
-		}
-		if opts.InformerPromotionThreshold > 0 {
-			serviceOpts.InformerPromotionThreshold = opts.InformerPromotionThreshold
-		}
-		if opts.EvictionTTL > 0 {
-			serviceOpts.EvictionTTL = opts.EvictionTTL
-		}
-		if opts.StreamingBatchSize > 0 {
-			serviceOpts.StreamingBatchSize = opts.StreamingBatchSize
-		}
-		if opts.StreamingFlushInterval > 0 {
-			serviceOpts.StreamingFlushInterval = opts.StreamingFlushInterval
-		}
-		if !opts.EnableReactiveUpdates {
-			serviceOpts.EnableReactiveUpdates = false
-		}
-		if opts.QueryStore != nil {
-			serviceOpts.QueryStore = opts.QueryStore
-		}
-	}
-
+	serviceOpts := defaultServiceOptions()
+	applyServiceOptions(&serviceOpts, opts)
 	nowFn := deps.Now
 	if nowFn == nil {
 		nowFn = time.Now
@@ -195,12 +149,57 @@ func NewService(deps Dependencies, opts *Options) *Service {
 		now:               nowFn,
 		streamSubscribers: make(map[int]chan StreamingUpdate),
 	}
-	if serviceOpts.QueryStore != nil {
-		service.queryStore = serviceOpts.QueryStore
-	} else {
+	service.queryStore = serviceOpts.QueryStore
+	if service.queryStore == nil {
 		service.queryStore = newInMemoryCatalogQueryStore(service)
 	}
 	return service
+}
+
+func defaultServiceOptions() Options {
+	return Options{
+		ResyncInterval:             config.ObjectCatalogResyncInterval,
+		FailedSyncRetryInterval:    config.ObjectCatalogFailedSyncRetryInterval,
+		PageSize:                   config.ObjectCatalogPageSize,
+		ListWorkers:                adjustedListWorkers(),
+		NamespaceWorkers:           config.ObjectCatalogNamespaceWorkers,
+		InformerPromotionThreshold: config.ObjectCatalogInformerPromotionThreshold,
+		EvictionTTL:                config.ObjectCatalogEvictionTTL,
+		StreamingBatchSize:         config.ObjectCatalogStreamingBatchSize,
+		StreamingFlushInterval:     config.ObjectCatalogStreamingFlushInterval,
+		EnableReactiveUpdates:      true,
+	}
+}
+
+func applyServiceOptions(target *Options, source *Options) {
+	if source == nil {
+		return
+	}
+	applyPositiveDuration(&target.ResyncInterval, source.ResyncInterval)
+	applyPositiveDuration(&target.FailedSyncRetryInterval, source.FailedSyncRetryInterval)
+	applyPositiveInt(&target.PageSize, source.PageSize)
+	applyPositiveInt(&target.ListWorkers, source.ListWorkers)
+	applyPositiveInt(&target.NamespaceWorkers, source.NamespaceWorkers)
+	applyPositiveInt(&target.InformerPromotionThreshold, source.InformerPromotionThreshold)
+	applyPositiveDuration(&target.EvictionTTL, source.EvictionTTL)
+	applyPositiveInt(&target.StreamingBatchSize, source.StreamingBatchSize)
+	applyPositiveDuration(&target.StreamingFlushInterval, source.StreamingFlushInterval)
+	target.EnableReactiveUpdates = source.EnableReactiveUpdates
+	if source.QueryStore != nil {
+		target.QueryStore = source.QueryStore
+	}
+}
+
+func applyPositiveDuration(target *time.Duration, value time.Duration) {
+	if value > 0 {
+		*target = value
+	}
+}
+
+func applyPositiveInt(target *int, value int) {
+	if value > 0 {
+		*target = value
+	}
 }
 
 // Run starts the catalog ingestion loop and blocks until the context is cancelled.

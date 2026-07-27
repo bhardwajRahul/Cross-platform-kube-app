@@ -330,87 +330,81 @@ func (m *Manager) startRecoveryLocked() {
 // connectivityRetryDelay.
 func (m *Manager) runRecovery(ctx context.Context) {
 	defer m.wg.Done()
-
 	authFailures := 0
 	delay := m.getBackoffDelay(0)
 	for {
-		// Check if cancelled before starting
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		if delay > 0 {
-			// Emit progress every second during the countdown
-			remaining := int(delay.Seconds())
-			for remaining > 0 {
-				m.emitProgress(remaining)
-
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(config.AuthRecoveryProgressInterval):
-					remaining--
-				}
-			}
-		}
-
-		// Emit progress with 0 seconds remaining (retry in progress)
-		m.emitProgress(0)
-
-		// Check if cancelled before testing
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		// Run the recovery test
-		err := m.testRecovery()
-		if err == nil {
-			m.mu.Lock()
-			// Only update state if we're still the active recovery.
-			if ctx.Err() == nil && m.state != StateValid {
-				m.setState(StateValid, FailureDiagnostic{})
-			}
-			m.mu.Unlock()
+		if !m.waitForRecoveryDelay(ctx, delay) {
 			return
 		}
-
-		class := m.classifyProbeError(err)
-		m.mu.Lock()
-		if m.lastProbeClass != class {
-			m.lastProbeClass = class
-			m.markSnapshotChangeLocked()
+		class, finished := m.runRecoveryProbe(ctx)
+		if finished {
+			return
 		}
-		m.mu.Unlock()
-
+		m.recordRecoveryProbeClass(class)
 		if class == ErrorClassConnectivity {
-			// Cluster unreachable: wait without consuming an attempt.
 			delay = m.connectivityRetryDelay()
 			continue
 		}
-
 		authFailures++
 		if authFailures >= m.config.MaxAttempts {
-			// Credentials confirmed bad: settle the verdict (idempotent —
-			// setState dedupes repeats) and keep probing at the steady pace.
-			// Preserve the typed fields (kind/execCommand) from the original
-			// failure so the settled overlay can still name the credential
-			// helper; only the human reason changes.
-			m.mu.Lock()
-			if ctx.Err() == nil && m.state == StateRecovering {
-				settled := m.failureDiagnostic
-				settled.Reason = "Credentials were rejected by the cluster. Please re-authenticate."
-				m.setState(StateInvalid, settled)
-			}
-			m.mu.Unlock()
+			m.settleInvalidCredentials(ctx)
 			delay = m.steadyRetryDelay()
 			continue
 		}
 		delay = m.getBackoffDelay(authFailures)
 	}
+}
+
+func (m *Manager) waitForRecoveryDelay(ctx context.Context, delay time.Duration) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	for remaining := int(delay.Seconds()); remaining > 0; remaining-- {
+		m.emitProgress(remaining)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(config.AuthRecoveryProgressInterval):
+		}
+	}
+	return true
+}
+
+func (m *Manager) runRecoveryProbe(ctx context.Context) (ErrorClass, bool) {
+	m.emitProgress(0)
+	if ctx.Err() != nil {
+		return ErrorClassUnknown, true
+	}
+	err := m.testRecovery()
+	if err != nil {
+		return m.classifyProbeError(err), false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ctx.Err() == nil && m.state != StateValid {
+		m.setState(StateValid, FailureDiagnostic{})
+	}
+	return ErrorClassUnknown, true
+}
+
+func (m *Manager) recordRecoveryProbeClass(class ErrorClass) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastProbeClass != class {
+		m.lastProbeClass = class
+		m.markSnapshotChangeLocked()
+	}
+}
+
+func (m *Manager) settleInvalidCredentials(ctx context.Context) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ctx.Err() != nil || m.state != StateRecovering {
+		return
+	}
+	settled := m.failureDiagnostic
+	settled.Reason = "Credentials were rejected by the cluster. Please re-authenticate."
+	m.setState(StateInvalid, settled)
 }
 
 // classifyProbeError maps a recovery test failure to an ErrorClass.

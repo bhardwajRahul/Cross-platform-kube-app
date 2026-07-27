@@ -325,7 +325,14 @@ func (s *session) handleSubscribe(msg ClientMessage) {
 
 	key := subscriptionKey(selector)
 	s.storeSubscription(key, sub, clusterID, clusterName)
+	s.enqueueSubscriptionAck(msg.Domain, normalized, clusterID, clusterName)
+	resume := s.resumeSubscription(selector, msg.ResumeToken, msg.Domain, normalized)
+	s.enqueueSubscriptionReset(msg.Domain, normalized, clusterID, clusterName, resume.ok)
+	s.enqueueResumeUpdates(resume.updates, clusterID, clusterName)
+	go s.forwardSubscription(key, resume.highWater)
+}
 
+func (s *session) enqueueSubscriptionAck(domain, scope, clusterID, clusterName string) {
 	// Positively confirm EVERY accepted subscribe. The client anchors its
 	// "synchronized" stream health on this frame; without it, a resumed
 	// subscribe with no buffered updates is indistinguishable from an ignored
@@ -333,49 +340,56 @@ func (s *session) handleSubscribe(msg ClientMessage) {
 	// a dead one. Clients that predate ACK drop the frame at parse.
 	s.enqueue(ServerMessage{
 		Type:        MessageTypeAck,
-		Domain:      msg.Domain,
-		Scope:       normalized,
+		Domain:      domain,
+		Scope:       scope,
 		ClusterID:   clusterID,
 		ClusterName: clusterName,
 	})
+}
 
-	resumeToken := parseResumeToken(msg.ResumeToken)
-	resumeUpdates := []ServerMessage(nil)
-	resumeOK := false
-	resumeHighWater := uint64(0)
+type subscriptionResume struct {
+	updates   []ServerMessage
+	ok        bool
+	highWater uint64
+}
+
+func (s *session) resumeSubscription(selector Selector, token, domain, scope string) subscriptionResume {
+	resumeToken := parseResumeToken(token)
+	result := subscriptionResume{}
 	if resumeToken > 0 {
-		resumeUpdates, resumeOK = s.adapter.Resume(selector, resumeToken)
-		if !resumeOK {
-			s.logger.Warn(fmt.Sprintf("stream mux: resume token expired for %s/%s", msg.Domain, normalized), logsources.StreamMux)
+		result.updates, result.ok = s.adapter.Resume(selector, resumeToken)
+		if !result.ok {
+			s.logger.Warn(fmt.Sprintf("stream mux: resume token expired for %s/%s", domain, scope), logsources.StreamMux)
 		}
-		if resumeOK && len(resumeUpdates) > 0 {
+		if result.ok && len(result.updates) > 0 {
 			// Track the highest buffered sequence to skip duplicates from live delivery.
-			resumeHighWater = resumeToken
-			for _, update := range resumeUpdates {
-				if sequence, ok := parseSequence(update.Sequence); ok && sequence > resumeHighWater {
-					resumeHighWater = sequence
+			result.highWater = resumeToken
+			for _, update := range result.updates {
+				if sequence, ok := parseSequence(update.Sequence); ok && sequence > result.highWater {
+					result.highWater = sequence
 				}
 			}
 		}
 	}
+	return result
+}
 
+func (s *session) enqueueSubscriptionReset(domain, scope, clusterID, clusterName string, resumeOK bool) {
 	if s.sendReset && !resumeOK {
 		s.enqueue(ServerMessage{
 			Type:        MessageTypeReset,
-			Domain:      msg.Domain,
-			Scope:       normalized,
+			Domain:      domain,
+			Scope:       scope,
 			ClusterID:   clusterID,
 			ClusterName: clusterName,
 		})
 	}
+}
 
-	if resumeOK && len(resumeUpdates) > 0 {
-		for _, update := range resumeUpdates {
-			s.enqueue(s.withClusterInfo(update, clusterID, clusterName))
-		}
+func (s *session) enqueueResumeUpdates(updates []ServerMessage, clusterID, clusterName string) {
+	for _, update := range updates {
+		s.enqueue(s.withClusterInfo(update, clusterID, clusterName))
 	}
-
-	go s.forwardSubscription(key, resumeHighWater)
 }
 
 func (s *session) handleCancel(msg ClientMessage) {

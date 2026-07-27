@@ -118,55 +118,53 @@ var maxPendingLineBytes = 1 << 20 // 1 MiB
 func (c *Capture) readPipe() {
 	buf := make([]byte, 4096)
 	var pending []byte
-
-	flush := func(lines []byte) {
-		if len(lines) == 0 {
-			return
-		}
-		// Process auth-related errors FIRST so state transitions happen before
-		// logSink decides whether to suppress the message. This ensures the
-		// auth manager knows about failures before logs are emitted.
-		c.captureIfInteresting(string(lines))
-
-		if getLogSink() != nil {
-			c.emitToLogSink(lines)
-		}
-	}
-
 	for {
 		n, err := c.pipeReader.Read(buf)
 		if n > 0 {
-			chunk := buf[:n]
-
-			c.mu.Lock()
-			c.buffer.Write(chunk)
-			trimBuffer(c.buffer, 100000, 50000)
-			c.mu.Unlock()
-
-			pending = append(pending, chunk...)
-			// Flush through the last newline; keep the trailing partial line.
-			if idx := bytes.LastIndexByte(pending, '\n'); idx >= 0 {
-				flush(pending[:idx+1])
-				pending = append(pending[:0], pending[idx+1:]...)
-			}
-			// Valve: never buffer an unterminated line without bound.
-			if len(pending) > maxPendingLineBytes {
-				flush(pending)
-				pending = pending[:0]
-			}
+			pending = c.processPipeChunk(pending, buf[:n])
 		}
 		if err != nil {
-			if err != io.EOF {
-				if sink := getLogSink(); sink != nil {
-					sink("error", "Error reading stderr pipe: "+err.Error())
-				}
-			}
+			logPipeReadError(err)
 			break
 		}
 	}
+	c.flushCapturedLines(pending)
+}
 
-	// Flush a final line that arrived without a trailing newline.
-	flush(pending)
+func (c *Capture) processPipeChunk(pending, chunk []byte) []byte {
+	c.mu.Lock()
+	c.buffer.Write(chunk)
+	trimBuffer(c.buffer, 100000, 50000)
+	c.mu.Unlock()
+	pending = append(pending, chunk...)
+	if index := bytes.LastIndexByte(pending, '\n'); index >= 0 {
+		c.flushCapturedLines(pending[:index+1])
+		pending = append(pending[:0], pending[index+1:]...)
+	}
+	if len(pending) > maxPendingLineBytes {
+		c.flushCapturedLines(pending)
+		return pending[:0]
+	}
+	return pending
+}
+
+func (c *Capture) flushCapturedLines(lines []byte) {
+	if len(lines) == 0 {
+		return
+	}
+	c.captureIfInteresting(string(lines))
+	if getLogSink() != nil {
+		c.emitToLogSink(lines)
+	}
+}
+
+func logPipeReadError(err error) {
+	if err == io.EOF {
+		return
+	}
+	if sink := getLogSink(); sink != nil {
+		sink("error", "Error reading stderr pipe: "+err.Error())
+	}
 }
 
 // isAuthRelated determines if a log message is related to authentication or token issues.

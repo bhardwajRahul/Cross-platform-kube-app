@@ -138,39 +138,12 @@ func prepareReloadMergeContext(
 	*unstructured.Unstructured,
 	error,
 ) {
-	if deps.KubernetesClient == nil || deps.DynamicClient == nil {
-		return nil, nil, nil, fmt.Errorf("kubernetes client not initialized")
-	}
-	if ctx == nil {
-		ctx = deps.Context
-		if ctx == nil {
-			ctx = context.Background()
-		}
-	}
-
-	if strings.TrimSpace(req.BaseYAML) == "" || strings.TrimSpace(req.DraftYAML) == "" {
-		return nil, nil, nil, fmt.Errorf("baseline YAML and draft YAML are required")
-	}
-	if strings.TrimSpace(req.Kind) == "" || strings.TrimSpace(req.APIVersion) == "" {
-		return nil, nil, nil, fmt.Errorf("apiVersion and kind are required")
-	}
-	if strings.TrimSpace(req.Name) == "" {
-		return nil, nil, nil, fmt.Errorf("metadata.name is required")
-	}
-
-	baseObj, err := parseYAMLToUnstructured(strings.TrimSpace(req.BaseYAML))
+	ctx, err := objectMutationContext(ctx, deps)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if err := validateReloadMergeObject(baseObj, req, "baseline YAML"); err != nil {
-		return nil, nil, nil, err
-	}
-
-	draftObj, err := parseYAMLToUnstructured(strings.TrimSpace(req.DraftYAML))
+	baseObj, draftObj, err := parseReloadMergeObjects(req)
 	if err != nil {
-		return nil, nil, nil, err
-	}
-	if err := validateReloadMergeObject(draftObj, req, "draft YAML"); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -180,16 +153,9 @@ func prepareReloadMergeContext(
 		return nil, nil, nil, fmt.Errorf("failed to resolve resource mapping for %s: %w", gvk.String(), err)
 	}
 
-	var resource interface {
-		Get(context.Context, string, metav1.GetOptions, ...string) (*unstructured.Unstructured, error)
-	}
-	if isNamespaced {
-		if strings.TrimSpace(req.Namespace) == "" {
-			return nil, nil, nil, fmt.Errorf("namespaced resources require metadata.namespace")
-		}
-		resource = deps.DynamicClient.Resource(gvr).Namespace(req.Namespace)
-	} else {
-		resource = deps.DynamicClient.Resource(gvr)
+	resource, err := dynamicResourceForScope(deps.DynamicClient, gvr, isNamespaced, req.Namespace)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	currentObj, err := resource.Get(ctx, req.Name, metav1.GetOptions{})
@@ -197,20 +163,55 @@ func prepareReloadMergeContext(
 		return nil, nil, nil, wrapKubernetesError(err, "failed to fetch live object")
 	}
 
-	if req.UID != "" && string(currentObj.GetUID()) != req.UID {
-		currentYAML, yamlErr := marshalObjectYAML(currentObj)
-		if yamlErr != nil {
-			return nil, nil, nil, yamlErr
-		}
-		return nil, nil, nil, &objectYAMLError{
-			Code:                   "ObjectUIDMismatch",
-			Message:                fmt.Sprintf("object identity changed since editing began: current uid is %s, editor tracked %s", currentObj.GetUID(), req.UID),
-			CurrentYAML:            currentYAML,
-			CurrentResourceVersion: currentObj.GetResourceVersion(),
-		}
+	if err := validateReloadMergeUID(currentObj, req); err != nil {
+		return nil, nil, nil, err
 	}
 
 	return baseObj, draftObj, currentObj, nil
+}
+
+func parseReloadMergeObjects(req ObjectYAMLReloadMergeRequest) (*unstructured.Unstructured, *unstructured.Unstructured, error) {
+	if strings.TrimSpace(req.BaseYAML) == "" || strings.TrimSpace(req.DraftYAML) == "" {
+		return nil, nil, fmt.Errorf("baseline YAML and draft YAML are required")
+	}
+	if strings.TrimSpace(req.Kind) == "" || strings.TrimSpace(req.APIVersion) == "" {
+		return nil, nil, fmt.Errorf("apiVersion and kind are required")
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, nil, fmt.Errorf("metadata.name is required")
+	}
+
+	base, err := parseYAMLToUnstructured(strings.TrimSpace(req.BaseYAML))
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := validateReloadMergeObject(base, req, "baseline YAML"); err != nil {
+		return nil, nil, err
+	}
+	draft, err := parseYAMLToUnstructured(strings.TrimSpace(req.DraftYAML))
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := validateReloadMergeObject(draft, req, "draft YAML"); err != nil {
+		return nil, nil, err
+	}
+	return base, draft, nil
+}
+
+func validateReloadMergeUID(current *unstructured.Unstructured, req ObjectYAMLReloadMergeRequest) error {
+	if req.UID == "" || string(current.GetUID()) == req.UID {
+		return nil
+	}
+	currentYAML, err := marshalObjectYAML(current)
+	if err != nil {
+		return err
+	}
+	return &objectYAMLError{
+		Code:                   "ObjectUIDMismatch",
+		Message:                fmt.Sprintf("object identity changed since editing began: current uid is %s, editor tracked %s", current.GetUID(), req.UID),
+		CurrentYAML:            currentYAML,
+		CurrentResourceVersion: current.GetResourceVersion(),
+	}
 }
 
 func validateReloadMergeObject(

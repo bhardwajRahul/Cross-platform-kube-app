@@ -991,6 +991,12 @@ type ClusterAttentionOptions struct {
 	IgnoredObjectPruner func(resourcemodel.ResourceRef)
 }
 
+type attentionIngestRegistration struct {
+	gvr     schema.GroupVersionResource
+	source  attentionSource
+	include bool
+}
+
 func RegisterClusterAttentionDomain(
 	reg *domain.Registry,
 	factory informers.SharedInformerFactory,
@@ -1005,7 +1011,30 @@ func RegisterClusterAttentionDomain(
 	index := newClusterAttentionIndex(meta, time.Now)
 	index.SetIgnoreRules(options.IgnoreRules)
 	index.SetIgnoredObjectPruner(options.IgnoredObjectPruner)
-	sources := []typedTableResourceSource{
+	sources := clusterAttentionSources(permissions)
+	registerAttentionIngestSources(index, ingestManager, []attentionIngestRegistration{
+		{PodGVR, attentionSourcePod, permissions.IncludePods},
+		{DeploymentGVR, attentionSourceWorkload, permissions.IncludeDeployments},
+		{StatefulSetGVR, attentionSourceWorkload, permissions.IncludeStatefulSets},
+		{DaemonSetGVR, attentionSourceWorkload, permissions.IncludeDaemonSets},
+		{JobGVR, attentionSourceWorkload, permissions.IncludeJobs},
+		{CronJobGVR, attentionSourceWorkload, permissions.IncludeCronJobs},
+		{NodeGVR, attentionSourceNode, permissions.IncludeNodes},
+	})
+	if err := registerAttentionEventSource(index, factory, permissions.IncludeEvents, meta); err != nil {
+		index.Stop()
+		return nil, err
+	}
+	reg.RegisterMaintainedStore(clusterAttentionDomainName, index)
+	if err := reg.Register(refresh.DomainConfig{Name: clusterAttentionDomainName, BuildSnapshot: (&ClusterAttentionBuilder{index: index, sources: sources}).Build}); err != nil {
+		index.Stop()
+		return nil, err
+	}
+	return index, nil
+}
+
+func clusterAttentionSources(permissions ClusterAttentionPermissions) []typedTableResourceSource {
+	return []typedTableResourceSource{
 		{Kind: "Pod", Group: "", Resource: "pods", Available: permissions.IncludePods},
 		{Kind: "Deployment", Group: "apps", Resource: "deployments", Available: permissions.IncludeDeployments},
 		{Kind: "StatefulSet", Group: "apps", Resource: "statefulsets", Available: permissions.IncludeStatefulSets},
@@ -1015,19 +1044,9 @@ func RegisterClusterAttentionDomain(
 		{Kind: "Node", Group: "", Resource: "nodes", Available: permissions.IncludeNodes},
 		{Kind: "Event", Group: "", Resource: "events", Available: permissions.IncludeEvents},
 	}
-	registrations := []struct {
-		gvr     schema.GroupVersionResource
-		source  attentionSource
-		include bool
-	}{
-		{PodGVR, attentionSourcePod, permissions.IncludePods},
-		{DeploymentGVR, attentionSourceWorkload, permissions.IncludeDeployments},
-		{StatefulSetGVR, attentionSourceWorkload, permissions.IncludeStatefulSets},
-		{DaemonSetGVR, attentionSourceWorkload, permissions.IncludeDaemonSets},
-		{JobGVR, attentionSourceWorkload, permissions.IncludeJobs},
-		{CronJobGVR, attentionSourceWorkload, permissions.IncludeCronJobs},
-		{NodeGVR, attentionSourceNode, permissions.IncludeNodes},
-	}
+}
+
+func registerAttentionIngestSources(index *ClusterAttentionIndex, ingestManager *ingest.IngestManager, registrations []attentionIngestRegistration) {
 	for _, registration := range registrations {
 		owner := registration.gvr.String()
 		index.registerOwnerKind(owner, attentionKindForSource(registration.source, registration.gvr))
@@ -1037,50 +1056,49 @@ func RegisterClusterAttentionDomain(
 			index.markOwnerUnavailable(owner)
 		}
 	}
+}
+
+func registerAttentionEventSource(index *ClusterAttentionIndex, factory informers.SharedInformerFactory, include bool, meta ClusterMeta) error {
 	index.registerOwnerKind("events", "Event")
-	if permissions.IncludeEvents {
-		if factory == nil {
-			index.Stop()
-			return nil, fmt.Errorf("%s shared informer factory is nil", clusterAttentionDomainName)
-		}
-		events := factory.Core().V1().Events().Informer()
-		index.eventRowsSynced = events.HasSynced
-		index.eventRows = func() []attentionSourceRecord {
-			objects := events.GetIndexer().List()
-			rows := make([]attentionSourceRecord, 0, len(objects))
-			for _, object := range objects {
-				event, ok := object.(*corev1.Event)
-				if !ok {
-					continue
-				}
-				if record, keep := attentionRecordFromEvent(meta, event); keep {
-					rows = append(rows, record)
-				}
-			}
-			return rows
-		}
-		if _, err := events.AddEventHandler(cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) { index.upsertEvent(meta, obj) },
-			UpdateFunc: func(oldObj, newObj interface{}) {
-				if eventUpdateIsEcho(oldObj, newObj) {
-					return
-				}
-				index.upsertEvent(meta, newObj)
-			},
-			DeleteFunc: func(obj interface{}) { index.deleteEvent(meta, obj) },
-		}); err != nil {
-			index.Stop()
-			return nil, fmt.Errorf("%s: register events handler: %w", clusterAttentionDomainName, err)
-		}
-	} else {
+	if !include {
 		index.markOwnerUnavailable("events")
+		return nil
 	}
-	reg.RegisterMaintainedStore(clusterAttentionDomainName, index)
-	if err := reg.Register(refresh.DomainConfig{Name: clusterAttentionDomainName, BuildSnapshot: (&ClusterAttentionBuilder{index: index, sources: sources}).Build}); err != nil {
-		index.Stop()
-		return nil, err
+	if factory == nil {
+		return fmt.Errorf("%s shared informer factory is nil", clusterAttentionDomainName)
 	}
-	return index, nil
+	events := factory.Core().V1().Events().Informer()
+	index.eventRowsSynced = events.HasSynced
+	index.eventRows = func() []attentionSourceRecord {
+		return attentionEventRows(meta, events.GetIndexer().List())
+	}
+	_, err := events.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) { index.upsertEvent(meta, obj) },
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			if !eventUpdateIsEcho(oldObj, newObj) {
+				index.upsertEvent(meta, newObj)
+			}
+		},
+		DeleteFunc: func(obj interface{}) { index.deleteEvent(meta, obj) },
+	})
+	if err != nil {
+		return fmt.Errorf("%s: register events handler: %w", clusterAttentionDomainName, err)
+	}
+	return nil
+}
+
+func attentionEventRows(meta ClusterMeta, objects []interface{}) []attentionSourceRecord {
+	rows := make([]attentionSourceRecord, 0, len(objects))
+	for _, object := range objects {
+		event, ok := object.(*corev1.Event)
+		if !ok {
+			continue
+		}
+		if record, keep := attentionRecordFromEvent(meta, event); keep {
+			rows = append(rows, record)
+		}
+	}
+	return rows
 }
 
 func attentionKindForSource(source attentionSource, gvr schema.GroupVersionResource) string {

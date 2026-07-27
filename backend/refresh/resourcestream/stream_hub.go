@@ -29,31 +29,14 @@ func (m *Manager) streamHub() managerStreamHub {
 
 func (h managerStreamHub) subscribe(selector StreamSelector) (*Subscription, error) {
 	m := h.manager
-	if m == nil {
-		return nil, errors.New("resource stream not initialised")
-	}
-	if selector.ClusterID != "" && selector.ClusterID != m.clusterMeta.ClusterID {
-		return nil, errors.New("cluster mismatch")
+	if err := validateStreamSelector(m, selector); err != nil {
+		return nil, err
 	}
 	domain := selector.Domain
 	normalized := selector.CanonicalScope()
 	// Avoid pre-checking permissions so partial streams can still deliver updates.
-
-	m.mu.Lock()
-	scopeSubscribers, ok := m.subscribers[domain]
-	if !ok {
-		scopeSubscribers = make(map[string]map[uint64]*subscription)
-		m.subscribers[domain] = scopeSubscribers
-	}
-
-	subs, ok := scopeSubscribers[normalized]
-	if !ok {
-		subs = make(map[uint64]*subscription)
-		scopeSubscribers[normalized] = subs
-	}
-	if len(subs) >= config.ResourceStreamMaxSubscribersPerScope {
-		m.mu.Unlock()
-		err := fmt.Errorf("resource stream subscriber limit reached for %s/%s", domain, normalized)
+	id, sub, err := m.addSubscriber(domain, normalized)
+	if err != nil {
 		m.logWarn(err.Error())
 		if m.telemetry != nil {
 			m.telemetry.RecordStreamError(telemetry.StreamResources, err)
@@ -61,42 +44,70 @@ func (h managerStreamHub) subscribe(selector StreamSelector) (*Subscription, err
 		return nil, err
 	}
 
+	return &Subscription{
+		Domain:  domain,
+		Scope:   normalized,
+		Updates: sub.ch,
+		Drops:   sub.drops,
+		Cancel:  func() { m.cancelSubscription(domain, normalized, id, sub) },
+	}, nil
+}
+
+func validateStreamSelector(m *Manager, selector StreamSelector) error {
+	if m == nil {
+		return errors.New("resource stream not initialised")
+	}
+	if selector.ClusterID != "" && selector.ClusterID != m.clusterMeta.ClusterID {
+		return errors.New("cluster mismatch")
+	}
+	return nil
+}
+
+func (m *Manager) addSubscriber(domain, scope string) (uint64, *subscription, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	domainSubscribers := m.subscribers[domain]
+	if domainSubscribers == nil {
+		domainSubscribers = make(map[string]map[uint64]*subscription)
+		m.subscribers[domain] = domainSubscribers
+	}
+	subscribers := domainSubscribers[scope]
+	if subscribers == nil {
+		subscribers = make(map[uint64]*subscription)
+		domainSubscribers[scope] = subscribers
+	}
+	if len(subscribers) >= config.ResourceStreamMaxSubscribersPerScope {
+		return 0, nil, fmt.Errorf("resource stream subscriber limit reached for %s/%s", domain, scope)
+	}
 	id := atomic.AddUint64(&m.nextID, 1)
 	sub := &subscription{
 		ch:      make(chan Update, config.ResourceStreamSubscriberBufferSize),
 		drops:   make(chan DropReason, 1),
 		created: time.Now(),
 	}
-	subs[id] = sub
-	m.mu.Unlock()
+	subscribers[id] = sub
+	return id, sub, nil
+}
 
-	cancel := func() {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		if domainSubs, ok := m.subscribers[domain]; ok {
-			if scopeSubs, ok := domainSubs[normalized]; ok {
-				if current, exists := scopeSubs[id]; exists && current == sub {
-					delete(scopeSubs, id)
-					if len(scopeSubs) == 0 {
-						delete(domainSubs, normalized)
-						m.clearScopeStateLocked(domain, normalized)
-					}
-					sub.close(DropReasonClosed)
-				}
-			}
-			if len(domainSubs) == 0 {
-				delete(m.subscribers, domain)
-			}
-		}
+func (m *Manager) cancelSubscription(domain, scope string, id uint64, sub *subscription) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	domainSubscribers := m.subscribers[domain]
+	if domainSubscribers == nil {
+		return
 	}
-
-	return &Subscription{
-		Domain:  domain,
-		Scope:   normalized,
-		Updates: sub.ch,
-		Drops:   sub.drops,
-		Cancel:  cancel,
-	}, nil
+	scopeSubscribers := domainSubscribers[scope]
+	if current, exists := scopeSubscribers[id]; exists && current == sub {
+		delete(scopeSubscribers, id)
+		if len(scopeSubscribers) == 0 {
+			delete(domainSubscribers, scope)
+			m.clearScopeStateLocked(domain, scope)
+		}
+		sub.close(DropReasonClosed)
+	}
+	if len(domainSubscribers) == 0 {
+		delete(m.subscribers, domain)
+	}
 }
 
 func (h managerStreamHub) resume(selector StreamSelector, since uint64) ([]Update, bool) {
@@ -134,55 +145,63 @@ func (h managerStreamHub) broadcast(domain string, scopes []string, update Updat
 
 	// Fan-out updates per scope and trigger a RESET when subscribers fall behind.
 	for _, scope := range uniqueScopes(scopes) {
-		delivered := 0
-		backpressureResets := 0
-		backpressureDrops := 0
-		closedCount := 0
+		result := m.broadcastScope(domain, scope, update)
+		m.recordBroadcastResult(domain, scope, result)
+	}
+}
 
-		scopedUpdate, items := m.prepareBroadcast(domain, scope, update)
-		for _, item := range items {
-			if item.sub.isResyncing() {
-				continue
-			}
-			sent, closed, reset := m.trySend(item.sub, scopedUpdate)
-			if closed {
-				closedCount++
-				go m.dropSubscriber(domain, scope, item.id, item.sub, DropReasonClosed)
-				continue
-			}
-			if reset {
-				backpressureResets++
-				continue
-			}
-			if sent {
-				delivered++
-				continue
-			}
-			backpressureDrops++
+type broadcastResult struct {
+	delivered          int
+	backpressureResets int
+	backpressureDrops  int
+	closed             int
+}
+
+func (m *Manager) broadcastScope(domain, scope string, update Update) broadcastResult {
+	var result broadcastResult
+	scopedUpdate, items := m.prepareBroadcast(domain, scope, update)
+	for _, item := range items {
+		if item.sub.isResyncing() {
+			continue
+		}
+		sent, closed, reset := m.trySend(item.sub, scopedUpdate)
+		switch {
+		case closed:
+			result.closed++
+			go m.dropSubscriber(domain, scope, item.id, item.sub, DropReasonClosed)
+		case reset:
+			result.backpressureResets++
+		case sent:
+			result.delivered++
+		default:
+			result.backpressureDrops++
 			go m.dropSubscriber(domain, scope, item.id, item.sub, DropReasonBackpressure)
 		}
+	}
+	return result
+}
 
-		if m.telemetry != nil {
-			backpressureEvents := backpressureResets + backpressureDrops
-			// Attribute deliveries/drops to the resource domain so diagnostics can
-			// show one Streams row per domain (sessions/connect stay stream-level).
-			m.telemetry.RecordStreamDeliveryForDomain(telemetry.StreamResources, domain, delivered, backpressureEvents)
-			if backpressureEvents > 0 {
-				m.telemetry.RecordStreamErrorForDomain(
-					telemetry.StreamResources,
+func (m *Manager) recordBroadcastResult(domain, scope string, result broadcastResult) {
+	backpressureEvents := result.backpressureResets + result.backpressureDrops
+	if m.telemetry != nil {
+		// Attribute deliveries/drops to the resource domain so diagnostics can
+		// show one Streams row per domain (sessions/connect stay stream-level).
+		m.telemetry.RecordStreamDeliveryForDomain(telemetry.StreamResources, domain, result.delivered, backpressureEvents)
+		if backpressureEvents > 0 {
+			m.telemetry.RecordStreamErrorForDomain(
+				telemetry.StreamResources,
+				domain,
+				fmt.Errorf(
+					"resource stream backlog reset %d subscriber(s) and dropped %d subscriber(s) for %s/%s",
+					result.backpressureResets,
+					result.backpressureDrops,
 					domain,
-					fmt.Errorf(
-						"resource stream backlog reset %d subscriber(s) and dropped %d subscriber(s) for %s/%s",
-						backpressureResets,
-						backpressureDrops,
-						domain,
-						scope,
-					),
-				)
-			}
+					scope,
+				),
+			)
 		}
-		if closedCount > 0 {
-			m.logInfo(fmt.Sprintf("resource stream: cleaned up %d closed subscribers for %s/%s", closedCount, domain, scope))
-		}
+	}
+	if result.closed > 0 {
+		m.logInfo(fmt.Sprintf("resource stream: cleaned up %d closed subscribers for %s/%s", result.closed, domain, scope))
 	}
 }

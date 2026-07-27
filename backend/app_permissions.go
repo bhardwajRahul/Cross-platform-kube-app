@@ -104,202 +104,200 @@ type nsDiagEntry struct {
 	checkCount        int
 }
 
+type permissionQueryBatch struct {
+	results          []capabilities.PermissionResult
+	resolutionCache  map[string]permissionResolutionResult
+	preparedQueries  []preparedPermissionQuery
+	ssrrFetchesByKey map[string]ssrrNamespaceKey
+	ssarByCluster    map[string][]ssarItem
+	nsDiag           map[string]*nsDiagEntry
+	resolveDuration  time.Duration
+	ssrrDuration     time.Duration
+	ssarDuration     time.Duration
+}
+
 // QueryPermissions evaluates a batch of permission queries using SSRR caching
 // with SSAR fallback. All errors are per-item; the top-level error is always nil.
 func (a *App) QueryPermissions(queries []capabilities.PermissionQuery) (*capabilities.QueryPermissionsResponse, error) {
 	ctx := a.CtxOrBackground()
-	results := make([]capabilities.PermissionResult, len(queries))
 	startedAt := time.Now()
-	var resolveDuration time.Duration
-	var ssrrDuration time.Duration
-	var ssarDuration time.Duration
-
-	// Per-request GVK resolution cache. Permission descriptors commonly
-	// repeat the same kind across verbs/subresources; resolving once keeps
-	// first-load latency tied to unique resources, not descriptor count.
-	resolutionCache := make(map[string]permissionResolutionResult)
-	preparedQueries := make([]preparedPermissionQuery, 0, len(queries))
-	ssrrFetchesByKey := make(map[string]ssrrNamespaceKey)
-	// Per-cluster SSAR fallback batches.
-	ssarByCluster := make(map[string][]ssarItem)
-	// Per-namespace diagnostics keyed by "clusterId|namespace".
-	nsDiag := make(map[string]*nsDiagEntry)
-
-	for i, q := range queries {
-		// Normalize input fields.
-		q.ID = strings.TrimSpace(q.ID)
-		q.ClusterId = strings.TrimSpace(q.ClusterId)
-		q.Group = strings.TrimSpace(q.Group)
-		q.Version = strings.TrimSpace(q.Version)
-		q.ResourceKind = strings.TrimSpace(q.ResourceKind)
-		q.Verb = strings.ToLower(strings.TrimSpace(q.Verb))
-		q.Namespace = strings.TrimSpace(q.Namespace)
-		q.Subresource = strings.TrimSpace(q.Subresource)
-		q.Name = strings.TrimSpace(q.Name)
-
-		// Write normalized values back for ResultFromQuery.
-		queries[i] = q
-		results[i] = capabilities.ResultFromQuery(q)
-
-		// Validate required fields.
-		if q.ID == "" || q.Verb == "" || q.ResourceKind == "" || q.ClusterId == "" {
-			results[i].Source = "error"
-			results[i].Error = "missing required field (id, verb, resourceKind, or clusterId)"
-			continue
-		}
-
-		// Resolve the GVR through the cluster resource resolver so colliding
-		// kinds disambiguate by group/version.
-		resolveStart := time.Now()
-		gvr, isNamespaced, err := a.resolveGVRForPermissionQueryCached(ctx, q, resolutionCache)
-		resolveDuration += time.Since(resolveStart)
-		if err != nil {
-			results[i].Source = "error"
-			results[i].Error = fmt.Sprintf("failed to resolve resource kind %q: %v", q.ResourceKind, err)
-			continue
-		}
-
-		// Build resource attributes for potential SSAR fallback.
-		attrs := &authorizationv1.ResourceAttributes{
-			Namespace:   q.Namespace,
-			Verb:        q.Verb,
-			Group:       gvr.Group,
-			Resource:    gvr.Resource,
-			Subresource: q.Subresource,
-			Name:        q.Name,
-		}
-
-		prepared := preparedPermissionQuery{
-			resultIdx:    i,
-			query:        q,
-			gvr:          gvr,
-			isNamespaced: isNamespaced,
-			attributes:   attrs,
-		}
-
-		if isNamespaced && q.Namespace != "" {
-			diagKey := q.ClusterId + "|" + q.Namespace
-			prepared.diagnosticKey = diagKey
-			diag := nsDiag[diagKey]
-			if diag == nil {
-				diag = &nsDiagEntry{
-					clusterId: q.ClusterId,
-					namespace: q.Namespace,
-				}
-				nsDiag[diagKey] = diag
-			}
-			diag.checkCount++
-			ssrrFetchesByKey[diagKey] = ssrrNamespaceKey{
-				clusterID: q.ClusterId,
-				namespace: q.Namespace,
-			}
-		}
-
-		preparedQueries = append(preparedQueries, prepared)
-	}
+	batch := newPermissionQueryBatch(len(queries))
+	a.preparePermissionQueries(ctx, queries, batch)
 
 	ssrrStart := time.Now()
-	ssrrResults := a.fetchSSRRRulesForNamespaces(ctx, ssrrFetchesByKey)
-	ssrrDuration += time.Since(ssrrStart)
+	ssrrResults := a.fetchSSRRRulesForNamespaces(ctx, batch.ssrrFetchesByKey)
+	batch.ssrrDuration = time.Since(ssrrStart)
+	a.evaluatePermissionQueries(batch, ssrrResults)
+	a.executePermissionSSARBatches(ctx, batch)
 
-	for _, prepared := range preparedQueries {
-		q := prepared.query
-		attrs := prepared.attributes
-		if !prepared.isNamespaced || q.Namespace == "" {
-			// Cluster-scoped resources and namespace-scoped resources without
-			// a concrete namespace route directly to SSAR. The latter is used
-			// for cluster-wide actions like node drain, where pods may be
-			// evicted or deleted from any namespace.
-			attrs.Namespace = ""
-			ssarByCluster[q.ClusterId] = append(ssarByCluster[q.ClusterId], ssarItem{
-				resultIdx: prepared.resultIdx,
-				attrs: capabilities.ReviewAttributes{
-					ID:         q.ID,
-					Attributes: attrs,
-				},
-			})
-			continue
-		}
-
-		diag := nsDiag[prepared.diagnosticKey]
-		ssrrResult, ok := ssrrResults[prepared.diagnosticKey]
-		if !ok {
-			ssrrResult.err = fmt.Errorf("SSRR result missing for cluster %s namespace %s", q.ClusterId, q.Namespace)
-		}
-		if ssrrResult.err != nil {
-			// SSRR fetch failed: fall back to SSAR.
-			diag.method = "ssar"
-			diag.ssarFallbackCount++
-			ssarByCluster[q.ClusterId] = append(ssarByCluster[q.ClusterId], ssarItem{
-				resultIdx: prepared.resultIdx,
-				attrs: capabilities.ReviewAttributes{
-					ID:         q.ID,
-					Attributes: attrs,
-				},
-			})
-			continue
-		}
-		status := ssrrResult.status
-
-		// SSRR succeeded: record diagnostics.
-		if diag.method == "" {
-			diag.method = "ssrr"
-		}
-		diag.ssrrIncomplete = diag.ssrrIncomplete || status.Incomplete
-		diag.ssrrRuleCount = len(status.ResourceRules)
-
-		// Try to match the check against cached rules.
-		matched := capabilities.MatchRules(status.ResourceRules, prepared.gvr.Group, prepared.gvr.Resource, q.Verb, q.Subresource, q.Name)
-		if matched {
-			results[prepared.resultIdx].Allowed = true
-			results[prepared.resultIdx].Source = "ssrr"
-			continue
-		}
-
-		if !status.Incomplete {
-			// Rules are complete and no match: definitively denied.
-			results[prepared.resultIdx].Allowed = false
-			results[prepared.resultIdx].Source = "denied"
-			results[prepared.resultIdx].Reason = "no matching rule"
-			continue
-		}
-
-		// Rules incomplete and no match: fall back to SSAR.
-		diag.ssarFallbackCount++
-		ssarByCluster[q.ClusterId] = append(ssarByCluster[q.ClusterId], ssarItem{
-			resultIdx: prepared.resultIdx,
-			attrs: capabilities.ReviewAttributes{
-				ID:         q.ID,
-				Attributes: attrs,
-			},
-		})
-	}
-
-	// Execute SSAR fallback batches per cluster.
-	for clusterID, items := range ssarByCluster {
-		ssarStart := time.Now()
-		a.executeSSARFallback(ctx, clusterID, items, results)
-		ssarDuration += time.Since(ssarStart)
-	}
-
-	// Build diagnostics from accumulated data.
-	diagnostics := a.buildDiagnostics(nsDiag, ssarByCluster)
+	diagnostics := a.buildDiagnostics(batch.nsDiag, batch.ssarByCluster)
 	a.logQueryPermissionsBatch(queryPermissionsBatchLog{
 		checkCount:       len(queries),
-		resolutionCount:  len(resolutionCache),
-		namespaceCount:   len(nsDiag),
-		ssarCount:        countSSARItems(ssarByCluster),
+		resolutionCount:  len(batch.resolutionCache),
+		namespaceCount:   len(batch.nsDiag),
+		ssarCount:        countSSARItems(batch.ssarByCluster),
 		totalDuration:    time.Since(startedAt),
-		resolveDuration:  resolveDuration,
-		ssrrDuration:     ssrrDuration,
-		ssarDuration:     ssarDuration,
+		resolveDuration:  batch.resolveDuration,
+		ssrrDuration:     batch.ssrrDuration,
+		ssarDuration:     batch.ssarDuration,
 		diagnosticsCount: len(diagnostics),
 	})
 
 	return &capabilities.QueryPermissionsResponse{
-		Results:     results,
+		Results:     batch.results,
 		Diagnostics: diagnostics,
 	}, nil
+}
+
+func newPermissionQueryBatch(queryCount int) *permissionQueryBatch {
+	return &permissionQueryBatch{
+		results:          make([]capabilities.PermissionResult, queryCount),
+		resolutionCache:  make(map[string]permissionResolutionResult),
+		preparedQueries:  make([]preparedPermissionQuery, 0, queryCount),
+		ssrrFetchesByKey: make(map[string]ssrrNamespaceKey),
+		ssarByCluster:    make(map[string][]ssarItem),
+		nsDiag:           make(map[string]*nsDiagEntry),
+	}
+}
+
+func normalizePermissionQuery(q capabilities.PermissionQuery) capabilities.PermissionQuery {
+	q.ID = strings.TrimSpace(q.ID)
+	q.ClusterId = strings.TrimSpace(q.ClusterId)
+	q.Group = strings.TrimSpace(q.Group)
+	q.Version = strings.TrimSpace(q.Version)
+	q.ResourceKind = strings.TrimSpace(q.ResourceKind)
+	q.Verb = strings.ToLower(strings.TrimSpace(q.Verb))
+	q.Namespace = strings.TrimSpace(q.Namespace)
+	q.Subresource = strings.TrimSpace(q.Subresource)
+	q.Name = strings.TrimSpace(q.Name)
+	return q
+}
+
+func (a *App) preparePermissionQueries(ctx context.Context, queries []capabilities.PermissionQuery, batch *permissionQueryBatch) {
+	for index, raw := range queries {
+		query := normalizePermissionQuery(raw)
+		queries[index] = query
+		batch.results[index] = capabilities.ResultFromQuery(query)
+		prepared, duration, err := a.preparePermissionQuery(ctx, query, index, batch.resolutionCache)
+		batch.resolveDuration += duration
+		if err != nil {
+			batch.results[index].Source = "error"
+			batch.results[index].Error = err.Error()
+			continue
+		}
+		batch.registerPreparedQuery(prepared)
+	}
+}
+
+func (a *App) preparePermissionQuery(
+	ctx context.Context,
+	query capabilities.PermissionQuery,
+	resultIndex int,
+	resolutionCache map[string]permissionResolutionResult,
+) (preparedPermissionQuery, time.Duration, error) {
+	if query.ID == "" || query.Verb == "" || query.ResourceKind == "" || query.ClusterId == "" {
+		return preparedPermissionQuery{}, 0, fmt.Errorf("missing required field (id, verb, resourceKind, or clusterId)")
+	}
+	startedAt := time.Now()
+	gvr, isNamespaced, err := a.resolveGVRForPermissionQueryCached(ctx, query, resolutionCache)
+	duration := time.Since(startedAt)
+	if err != nil {
+		return preparedPermissionQuery{}, duration, fmt.Errorf("failed to resolve resource kind %q: %v", query.ResourceKind, err)
+	}
+	return preparedPermissionQuery{
+		resultIdx: resultIndex, query: query, gvr: gvr, isNamespaced: isNamespaced,
+		attributes: &authorizationv1.ResourceAttributes{
+			Namespace: query.Namespace, Verb: query.Verb, Group: gvr.Group, Resource: gvr.Resource,
+			Subresource: query.Subresource, Name: query.Name,
+		},
+	}, duration, nil
+}
+
+func (b *permissionQueryBatch) registerPreparedQuery(prepared preparedPermissionQuery) {
+	query := prepared.query
+	if prepared.isNamespaced && query.Namespace != "" {
+		diagnosticKey := query.ClusterId + "|" + query.Namespace
+		prepared.diagnosticKey = diagnosticKey
+		diagnostic := b.nsDiag[diagnosticKey]
+		if diagnostic == nil {
+			diagnostic = &nsDiagEntry{clusterId: query.ClusterId, namespace: query.Namespace}
+			b.nsDiag[diagnosticKey] = diagnostic
+		}
+		diagnostic.checkCount++
+		b.ssrrFetchesByKey[diagnosticKey] = ssrrNamespaceKey{clusterID: query.ClusterId, namespace: query.Namespace}
+	}
+	b.preparedQueries = append(b.preparedQueries, prepared)
+}
+
+func (a *App) evaluatePermissionQueries(batch *permissionQueryBatch, ssrrResults map[string]ssrrNamespaceResult) {
+	for _, prepared := range batch.preparedQueries {
+		a.evaluatePermissionQuery(batch, prepared, ssrrResults)
+	}
+}
+
+func (a *App) evaluatePermissionQuery(
+	batch *permissionQueryBatch,
+	prepared preparedPermissionQuery,
+	ssrrResults map[string]ssrrNamespaceResult,
+) {
+	query := prepared.query
+	if !prepared.isNamespaced || query.Namespace == "" {
+		prepared.attributes.Namespace = ""
+		batch.enqueueSSAR(prepared)
+		return
+	}
+
+	diagnostic := batch.nsDiag[prepared.diagnosticKey]
+	ssrrResult, ok := ssrrResults[prepared.diagnosticKey]
+	if !ok {
+		ssrrResult.err = fmt.Errorf("SSRR result missing for cluster %s namespace %s", query.ClusterId, query.Namespace)
+	}
+	if ssrrResult.err != nil {
+		diagnostic.method = "ssar"
+		diagnostic.ssarFallbackCount++
+		batch.enqueueSSAR(prepared)
+		return
+	}
+
+	status := ssrrResult.status
+	recordSSRRDiagnostic(diagnostic, status)
+	if capabilities.MatchRules(status.ResourceRules, prepared.gvr.Group, prepared.gvr.Resource, query.Verb, query.Subresource, query.Name) {
+		batch.results[prepared.resultIdx].Allowed = true
+		batch.results[prepared.resultIdx].Source = "ssrr"
+		return
+	}
+	if !status.Incomplete {
+		batch.results[prepared.resultIdx].Allowed = false
+		batch.results[prepared.resultIdx].Source = "denied"
+		batch.results[prepared.resultIdx].Reason = "no matching rule"
+		return
+	}
+	diagnostic.ssarFallbackCount++
+	batch.enqueueSSAR(prepared)
+}
+
+func recordSSRRDiagnostic(diagnostic *nsDiagEntry, status *authorizationv1.SubjectRulesReviewStatus) {
+	if diagnostic.method == "" {
+		diagnostic.method = "ssrr"
+	}
+	diagnostic.ssrrIncomplete = diagnostic.ssrrIncomplete || status.Incomplete
+	diagnostic.ssrrRuleCount = len(status.ResourceRules)
+}
+
+func (b *permissionQueryBatch) enqueueSSAR(prepared preparedPermissionQuery) {
+	query := prepared.query
+	b.ssarByCluster[query.ClusterId] = append(b.ssarByCluster[query.ClusterId], ssarItem{
+		resultIdx: prepared.resultIdx,
+		attrs:     capabilities.ReviewAttributes{ID: query.ID, Attributes: prepared.attributes},
+	})
+}
+
+func (a *App) executePermissionSSARBatches(ctx context.Context, batch *permissionQueryBatch) {
+	for clusterID, items := range batch.ssarByCluster {
+		startedAt := time.Now()
+		a.executeSSARFallback(ctx, clusterID, items, batch.results)
+		batch.ssarDuration += time.Since(startedAt)
+	}
 }
 
 func (a *App) fetchSSRRRulesForNamespaces(

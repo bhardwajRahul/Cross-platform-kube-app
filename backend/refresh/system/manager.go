@@ -235,163 +235,181 @@ func scopedResourcePredicate() func(group, resource string) bool {
 	}
 }
 
-// NewSubsystemWithServices returns a fully wired refresh subsystem.
-func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
-	registry := domain.New()
+func newInformerInfrastructure(cfg Config) (*permissions.Checker, *informer.Factory) {
 	runtimePerms := permissions.NewChecker(cfg.KubernetesClient, cfg.ClusterID, 0)
 	if len(cfg.AllowedNamespaces) > 0 {
 		runtimePerms.SetScope(cfg.AllowedNamespaces, scopedResourcePredicate())
 	}
-	// Decide once per process whether WatchList is usable, BEFORE the first
-	// informer factory issues a watch (client-go reads the WatchListClient gate
-	// lazily and caches it). If a bookmark-stripping proxy is in front of the
-	// apiserver this disables WatchList so informers fall back to LIST+WATCH
-	// instead of wedging. Idempotent — only the first cluster build runs the probe.
+	// Decide once per process whether WatchList is usable before the first
+	// informer factory issues a watch; client-go reads and caches the gate lazily.
 	informer.EnsureWatchListDecision(context.Background(), cfg.KubernetesClient)
-	informerFactory := informer.New(cfg.KubernetesClient, cfg.APIExtensionsClient, cfg.ResyncInterval, runtimePerms).
+	factory := informer.New(cfg.KubernetesClient, cfg.APIExtensionsClient, cfg.ResyncInterval, runtimePerms).
 		WithGatewayFactory(cfg.GatewayInformerFactory, cfg.GatewayAPIPresence)
+	return runtimePerms, factory
+}
 
-	// Owned-reflector ingestion for cut kinds: build the manager, register each cut
-	// kind's table/catalog/object-map projectors, and let the composite hub start +
-	// sync-gate it alongside the factory. The factory no longer registers the cut
-	// kinds' informers (see informer.New), so the ingest manager is their sole source.
-	ingestManager := ingest.NewIngestManager(
+func newIngestInfrastructure(cfg Config, factory *informer.Factory, runtimePerms *permissions.Checker) (*ingest.IngestManager, error) {
+	clusterMeta := snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName}
+	manager := ingest.NewIngestManager(
 		streamrows.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName},
 		cfg.KubernetesClient,
 		cfg.APIExtensionsClient,
 		cfg.GatewayClient,
 		cfg.AllowedNamespaces...,
 	)
-	// Dynamic client for the on-demand dynamic (CRD-backed) reflectors the catalog promotes
-	// at runtime (objectcatalog maybePromote → RegisterDynamicCatalogReflector). Set before
-	// Start; nil leaves the on-demand path disabled and the catalog keeps listing CRs.
-	ingestManager.SetDynamicClient(cfg.DynamicClient)
-	registerIngestProjectors(ingestManager, cfg.ClusterID)
-	// Pods has no Stream descriptor (its table is the bespoke PodSummary), so the
-	// generic ingest loop above does not build it. Wire the pod reflector explicitly
-	// with its four-half projector, resolving the ReplicaSet->Deployment owner from
-	// the shared factory's RS lister — the RS informer stays registered (only pods is
-	// cut). Registered BEFORE the hub starts so the pod reflector launches with the
-	// rest and the initial relist is sync-gated.
+	manager.SetDynamicClient(cfg.DynamicClient)
+	registerIngestProjectors(manager, cfg.ClusterID)
 	jobControllerOwners := snapshot.NewJobControllerOwnerIndex()
-	registerPodReflector(
-		ingestManager,
-		informerFactory,
-		snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName},
-		jobControllerOwners.Lookup,
-	)
-	// The five workload kinds (Deployment/StatefulSet/DaemonSet/Job/CronJob) have no Stream
-	// descriptor either (their table is the bespoke cross-kind WorkloadSummary), so they too
-	// are wired with explicit bespoke projectors. ReplicaSet stays on its typed informer.
-	if err := registerWorkloadReflectors(ingestManager, snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName}); err != nil {
+	registerPodReflector(manager, factory, clusterMeta, jobControllerOwners.Lookup)
+	if err := registerWorkloadReflectors(manager, clusterMeta); err != nil {
 		return nil, err
 	}
-	if !ingestManager.AddBundleSink(snapshot.JobGVR, jobControllerOwners) {
+	if !manager.AddBundleSink(snapshot.JobGVR, jobControllerOwners) {
 		return nil, fmt.Errorf("register Job owner sink: Job ingest store is unavailable")
 	}
-	// Service and EndpointSlice have no Stream descriptor either (a Service row is the bespoke
-	// Service↔EndpointSlice join), so they are wired with explicit bespoke projectors. Ingress
-	// and NetworkPolicy ARE Stream-backed and handled by the generic loop above.
-	registerNetworkReflectors(ingestManager, snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName})
-	// Node has no Stream descriptor either (its table is the bespoke NodeSummary whose row
-	// joins per-node pod aggregates + metrics), so it is wired with an explicit bespoke
-	// projector. The nodes domain re-joins pod aggregates + metrics at serve.
-	registerNodeReflector(ingestManager, snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName})
+	registerNetworkReflectors(manager, clusterMeta)
+	registerNodeReflector(manager, clusterMeta)
+	manager.SetPermissionFilter(ingestPermissionFilter(runtimePerms))
+	return manager, nil
+}
 
-	// Permission-gate the ingest reflectors the way the shared factory gates its
-	// informers: a cut kind the identity cannot list+watch is skipped at Start rather
-	// than launching a reflector that only 403-retries and waits out the sync deadline.
-	// CONSERVATIVE: skip ONLY on a confirmed denial (allowed==false, no error). On an
-	// SSAR error, run the reflector anyway — the per-kind sync-deadline degrade backstops
-	// a true failure, so a transient permission blip never wrongly excludes a kind with
-	// no retry. Permission preflight below primes the same checker before Start, and
-	// cache misses still run the normal SubjectAccessReview path.
-	ingestManager.SetPermissionFilter(ingestPermissionFilter(runtimePerms))
+type permissionIssueRecorder struct {
+	issues []PermissionIssue
+}
 
+func (r *permissionIssueRecorder) append(domainName, resource string, errs ...error) {
+	err := errors.Join(errs...)
+	if err == nil {
+		return
+	}
+	r.issues = append(r.issues, PermissionIssue{Domain: domainName, Resource: resource, Err: err})
+}
+
+func logPermissionSkip(domainName, group, resource string) {
+	klog.V(2).Infof("Skipping registration for domain %s: insufficient permission to list %s/%s", domainName, group, resource)
+}
+
+func newMetricsServices(cfg Config, gate *permissionGate, recorder *telemetry.Recorder, issues *permissionIssueRecorder) (refresh.MetricsPoller, metrics.Provider) {
+	checks := []listCheck{
+		{group: "metrics.k8s.io", resource: "nodes"},
+		{group: "metrics.k8s.io", resource: "pods"},
+	}
+	results := gate.runListChecks(checks)
+	metricErrors := gate.listErrors(results)
+	issues.append("metrics-poller", "metrics.k8s.io/nodes,pods", metricErrors...)
+	if len(metricErrors) == 0 && gate.allListAllowed(results) {
+		return newEnabledMetricsServices(cfg, recorder)
+	}
+	logPermissionSkip("metrics-poller", "metrics.k8s.io", "nodes/pods")
+	return newDisabledMetricsServices(cfg, gate, results, recorder)
+}
+
+func newEnabledMetricsServices(cfg Config, recorder *telemetry.Recorder) (refresh.MetricsPoller, metrics.Provider) {
+	poller := metrics.NewPoller(cfg.MetricsClient, cfg.RestConfig, cfg.MetricsInterval, recorder)
+	poller.SetAllowedNamespaces(cfg.AllowedNamespaces)
+	demandPoller := metrics.NewDemandPoller(poller, poller, cfg.MetricsInterval*3)
+	return demandPoller, demandPoller
+}
+
+func newDisabledMetricsServices(cfg Config, gate *permissionGate, results []listCheckResult, recorder *telemetry.Recorder) (refresh.MetricsPoller, metrics.Provider) {
+	nodesErr := gate.listErrFor(results, "metrics.k8s.io", "nodes")
+	podsErr := gate.listErrFor(results, "metrics.k8s.io", "pods")
+	reason, detail := disabledMetricsReason(gate.listAllowedByKey(results), nodesErr, podsErr)
+	applog.Warn(cfg.Logger, detail, "Metrics")
+	disabled := metrics.NewDisabledPoller(recorder, reason)
+	return disabled, disabled
+}
+
+func disabledMetricsReason(allowed map[string]bool, nodesErr, podsErr error) (string, string) {
+	if nodesErr == nil && podsErr == nil {
+		return "Insufficient permissions for Metrics API", fmt.Sprintf(
+			"metrics polling disabled: access denied for metrics.k8s.io (nodesAllowed=%t podsAllowed=%t)",
+			allowed["metrics.k8s.io/nodes"],
+			allowed["metrics.k8s.io/pods"],
+		)
+	}
+	return "Metrics API not found (metrics-server)", fmt.Sprintf(
+		"metrics polling disabled: metrics API discovery failed (nodesErr=%v podsErr=%v)",
+		nodesErr,
+		podsErr,
+	)
+}
+
+func restServerHost(cfg *rest.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Host
+}
+
+func registerSubsystemDomains(factory *informer.Factory, gate *permissionGate, runtimePerms *permissions.Checker, registrations []domainRegistration) error {
+	preflight := preflightRequests(registrations, []informer.PermissionRequest{
+		{Group: "metrics.k8s.io", Resource: "nodes", Verb: "list"},
+		{Group: "metrics.k8s.io", Resource: "pods", Verb: "list"},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), config.PermissionPreflightTimeout)
+	defer cancel()
+	_ = factory.PrimePermissions(ctx, preflight)
+	return registerDomains(ctx, gate, runtimePerms, registrations)
+}
+
+func wireStreamObservers(
+	eventManager *eventstream.Manager,
+	resourceManager *resourcestream.Manager,
+	metricsPoller refresh.MetricsPoller,
+	snapshotService *snapshot.Service,
+	namespaceNotifier *snapshot.NamespaceChangeNotifier,
+	objectEventsNotifier *snapshot.ObjectEventsChangeNotifier,
+	attentionIndex *snapshot.ClusterAttentionIndex,
+) *NamespacesDoorbellObserver {
+	if resourceManager != nil {
+		resourceManager.SetSnapshotDomainInvalidator(snapshotService.InvalidateDomainCache)
+		wireMetricsObserver(metricsPoller, resourceManager)
+	}
+	if eventManager != nil && resourceManager != nil {
+		eventManager.SetSignalObserver(eventSignalObserver(resourceManager))
+	}
+	observer := &NamespacesDoorbellObserver{}
+	if resourceManager == nil {
+		return observer
+	}
+	if namespaceNotifier != nil {
+		wireNamespacesDoorbell(namespaceNotifier, resourceManager, observer)
+	}
+	if objectEventsNotifier != nil {
+		wireObjectEventsDoorbell(objectEventsNotifier, resourceManager)
+	}
+	if attentionIndex != nil {
+		wireClusterAttentionDoorbell(attentionIndex, resourceManager)
+	}
+	return observer
+}
+
+func wireMetricsObserver(metricsPoller refresh.MetricsPoller, resourceManager *resourcestream.Manager) {
+	if observable, ok := metricsPoller.(interface {
+		SetCollectionObserver(func(metrics.Metadata))
+	}); ok {
+		observable.SetCollectionObserver(metricsSignalObserver(resourceManager))
+	}
+}
+
+// NewSubsystemWithServices returns a fully wired refresh subsystem.
+func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
+	registry := domain.New()
+	runtimePerms, informerFactory := newInformerInfrastructure(cfg)
+	ingestManager, err := newIngestInfrastructure(cfg, informerFactory, runtimePerms)
+	if err != nil {
+		return nil, err
+	}
 	informerHub := newIngestInformerHub(informerFactory, ingestManager)
-
-	var permissionIssues []PermissionIssue
-
-	// appendIssue adds a permission issue to the list if any errors are present.
-	appendIssue := func(domainName, resource string, errs ...error) {
-		err := errors.Join(errs...)
-		if err != nil {
-			permissionIssues = append(permissionIssues, PermissionIssue{
-				Domain:   domainName,
-				Resource: resource,
-				Err:      err,
-			})
-		}
-	}
-
-	// logSkip logs a message indicating that registration for a domain is being skipped due to insufficient permissions.
-	logSkip := func(domainName, group, resource string) {
-		klog.V(2).Infof("Skipping registration for domain %s: insufficient permission to list %s/%s", domainName, group, resource)
-	}
-
-	gate := newPermissionGate(registry, informerFactory, appendIssue, logSkip)
+	issues := &permissionIssueRecorder{}
+	gate := newPermissionGate(registry, informerFactory, issues.append, logPermissionSkip)
 
 	telemetryRecorder := telemetry.NewRecorder()
 	telemetryRecorder.SetClusterMeta(cfg.ClusterID, cfg.ClusterName)
 
 	clusterMeta := snapshot.ClusterMeta{ClusterID: cfg.ClusterID, ClusterName: cfg.ClusterName}
-
-	var (
-		metricsPoller   refresh.MetricsPoller
-		metricsProvider metrics.Provider
-	)
-
-	serverHost := ""
-	if cfg.RestConfig != nil {
-		serverHost = cfg.RestConfig.Host
-	}
-
-	// *** Metrics polling ***
-
-	metricsChecks := []listCheck{
-		{group: "metrics.k8s.io", resource: "nodes"},
-		{group: "metrics.k8s.io", resource: "pods"},
-	}
-	metricsResults := gate.runListChecks(metricsChecks)
-	metricsErrs := gate.listErrors(metricsResults)
-	metricsAllowed := gate.allListAllowed(metricsResults)
-	allowedByKey := gate.listAllowedByKey(metricsResults)
-	metricsNodesAllowed := allowedByKey["metrics.k8s.io/nodes"]
-	metricsPodsAllowed := allowedByKey["metrics.k8s.io/pods"]
-	metricsNodesErr := gate.listErrFor(metricsResults, "metrics.k8s.io", "nodes")
-	metricsPodsErr := gate.listErrFor(metricsResults, "metrics.k8s.io", "pods")
-
-	// Check if metrics polling is allowed and append any permission issues.
-	appendIssue("metrics-poller", "metrics.k8s.io/nodes,pods", metricsErrs...)
-	if len(metricsErrs) == 0 && metricsAllowed {
-		poller := metrics.NewPoller(cfg.MetricsClient, cfg.RestConfig, cfg.MetricsInterval, telemetryRecorder)
-		poller.SetAllowedNamespaces(cfg.AllowedNamespaces)
-		idleTimeout := cfg.MetricsInterval * 3
-		demandPoller := metrics.NewDemandPoller(poller, poller, idleTimeout)
-		metricsPoller = demandPoller
-		metricsProvider = demandPoller
-	} else {
-		logSkip("metrics-poller", "metrics.k8s.io", "nodes/pods")
-
-		var disabledReasonUI string
-		var disabledLogDetail string
-
-		if metricsNodesErr == nil && metricsPodsErr == nil {
-			disabledReasonUI = "Insufficient permissions for Metrics API"
-			disabledLogDetail = fmt.Sprintf("metrics polling disabled: access denied for metrics.k8s.io (nodesAllowed=%t podsAllowed=%t)", metricsNodesAllowed, metricsPodsAllowed)
-		} else {
-			disabledReasonUI = "Metrics API not found (metrics-server)"
-			disabledLogDetail = fmt.Sprintf("metrics polling disabled: metrics API discovery failed (nodesErr=%v podsErr=%v)", metricsNodesErr, metricsPodsErr)
-		}
-
-		if disabledLogDetail != "" {
-			applog.Warn(cfg.Logger, disabledLogDetail, "Metrics")
-		}
-
-		disabled := metrics.NewDisabledPoller(telemetryRecorder, disabledReasonUI)
-		metricsPoller = disabled
-		metricsProvider = disabled
-	}
+	metricsPoller, metricsProvider := newMetricsServices(cfg, gate, telemetryRecorder, issues)
 
 	var namespaceNotifier *snapshot.NamespaceChangeNotifier
 	var objectEventsNotifier *snapshot.ObjectEventsChangeNotifier
@@ -403,7 +421,7 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 		metricsProvider: metricsProvider,
 		cfg:             cfg,
 		gate:            gate,
-		serverHost:      serverHost,
+		serverHost:      restServerHost(cfg.RestConfig),
 		noteNamespaceNotifier: func(notifier *snapshot.NamespaceChangeNotifier) {
 			namespaceNotifier = notifier
 		},
@@ -416,19 +434,7 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 	}
 
 	registrations := domainRegistrations(deps)
-	preflight := preflightRequests(registrations, []informer.PermissionRequest{
-		{Group: "metrics.k8s.io", Resource: "nodes", Verb: "list"},
-		{Group: "metrics.k8s.io", Resource: "pods", Verb: "list"},
-	})
-
-	// PrimePermissions checks the initial set of permissions required for the subsystem.
-	ctx, cancel := context.WithTimeout(context.Background(), config.PermissionPreflightTimeout)
-	defer cancel()
-	_ = informerFactory.PrimePermissions(ctx, preflight)
-
-	// Registration reuses the preflight deadline; runtime checks should hit the
-	// just-primed permission cache instead of extending startup indefinitely.
-	if err := registerDomains(ctx, gate, runtimePerms, registrations); err != nil {
+	if err := registerSubsystemDomains(informerFactory, gate, runtimePerms, registrations); err != nil {
 		return nil, err
 	}
 
@@ -467,46 +473,21 @@ func NewSubsystemWithServices(cfg Config) (*Subsystem, error) {
 	if err != nil {
 		return nil, err
 	}
-	if resourceManager != nil {
-		resourceManager.SetSnapshotDomainInvalidator(snapshotService.InvalidateDomainCache)
-	}
-	if eventManager != nil && resourceManager != nil {
-		eventManager.SetSignalObserver(eventSignalObserver(resourceManager))
-	}
-	// Metric doorbell: each successful poller collection notifies the stream so
-	// the frontend refetches metric-bearing tables on the poller's schedule —
-	// no client-side metric polling. Wired via type assertion because the
-	// poller may be the disabled stub, which has no observer.
-	if resourceManager != nil {
-		if observable, ok := metricsPoller.(interface {
-			SetCollectionObserver(func(metrics.Metadata))
-		}); ok {
-			observable.SetCollectionObserver(metricsSignalObserver(resourceManager))
-		}
-	}
-	// Namespaces doorbell: namespace object changes and workload-presence flips
-	// broadcast to the namespaces domain's subscribers, replacing the sidebar's
-	// 2s poll (the poll remains only as the stream-down fallback). The observer
-	// slot lets the app attach the cluster-Ready self-build hook post-construction.
-	namespacesDoorbellObserver := &NamespacesDoorbellObserver{}
-	if resourceManager != nil && namespaceNotifier != nil {
-		wireNamespacesDoorbell(namespaceNotifier, resourceManager, namespacesDoorbellObserver)
-	}
-	// Object-events doorbell: an event for a panel's object broadcasts to that
-	// object's subscribed events scope, replacing the Events tab's 10s poll
-	// (the poll remains only as the stream-down fallback).
-	if resourceManager != nil && objectEventsNotifier != nil {
-		wireObjectEventsDoorbell(objectEventsNotifier, resourceManager)
-	}
-	if resourceManager != nil && attentionIndex != nil {
-		wireClusterAttentionDoorbell(attentionIndex, resourceManager)
-	}
+	namespacesDoorbellObserver := wireStreamObservers(
+		eventManager,
+		resourceManager,
+		metricsPoller,
+		snapshotService,
+		namespaceNotifier,
+		objectEventsNotifier,
+		attentionIndex,
+	)
 
 	return &Subsystem{
 		Manager:              manager,
 		Handler:              mux,
 		Telemetry:            telemetryRecorder,
-		PermissionIssues:     permissionIssues,
+		PermissionIssues:     issues.issues,
 		InformerFactory:      informerFactory,
 		IngestManager:        ingestManager,
 		RuntimePerms:         runtimePerms,

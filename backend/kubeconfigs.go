@@ -16,6 +16,18 @@ import (
 	"k8s.io/client-go/util/homedir"
 )
 
+type kubeconfigWatchDirectory struct {
+	dir         string
+	unfiltered  bool
+	filterFiles map[string]struct{}
+}
+
+type discoveredSelectionPrune struct {
+	remainingSelections []string
+	remainingParsed     []kubeconfigSelection
+	removedClusterIDs   []string
+}
+
 // discoverKubeconfigs scans configured kubeconfig search paths for kubeconfig files.
 func (a *App) discoverKubeconfigs() error {
 	a.kubeconfigsMu.Lock()
@@ -42,41 +54,7 @@ func (a *App) discoverKubeconfigsLocked() error {
 	seenFiles := make(map[string]struct{})
 
 	for _, entry := range searchPaths {
-		resolved := resolveKubeconfigSearchPath(entry)
-		if resolved == "" {
-			continue
-		}
-		info, err := os.Stat(resolved)
-		if err != nil {
-			if os.IsNotExist(err) {
-				a.logger.Warn(fmt.Sprintf("Kubeconfig path not found: %s", resolved), logsources.KubeconfigManager)
-			} else {
-				a.logger.Warn(fmt.Sprintf("Failed to read kubeconfig path %s: %v", resolved, err), logsources.KubeconfigManager)
-			}
-			continue
-		}
-		foundRoot = true
-
-		if info.IsDir() {
-			a.logger.Debug(fmt.Sprintf("Scanning directory: %s", resolved), logsources.KubeconfigManager)
-			entries, err := os.ReadDir(resolved)
-			if err != nil {
-				a.logger.Warn(fmt.Sprintf("Failed to read kubeconfig directory %s: %v", resolved, err), logsources.KubeconfigManager)
-				continue
-			}
-			a.logger.Debug(fmt.Sprintf("Found %d items in %s", len(entries), resolved), logsources.KubeconfigManager)
-			for _, d := range entries {
-				// Skip directories - we only want files directly in the search directory.
-				if d.IsDir() {
-					continue
-				}
-				path := filepath.Join(resolved, d.Name())
-				a.appendKubeconfigFromFile(path, d.Name(), defaultConfigPath, true, seenFiles)
-			}
-			continue
-		}
-
-		a.appendKubeconfigFromFile(resolved, filepath.Base(resolved), defaultConfigPath, false, seenFiles)
+		foundRoot = a.discoverKubeconfigsAtPath(entry, defaultConfigPath, seenFiles) || foundRoot
 	}
 
 	if !foundRoot {
@@ -84,6 +62,46 @@ func (a *App) discoverKubeconfigsLocked() error {
 	}
 
 	return nil
+}
+
+func (a *App) discoverKubeconfigsAtPath(entry, defaultConfigPath string, seenFiles map[string]struct{}) bool {
+	resolved := resolveKubeconfigSearchPath(entry)
+	if resolved == "" {
+		return false
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		a.logKubeconfigPathReadError(resolved, err)
+		return false
+	}
+	if !info.IsDir() {
+		a.appendKubeconfigFromFile(resolved, filepath.Base(resolved), defaultConfigPath, false, seenFiles)
+		return true
+	}
+
+	a.logger.Debug(fmt.Sprintf("Scanning directory: %s", resolved), logsources.KubeconfigManager)
+	entries, err := os.ReadDir(resolved)
+	if err != nil {
+		a.logger.Warn(fmt.Sprintf("Failed to read kubeconfig directory %s: %v", resolved, err), logsources.KubeconfigManager)
+		return true
+	}
+	a.logger.Debug(fmt.Sprintf("Found %d items in %s", len(entries), resolved), logsources.KubeconfigManager)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(resolved, entry.Name())
+		a.appendKubeconfigFromFile(path, entry.Name(), defaultConfigPath, true, seenFiles)
+	}
+	return true
+}
+
+func (a *App) logKubeconfigPathReadError(path string, err error) {
+	if os.IsNotExist(err) {
+		a.logger.Warn(fmt.Sprintf("Kubeconfig path not found: %s", path), logsources.KubeconfigManager)
+		return
+	}
+	a.logger.Warn(fmt.Sprintf("Failed to read kubeconfig path %s: %v", path, err), logsources.KubeconfigManager)
 }
 
 // appendKubeconfigFromFile validates a kubeconfig file and appends its contexts.
@@ -700,51 +718,48 @@ func (a *App) resolvedKubeconfigWatchPaths() []watchedPath {
 		return nil
 	}
 
-	type dirEntry struct {
-		dir         string
-		unfiltered  bool
-		filterFiles map[string]struct{}
-	}
-
-	dirMap := make(map[string]*dirEntry)
+	dirMap := make(map[string]*kubeconfigWatchDirectory)
 	for _, entry := range searchPaths {
 		resolved := resolveKubeconfigSearchPath(entry)
 		if resolved == "" {
 			continue
 		}
-		info, statErr := os.Stat(resolved)
-		if statErr == nil && info.IsDir() {
-			key := kubeconfigPathKey(resolved)
-			if existing, ok := dirMap[key]; ok {
-				existing.unfiltered = true
-			} else {
-				dirMap[key] = &dirEntry{dir: resolved, unfiltered: true}
-			}
-			continue
-		}
-
-		parentDir := filepath.Dir(resolved)
-		parentInfo, parentErr := os.Stat(parentDir)
-		if parentErr != nil || !parentInfo.IsDir() {
-			continue
-		}
-		key := kubeconfigPathKey(parentDir)
-		filename := filepath.Base(resolved)
-		if existing, ok := dirMap[key]; ok {
-			if !existing.unfiltered {
-				if existing.filterFiles == nil {
-					existing.filterFiles = make(map[string]struct{})
-				}
-				existing.filterFiles[filename] = struct{}{}
-			}
-			continue
-		}
-		dirMap[key] = &dirEntry{
-			dir:         parentDir,
-			filterFiles: map[string]struct{}{filename: {}},
-		}
+		mergeKubeconfigWatchDirectory(dirMap, resolved)
 	}
 
+	return kubeconfigWatchedPaths(dirMap)
+}
+
+func mergeKubeconfigWatchDirectory(dirMap map[string]*kubeconfigWatchDirectory, resolved string) {
+	info, statErr := os.Stat(resolved)
+	if statErr == nil && info.IsDir() {
+		key := kubeconfigPathKey(resolved)
+		if existing := dirMap[key]; existing != nil {
+			existing.unfiltered = true
+			existing.filterFiles = nil
+			return
+		}
+		dirMap[key] = &kubeconfigWatchDirectory{dir: resolved, unfiltered: true}
+		return
+	}
+
+	parentDir := filepath.Dir(resolved)
+	parentInfo, parentErr := os.Stat(parentDir)
+	if parentErr != nil || !parentInfo.IsDir() {
+		return
+	}
+	key := kubeconfigPathKey(parentDir)
+	entry := dirMap[key]
+	if entry == nil {
+		entry = &kubeconfigWatchDirectory{dir: parentDir, filterFiles: make(map[string]struct{})}
+		dirMap[key] = entry
+	}
+	if !entry.unfiltered {
+		entry.filterFiles[filepath.Base(resolved)] = struct{}{}
+	}
+}
+
+func kubeconfigWatchedPaths(dirMap map[string]*kubeconfigWatchDirectory) []watchedPath {
 	result := make([]watchedPath, 0, len(dirMap))
 	for _, entry := range dirMap {
 		wp := watchedPath{dir: entry.dir}
@@ -973,43 +988,52 @@ func (a *App) pruneSelectionsAgainstDiscoveredKubeconfigs() {
 		return
 	}
 
-	remainingSelections := make([]string, 0, len(currentSelections))
-	remainingParsed := make([]kubeconfigSelection, 0, len(currentSelections))
-	removedClusterIDs := make([]string, 0)
+	prune := a.classifyDiscoveredSelections(currentSelections)
+	if len(prune.remainingSelections) == len(currentSelections) {
+		return
+	}
+
+	a.applySelectionPrune(prune.remainingSelections, prune.remainingParsed, prune.removedClusterIDs, logsources.KubeconfigManager)
+}
+
+func (a *App) classifyDiscoveredSelections(currentSelections []string) discoveredSelectionPrune {
+	result := discoveredSelectionPrune{
+		remainingSelections: make([]string, 0, len(currentSelections)),
+		remainingParsed:     make([]kubeconfigSelection, 0, len(currentSelections)),
+	}
 	removedSeen := make(map[string]struct{})
 
 	for _, raw := range currentSelections {
 		parsed, err := parseKubeconfigSelection(raw)
-		if err == nil && a.validateKubeconfigSelection(parsed) == nil {
-			remainingSelections = append(remainingSelections, parsed.String())
-			remainingParsed = append(remainingParsed, parsed)
+		if err != nil {
 			continue
 		}
-
-		if err == nil {
-			if clients := a.clusterClientsForSelection(parsed); clients != nil && clients.meta.ID != "" {
-				if _, exists := removedSeen[clients.meta.ID]; !exists {
-					removedSeen[clients.meta.ID] = struct{}{}
-					removedClusterIDs = append(removedClusterIDs, clients.meta.ID)
-				}
-				continue
-			}
-
-			meta := a.clusterMetaForSelection(parsed)
-			if meta.ID != "" {
-				if _, exists := removedSeen[meta.ID]; !exists {
-					removedSeen[meta.ID] = struct{}{}
-					removedClusterIDs = append(removedClusterIDs, meta.ID)
-				}
-			}
+		if a.validateKubeconfigSelection(parsed) == nil {
+			result.remainingSelections = append(result.remainingSelections, parsed.String())
+			result.remainingParsed = append(result.remainingParsed, parsed)
+			continue
 		}
+		appendUniqueClusterID(&result.removedClusterIDs, removedSeen, a.clusterIDForRemovedSelection(parsed))
 	}
+	return result
+}
 
-	if len(remainingSelections) == len(currentSelections) {
+func (a *App) clusterIDForRemovedSelection(selection kubeconfigSelection) string {
+	if clients := a.clusterClientsForSelection(selection); clients != nil && clients.meta.ID != "" {
+		return clients.meta.ID
+	}
+	return a.clusterMetaForSelection(selection).ID
+}
+
+func appendUniqueClusterID(clusterIDs *[]string, seen map[string]struct{}, clusterID string) {
+	if clusterID == "" {
 		return
 	}
-
-	a.applySelectionPrune(remainingSelections, remainingParsed, removedClusterIDs, logsources.KubeconfigManager)
+	if _, exists := seen[clusterID]; exists {
+		return
+	}
+	seen[clusterID] = struct{}{}
+	*clusterIDs = append(*clusterIDs, clusterID)
 }
 
 // applySelectionPrune commits an already-computed selection prune and tears down removed cluster state.

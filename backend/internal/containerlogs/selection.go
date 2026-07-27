@@ -20,49 +20,49 @@ func ParseScopeSelection(values []string) ScopeSelection {
 	selection := ScopeSelection{}
 	for _, rawValue := range values {
 		value := strings.TrimSpace(rawValue)
-		if value == "" {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(value, SelectedPodPrefix):
-			podName := strings.TrimSpace(strings.TrimPrefix(value, SelectedPodPrefix))
-			if podName == "" {
-				continue
-			}
-			if selection.selectedPods == nil {
-				selection.selectedPods = make(map[string]struct{})
-			}
-			selection.selectedPods[podName] = struct{}{}
-		case strings.HasPrefix(value, SelectedInitPrefix):
-			name := strings.TrimSpace(strings.TrimPrefix(value, SelectedInitPrefix))
-			if name == "" {
-				continue
-			}
-			if selection.selectedContainers == nil {
-				selection.selectedContainers = make(map[ContainerRef]struct{})
-			}
-			selection.selectedContainers[ContainerRef{Name: name, IsInit: true}] = struct{}{}
-		case strings.HasPrefix(value, SelectedDebugPrefix):
-			name := strings.TrimSpace(strings.TrimPrefix(value, SelectedDebugPrefix))
-			if name == "" {
-				continue
-			}
-			if selection.selectedContainers == nil {
-				selection.selectedContainers = make(map[ContainerRef]struct{})
-			}
-			selection.selectedContainers[ContainerRef{Name: name, IsEphemeral: true}] = struct{}{}
-		case strings.HasPrefix(value, SelectedContainerPrefix):
-			name := strings.TrimSpace(strings.TrimPrefix(value, SelectedContainerPrefix))
-			if name == "" {
-				continue
-			}
-			if selection.selectedContainers == nil {
-				selection.selectedContainers = make(map[ContainerRef]struct{})
-			}
-			selection.selectedContainers[ContainerRef{Name: name}] = struct{}{}
-		}
+		selection.addValue(value)
 	}
 	return selection
+}
+
+func (s *ScopeSelection) addValue(value string) {
+	if name, ok := selectedFilterName(value, SelectedPodPrefix); ok {
+		s.addPod(name)
+		return
+	}
+	if name, ok := selectedFilterName(value, SelectedInitPrefix); ok {
+		s.addContainer(ContainerRef{Name: name, IsInit: true})
+		return
+	}
+	if name, ok := selectedFilterName(value, SelectedDebugPrefix); ok {
+		s.addContainer(ContainerRef{Name: name, IsEphemeral: true})
+		return
+	}
+	if name, ok := selectedFilterName(value, SelectedContainerPrefix); ok {
+		s.addContainer(ContainerRef{Name: name})
+	}
+}
+
+func selectedFilterName(value, prefix string) (string, bool) {
+	if !strings.HasPrefix(value, prefix) {
+		return "", false
+	}
+	name := strings.TrimSpace(strings.TrimPrefix(value, prefix))
+	return name, name != ""
+}
+
+func (s *ScopeSelection) addPod(name string) {
+	if s.selectedPods == nil {
+		s.selectedPods = make(map[string]struct{})
+	}
+	s.selectedPods[name] = struct{}{}
+}
+
+func (s *ScopeSelection) addContainer(container ContainerRef) {
+	if s.selectedContainers == nil {
+		s.selectedContainers = make(map[ContainerRef]struct{})
+	}
+	s.selectedContainers[container] = struct{}{}
 }
 
 func (s ScopeSelection) IsZero() bool {

@@ -351,19 +351,7 @@ func (p *Poller) refresh(ctx context.Context) error {
 		return err
 	}
 
-	nodeUsage := make(map[string]NodeUsage, len(nodeResp.Items))
-	for _, metric := range nodeResp.Items {
-		usage := NodeUsage{Timestamp: metric.Timestamp.Time}
-		for resourceName, quantity := range metric.Usage {
-			switch resourceName {
-			case corev1.ResourceCPU:
-				usage.CPUUsageMilli = quantity.MilliValue()
-			case corev1.ResourceMemory:
-				usage.MemoryUsageBytes = quantity.Value()
-			}
-		}
-		nodeUsage[metric.Name] = usage
-	}
+	nodeUsage := nodeUsageFromMetrics(nodeResp.Items)
 
 	podResp, err := p.podLister(ctx, client)
 	if err != nil {
@@ -375,22 +363,7 @@ func (p *Poller) refresh(ctx context.Context) error {
 		return err
 	}
 
-	podUsage := make(map[string]PodUsage, len(podResp.Items))
-	for _, metric := range podResp.Items {
-		usage := PodUsage{Timestamp: metric.Timestamp.Time}
-		for _, container := range metric.Containers {
-			for resourceName, quantity := range container.Usage {
-				switch resourceName {
-				case corev1.ResourceCPU:
-					usage.CPUUsageMilli += quantity.MilliValue()
-				case corev1.ResourceMemory:
-					usage.MemoryUsageBytes += quantity.Value()
-				}
-			}
-		}
-		key := fmt.Sprintf("%s/%s", metric.Namespace, metric.Name)
-		podUsage[key] = usage
-	}
+	podUsage := podUsageFromMetrics(podResp.Items)
 
 	p.mu.Lock()
 	p.nodeUsage = nodeUsage
@@ -411,6 +384,46 @@ func (p *Poller) refresh(ctx context.Context) error {
 	p.notifyCollectionObserver()
 
 	return nil
+}
+
+func nodeUsageFromMetrics(metrics []metricsv1beta1.NodeMetrics) map[string]NodeUsage {
+	result := make(map[string]NodeUsage, len(metrics))
+	for _, metric := range metrics {
+		usage := NodeUsage{Timestamp: metric.Timestamp.Time}
+		for resourceName, quantity := range metric.Usage {
+			switch resourceName {
+			case corev1.ResourceCPU:
+				usage.CPUUsageMilli = quantity.MilliValue()
+			case corev1.ResourceMemory:
+				usage.MemoryUsageBytes = quantity.Value()
+			}
+		}
+		result[metric.Name] = usage
+	}
+	return result
+}
+
+func podUsageFromMetrics(metrics []metricsv1beta1.PodMetrics) map[string]PodUsage {
+	result := make(map[string]PodUsage, len(metrics))
+	for _, metric := range metrics {
+		usage := PodUsage{Timestamp: metric.Timestamp.Time}
+		for _, container := range metric.Containers {
+			addContainerUsage(&usage, container.Usage)
+		}
+		result[fmt.Sprintf("%s/%s", metric.Namespace, metric.Name)] = usage
+	}
+	return result
+}
+
+func addContainerUsage(usage *PodUsage, resources corev1.ResourceList) {
+	for resourceName, quantity := range resources {
+		switch resourceName {
+		case corev1.ResourceCPU:
+			usage.CPUUsageMilli += quantity.MilliValue()
+		case corev1.ResourceMemory:
+			usage.MemoryUsageBytes += quantity.Value()
+		}
+	}
 }
 
 func (p *Poller) listNodeMetricsWithRetry(ctx context.Context, client *metricsclient.Clientset) (*metricsv1beta1.NodeMetricsList, error) {

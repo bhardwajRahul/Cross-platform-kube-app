@@ -17,6 +17,7 @@ import (
 	"github.com/luxury-yacht/app/backend/internal/containerlogs"
 	"github.com/luxury-yacht/app/backend/internal/linescanner"
 	"github.com/luxury-yacht/app/backend/internal/logsources"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -480,36 +481,49 @@ func (s *Streamer) consumeWatch(
 			if !ok {
 				return errors.New("watch channel closed")
 			}
-			// watch.Error events may not close the channel, so surface an error to trigger a reconnect.
-			if event.Type == watch.Error {
-				if status, ok := event.Object.(*metav1.Status); ok {
-					return fmt.Errorf("containerlogsstream: watch error: %s", status.Message)
-				}
-				return errors.New("containerlogsstream: watch error event")
-			}
-			pod, ok := event.Object.(*corev1.Pod)
-			if !ok {
-				continue
-			}
-			if strings.ToLower(opts.Kind) == "cronjob" {
-				if !s.podBelongsToCronJob(ctx, opts.Namespace, opts.Name, pod, cronCache) {
-					continue
-				}
-			}
-			if opts.PodFilter != "" && pod.Name != opts.PodFilter {
-				continue
-			}
-			if !opts.Selection.MatchPod(pod.Name) {
-				continue
-			}
-			switch event.Type {
-			case watch.Added, watch.Modified:
-				startPod(pod)
-			case watch.Deleted:
-				stopPod(pod.Name)
+			if err := s.consumePodWatchEvent(ctx, event, opts, cronCache, startPod, stopPod); err != nil {
+				return err
 			}
 		}
 	}
+}
+
+func (s *Streamer) consumePodWatchEvent(
+	ctx context.Context,
+	event watch.Event,
+	opts Options,
+	cronCache map[string]bool,
+	startPod func(*corev1.Pod),
+	stopPod func(string),
+) error {
+	// watch.Error events may not close the channel, so surface an error to trigger a reconnect.
+	if event.Type == watch.Error {
+		if status, ok := event.Object.(*metav1.Status); ok {
+			return fmt.Errorf("containerlogsstream: watch error: %s", status.Message)
+		}
+		return errors.New("containerlogsstream: watch error event")
+	}
+	pod, ok := event.Object.(*corev1.Pod)
+	if !ok || !s.matchesPodWatch(ctx, opts, pod, cronCache) {
+		return nil
+	}
+	switch event.Type {
+	case watch.Added, watch.Modified:
+		startPod(pod)
+	case watch.Deleted:
+		stopPod(pod.Name)
+	}
+	return nil
+}
+
+func (s *Streamer) matchesPodWatch(ctx context.Context, opts Options, pod *corev1.Pod, cronCache map[string]bool) bool {
+	if strings.EqualFold(opts.Kind, "cronjob") && !s.podBelongsToCronJob(ctx, opts.Namespace, opts.Name, pod, cronCache) {
+		return false
+	}
+	if opts.PodFilter != "" && pod.Name != opts.PodFilter {
+		return false
+	}
+	return opts.Selection.MatchPod(pod.Name)
 }
 
 func (s *Streamer) followContainer(ctx context.Context, target containerTarget, lineFilter containerlogs.LineFilter, entriesCh chan<- Entry, errCh chan<- error, dropCh chan<- int) {
@@ -708,55 +722,76 @@ func (s *Streamer) listPods(ctx context.Context, opts Options) ([]*corev1.Pod, s
 	kind := strings.ToLower(opts.Kind)
 	switch kind {
 	case "pod":
-		pod, err := s.client.CoreV1().Pods(opts.Namespace).Get(ctx, opts.Name, metav1.GetOptions{})
-		if err != nil {
-			return nil, "", fmt.Errorf("containerlogsstream: get pod %s/%s: %w", opts.Namespace, opts.Name, err)
-		}
-		return filterPodsByName([]*corev1.Pod{pod}, opts.PodFilter, opts.PodNameFilter, opts.Selection), "", nil
+		return s.listSinglePod(ctx, opts)
 	case "deployment", "replicaset", "statefulset", "daemonset":
-		selector, err := s.selectorForWorkload(ctx, opts)
-		if err != nil {
-			return nil, "", fmt.Errorf("containerlogsstream: selector for %s %s/%s: %w", kind, opts.Namespace, opts.Name, err)
-		}
-		pods, err := s.client.CoreV1().Pods(opts.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
-		if err != nil {
-			return nil, "", fmt.Errorf("containerlogsstream: list pods for %s %s/%s: %w", kind, opts.Namespace, opts.Name, err)
-		}
-		return filterPodsByName(podPointers(pods.Items), opts.PodFilter, opts.PodNameFilter, opts.Selection), selector, nil
+		return s.listWorkloadPods(ctx, opts, kind)
 	case "job":
-		selector := labels.Set{"job-name": opts.Name}.AsSelector().String()
-		pods, err := s.client.CoreV1().Pods(opts.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
-		if err != nil {
-			return nil, "", fmt.Errorf("containerlogsstream: list pods for job %s/%s: %w", opts.Namespace, opts.Name, err)
-		}
-		return filterPodsByName(podPointers(pods.Items), opts.PodFilter, opts.PodNameFilter, opts.Selection), selector, nil
+		return s.listJobPods(ctx, opts)
 	case "cronjob":
-		jobs, err := s.client.BatchV1().Jobs(opts.Namespace).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			return nil, "", fmt.Errorf("containerlogsstream: list jobs for cronjob %s/%s: %w", opts.Namespace, opts.Name, err)
-		}
-		var jobNames []string
-		for _, job := range jobs.Items {
-			for _, owner := range job.OwnerReferences {
-				if owner.Kind == cronjobpkg.Identity.Kind && owner.Name == opts.Name {
-					jobNames = append(jobNames, job.Name)
-				}
-			}
-		}
-		if len(jobNames) == 0 {
-			return nil, "", nil
-		}
-		selector := "job-name in (" + strings.Join(jobNames, ",") + ")"
-		list, err := s.client.CoreV1().Pods(opts.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
-		if err != nil {
-			return nil, "", fmt.Errorf("containerlogsstream: list pods for cronjob %s/%s: %w", opts.Namespace, opts.Name, err)
-		}
-		// Return empty selector so the pod watch sees pods from future Jobs.
-		// consumeWatch filters by CronJob ownership via podBelongsToCronJob.
-		return filterPodsByName(podPointers(list.Items), opts.PodFilter, opts.PodNameFilter, opts.Selection), "", nil
+		return s.listCronJobPods(ctx, opts)
 	default:
 		return nil, "", fmt.Errorf("containerlogsstream: unsupported workload kind %q", opts.Kind)
 	}
+}
+
+func (s *Streamer) listSinglePod(ctx context.Context, opts Options) ([]*corev1.Pod, string, error) {
+	pod, err := s.client.CoreV1().Pods(opts.Namespace).Get(ctx, opts.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, "", fmt.Errorf("containerlogsstream: get pod %s/%s: %w", opts.Namespace, opts.Name, err)
+	}
+	return filterPodsByName([]*corev1.Pod{pod}, opts.PodFilter, opts.PodNameFilter, opts.Selection), "", nil
+}
+
+func (s *Streamer) listWorkloadPods(ctx context.Context, opts Options, kind string) ([]*corev1.Pod, string, error) {
+	selector, err := s.selectorForWorkload(ctx, opts)
+	if err != nil {
+		return nil, "", fmt.Errorf("containerlogsstream: selector for %s %s/%s: %w", kind, opts.Namespace, opts.Name, err)
+	}
+	pods, err := s.client.CoreV1().Pods(opts.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, "", fmt.Errorf("containerlogsstream: list pods for %s %s/%s: %w", kind, opts.Namespace, opts.Name, err)
+	}
+	return filterPodsByName(podPointers(pods.Items), opts.PodFilter, opts.PodNameFilter, opts.Selection), selector, nil
+}
+
+func (s *Streamer) listJobPods(ctx context.Context, opts Options) ([]*corev1.Pod, string, error) {
+	selector := labels.Set{"job-name": opts.Name}.AsSelector().String()
+	pods, err := s.client.CoreV1().Pods(opts.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, "", fmt.Errorf("containerlogsstream: list pods for job %s/%s: %w", opts.Namespace, opts.Name, err)
+	}
+	return filterPodsByName(podPointers(pods.Items), opts.PodFilter, opts.PodNameFilter, opts.Selection), selector, nil
+}
+
+func (s *Streamer) listCronJobPods(ctx context.Context, opts Options) ([]*corev1.Pod, string, error) {
+	jobs, err := s.client.BatchV1().Jobs(opts.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, "", fmt.Errorf("containerlogsstream: list jobs for cronjob %s/%s: %w", opts.Namespace, opts.Name, err)
+	}
+	jobNames := cronJobNames(jobs.Items, opts.Name)
+	if len(jobNames) == 0 {
+		return nil, "", nil
+	}
+	selector := "job-name in (" + strings.Join(jobNames, ",") + ")"
+	list, err := s.client.CoreV1().Pods(opts.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, "", fmt.Errorf("containerlogsstream: list pods for cronjob %s/%s: %w", opts.Namespace, opts.Name, err)
+	}
+	// Return empty selector so the pod watch sees pods from future Jobs.
+	// consumeWatch filters by CronJob ownership via podBelongsToCronJob.
+	return filterPodsByName(podPointers(list.Items), opts.PodFilter, opts.PodNameFilter, opts.Selection), "", nil
+}
+
+func cronJobNames(jobs []batchv1.Job, cronJobName string) []string {
+	var names []string
+	for _, job := range jobs {
+		for _, owner := range job.OwnerReferences {
+			if owner.Kind == cronjobpkg.Identity.Kind && owner.Name == cronJobName {
+				names = append(names, job.Name)
+			}
+		}
+	}
+	return names
 }
 
 func filterPodsByName(

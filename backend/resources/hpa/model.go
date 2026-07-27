@@ -134,42 +134,66 @@ func metricFacts(metrics []autoscalingv2.MetricSpec) []MetricFacts {
 	}
 	facts := make([]MetricFacts, 0, len(metrics))
 	for _, metric := range metrics {
-		spec := MetricFacts{Kind: string(metric.Type), Target: map[string]string{}}
-		switch metric.Type {
-		case autoscalingv2.ResourceMetricSourceType:
-			if metric.Resource != nil {
-				spec.Target["resource"] = string(metric.Resource.Name)
-				addMetricTarget(spec.Target, metric.Resource.Target)
-			}
-		case autoscalingv2.PodsMetricSourceType:
-			if metric.Pods != nil {
-				spec.Target["metric"] = metric.Pods.Metric.Name
-				addMetricTarget(spec.Target, metric.Pods.Target)
-			}
-		case autoscalingv2.ObjectMetricSourceType:
-			if metric.Object != nil {
-				spec.Target["metric"] = metric.Object.Metric.Name
-				spec.Target["object"] = objectMetricTargetName(metric.Object.DescribedObject.APIVersion, metric.Object.DescribedObject.Kind, metric.Object.DescribedObject.Name)
-				addMetricTarget(spec.Target, metric.Object.Target)
-			}
-		case autoscalingv2.ExternalMetricSourceType:
-			if metric.External != nil {
-				spec.Target["metric"] = metric.External.Metric.Name
-				addMetricTarget(spec.Target, metric.External.Target)
-			}
-		case autoscalingv2.ContainerResourceMetricSourceType:
-			if metric.ContainerResource != nil {
-				spec.Target["resource"] = string(metric.ContainerResource.Name)
-				spec.Target["container"] = metric.ContainerResource.Container
-				addMetricTarget(spec.Target, metric.ContainerResource.Target)
-			}
-		}
-		if len(spec.Target) == 0 {
-			spec.Target = nil
-		}
-		facts = append(facts, spec)
+		facts = append(facts, metricSpecFacts(metric))
 	}
 	return facts
+}
+
+func metricSpecFacts(metric autoscalingv2.MetricSpec) MetricFacts {
+	target := make(map[string]string)
+	switch metric.Type {
+	case autoscalingv2.ResourceMetricSourceType:
+		addResourceMetricSpec(target, metric.Resource)
+	case autoscalingv2.PodsMetricSourceType:
+		addPodsMetricSpec(target, metric.Pods)
+	case autoscalingv2.ObjectMetricSourceType:
+		addObjectMetricSpec(target, metric.Object)
+	case autoscalingv2.ExternalMetricSourceType:
+		addExternalMetricSpec(target, metric.External)
+	case autoscalingv2.ContainerResourceMetricSourceType:
+		addContainerResourceMetricSpec(target, metric.ContainerResource)
+	}
+	if len(target) == 0 {
+		target = nil
+	}
+	return MetricFacts{Kind: string(metric.Type), Target: target}
+}
+
+func addResourceMetricSpec(target map[string]string, source *autoscalingv2.ResourceMetricSource) {
+	if source != nil {
+		target["resource"] = string(source.Name)
+		addMetricTarget(target, source.Target)
+	}
+}
+
+func addPodsMetricSpec(target map[string]string, source *autoscalingv2.PodsMetricSource) {
+	if source != nil {
+		target["metric"] = source.Metric.Name
+		addMetricTarget(target, source.Target)
+	}
+}
+
+func addObjectMetricSpec(target map[string]string, source *autoscalingv2.ObjectMetricSource) {
+	if source != nil {
+		target["metric"] = source.Metric.Name
+		target["object"] = objectMetricTargetName(source.DescribedObject.APIVersion, source.DescribedObject.Kind, source.DescribedObject.Name)
+		addMetricTarget(target, source.Target)
+	}
+}
+
+func addExternalMetricSpec(target map[string]string, source *autoscalingv2.ExternalMetricSource) {
+	if source != nil {
+		target["metric"] = source.Metric.Name
+		addMetricTarget(target, source.Target)
+	}
+}
+
+func addContainerResourceMetricSpec(target map[string]string, source *autoscalingv2.ContainerResourceMetricSource) {
+	if source != nil {
+		target["resource"] = string(source.Name)
+		target["container"] = source.Container
+		addMetricTarget(target, source.Target)
+	}
 }
 
 func currentMetricFacts(metrics []autoscalingv2.MetricStatus) []MetricStatusFacts {
@@ -178,42 +202,66 @@ func currentMetricFacts(metrics []autoscalingv2.MetricStatus) []MetricStatusFact
 	}
 	facts := make([]MetricStatusFacts, 0, len(metrics))
 	for _, metric := range metrics {
-		status := MetricStatusFacts{Kind: string(metric.Type), Current: map[string]string{}}
-		switch metric.Type {
-		case autoscalingv2.ResourceMetricSourceType:
-			if metric.Resource != nil {
-				status.Current["resource"] = string(metric.Resource.Name)
-				addMetricValueStatus(status.Current, metric.Resource.Current)
-			}
-		case autoscalingv2.PodsMetricSourceType:
-			if metric.Pods != nil {
-				status.Current["metric"] = metric.Pods.Metric.Name
-				addMetricValueStatus(status.Current, metric.Pods.Current)
-			}
-		case autoscalingv2.ObjectMetricSourceType:
-			if metric.Object != nil {
-				status.Current["metric"] = metric.Object.Metric.Name
-				status.Current["object"] = objectMetricTargetName(metric.Object.DescribedObject.APIVersion, metric.Object.DescribedObject.Kind, metric.Object.DescribedObject.Name)
-				addMetricValueStatus(status.Current, metric.Object.Current)
-			}
-		case autoscalingv2.ExternalMetricSourceType:
-			if metric.External != nil {
-				status.Current["metric"] = metric.External.Metric.Name
-				addMetricValueStatus(status.Current, metric.External.Current)
-			}
-		case autoscalingv2.ContainerResourceMetricSourceType:
-			if metric.ContainerResource != nil {
-				status.Current["resource"] = string(metric.ContainerResource.Name)
-				status.Current["container"] = metric.ContainerResource.Container
-				addMetricValueStatus(status.Current, metric.ContainerResource.Current)
-			}
-		}
-		if len(status.Current) == 0 {
-			status.Current = nil
-		}
-		facts = append(facts, status)
+		facts = append(facts, metricStatusFacts(metric))
 	}
 	return facts
+}
+
+func metricStatusFacts(metric autoscalingv2.MetricStatus) MetricStatusFacts {
+	current := make(map[string]string)
+	switch metric.Type {
+	case autoscalingv2.ResourceMetricSourceType:
+		addResourceMetricStatus(current, metric.Resource)
+	case autoscalingv2.PodsMetricSourceType:
+		addPodsMetricStatus(current, metric.Pods)
+	case autoscalingv2.ObjectMetricSourceType:
+		addObjectMetricStatus(current, metric.Object)
+	case autoscalingv2.ExternalMetricSourceType:
+		addExternalMetricStatus(current, metric.External)
+	case autoscalingv2.ContainerResourceMetricSourceType:
+		addContainerResourceMetricStatus(current, metric.ContainerResource)
+	}
+	if len(current) == 0 {
+		current = nil
+	}
+	return MetricStatusFacts{Kind: string(metric.Type), Current: current}
+}
+
+func addResourceMetricStatus(current map[string]string, source *autoscalingv2.ResourceMetricStatus) {
+	if source != nil {
+		current["resource"] = string(source.Name)
+		addMetricValueStatus(current, source.Current)
+	}
+}
+
+func addPodsMetricStatus(current map[string]string, source *autoscalingv2.PodsMetricStatus) {
+	if source != nil {
+		current["metric"] = source.Metric.Name
+		addMetricValueStatus(current, source.Current)
+	}
+}
+
+func addObjectMetricStatus(current map[string]string, source *autoscalingv2.ObjectMetricStatus) {
+	if source != nil {
+		current["metric"] = source.Metric.Name
+		current["object"] = objectMetricTargetName(source.DescribedObject.APIVersion, source.DescribedObject.Kind, source.DescribedObject.Name)
+		addMetricValueStatus(current, source.Current)
+	}
+}
+
+func addExternalMetricStatus(current map[string]string, source *autoscalingv2.ExternalMetricStatus) {
+	if source != nil {
+		current["metric"] = source.Metric.Name
+		addMetricValueStatus(current, source.Current)
+	}
+}
+
+func addContainerResourceMetricStatus(current map[string]string, source *autoscalingv2.ContainerResourceMetricStatus) {
+	if source != nil {
+		current["resource"] = string(source.Name)
+		current["container"] = source.Container
+		addMetricValueStatus(current, source.Current)
+	}
 }
 
 func addMetricTarget(target map[string]string, metric autoscalingv2.MetricTarget) {

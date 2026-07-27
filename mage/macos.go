@@ -316,70 +316,56 @@ func InstallMacOS(cfg BuildConfig, signed bool) error {
 
 // Packages the macOS application with optional signing and notarization.
 func PackageMacOS(cfg BuildConfig, signed bool) error {
-	err := createMacIconfile(cfg)
-	if err != nil {
+	if err := createMacIconfile(cfg); err != nil {
 		return err
 	}
 
 	archs := []string{"arm64", "amd64"}
-
+	var signing *macOSSigningConfig
 	if signed {
-		identity, appleID, appleIDPassword, appleTeamId, keychainPath := getMacOSSigningEnv()
-
-		for _, archType := range archs {
-			archCfg := cfg
-			archCfg.ArchType = archType
-
-			// Build, sign, and package each macOS architecture separately.
-			err = buildMacOSForArch(archCfg, archType)
-			if err != nil {
-				return err
-			}
-
-			err = signMacApp(identity, keychainPath, binDir+"/"+archCfg.AppLongName+".app")
-			if err != nil {
-				return err
-			}
-
-			err = notarizeMacApp(appleID, appleIDPassword, appleTeamId, binDir+"/"+archCfg.AppLongName+".app")
-			if err != nil {
-				return err
-			}
-
-			err = stageMacApp(archCfg)
-			if err != nil {
-				return err
-			}
-
-			err = createDMG(archCfg.ArchType, archCfg.Version)
-			if err != nil {
-				return err
-			}
+		identity, appleID, password, teamID, keychainPath := getMacOSSigningEnv()
+		signing = &macOSSigningConfig{
+			identity:     identity,
+			appleID:      appleID,
+			password:     password,
+			teamID:       teamID,
+			keychainPath: keychainPath,
 		}
-
-		return nil
 	}
-
 	for _, archType := range archs {
 		archCfg := cfg
 		archCfg.ArchType = archType
-
-		// Build and package each macOS architecture separately.
-		err = buildMacOSForArch(archCfg, archType)
-		if err != nil {
-			return err
-		}
-
-		err = stageMacApp(archCfg)
-		if err != nil {
-			return err
-		}
-
-		err = createDMG(archCfg.ArchType, archCfg.Version)
-		if err != nil {
+		if err := packageMacOSArchitecture(archCfg, signing); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+type macOSSigningConfig struct {
+	identity     string
+	appleID      string
+	password     string
+	teamID       string
+	keychainPath string
+}
+
+func packageMacOSArchitecture(cfg BuildConfig, signing *macOSSigningConfig) error {
+	if err := buildMacOSForArch(cfg, cfg.ArchType); err != nil {
+		return err
+	}
+	if signing != nil {
+		appPath := binDir + "/" + cfg.AppLongName + ".app"
+		if err := signMacApp(signing.identity, signing.keychainPath, appPath); err != nil {
+			return err
+		}
+		if err := notarizeMacApp(signing.appleID, signing.password, signing.teamID, appPath); err != nil {
+			return err
+		}
+	}
+	if err := stageMacApp(cfg); err != nil {
+		return err
+	}
+	return createDMG(cfg.ArchType, cfg.Version)
 }

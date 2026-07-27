@@ -249,59 +249,82 @@ func (s *Service) listNamespaceItems(ctx context.Context, index int, desc resour
 	options := metav1.ListOptions{Limit: int64(batchSize)}
 	results := make([]Summary, 0)
 	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
+		list, denied, err := s.listCatalogPageWithRetry(ctx, desc, resourceInterface, options)
+		if err != nil {
+			return nil, err
 		}
-
-		var list *unstructuredv1.UnstructuredList
-		var err error
-		for attempt := range config.ObjectCatalogListRetryMaxAttempts {
-			list, err = resourceInterface.List(ctx, options)
-			if err == nil {
-				break
-			}
-			if apierrors.IsForbidden(err) {
-				// Record the denial so the catalog can report WHY the type is
-				// missing — an RBAC-blocked catalog must not look like an
-				// empty cluster.
-				s.recordDeniedResource(deniedResourceName(desc))
-				s.logDebug(fmt.Sprintf("permission denied listing %s, skipping", desc.GVR.String()))
-				return results, nil
-			}
-			if !shouldRetryList(err) || attempt == config.ObjectCatalogListRetryMaxAttempts-1 {
-				return nil, err
-			}
-			delay := listRetryBackoff(attempt)
-			s.logDebug(fmt.Sprintf("retrying list for %s after error: %v (backoff=%s)", desc.GVR.String(), err, delay))
-			if err := timeutil.SleepWithContext(ctx, delay); err != nil {
-				return nil, err
-			}
+		if denied {
+			return results, nil
 		}
 		if list == nil {
 			return results, nil
 		}
 
-		page := make([]Summary, 0, len(list.Items))
-		for i := range list.Items {
-			item := &list.Items[i]
-			page = append(page, s.buildSummary(desc, item))
-		}
-		if len(page) > 0 {
-			results = append(results, page...)
-			if agg != nil {
-				agg.emit(index, page)
-			}
-		}
-
-		cont := list.GetContinue()
-		if cont == "" {
+		results = appendCatalogSummaryPage(results, s.catalogSummaryPage(desc, list), index, agg)
+		if !advanceCatalogList(&options, list) {
 			break
 		}
-		options.Continue = cont
 	}
 	return results, nil
+}
+
+func (s *Service) listCatalogPageWithRetry(
+	ctx context.Context,
+	desc resourceDescriptor,
+	resourceInterface dynamic.ResourceInterface,
+	options metav1.ListOptions,
+) (*unstructuredv1.UnstructuredList, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	for attempt := range config.ObjectCatalogListRetryMaxAttempts {
+		list, err := resourceInterface.List(ctx, options)
+		if err == nil {
+			return list, false, nil
+		}
+		if apierrors.IsForbidden(err) {
+			s.recordDeniedResource(deniedResourceName(desc))
+			s.logDebug(fmt.Sprintf("permission denied listing %s, skipping", desc.GVR.String()))
+			return nil, true, nil
+		}
+		if !shouldRetryList(err) || attempt == config.ObjectCatalogListRetryMaxAttempts-1 {
+			return nil, false, err
+		}
+		delay := listRetryBackoff(attempt)
+		s.logDebug(fmt.Sprintf("retrying list for %s after error: %v (backoff=%s)", desc.GVR.String(), err, delay))
+		if err := timeutil.SleepWithContext(ctx, delay); err != nil {
+			return nil, false, err
+		}
+	}
+	return nil, false, nil
+}
+
+func appendCatalogSummaryPage(results, page []Summary, index int, agg *streamingAggregator) []Summary {
+	if len(page) == 0 {
+		return results
+	}
+	results = append(results, page...)
+	if agg != nil {
+		agg.emit(index, page)
+	}
+	return results
+}
+
+func advanceCatalogList(options *metav1.ListOptions, list *unstructuredv1.UnstructuredList) bool {
+	continuation := list.GetContinue()
+	if continuation == "" {
+		return false
+	}
+	options.Continue = continuation
+	return true
+}
+
+func (s *Service) catalogSummaryPage(desc resourceDescriptor, list *unstructuredv1.UnstructuredList) []Summary {
+	page := make([]Summary, 0, len(list.Items))
+	for index := range list.Items {
+		page = append(page, s.buildSummary(desc, &list.Items[index]))
+	}
+	return page
 }
 
 // deniedResourceName renders a kubectl-style resource name (`resource[.group]`)

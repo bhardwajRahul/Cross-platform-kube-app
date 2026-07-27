@@ -146,50 +146,7 @@ func (a *App) buildRefreshSubsystems(
 		len(selections),
 		clusterClientBuildConcurrencyLimit(len(selections)),
 		func(_ context.Context, index int) (subsystemBuildOutcome, error) {
-			selection := selections[index]
-			// Use the canonical ID from clusterClients rather than re-deriving
-			// from the selection, which can produce inconsistent IDs when a
-			// kubeconfig file contains multiple contexts.
-			clusterMeta := a.clusterMetaForSelection(selection)
-			if clusterMeta.ID == "" {
-				return subsystemBuildOutcome{}, fmt.Errorf("cluster identifier missing for selection %s", selection.String())
-			}
-			clients := a.clusterClientsForID(clusterMeta.ID)
-			if clients == nil {
-				// Fallback: try matching by stored meta in clusterClients in case
-				// the re-derived ID doesn't match the canonical one.
-				clients = a.clusterClientsForSelection(selection)
-			}
-			if clients != nil {
-				// Always use the canonical meta from the stored client.
-				clusterMeta = clients.meta
-			}
-			if clients == nil {
-				return subsystemBuildOutcome{}, fmt.Errorf("cluster clients unavailable for %s", clusterMeta.ID)
-			}
-
-			// Skip subsystem creation if auth is not valid for this cluster.
-			// Check both the explicit flag (set during pre-flight check) and the auth state.
-			if clients.authFailedOnInit {
-				a.logger.Warn(fmt.Sprintf("Skipping subsystem for cluster %s: auth failed during initialization", clusterMeta.Name), logsources.Refresh, clusterMeta.ID, clusterMeta.Name)
-				// Still part of clusterOrder so the cluster appears in the UI.
-				return subsystemBuildOutcome{id: clusterMeta.ID}, nil
-			}
-			if clients.authManager != nil {
-				state, reason := clients.authManager.State()
-				a.logger.Info(fmt.Sprintf("Auth state for cluster %s: %s (reason: %s)", clusterMeta.Name, state.String(), reason), logsources.Refresh, clusterMeta.ID, clusterMeta.Name)
-				if !clients.authManager.IsValid() {
-					a.logger.Warn(fmt.Sprintf("Skipping subsystem for cluster %s: auth not valid (state=%s)", clusterMeta.Name, state.String()), logsources.Refresh, clusterMeta.ID, clusterMeta.Name)
-					// Still part of clusterOrder so the cluster appears in the UI.
-					return subsystemBuildOutcome{id: clusterMeta.ID}, nil
-				}
-			}
-
-			subsystem, err := a.buildRefreshSubsystemForSelection(selection, clients, clusterMeta)
-			if err != nil {
-				return subsystemBuildOutcome{}, err
-			}
-			return subsystemBuildOutcome{id: clusterMeta.ID, subsystem: subsystem}, nil
+			return a.buildRefreshSubsystemOutcome(selections[index])
 		},
 	)
 	if err != nil {
@@ -205,6 +162,46 @@ func (a *App) buildRefreshSubsystems(
 	// Note: It's valid to return an empty subsystems map if all clusters have auth failures.
 	// The caller should handle this case gracefully.
 	return subsystems, clusterOrder, nil
+}
+
+func (a *App) buildRefreshSubsystemOutcome(selection kubeconfigSelection) (subsystemBuildOutcome, error) {
+	clusterMeta := a.clusterMetaForSelection(selection)
+	if clusterMeta.ID == "" {
+		return subsystemBuildOutcome{}, fmt.Errorf("cluster identifier missing for selection %s", selection.String())
+	}
+	clients := a.clusterClientsForID(clusterMeta.ID)
+	if clients == nil {
+		clients = a.clusterClientsForSelection(selection)
+	}
+	if clients == nil {
+		return subsystemBuildOutcome{}, fmt.Errorf("cluster clients unavailable for %s", clusterMeta.ID)
+	}
+	clusterMeta = clients.meta
+	if !a.clusterClientsAllowRefresh(clients, clusterMeta) {
+		return subsystemBuildOutcome{id: clusterMeta.ID}, nil
+	}
+	subsystem, err := a.buildRefreshSubsystemForSelection(selection, clients, clusterMeta)
+	if err != nil {
+		return subsystemBuildOutcome{}, err
+	}
+	return subsystemBuildOutcome{id: clusterMeta.ID, subsystem: subsystem}, nil
+}
+
+func (a *App) clusterClientsAllowRefresh(clients *clusterClients, meta ClusterMeta) bool {
+	if clients.authFailedOnInit {
+		a.logger.Warn(fmt.Sprintf("Skipping subsystem for cluster %s: auth failed during initialization", meta.Name), logsources.Refresh, meta.ID, meta.Name)
+		return false
+	}
+	if clients.authManager == nil {
+		return true
+	}
+	state, reason := clients.authManager.State()
+	a.logger.Info(fmt.Sprintf("Auth state for cluster %s: %s (reason: %s)", meta.Name, state.String(), reason), logsources.Refresh, meta.ID, meta.Name)
+	if clients.authManager.IsValid() {
+		return true
+	}
+	a.logger.Warn(fmt.Sprintf("Skipping subsystem for cluster %s: auth not valid (state=%s)", meta.Name, state.String()), logsources.Refresh, meta.ID, meta.Name)
+	return false
 }
 
 func (a *App) buildRefreshSubsystemForSelection(

@@ -278,6 +278,14 @@ type typedServeConfig[T any] struct {
 	versionToken string
 }
 
+type typedStoreResult[T any] struct {
+	store             *querypage.Store[T]
+	matchedTotal      int
+	matchedNamespaces []string
+	matchedKinds      []string
+	scopeFacetValues  []ResourceQueryFacetValues
+}
+
 // withPerBuildCache opts a per-Build serve into the single-slot store cache.
 // versionToken must change whenever the domain's source data changes (the
 // domain's snapshot version watermark); metric ticks are covered separately by
@@ -297,11 +305,39 @@ func withPerBuildCache[T any](cache *perBuildStoreCache[T], versionToken string)
 // it. Precondition: query.Enabled (every caller checks; window mode is served
 // by truncateSnapshotWindow, not an executor).
 func applyTypedTableQueryViaStore[T any](items []T, query typedTableQuery, adapter typedTableQueryAdapter[T], schema querypage.Schema[T], opts ...typedServeOption[T]) typedTableQueryPage[T] {
+	cfg := typedServeOptions(opts)
+	storeResult := resolveTypedTableStore(items, query, adapter, schema, cfg)
+	engineQuery := typedEngineQuery(query, schema)
+	page, anchorResult := executeTypedEngineQuery(items, query, adapter, storeResult.store, engineQuery)
+	return typedTableQueryPage[T]{
+		Rows:            page.Rows,
+		Continue:        page.NextCursor,
+		Previous:        page.PrevCursor,
+		Self:            page.SelfCursor,
+		CursorInvalid:   page.CursorInvalid,
+		Anchor:          anchorResult,
+		PageStartRank:   pageStartRankPtr(page.PageStartRank),
+		Total:           storeResult.matchedTotal,
+		UnfilteredTotal: len(items),
+		TotalIsExact:    true,
+		FacetsExact:     true,
+		Namespaces:      storeResult.matchedNamespaces,
+		Kinds:           storeResult.matchedKinds,
+		FacetValues:     storeResult.scopeFacetValues,
+		Dynamic:         query.dynamicRef(),
+		SortField:       query.Request.SortField,
+	}
+}
+
+func typedServeOptions[T any](opts []typedServeOption[T]) typedServeConfig[T] {
 	var cfg typedServeConfig[T]
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	return cfg
+}
 
+func resolveTypedTableStore[T any](items []T, query typedTableQuery, adapter typedTableQueryAdapter[T], schema querypage.Schema[T], cfg typedServeConfig[T]) typedStoreResult[T] {
 	// Apply the FULL live matcher first — namespace + kind + provider facets + search + predicates —
 	// so the engine sees only the matched set. Building the store from `matched`
 	// (rather than all items and re-filtering inside Query) is what makes the engine
@@ -310,41 +346,50 @@ func applyTypedTableQueryViaStore[T any](items []T, query typedTableQuery, adapt
 	// already have been excluded here. A caller-owned single-slot cache skips this
 	// whole rebuild when the matched-set identity and source version are unchanged
 	// (page turns, sort flips).
-	var store *querypage.Store[T]
-	var matchedTotal int
-	var matchedNamespaces, matchedKinds []string
-	var scopeFacetValues []ResourceQueryFacetValues
+	var result typedStoreResult[T]
 	cacheKey := ""
-	cached := false
 	if cfg.cache != nil {
 		cacheKey = perBuildCacheKey(query, cfg.versionToken)
-		store, matchedTotal, matchedNamespaces, matchedKinds, scopeFacetValues, cached = cfg.cache.get(cacheKey)
-	}
-	if !cached {
-		matcher := newTypedTableQueryMatcher(query, adapter)
-		matched := make([]T, 0, len(items))
-		for _, it := range items {
-			if matcher.Matches(it) {
-				matched = append(matched, it)
-			}
-		}
-		store = querypage.NewStore(schema)
-		for _, it := range matched {
-			store.Upsert(it)
-		}
-		matchedTotal = len(matched)
-		matchedNamespaces = collectTypedTableFacet(matched, adapter.Namespace)
-		matchedKinds = collectTypedTableFacet(matched, adapter.Kind)
-		if query.Request.MatchNone {
-			matchedNamespaces = collectTypedTableFacet(items, adapter.Namespace)
-			matchedKinds = collectTypedTableFacet(items, adapter.Kind)
-		}
-		scopeFacetValues = collectTypedTableFacetValues(items, adapter.Facets, true)
-		if cfg.cache != nil {
-			cfg.cache.put(cacheKey, store, matchedTotal, matchedNamespaces, matchedKinds, scopeFacetValues)
+		var cached bool
+		result.store, result.matchedTotal, result.matchedNamespaces, result.matchedKinds, result.scopeFacetValues, cached = cfg.cache.get(cacheKey)
+		if cached {
+			return result
 		}
 	}
+	result = buildTypedTableStore(items, query, adapter, schema)
+	if cfg.cache != nil {
+		cfg.cache.put(cacheKey, result.store, result.matchedTotal, result.matchedNamespaces, result.matchedKinds, result.scopeFacetValues)
+	}
+	return result
+}
 
+func buildTypedTableStore[T any](items []T, query typedTableQuery, adapter typedTableQueryAdapter[T], schema querypage.Schema[T]) typedStoreResult[T] {
+	matcher := newTypedTableQueryMatcher(query, adapter)
+	matched := make([]T, 0, len(items))
+	for _, item := range items {
+		if matcher.Matches(item) {
+			matched = append(matched, item)
+		}
+	}
+	store := querypage.NewStore(schema)
+	for _, item := range matched {
+		store.Upsert(item)
+	}
+	result := typedStoreResult[T]{
+		store:             store,
+		matchedTotal:      len(matched),
+		matchedNamespaces: collectTypedTableFacet(matched, adapter.Namespace),
+		matchedKinds:      collectTypedTableFacet(matched, adapter.Kind),
+		scopeFacetValues:  collectTypedTableFacetValues(items, adapter.Facets, true),
+	}
+	if query.Request.MatchNone {
+		result.matchedNamespaces = collectTypedTableFacet(items, adapter.Namespace)
+		result.matchedKinds = collectTypedTableFacet(items, adapter.Kind)
+	}
+	return result
+}
+
+func typedEngineQuery[T any](query typedTableQuery, schema querypage.Schema[T]) querypage.Query {
 	sortField := strings.ToLower(strings.TrimSpace(query.Request.SortField))
 	if _, ok := schema.SortKeys[sortField]; !ok {
 		sortField = "name"
@@ -353,21 +398,21 @@ func applyTypedTableQueryViaStore[T any](items []T, query typedTableQuery, adapt
 	if strings.EqualFold(query.Request.SortDirection, "desc") {
 		dir = querypage.Descending
 	}
-	limit := query.Request.Limit
-	sig := typedQuerySignature(sortField, dir, limit, query.BaseScope, query.Request)
-
 	// Cursor decode/validate is owned by the engine: an invalid token restarts at
 	// page 1 and surfaces on page.CursorInvalid — no caller pre-validation.
 	// The store already holds only matched rows, so the engine query needs
 	// Sort/Direction/Limit/Cursor only — no Filters/Search (they were applied by
 	// the matcher).
-	engineQuery := querypage.Query{
+	return querypage.Query{
 		ClusterID: query.Request.ClusterID,
-		Signature: sig,
+		Signature: typedQuerySignature(sortField, dir, query.Request.Limit, query.BaseScope, query.Request),
 		Sort:      sortField,
 		Direction: dir,
-		Limit:     limit,
+		Limit:     query.Request.Limit,
 	}
+}
+
+func executeTypedEngineQuery[T any](items []T, query typedTableQuery, adapter typedTableQueryAdapter[T], store *querypage.Store[T], engineQuery querypage.Query) (querypage.Page[T], *ResourceQueryAnchorResult) {
 	var page querypage.Page[T]
 	var anchorResult *ResourceQueryAnchorResult
 	switch {
@@ -378,13 +423,8 @@ func applyTypedTableQueryViaStore[T any](items []T, query typedTableQuery, adapt
 		// This store holds ONLY matched rows, so an anchor the engine cannot find
 		// is ambiguous: present in the full item list ⇒ excluded by the request's
 		// filters ("filtered"); absent ⇒ "not-found".
-		if !outcome.Found && key != "" {
-			for _, it := range items {
-				if adapter.Key(it) == key {
-					outcome.Filtered = true
-					break
-				}
-			}
+		if !outcome.Found && typedItemsContainKey(items, adapter.Key, key) {
+			outcome.Filtered = true
 		}
 		anchorResult = anchorResultFromOutcome(outcome)
 	case query.Request.StartRank != nil:
@@ -395,25 +435,19 @@ func applyTypedTableQueryViaStore[T any](items []T, query typedTableQuery, adapt
 		engineQuery.Cursor = query.Request.Continue
 		page, _ = store.Query(engineQuery)
 	}
+	return page, anchorResult
+}
 
-	return typedTableQueryPage[T]{
-		Rows:            page.Rows,
-		Continue:        page.NextCursor,
-		Previous:        page.PrevCursor,
-		Self:            page.SelfCursor,
-		CursorInvalid:   page.CursorInvalid,
-		Anchor:          anchorResult,
-		PageStartRank:   pageStartRankPtr(page.PageStartRank),
-		Total:           matchedTotal,
-		UnfilteredTotal: len(items),
-		TotalIsExact:    true,
-		FacetsExact:     true,
-		Namespaces:      matchedNamespaces,
-		Kinds:           matchedKinds,
-		FacetValues:     scopeFacetValues,
-		Dynamic:         query.dynamicRef(),
-		SortField:       query.Request.SortField,
+func typedItemsContainKey[T any](items []T, keyOf func(T) string, key string) bool {
+	if key == "" {
+		return false
 	}
+	for _, item := range items {
+		if keyOf(item) == key {
+			return true
+		}
+	}
+	return false
 }
 
 // typedAnchorKey resolves a request anchor to the adapter's row key, or ""

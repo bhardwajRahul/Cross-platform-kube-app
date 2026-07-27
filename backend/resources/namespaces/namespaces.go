@@ -21,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 type Service struct {
@@ -99,63 +100,59 @@ func (s *Service) hasWorkloads(namespace string) (bool, bool) {
 	defer cancel()
 
 	opts := metav1.ListOptions{Limit: 1}
-
-	handleListError := func(resource string, err error) bool {
-		if err == nil {
-			return false
-		}
-		if apierrors.IsForbidden(err) {
-			return true
-		}
-		s.logError(fmt.Sprintf("Failed to list %s in namespace %s: %v", resource, namespace, err))
-		return true
-	}
-
-	if list, err := client.AppsV1().Deployments(namespace).List(ctx, opts); err != nil {
-		if handleListError("deployments", err) {
+	probes := namespaceWorkloadProbes(client, ctx, namespace, opts)
+	for _, probe := range probes {
+		hasAny, err := probe.hasAny()
+		if err != nil {
+			s.logWorkloadProbeError(probe.resource, namespace, err)
 			return false, true
 		}
-	} else if len(list.Items) > 0 {
-		return true, false
-	}
-	if list, err := client.AppsV1().StatefulSets(namespace).List(ctx, opts); err != nil {
-		if handleListError("statefulsets", err) {
-			return false, true
+		if hasAny {
+			return true, false
 		}
-	} else if len(list.Items) > 0 {
-		return true, false
-	}
-	if list, err := client.AppsV1().DaemonSets(namespace).List(ctx, opts); err != nil {
-		if handleListError("daemonsets", err) {
-			return false, true
-		}
-	} else if len(list.Items) > 0 {
-		return true, false
-	}
-	if list, err := client.BatchV1().Jobs(namespace).List(ctx, opts); err != nil {
-		if handleListError("jobs", err) {
-			return false, true
-		}
-	} else if len(list.Items) > 0 {
-		return true, false
-	}
-	if list, err := client.BatchV1().CronJobs(namespace).List(ctx, opts); err != nil {
-		if handleListError("cronjobs", err) {
-			return false, true
-		}
-	} else if len(list.Items) > 0 {
-		return true, false
-	}
-	if list, err := client.CoreV1().Pods(namespace).List(ctx, opts); err != nil {
-		if handleListError("pods", err) {
-			return false, true
-		}
-	} else if len(list.Items) > 0 {
-		return true, false
 	}
 
 	return false, false
+}
 
+type namespaceWorkloadProbe struct {
+	resource string
+	hasAny   func() (bool, error)
+}
+
+func namespaceWorkloadProbes(client kubernetes.Interface, ctx context.Context, namespace string, opts metav1.ListOptions) []namespaceWorkloadProbe {
+	return []namespaceWorkloadProbe{
+		{resource: "deployments", hasAny: func() (bool, error) {
+			list, err := client.AppsV1().Deployments(namespace).List(ctx, opts)
+			return list != nil && len(list.Items) > 0, err
+		}},
+		{resource: "statefulsets", hasAny: func() (bool, error) {
+			list, err := client.AppsV1().StatefulSets(namespace).List(ctx, opts)
+			return list != nil && len(list.Items) > 0, err
+		}},
+		{resource: "daemonsets", hasAny: func() (bool, error) {
+			list, err := client.AppsV1().DaemonSets(namespace).List(ctx, opts)
+			return list != nil && len(list.Items) > 0, err
+		}},
+		{resource: "jobs", hasAny: func() (bool, error) {
+			list, err := client.BatchV1().Jobs(namespace).List(ctx, opts)
+			return list != nil && len(list.Items) > 0, err
+		}},
+		{resource: "cronjobs", hasAny: func() (bool, error) {
+			list, err := client.BatchV1().CronJobs(namespace).List(ctx, opts)
+			return list != nil && len(list.Items) > 0, err
+		}},
+		{resource: "pods", hasAny: func() (bool, error) {
+			list, err := client.CoreV1().Pods(namespace).List(ctx, opts)
+			return list != nil && len(list.Items) > 0, err
+		}},
+	}
+}
+
+func (s *Service) logWorkloadProbeError(resource, namespace string, err error) {
+	if !apierrors.IsForbidden(err) {
+		s.logError(fmt.Sprintf("Failed to list %s in namespace %s: %v", resource, namespace, err))
+	}
 }
 
 func (s *Service) collectQuotasAndLimits(namespace string) (quotas, limits []string) {

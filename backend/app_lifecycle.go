@@ -38,25 +38,42 @@ const beforeCloseSelectionFlushTimeout = 2 * time.Second
 func (a *App) Startup(ctx context.Context) {
 	a.Ctx = ctx
 	a.eventEmitter = runtimeEventsEmit
-	lifecycle := newClusterLifecycle(func(clusterId string, state, previousState ClusterLifecycleState) {
+	a.initializeClusterLifecycle()
+	a.logger.Info("Application startup initiated", logsources.App)
+	a.startDiagnosticDumpHandler(ctx)
+	a.configureStartupErrorCapture()
+	if !a.checkStartupBetaExpiry(ctx) {
+		return
+	}
+	a.configureStartupLogging()
+	a.setupEnvironment()
+	a.logger.Debug("Environment setup completed", logsources.App)
+	a.restoreStartupWindow(ctx)
+	runtimeWindowShow(ctx)
+	a.logger.Info("Luxury Yacht - Sail the Seas of Kubernetes In Style", logsources.App)
+	a.initializeStartupClusters()
+	if err := a.startKubeconfigWatcher(); err != nil {
+		a.logger.Warn(fmt.Sprintf("Kubeconfig directory watcher not available: %v", err), logsources.App)
+	}
+	a.startUpdateCheck()
+}
+
+func (a *App) initializeClusterLifecycle() {
+	lifecycle := newClusterLifecycle(func(clusterID string, state, previousState ClusterLifecycleState) {
 		// The wire payload is stringly (Wails flattens defined string types);
 		// the frontend re-closes the union at its ingestion boundary. An empty
 		// previousState means "no previous state" (first transition).
 		a.emitEvent("cluster:lifecycle", map[string]string{
-			"clusterId":     clusterId,
+			"clusterId":     clusterID,
 			"state":         string(state),
 			"previousState": string(previousState),
 		})
 	})
 	lifecycle.setSnapshotChangeObserver(a.markClusterWorkspaceChanged)
 	a.clusterLifecycle = lifecycle
-	a.logger.Info("Application startup initiated", logsources.App)
+}
 
-	// Arm the SIGUSR1 goroutine-dump diagnostic (unix only): `pkill -USR1 luxury-yacht`
-	// writes every goroutine's stack to the user cache diagnostics dir without stopping
-	// the app — the instrument for naming lock holders when a view wedges.
-	a.startDiagnosticDumpHandler(ctx)
-
+func (a *App) configureStartupErrorCapture() {
 	errorcapture.Init()
 	errorcapture.InstallUnhandledErrorDedup()
 	errorcapture.SetEventEmitter(func(message string) {
@@ -96,7 +113,9 @@ func (a *App) Startup(ctx context.Context) {
 			a.logger.Info(message, logsources.ErrorCapture)
 		}
 	})
+}
 
+func (a *App) checkStartupBetaExpiry(ctx context.Context) bool {
 	if err := a.checkBetaExpiry(); err != nil {
 		a.logger.Error(err.Error(), logsources.App)
 		runtimeMessageDialog(ctx, runtime.MessageDialogOptions{
@@ -105,19 +124,21 @@ func (a *App) Startup(ctx context.Context) {
 			Message: err.Error(),
 		})
 		runtimeQuit(ctx)
-		return
+		return false
 	}
+	return true
+}
 
+func (a *App) configureStartupLogging() {
 	a.logger.SetEventEmitter(func(eventName string, args ...interface{}) {
 		a.emitEvent(eventName, args...)
 	})
 
 	log.SetFlags(0)
 	log.SetOutput(&stdLogBridge{logger: a.logger})
+}
 
-	a.setupEnvironment()
-	a.logger.Debug("Environment setup completed", logsources.App)
-
+func (a *App) restoreStartupWindow(ctx context.Context) {
 	if settings, err := a.LoadWindowSettings(); err != nil {
 		a.logger.Warn(fmt.Sprintf("Failed to load window settings: %v", err), logsources.App)
 	} else if settings != nil {
@@ -131,10 +152,9 @@ func (a *App) Startup(ctx context.Context) {
 			runtimeWindowMaximise(ctx)
 		}
 	}
+}
 
-	runtimeWindowShow(ctx)
-	a.logger.Info("Luxury Yacht - Sail the Seas of Kubernetes In Style", logsources.App)
-
+func (a *App) initializeStartupClusters() {
 	a.logger.Info("Discovering kubeconfig files...", logsources.App)
 	if err := a.discoverKubeconfigs(); err != nil {
 		a.logger.Error(fmt.Sprintf("Failed to discover kubeconfigs: %v", err), logsources.App)
@@ -154,16 +174,6 @@ func (a *App) Startup(ctx context.Context) {
 	} else {
 		a.logger.Warn("No kubeconfig selections found - please select a cluster", logsources.App)
 	}
-
-	// Start watching kubeconfig directories after cluster initialization completes
-	// so watcher callbacks cannot race startup subsystem construction.
-	if err := a.startKubeconfigWatcher(); err != nil {
-		a.logger.Warn(fmt.Sprintf("Kubeconfig directory watcher not available: %v", err), logsources.App)
-	}
-
-	// Per-cluster heartbeat runs via startHeartbeatLoop, launched by setupRefreshSubsystem.
-	// Run update checks in the background so the UI can surface them on startup.
-	a.startUpdateCheck()
 }
 
 type stdLogBridge struct {

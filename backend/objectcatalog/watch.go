@@ -53,6 +53,12 @@ type watchNotifier struct {
 	lastOverflowWarn   time.Time
 }
 
+type watchBatch struct {
+	events       []watchEvent
+	timer        *time.Timer
+	timerChannel <-chan time.Time
+}
+
 func newWatchNotifier(ctx context.Context, svc *Service) *watchNotifier {
 	return &watchNotifier{
 		service: svc,
@@ -117,57 +123,55 @@ func (n *watchNotifier) flush(events []watchEvent) {
 
 // run collects events and flushes in debounced batches.
 func (n *watchNotifier) run() {
-	var batch []watchEvent
-	var timer *time.Timer
-	var timerC <-chan time.Time
-
+	batch := watchBatch{}
 	for {
 		select {
 		case <-n.ctx.Done():
-			if len(batch) > 0 {
-				n.flush(batch)
-			}
-			if timer != nil {
-				timer.Stop()
-			}
+			n.finishWatchBatch(&batch, false)
 			return
 		case evt, ok := <-n.pending:
 			if !ok {
-				if len(batch) > 0 {
-					n.flush(batch)
-				}
+				n.finishWatchBatch(&batch, false)
 				return
 			}
-			batch = append(batch, evt)
-			if timer == nil {
-				timer = time.NewTimer(config.ObjectCatalogWatchDebounceInterval)
-				timerC = timer.C
+			if batch.add(evt) {
+				n.finishWatchBatch(&batch, true)
 			}
-			if len(batch) >= config.ObjectCatalogWatchPendingBufferSize {
-				n.flush(batch)
-				batch = nil
-				n.runRecoverySync()
-				if timer != nil {
-					if !timer.Stop() {
-						select {
-						case <-timer.C:
-						default:
-						}
-					}
-					timer = nil
-					timerC = nil
-				}
-			}
-		case <-timerC:
-			if len(batch) > 0 {
-				n.flush(batch)
-				batch = nil
-			}
-			n.runRecoverySync()
-			timer = nil
-			timerC = nil
+		case <-batch.timerChannel:
+			n.finishWatchBatch(&batch, true)
 		}
 	}
+}
+
+func (b *watchBatch) add(event watchEvent) bool {
+	b.events = append(b.events, event)
+	if b.timer == nil {
+		b.timer = time.NewTimer(config.ObjectCatalogWatchDebounceInterval)
+		b.timerChannel = b.timer.C
+	}
+	return len(b.events) >= config.ObjectCatalogWatchPendingBufferSize
+}
+
+func (n *watchNotifier) finishWatchBatch(batch *watchBatch, runRecovery bool) {
+	if len(batch.events) > 0 {
+		n.flush(batch.events)
+	}
+	if runRecovery {
+		n.runRecoverySync()
+	}
+	batch.events = nil
+	batch.stopTimer()
+}
+
+func (b *watchBatch) stopTimer() {
+	if b.timer != nil && !b.timer.Stop() {
+		select {
+		case <-b.timer.C:
+		default:
+		}
+	}
+	b.timer = nil
+	b.timerChannel = nil
 }
 
 // send enqueues a watch event. If the bounded queue is saturated, it drops the
@@ -224,66 +228,48 @@ func (n *watchNotifier) runRecoverySync() {
 // makeHandler builds an informer event handler for the given GroupResource.
 func makeHandler(gr schema.GroupResource, notifier *watchNotifier, svc *Service) cache.ResourceEventHandlerFuncs {
 	return cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			metaObj, ok := toMetaObject(obj)
-			if !ok {
-				return
-			}
-			gvr, desc := svc.resolveGRToDescriptor(gr)
-			if desc == nil {
-				return
-			}
-			notifier.send(watchEvent{
-				eventType: watchEventAdd,
-				gvr:       gvr,
-				key:       catalogKey(*desc, metaObj.GetNamespace(), metaObj.GetName()),
-				obj:       metaObj,
-			})
-		},
+		AddFunc: func(obj interface{}) { sendWatchObject(gr, notifier, svc, watchEventAdd, obj) },
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			// Skip no-op updates from informer resync.
-			if oldMeta, ok := toMetaObject(oldObj); ok {
-				if newMeta, ok := toMetaObject(newObj); ok {
-					if oldMeta.GetResourceVersion() == newMeta.GetResourceVersion() {
-						return
-					}
-				}
+			if !sameObjectResourceVersion(oldObj, newObj) {
+				sendWatchObject(gr, notifier, svc, watchEventUpdate, newObj)
 			}
-			metaObj, ok := toMetaObject(newObj)
-			if !ok {
-				return
-			}
-			gvr, desc := svc.resolveGRToDescriptor(gr)
-			if desc == nil {
-				return
-			}
-			notifier.send(watchEvent{
-				eventType: watchEventUpdate,
-				gvr:       gvr,
-				key:       catalogKey(*desc, metaObj.GetNamespace(), metaObj.GetName()),
-				obj:       metaObj,
-			})
 		},
-		DeleteFunc: func(obj interface{}) {
-			if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
-				obj = d.Obj
-			}
-			metaObj, ok := toMetaObject(obj)
-			if !ok {
-				return
-			}
-			gvr, desc := svc.resolveGRToDescriptor(gr)
-			if desc == nil {
-				return
-			}
-			notifier.send(watchEvent{
-				eventType: watchEventDelete,
-				gvr:       gvr,
-				key:       catalogKey(*desc, metaObj.GetNamespace(), metaObj.GetName()),
-				obj:       nil,
-			})
-		},
+		DeleteFunc: func(obj interface{}) { sendWatchObject(gr, notifier, svc, watchEventDelete, unwrapDeletedObject(obj)) },
 	}
+}
+
+func sameObjectResourceVersion(oldObj, newObj interface{}) bool {
+	oldMeta, oldOK := toMetaObject(oldObj)
+	newMeta, newOK := toMetaObject(newObj)
+	return oldOK && newOK && oldMeta.GetResourceVersion() == newMeta.GetResourceVersion()
+}
+
+func unwrapDeletedObject(obj interface{}) interface{} {
+	if deleted, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		return deleted.Obj
+	}
+	return obj
+}
+
+func sendWatchObject(gr schema.GroupResource, notifier *watchNotifier, svc *Service, eventType watchEventType, obj interface{}) {
+	metaObj, ok := toMetaObject(obj)
+	if !ok {
+		return
+	}
+	gvr, desc := svc.resolveGRToDescriptor(gr)
+	if desc == nil {
+		return
+	}
+	key := catalogKey(*desc, metaObj.GetNamespace(), metaObj.GetName())
+	if eventType == watchEventDelete {
+		metaObj = nil
+	}
+	notifier.send(watchEvent{
+		eventType: eventType,
+		gvr:       gvr,
+		key:       key,
+		obj:       metaObj,
+	})
 }
 
 // registerWatchHandlers attaches event handlers to shared informers, and registers

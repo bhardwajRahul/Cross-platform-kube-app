@@ -20,6 +20,18 @@ import (
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 )
 
+type podAverageAccumulator struct {
+	cpuRequest, cpuLimit, memRequest, memLimit, cpuUsage, memUsage resource.Quantity
+	cpuReqCount, cpuLimCount, memReqCount, memLimCount             int
+	cpuUseCount, memUseCount                                       int
+}
+
+type podMetricsAccumulator struct {
+	summary                                                        restypes.PodMetricsSummary
+	cpuRequest, cpuLimit, cpuUsage, memRequest, memLimit, memUsage resource.Quantity
+	restarts                                                       int32
+}
+
 func aggregatePodAverages(podSlice []corev1.Pod, podMetrics map[string]*metricsv1beta1.PodMetrics) (
 	*resource.Quantity,
 	*resource.Quantity,
@@ -32,125 +44,109 @@ func aggregatePodAverages(podSlice []corev1.Pod, podMetrics map[string]*metricsv
 		return nil, nil, nil, nil, nil, nil
 	}
 
-	totalCPURequest := resource.NewQuantity(0, resource.DecimalSI)
-	totalCPULimit := resource.NewQuantity(0, resource.DecimalSI)
-	totalMemRequest := resource.NewQuantity(0, resource.BinarySI)
-	totalMemLimit := resource.NewQuantity(0, resource.BinarySI)
-	totalCPUUsage := resource.NewQuantity(0, resource.DecimalSI)
-	totalMemUsage := resource.NewQuantity(0, resource.BinarySI)
-
-	cpuReqCount, cpuLimCount, memReqCount, memLimCount := 0, 0, 0, 0
-	cpuUseCount, memUseCount := 0, 0
-
+	accumulator := newPodAverageAccumulator()
 	for _, pod := range podSlice {
-		cpuReq, cpuLim, memReq, memLim := pods.CalculatePodResources(pod)
-		if cpuReq != nil && !cpuReq.IsZero() {
-			totalCPURequest.Add(*cpuReq)
-			cpuReqCount++
-		}
-		if cpuLim != nil && !cpuLim.IsZero() {
-			totalCPULimit.Add(*cpuLim)
-			cpuLimCount++
-		}
-		if memReq != nil && !memReq.IsZero() {
-			totalMemRequest.Add(*memReq)
-			memReqCount++
-		}
-		if memLim != nil && !memLim.IsZero() {
-			totalMemLimit.Add(*memLim)
-			memLimCount++
-		}
+		accumulator.addPod(pod, podMetrics)
+	}
+	return accumulator.averages()
+}
 
-		cpuUse, memUse := pods.PodUsageFromMetrics(pod.Name, podMetrics)
-		if cpuUse != nil && !cpuUse.IsZero() {
-			totalCPUUsage.Add(*cpuUse)
-			cpuUseCount++
-		}
-		if memUse != nil && !memUse.IsZero() {
-			totalMemUsage.Add(*memUse)
-			memUseCount++
-		}
+func newPodAverageAccumulator() podAverageAccumulator {
+	return podAverageAccumulator{
+		cpuRequest: *resource.NewQuantity(0, resource.DecimalSI), cpuLimit: *resource.NewQuantity(0, resource.DecimalSI),
+		memRequest: *resource.NewQuantity(0, resource.BinarySI), memLimit: *resource.NewQuantity(0, resource.BinarySI),
+		cpuUsage: *resource.NewQuantity(0, resource.DecimalSI), memUsage: *resource.NewQuantity(0, resource.BinarySI),
 	}
+}
 
-	var avgCPURequest, avgCPULimit, avgMemRequest, avgMemLimit, avgCPUUsage, avgMemUsage *resource.Quantity
-	if cpuReqCount > 0 {
-		avgCPURequest = resource.NewMilliQuantity(totalCPURequest.MilliValue()/int64(cpuReqCount), resource.DecimalSI)
-	}
-	if cpuLimCount > 0 {
-		avgCPULimit = resource.NewMilliQuantity(totalCPULimit.MilliValue()/int64(cpuLimCount), resource.DecimalSI)
-	}
-	if memReqCount > 0 {
-		avgMemRequest = resource.NewQuantity(totalMemRequest.Value()/int64(memReqCount), resource.BinarySI)
-	}
-	if memLimCount > 0 {
-		avgMemLimit = resource.NewQuantity(totalMemLimit.Value()/int64(memLimCount), resource.BinarySI)
-	}
-	if cpuUseCount > 0 {
-		avgCPUUsage = resource.NewMilliQuantity(totalCPUUsage.MilliValue()/int64(cpuUseCount), resource.DecimalSI)
-	}
-	if memUseCount > 0 {
-		avgMemUsage = resource.NewQuantity(totalMemUsage.Value()/int64(memUseCount), resource.BinarySI)
-	}
+func (a *podAverageAccumulator) addPod(pod corev1.Pod, metrics map[string]*metricsv1beta1.PodMetrics) {
+	cpuReq, cpuLim, memReq, memLim := pods.CalculatePodResources(pod)
+	addNonZeroQuantity(&a.cpuRequest, &a.cpuReqCount, cpuReq)
+	addNonZeroQuantity(&a.cpuLimit, &a.cpuLimCount, cpuLim)
+	addNonZeroQuantity(&a.memRequest, &a.memReqCount, memReq)
+	addNonZeroQuantity(&a.memLimit, &a.memLimCount, memLim)
+	cpuUse, memUse := pods.PodUsageFromMetrics(pod.Name, metrics)
+	addNonZeroQuantity(&a.cpuUsage, &a.cpuUseCount, cpuUse)
+	addNonZeroQuantity(&a.memUsage, &a.memUseCount, memUse)
+}
 
-	return avgCPURequest, avgCPULimit, avgMemRequest, avgMemLimit, avgCPUUsage, avgMemUsage
+func addNonZeroQuantity(total *resource.Quantity, count *int, value *resource.Quantity) {
+	if value != nil && !value.IsZero() {
+		total.Add(*value)
+		*count++
+	}
+}
+
+func (a podAverageAccumulator) averages() (*resource.Quantity, *resource.Quantity, *resource.Quantity, *resource.Quantity, *resource.Quantity, *resource.Quantity) {
+	return averageCPU(a.cpuRequest, a.cpuReqCount), averageCPU(a.cpuLimit, a.cpuLimCount),
+		averageMemory(a.memRequest, a.memReqCount), averageMemory(a.memLimit, a.memLimCount),
+		averageCPU(a.cpuUsage, a.cpuUseCount), averageMemory(a.memUsage, a.memUseCount)
+}
+
+func averageCPU(total resource.Quantity, count int) *resource.Quantity {
+	if count == 0 {
+		return nil
+	}
+	return resource.NewMilliQuantity(total.MilliValue()/int64(count), resource.DecimalSI)
+}
+
+func averageMemory(total resource.Quantity, count int) *resource.Quantity {
+	if count == 0 {
+		return nil
+	}
+	return resource.NewQuantity(total.Value()/int64(count), resource.BinarySI)
 }
 
 func SummarizePodMetrics(podSlice []corev1.Pod, podMetrics map[string]*metricsv1beta1.PodMetrics) (*restypes.PodMetricsSummary, int32) {
-	summary := &restypes.PodMetricsSummary{}
-	cpuRequest := resource.NewQuantity(0, resource.DecimalSI)
-	cpuLimit := resource.NewQuantity(0, resource.DecimalSI)
-	cpuUsage := resource.NewQuantity(0, resource.DecimalSI)
-	memRequest := resource.NewQuantity(0, resource.BinarySI)
-	memLimit := resource.NewQuantity(0, resource.BinarySI)
-	memUsage := resource.NewQuantity(0, resource.BinarySI)
-
-	var restarts int32
-
+	accumulator := newPodMetricsAccumulator()
 	for _, pod := range podSlice {
-		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-			continue
-		}
-
-		summary.Pods++
-		readyContainers, totalContainers := parseReadyStatus(pods.PodReadyStatus(pod))
-		if totalContainers > 0 && readyContainers == totalContainers {
-			summary.ReadyPods++
-		}
-
-		restarts += pods.PodRestartCount(pod)
-
-		cpuReq, cpuLim, memReq, memLim := pods.CalculatePodResources(pod)
-		if cpuReq != nil {
-			cpuRequest.Add(*cpuReq)
-		}
-		if cpuLim != nil {
-			cpuLimit.Add(*cpuLim)
-		}
-		if memReq != nil {
-			memRequest.Add(*memReq)
-		}
-		if memLim != nil {
-			memLimit.Add(*memLim)
-		}
-
-		if useCPU, useMem := pods.PodUsageFromMetrics(pod.Name, podMetrics); useCPU != nil || useMem != nil {
-			if useCPU != nil {
-				cpuUsage.Add(*useCPU)
-			}
-			if useMem != nil {
-				memUsage.Add(*useMem)
-			}
-		}
+		accumulator.addPod(pod, podMetrics)
 	}
+	return accumulator.result()
+}
 
-	summary.CPURequest = common.FormatCPU(cpuRequest)
-	summary.CPULimit = common.FormatCPU(cpuLimit)
-	summary.CPUUsage = common.FormatCPU(cpuUsage)
-	summary.MemRequest = common.FormatMemory(memRequest)
-	summary.MemLimit = common.FormatMemory(memLimit)
-	summary.MemUsage = common.FormatMemory(memUsage)
+func newPodMetricsAccumulator() podMetricsAccumulator {
+	return podMetricsAccumulator{
+		cpuRequest: *resource.NewQuantity(0, resource.DecimalSI), cpuLimit: *resource.NewQuantity(0, resource.DecimalSI),
+		cpuUsage: *resource.NewQuantity(0, resource.DecimalSI), memRequest: *resource.NewQuantity(0, resource.BinarySI),
+		memLimit: *resource.NewQuantity(0, resource.BinarySI), memUsage: *resource.NewQuantity(0, resource.BinarySI),
+	}
+}
 
-	return summary, restarts
+func (a *podMetricsAccumulator) addPod(pod corev1.Pod, metrics map[string]*metricsv1beta1.PodMetrics) {
+	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		return
+	}
+	a.summary.Pods++
+	ready, total := parseReadyStatus(pods.PodReadyStatus(pod))
+	if total > 0 && ready == total {
+		a.summary.ReadyPods++
+	}
+	a.restarts += pods.PodRestartCount(pod)
+	cpuReq, cpuLim, memReq, memLim := pods.CalculatePodResources(pod)
+	addQuantity(&a.cpuRequest, cpuReq)
+	addQuantity(&a.cpuLimit, cpuLim)
+	addQuantity(&a.memRequest, memReq)
+	addQuantity(&a.memLimit, memLim)
+	cpuUse, memUse := pods.PodUsageFromMetrics(pod.Name, metrics)
+	addQuantity(&a.cpuUsage, cpuUse)
+	addQuantity(&a.memUsage, memUse)
+}
+
+func addQuantity(total *resource.Quantity, value *resource.Quantity) {
+	if value != nil {
+		total.Add(*value)
+	}
+}
+
+func (a *podMetricsAccumulator) result() (*restypes.PodMetricsSummary, int32) {
+	a.summary.CPURequest = common.FormatCPU(&a.cpuRequest)
+	a.summary.CPULimit = common.FormatCPU(&a.cpuLimit)
+	a.summary.CPUUsage = common.FormatCPU(&a.cpuUsage)
+	a.summary.MemRequest = common.FormatMemory(&a.memRequest)
+	a.summary.MemLimit = common.FormatMemory(&a.memLimit)
+	a.summary.MemUsage = common.FormatMemory(&a.memUsage)
+	return &a.summary, a.restarts
 }
 
 func parseReadyStatus(value string) (ready, total int) {

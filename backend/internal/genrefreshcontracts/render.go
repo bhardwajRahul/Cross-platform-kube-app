@@ -34,6 +34,20 @@ func Render() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	r, err := newRenderer(resolvedEnums)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.discoverDefinitions(); err != nil {
+		return nil, err
+	}
+	if err := validateDomainPayloadTypes(domains, r.typesByName); err != nil {
+		return nil, err
+	}
+	return r.renderOutput(resolvedEnums, domains)
+}
+
+func newRenderer(resolvedEnums []enumSpec) (*renderer, error) {
 	r := &renderer{
 		names:       make(map[reflect.Type]string),
 		typesByName: make(map[string]reflect.Type),
@@ -55,20 +69,31 @@ func Render() ([]byte, error) {
 			r.definitions[indirect(spec.typeOf)] = struct{}{}
 		}
 	}
+	return r, nil
+}
 
-	if err := r.discoverDefinitions(); err != nil {
-		return nil, err
-	}
-	if err := validateDomainPayloadTypes(domains, r.typesByName); err != nil {
-		return nil, err
-	}
-
+func (r *renderer) renderOutput(resolvedEnums []enumSpec, domains []domainSpec) ([]byte, error) {
 	var out bytes.Buffer
 	out.WriteString(generatedHeader)
 	for _, spec := range resolvedEnums {
 		r.renderEnum(&out, spec)
 	}
+	if err := r.renderDefinitions(&out); err != nil {
+		return nil, err
+	}
+	r.renderAliasesAndDomains(&out, domains)
+	r.renderValidationSupport(&out)
+	if err := r.renderSnapshotAssertion(&out); err != nil {
+		return nil, err
+	}
+	if err := r.renderTelemetryAssertion(&out); err != nil {
+		return nil, err
+	}
+	r.renderDomainPayloadMap(&out, domains)
+	return out.Bytes(), nil
+}
 
+func (r *renderer) renderDefinitions(out *bytes.Buffer) error {
 	definitionTypes := make([]reflect.Type, 0, len(r.definitions))
 	for typeOf := range r.definitions {
 		definitionTypes = append(definitionTypes, typeOf)
@@ -77,42 +102,36 @@ func Render() ([]byte, error) {
 		return r.names[definitionTypes[i]] < r.names[definitionTypes[j]]
 	})
 	for _, typeOf := range definitionTypes {
-		if err := r.renderInterface(&out, typeOf); err != nil {
-			return nil, err
+		if err := r.renderInterface(out, typeOf); err != nil {
+			return err
 		}
 	}
 	out.WriteString("export interface CanonicalResourceRef extends ResourceRef {\n  resource: string;\n  name: string;\n}\n\n")
-	if err := r.renderSnapshotInterface(&out); err != nil {
-		return nil, err
-	}
+	return r.renderSnapshotInterface(out)
+}
 
+func (r *renderer) renderAliasesAndDomains(out *bytes.Buffer, domains []domainSpec) {
 	for _, alias := range contractAliases {
-		fmt.Fprintf(&out, "export type %s = %s;\n\n", alias.name, alias.target)
+		fmt.Fprintf(out, "export type %s = %s;\n\n", alias.name, alias.target)
 	}
 
 	out.WriteString("export const REFRESH_DOMAINS = [\n")
 	for _, domain := range domains {
-		fmt.Fprintf(&out, "  %s,\n", quoteString(domain.domain))
+		fmt.Fprintf(out, "  %s,\n", quoteString(domain.domain))
 	}
 	out.WriteString("] as const;\n\n")
 	out.WriteString("export type RefreshDomain = (typeof REFRESH_DOMAINS)[number];\n\n")
-	r.renderValidationSupport(&out)
-	if err := r.renderSnapshotAssertion(&out); err != nil {
-		return nil, err
-	}
-	if err := r.renderTelemetryAssertion(&out); err != nil {
-		return nil, err
-	}
+}
+
+func (r *renderer) renderDomainPayloadMap(out *bytes.Buffer, domains []domainSpec) {
 	out.WriteString("export interface BackendDomainPayloadMap {\n")
 	for _, domain := range domains {
 		if domain.frontendOwned {
 			continue
 		}
-		fmt.Fprintf(&out, "  %s: %s;\n", quoteProperty(domain.domain), domain.payload)
+		fmt.Fprintf(out, "  %s: %s;\n", quoteProperty(domain.domain), domain.payload)
 	}
 	out.WriteString("}\n")
-
-	return out.Bytes(), nil
 }
 
 func (r *renderer) renderEnum(out *bytes.Buffer, spec enumSpec) {
@@ -323,36 +342,45 @@ type validationField struct {
 }
 
 func (r *renderer) renderValidationSchema(out *bytes.Buffer, typeOf reflect.Type, nullable bool, indent int) error {
-	for typeOf.Kind() == reflect.Pointer {
-		typeOf = typeOf.Elem()
-	}
+	typeOf = indirect(typeOf)
 	if special, ok := specialTypeScriptType(typeOf); ok {
-		switch special {
-		case "string":
-			renderPrimitiveValidationSchema(out, "string", nullable)
-		case "Record<string, unknown>":
-			out.WriteString("{ kind: 'record', values: { kind: 'unknown' }")
-			renderValidationNullable(out, nullable)
-			out.WriteString(" }")
-		default:
-			return fmt.Errorf("unsupported special validation type %s for %s", special, typeOf)
-		}
-		return nil
+		return renderSpecialValidationSchema(out, typeOf, special, nullable)
 	}
 	if enum, ok := r.enums[typeOf]; ok {
-		out.WriteString("{ kind: 'enum', values: [")
-		for index, value := range enum.values {
-			if index > 0 {
-				out.WriteString(", ")
-			}
-			out.WriteString(quoteString(value))
-		}
-		out.WriteString("]")
-		renderValidationNullable(out, nullable)
-		out.WriteString(" }")
+		renderEnumValidationSchema(out, enum, nullable)
 		return nil
 	}
+	return r.renderValidationSchemaByKind(out, typeOf, nullable, indent)
+}
 
+func renderSpecialValidationSchema(out *bytes.Buffer, typeOf reflect.Type, special string, nullable bool) error {
+	switch special {
+	case "string":
+		renderPrimitiveValidationSchema(out, "string", nullable)
+	case "Record<string, unknown>":
+		out.WriteString("{ kind: 'record', values: { kind: 'unknown' }")
+		renderValidationNullable(out, nullable)
+		out.WriteString(" }")
+	default:
+		return fmt.Errorf("unsupported special validation type %s for %s", special, typeOf)
+	}
+	return nil
+}
+
+func renderEnumValidationSchema(out *bytes.Buffer, enum enumSpec, nullable bool) {
+	out.WriteString("{ kind: 'enum', values: [")
+	for index, value := range enum.values {
+		if index > 0 {
+			out.WriteString(", ")
+		}
+		out.WriteString(quoteString(value))
+	}
+	out.WriteString("]")
+	renderValidationNullable(out, nullable)
+	out.WriteString(" }")
+}
+
+func (r *renderer) renderValidationSchemaByKind(out *bytes.Buffer, typeOf reflect.Type, nullable bool, indent int) error {
 	switch typeOf.Kind() {
 	case reflect.Bool:
 		renderPrimitiveValidationSchema(out, "boolean", nullable)
@@ -365,43 +393,59 @@ func (r *renderer) renderValidationSchema(out *bytes.Buffer, typeOf reflect.Type
 	case reflect.Interface:
 		out.WriteString("{ kind: 'unknown' }")
 	case reflect.Array, reflect.Slice:
-		out.WriteString("{ kind: 'array', items: ")
-		if err := r.renderValidationSchema(out, typeOf.Elem(), wireTypeCanMarshalNull(typeOf.Elem()), indent); err != nil {
-			return err
-		}
-		renderValidationNullable(out, nullable)
-		out.WriteString(" }")
+		return r.renderCollectionValidationSchema(out, typeOf.Elem(), nullable, indent)
 	case reflect.Map:
-		if typeOf.Key().Kind() != reflect.String {
-			return fmt.Errorf("map key %s is not representable as a validation record key", typeOf.Key())
-		}
-		out.WriteString("{ kind: 'record', values: ")
-		if err := r.renderValidationSchema(out, typeOf.Elem(), wireTypeCanMarshalNull(typeOf.Elem()), indent); err != nil {
-			return err
-		}
-		renderValidationNullable(out, nullable)
-		out.WriteString(" }")
+		return r.renderMapValidationSchema(out, typeOf, nullable, indent)
 	case reflect.Struct:
-		fields, err := validationFields(typeOf, false)
-		if err != nil {
-			return err
-		}
-		out.WriteString("{ kind: 'object', fields: {\n")
-		for _, field := range fields {
-			writeIndent(out, indent+1)
-			fmt.Fprintf(out, "%s: { optional: %t, schema: ", quoteProperty(field.name), field.optional)
-			if err := r.renderValidationSchema(out, field.typeOf, validationFieldNullable(field.typeOf, field.optional), indent+1); err != nil {
-				return fmt.Errorf("%s.%s: %w", typeOf, field.name, err)
-			}
-			out.WriteString(" },\n")
-		}
-		writeIndent(out, indent)
-		out.WriteString("}")
-		renderValidationNullable(out, nullable)
-		out.WriteString(" }")
+		return r.renderStructValidationSchema(out, typeOf, nullable, indent)
 	default:
 		return fmt.Errorf("unsupported Go validation type %s", typeOf)
 	}
+	return nil
+}
+
+func (r *renderer) renderCollectionValidationSchema(out *bytes.Buffer, element reflect.Type, nullable bool, indent int) error {
+	out.WriteString("{ kind: 'array', items: ")
+	if err := r.renderValidationSchema(out, element, wireTypeCanMarshalNull(element), indent); err != nil {
+		return err
+	}
+	renderValidationNullable(out, nullable)
+	out.WriteString(" }")
+	return nil
+}
+
+func (r *renderer) renderMapValidationSchema(out *bytes.Buffer, typeOf reflect.Type, nullable bool, indent int) error {
+	if typeOf.Key().Kind() != reflect.String {
+		return fmt.Errorf("map key %s is not representable as a validation record key", typeOf.Key())
+	}
+	element := typeOf.Elem()
+	out.WriteString("{ kind: 'record', values: ")
+	if err := r.renderValidationSchema(out, element, wireTypeCanMarshalNull(element), indent); err != nil {
+		return err
+	}
+	renderValidationNullable(out, nullable)
+	out.WriteString(" }")
+	return nil
+}
+
+func (r *renderer) renderStructValidationSchema(out *bytes.Buffer, typeOf reflect.Type, nullable bool, indent int) error {
+	fields, err := validationFields(typeOf, false)
+	if err != nil {
+		return err
+	}
+	out.WriteString("{ kind: 'object', fields: {\n")
+	for _, field := range fields {
+		writeIndent(out, indent+1)
+		fmt.Fprintf(out, "%s: { optional: %t, schema: ", quoteProperty(field.name), field.optional)
+		if err := r.renderValidationSchema(out, field.typeOf, validationFieldNullable(field.typeOf, field.optional), indent+1); err != nil {
+			return fmt.Errorf("%s.%s: %w", typeOf, field.name, err)
+		}
+		out.WriteString(" },\n")
+	}
+	writeIndent(out, indent)
+	out.WriteString("}")
+	renderValidationNullable(out, nullable)
+	out.WriteString(" }")
 	return nil
 }
 
@@ -635,21 +679,32 @@ func (r *renderer) typeScriptTypeWithOuterNull(typeOf reflect.Type, outerNullabl
 		}
 		return nullableTypeScriptType(value, outerNullable), nil
 	}
+	if value, handled, err := r.namedTypeScriptType(typeOf, outerNullable); handled {
+		return value, err
+	}
+	return r.typeScriptTypeByKind(typeOf, outerNullable)
+}
+
+func (r *renderer) namedTypeScriptType(typeOf reflect.Type, outerNullable bool) (string, bool, error) {
 	if special, ok := specialTypeScriptType(typeOf); ok {
 		if specialTypeCanMarshalNull(typeOf) {
-			return nullableTypeScriptType(special, outerNullable), nil
+			return nullableTypeScriptType(special, outerNullable), true, nil
 		}
-		return special, nil
+		return special, true, nil
 	}
 	if enum, ok := r.enums[typeOf]; ok {
-		return enum.name, nil
+		return enum.name, true, nil
 	}
 	if typeOf.Name() != "" && typeOf.PkgPath() != "" && typeOf.Kind() != reflect.Struct {
-		return "", fmt.Errorf("named Go wire type %s must be registered as an enum or special type", typeOf)
+		return "", true, fmt.Errorf("named Go wire type %s must be registered as an enum or special type", typeOf)
 	}
 	if name, ok := r.names[typeOf]; ok && typeOf.Kind() == reflect.Struct {
-		return name, nil
+		return name, true, nil
 	}
+	return "", false, nil
+}
+
+func (r *renderer) typeScriptTypeByKind(typeOf reflect.Type, outerNullable bool) (string, error) {
 	switch typeOf.Kind() {
 	case reflect.Bool:
 		return "boolean", nil
@@ -662,30 +717,34 @@ func (r *renderer) typeScriptTypeWithOuterNull(typeOf reflect.Type, outerNullabl
 	case reflect.Interface:
 		return "unknown", nil
 	case reflect.Array, reflect.Slice:
-		item, err := r.typeScriptTypeWithOuterNull(typeOf.Elem(), true)
-		if err != nil {
-			return "", err
-		}
-		collection := "Array<" + item + ">"
-		return nullableTypeScriptType(collection, typeOf.Kind() == reflect.Slice && outerNullable), nil
+		return r.typeScriptCollectionType(typeOf, outerNullable)
 	case reflect.Map:
-		if typeOf.Key().Kind() != reflect.String {
-			return "", fmt.Errorf("map key %s is not representable as a TypeScript record key", typeOf.Key())
-		}
-		value, err := r.typeScriptTypeWithOuterNull(typeOf.Elem(), true)
-		if err != nil {
-			return "", err
-		}
-		return nullableTypeScriptType("Record<string, "+value+">", outerNullable), nil
+		return r.typeScriptMapType(typeOf, outerNullable)
 	case reflect.Struct:
-		name := r.names[typeOf]
-		if name == "" {
-			return "", fmt.Errorf("missing discovered TypeScript name for %s", typeOf)
-		}
-		return name, nil
+		return "", fmt.Errorf("missing discovered TypeScript name for %s", typeOf)
 	default:
 		return "", fmt.Errorf("unsupported Go wire type %s", typeOf)
 	}
+}
+
+func (r *renderer) typeScriptCollectionType(typeOf reflect.Type, outerNullable bool) (string, error) {
+	item, err := r.typeScriptTypeWithOuterNull(typeOf.Elem(), true)
+	if err != nil {
+		return "", err
+	}
+	collection := "Array<" + item + ">"
+	return nullableTypeScriptType(collection, typeOf.Kind() == reflect.Slice && outerNullable), nil
+}
+
+func (r *renderer) typeScriptMapType(typeOf reflect.Type, outerNullable bool) (string, error) {
+	if typeOf.Key().Kind() != reflect.String {
+		return "", fmt.Errorf("map key %s is not representable as a TypeScript record key", typeOf.Key())
+	}
+	value, err := r.typeScriptTypeWithOuterNull(typeOf.Elem(), true)
+	if err != nil {
+		return "", err
+	}
+	return nullableTypeScriptType("Record<string, "+value+">", outerNullable), nil
 }
 
 func jsonField(field reflect.StructField) (name string, optional bool, skip bool) {

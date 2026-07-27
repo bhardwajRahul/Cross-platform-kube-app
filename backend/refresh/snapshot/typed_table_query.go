@@ -284,41 +284,62 @@ func (m typedTableQueryMatcher[T]) Matches(item T) bool {
 	if m.matchNone {
 		return false
 	}
-	if len(m.namespaceSet) > 0 {
-		if _, ok := m.namespaceSet[strings.ToLower(strings.TrimSpace(m.adapter.Namespace(item)))]; !ok {
-			return false
-		}
+	return m.matchesNamespace(item) &&
+		m.matchesKind(item) &&
+		m.matchesFacets(item) &&
+		m.matchesSearch(item) &&
+		m.matchesPredicates(item)
+}
+
+func (m typedTableQueryMatcher[T]) matchesNamespace(item T) bool {
+	if len(m.namespaceSet) == 0 {
+		return true
 	}
-	if len(m.kindSet) > 0 {
-		if _, ok := m.kindSet[strings.ToLower(strings.TrimSpace(m.adapter.Kind(item)))]; !ok {
-			return false
-		}
+	_, ok := m.namespaceSet[strings.ToLower(strings.TrimSpace(m.adapter.Namespace(item)))]
+	return ok
+}
+
+func (m typedTableQueryMatcher[T]) matchesKind(item T) bool {
+	if len(m.kindSet) == 0 {
+		return true
 	}
+	_, ok := m.kindSet[strings.ToLower(strings.TrimSpace(m.adapter.Kind(item)))]
+	return ok
+}
+
+func (m typedTableQueryMatcher[T]) matchesFacets(item T) bool {
 	for key, selected := range m.facetSets {
 		facet, ok := typedTableFacetByKey(m.adapter.Facets, key)
 		if !ok || (facet.Value == nil && facet.Values == nil) {
 			return false
 		}
-		matched := false
-		for _, value := range typedTableFacetItemValues(facet, item) {
-			if _, exists := selected[strings.ToLower(strings.TrimSpace(value))]; exists {
-				matched = true
-				break
-			}
-		}
-		if !matched {
+		if !typedTableFacetMatches(facet, item, selected) {
 			return false
 		}
 	}
-	if m.searchNeedle != "" {
-		matched := typedTableSearchMatches(m.adapter.SearchText(item), m.searchNeedle)
-		if !matched && m.includeMetadata && m.adapter.MetadataText != nil {
-			matched = typedTableSearchMatches(m.adapter.MetadataText(item), m.searchNeedle)
-		}
-		if !matched {
-			return false
+	return true
+}
+
+func typedTableFacetMatches[T any](facet typedTableQueryFacet[T], item T, selected map[string]struct{}) bool {
+	for _, value := range typedTableFacetItemValues(facet, item) {
+		if _, exists := selected[strings.ToLower(strings.TrimSpace(value))]; exists {
+			return true
 		}
 	}
+	return false
+}
+
+func (m typedTableQueryMatcher[T]) matchesSearch(item T) bool {
+	if m.searchNeedle == "" {
+		return true
+	}
+	if typedTableSearchMatches(m.adapter.SearchText(item), m.searchNeedle) {
+		return true
+	}
+	return m.includeMetadata && m.adapter.MetadataText != nil && typedTableSearchMatches(m.adapter.MetadataText(item), m.searchNeedle)
+}
+
+func (m typedTableQueryMatcher[T]) matchesPredicates(item T) bool {
 	for field, value := range m.predicates {
 		if !m.adapter.Predicate(item, field, value) {
 			return false

@@ -53,6 +53,16 @@ type clusterClients struct {
 	fallbackResourceResolver common.ResourceResolver
 }
 
+type builtClusterClientDependencies struct {
+	client                 kubernetes.Interface
+	gatewayClient          gatewayversioned.Interface
+	gatewayInformerFactory gatewayinformers.SharedInformerFactory
+	gatewayAPIPresence     *gatewayapi.Presence
+	apiextensionsClient    apiextensionsclientset.Interface
+	dynamicClient          dynamic.Interface
+	metricsClient          *metricsclient.Clientset
+}
+
 type clusterClientBuilder func(
 	context.Context,
 	kubeconfigSelection,
@@ -350,15 +360,10 @@ func (a *App) buildClusterClientsWithManager(
 	if ownsManager {
 		clusterAuthMgr = a.createClusterAuthManager(meta)
 	}
-	shutdownOwned := func() {
-		if ownsManager {
-			clusterAuthMgr.Shutdown()
-		}
-	}
 
 	config, err := a.buildRestConfigForSelection(selection, meta, clusterAuthMgr)
 	if err != nil {
-		shutdownOwned()
+		shutdownClusterAuthManagerIfOwned(clusterAuthMgr, ownsManager)
 		return nil, err
 	}
 
@@ -366,54 +371,117 @@ func (a *App) buildClusterClientsWithManager(
 	// endpoint), cutting the initial-sync transfer and decode cost. The dynamic and
 	// gateway clients below keep the base config: custom resources are JSON-only.
 	typedConfig := protobufRestConfig(config)
+	dependencies, err := a.buildClusterClientDependencies(ctx, config, typedConfig, meta)
+	if err != nil {
+		shutdownClusterAuthManagerIfOwned(clusterAuthMgr, ownsManager)
+		return nil, err
+	}
 
+	configureClusterRecoveryTest(clusterAuthMgr, selection)
+	authFailedOnInit := a.clusterAuthFailedOnPreflight(ctx, dependencies.client, config, clusterAuthMgr, meta)
+
+	return &clusterClients{
+		meta:                   meta,
+		kubeconfigPath:         selection.Path,
+		kubeconfigContext:      selection.Context,
+		client:                 dependencies.client,
+		gatewayClient:          dependencies.gatewayClient,
+		gatewayInformerFactory: dependencies.gatewayInformerFactory,
+		gatewayAPIPresence:     dependencies.gatewayAPIPresence,
+		gatewayVersionResolver: dependencies.gatewayAPIPresence,
+		apiextensionsClient:    dependencies.apiextensionsClient,
+		dynamicClient:          dependencies.dynamicClient,
+		metricsClient:          dependencies.metricsClient,
+		restConfig:             config,
+		rateLimiter:            config.RateLimiter.(*mutableKubernetesRateLimiter),
+		authManager:            clusterAuthMgr,
+		authFailedOnInit:       authFailedOnInit,
+	}, nil
+}
+
+func shutdownClusterAuthManagerIfOwned(manager *authstate.Manager, owned bool) {
+	if owned {
+		manager.Shutdown()
+	}
+}
+
+func (a *App) buildClusterClientDependencies(
+	ctx context.Context,
+	config *rest.Config,
+	typedConfig *rest.Config,
+	meta ClusterMeta,
+) (builtClusterClientDependencies, error) {
 	clientset, err := kubernetes.NewForConfig(typedConfig)
 	if err != nil {
-		shutdownOwned()
-		return nil, fmt.Errorf("failed to create clientset: %w", err)
+		return builtClusterClientDependencies{}, fmt.Errorf("failed to create clientset: %w", err)
 	}
 
 	apiextensionsClient, err := apiextensionsclientset.NewForConfig(typedConfig)
 	if err != nil {
-		shutdownOwned()
-		return nil, fmt.Errorf("failed to create apiextensions clientset: %w", err)
+		return builtClusterClientDependencies{}, fmt.Errorf("failed to create apiextensions clientset: %w", err)
 	}
 
 	dynamicClient, err := dynamic.NewForConfig(config)
 	if err != nil {
-		shutdownOwned()
-		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
+		return builtClusterClientDependencies{}, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
 
-	var metrics *metricsclient.Clientset
-	metricsClient, err := metricsclient.NewForConfig(typedConfig)
+	metrics := a.buildMetricsClient(typedConfig, meta)
+	gatewayPresence, gatewayClient, gatewayInformerFactory, err := a.buildGatewayClients(ctx, config, clientset, meta)
+	if err != nil {
+		return builtClusterClientDependencies{}, err
+	}
+
+	return builtClusterClientDependencies{
+		client:                 clientset,
+		gatewayClient:          gatewayClient,
+		gatewayInformerFactory: gatewayInformerFactory,
+		gatewayAPIPresence:     gatewayPresence,
+		apiextensionsClient:    apiextensionsClient,
+		dynamicClient:          dynamicClient,
+		metricsClient:          metrics,
+	}, nil
+}
+
+func (a *App) buildMetricsClient(config *rest.Config, meta ClusterMeta) *metricsclient.Clientset {
+	client, err := metricsclient.NewForConfig(config)
 	if err != nil {
 		a.logger.Info(fmt.Sprintf("Metrics client not available for cluster %s: %v", meta.ID, err), logsources.KubernetesClient, meta.ID, meta.Name)
-	} else {
-		metrics = metricsClient
+		return nil
+	}
+	return client
+}
+
+func (a *App) buildGatewayClients(
+	ctx context.Context,
+	config *rest.Config,
+	clientset kubernetes.Interface,
+	meta ClusterMeta,
+) (*gatewayapi.Presence, gatewayversioned.Interface, gatewayinformers.SharedInformerFactory, error) {
+	presence, discoverErr := gatewayapi.DiscoverViaDiscovery(ctx, clientset.Discovery())
+	if discoverErr != nil {
+		a.logger.Warn(fmt.Sprintf("Gateway API discovery failed for cluster %s: %v", meta.Name, discoverErr), logsources.KubernetesClient, meta.ID, meta.Name)
+	}
+	if !presence.AnyPresent() {
+		return presence, nil, nil, nil
 	}
 
-	gatewayPresence, gatewayDiscoverErr := gatewayapi.DiscoverViaDiscovery(ctx, clientset.Discovery())
-	if gatewayDiscoverErr != nil {
-		a.logger.Warn(fmt.Sprintf("Gateway API discovery failed for cluster %s: %v", meta.Name, gatewayDiscoverErr), logsources.KubernetesClient, meta.ID, meta.Name)
+	client, err := gatewayversioned.NewForConfig(config)
+	if err != nil {
+		return gatewayapi.EmptyPresence(), nil, nil, fmt.Errorf("failed to create gateway api clientset: %w", err)
 	}
-	var gatewayClient gatewayversioned.Interface
-	var gatewayInformerFactory gatewayinformers.SharedInformerFactory
-	if gatewayPresence.AnyPresent() {
-		gatewayClientset, err := gatewayversioned.NewForConfig(config)
-		if err != nil {
-			shutdownOwned()
-			return nil, fmt.Errorf("failed to create gateway api clientset: %w", err)
-		}
-		gatewayClient = gatewayClientset
-		gatewayInformerFactory = gatewayinformers.NewSharedInformerFactoryWithOptions(gatewayClientset, appconfig.RefreshResyncInterval, gatewayinformers.WithTransform(informerpkg.StripManagedFields))
-	}
+	factory := gatewayinformers.NewSharedInformerFactoryWithOptions(
+		client,
+		appconfig.RefreshResyncInterval,
+		gatewayinformers.WithTransform(informerpkg.StripManagedFields),
+	)
+	return presence, client, factory, nil
+}
 
-	// Configure the recovery test to rebuild credentials from kubeconfig.
-	// We can't use the existing clientset because it caches stale credentials.
-	// By rebuilding from the kubeconfig, we pick up refreshed SSO tokens.
-	clusterAuthMgr.SetRecoveryTest(func() error {
-		// Rebuild rest config from kubeconfig to get fresh credentials
+// configureClusterRecoveryTest rebuilds credentials rather than probing with a
+// clientset that may still cache credentials from the failed request.
+func configureClusterRecoveryTest(manager *authstate.Manager, selection kubeconfigSelection) {
+	manager.SetRecoveryTest(func() error {
 		loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 		loadingRules.ExplicitPath = selection.Path
 		overrides := &clientcmd.ConfigOverrides{}
@@ -425,59 +493,39 @@ func (a *App) buildClusterClientsWithManager(
 		if err != nil {
 			return fmt.Errorf("failed to load kubeconfig: %w", err)
 		}
-		// Bound the probe: rest.Config has no default timeout, and a hung
-		// probe would stall the recovery loop indefinitely.
 		freshConfig.Timeout = appconfig.ClusterAuthRecoveryProbeTimeout
 
-		// Build a fresh clientset with the new credentials
 		freshClient, err := kubernetes.NewForConfig(freshConfig)
 		if err != nil {
 			return fmt.Errorf("failed to create client: %w", err)
 		}
-
-		// Test connectivity with fresh credentials
 		_, err = freshClient.Discovery().ServerVersion()
 		return err
 	})
+}
 
-	// Pre-flight credential check: test connectivity before returning.
-	// This triggers auth state transition BEFORE the informer factory tries to make requests.
-	// The exec credential provider runs at this layer (above HTTP transport), so transport
-	// wrapper won't catch these errors - we must check them explicitly here.
-	var authFailedOnInit bool
-	if err := a.preflightClusterClientWithContext(ctx, clientset); err != nil {
-		a.logger.Warn(fmt.Sprintf("Pre-flight check failed for cluster %s: %v", meta.Name, err), logsources.Auth, meta.ID, meta.Name)
-		// Capture the kubeconfig exec command (if any) from the rest config so the
-		// diagnostic can name the credential helper. This is the reliable source —
-		// it is never scraped from the error string.
-		if d := credentialerrors.Classify(err, credentialerrors.Context{ExecCommand: execDisplayCommand(config)}); d.IsAuth() {
-			a.logger.Warn(fmt.Sprintf("Detected credential error for cluster %s, reporting auth failure", meta.Name), logsources.Auth, meta.ID, meta.Name)
-			clusterAuthMgr.ReportFailureDiagnostic(authstate.NewFailureDiagnostic(err.Error(), d))
-			authFailedOnInit = true
-		}
-		// Don't return error - the cluster clients are valid, auth just needs recovery.
-		// The subsystem builder will check auth state before proceeding.
-	} else {
+func (a *App) clusterAuthFailedOnPreflight(
+	ctx context.Context,
+	client kubernetes.Interface,
+	config *rest.Config,
+	manager *authstate.Manager,
+	meta ClusterMeta,
+) bool {
+	err := a.preflightClusterClientWithContext(ctx, client)
+	if err == nil {
 		a.logger.Info(fmt.Sprintf("Pre-flight check passed for cluster %s", meta.Name), logsources.Auth, meta.ID, meta.Name)
+		return false
 	}
 
-	return &clusterClients{
-		meta:                   meta,
-		kubeconfigPath:         selection.Path,
-		kubeconfigContext:      selection.Context,
-		client:                 clientset,
-		gatewayClient:          gatewayClient,
-		gatewayInformerFactory: gatewayInformerFactory,
-		gatewayAPIPresence:     gatewayPresence,
-		gatewayVersionResolver: gatewayPresence,
-		apiextensionsClient:    apiextensionsClient,
-		dynamicClient:          dynamicClient,
-		metricsClient:          metrics,
-		restConfig:             config,
-		rateLimiter:            config.RateLimiter.(*mutableKubernetesRateLimiter),
-		authManager:            clusterAuthMgr,
-		authFailedOnInit:       authFailedOnInit,
-	}, nil
+	a.logger.Warn(fmt.Sprintf("Pre-flight check failed for cluster %s: %v", meta.Name, err), logsources.Auth, meta.ID, meta.Name)
+	diagnostic := credentialerrors.Classify(err, credentialerrors.Context{ExecCommand: execDisplayCommand(config)})
+	if !diagnostic.IsAuth() {
+		return false
+	}
+
+	a.logger.Warn(fmt.Sprintf("Detected credential error for cluster %s, reporting auth failure", meta.Name), logsources.Auth, meta.ID, meta.Name)
+	manager.ReportFailureDiagnostic(authstate.NewFailureDiagnostic(err.Error(), diagnostic))
+	return true
 }
 
 func (a *App) preflightClusterClientWithContext(ctx context.Context, client kubernetes.Interface) error {

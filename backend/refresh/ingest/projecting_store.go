@@ -790,34 +790,30 @@ func (s *ProjectingStore) feedSinksReplace(prev, next map[string]interface{}) {
 }
 
 func (s *ProjectingStore) emitDeleteToIncrementalSinks(projected interface{}) {
-	if len(s.sinks) > 0 {
-		if table := tableHalf(projected); table != nil {
-			for _, sink := range s.sinks {
-				if _, bulk := sink.(ReplaceSink); bulk {
-					continue
-				}
-				sink.Delete(table)
-			}
+	emitDeleteToIncrementalRowSinks(s.sinks, tableHalf(projected))
+	emitDeleteToIncrementalRowSinks(s.catalogSinks, catalogHalf(projected))
+	emitDeleteToIncrementalBundleSinks(s.bundleSinks, projected)
+}
+
+func emitDeleteToIncrementalRowSinks(sinks []Sink, value interface{}) {
+	if value == nil {
+		return
+	}
+	for _, sink := range sinks {
+		if _, bulk := sink.(ReplaceSink); !bulk {
+			sink.Delete(value)
 		}
 	}
-	if len(s.catalogSinks) > 0 {
-		if cat := catalogHalf(projected); cat != nil {
-			for _, sink := range s.catalogSinks {
-				if _, bulk := sink.(ReplaceSink); bulk {
-					continue
-				}
-				sink.Delete(cat)
-			}
-		}
+}
+
+func emitDeleteToIncrementalBundleSinks(sinks []BundleSink, projected interface{}) {
+	bundle, ok := projected.(Bundle)
+	if !ok {
+		return
 	}
-	if len(s.bundleSinks) > 0 {
-		if bundle, ok := projected.(Bundle); ok {
-			for _, sink := range s.bundleSinks {
-				if _, bulk := sink.(BundleReplaceSink); bulk {
-					continue
-				}
-				sink.DeleteBundle(bundle)
-			}
+	for _, sink := range sinks {
+		if _, bulk := sink.(BundleReplaceSink); !bulk {
+			sink.DeleteBundle(bundle)
 		}
 	}
 }

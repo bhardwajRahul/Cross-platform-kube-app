@@ -20,7 +20,6 @@ import (
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	informers "k8s.io/client-go/informers"
@@ -371,89 +370,78 @@ func assembleWorkloadRows(
 	workloadIngestVersion uint64,
 	podIngestVersion uint64,
 ) ([]WorkloadSummary, uint64) {
-	// Build a set of HPA-managed workloads keyed by full target GVK + namespace/name.
-	hpaTargets := buildHPATargetSet(hpas)
-
-	// Group pods by their owner key (the string-suffix RS->Deployment collapse), read
-	// straight from the projected aggregate. namespace-workloads never reads WorkloadKind.
-	podsByOwner := make(map[string][]streamrows.PodAggregate)
-	for _, agg := range podAggregates {
-		if agg.OwnerKey != "" {
-			podsByOwner[agg.OwnerKey] = append(podsByOwner[agg.OwnerKey], agg)
-		}
+	_ = meta
+	assembler := workloadRowAssembler{
+		hpaTargets:   buildHPATargetSet(hpas),
+		hpaKnown:     hpaKnown,
+		podUsage:     podUsage,
+		podSummaries: podSummaries,
+		podsByOwner:  groupPodAggregatesByOwner(podAggregates),
 	}
-
-	var (
-		items   []WorkloadSummary
-		version uint64
-	)
-
-	appendSummary := func(summary WorkloadSummary, obj metav1.Object) {
-		// Mark as HPA-managed only when the HPA target carries the same full
-		// GVK. Kind/name-only matching can collide with custom resources.
-		if hpaKnown {
-			managed := false
-			if _, ok := hpaTargets[workloadHPATargetKey(summary)]; ok {
-				managed = true
-			}
-			summary.HPAManaged = &managed
-		}
-		items = append(items, summary)
-		if obj == nil {
-			return
-		}
-		if v := resourceVersionOrTimestamp(obj); v > version {
-			version = v
-		}
-	}
-
-	// The workload kinds are cut: each `ownRow` is the projected workload-OWN-fields
-	// WorkloadSummary the reflector built at intake. The serve path re-joins the owner's
-	// pods + the metrics sample onto it (reaggregateWorkloadSummary). The projected row
-	// carries no per-object resourceVersion, so each is appended with a nil object — the
-	// workload store's RV is folded into the version watermark once below.
-	reaggregate := func(ownRow WorkloadSummary) WorkloadSummary {
-		key := workloadOwnerKey(ownRow.Ref.Kind, ownRow.Ref.Namespace, ownRow.Ref.Name)
-		return reaggregateWorkloadSummary(ownRow, podsByOwner[key], podUsage)
-	}
-	workloadEmitted := false
-	for _, ownRow := range ownRows {
-		appendSummary(reaggregate(ownRow), nil)
-		workloadEmitted = true
-	}
-	if workloadEmitted && workloadIngestVersion > version {
-		version = workloadIngestVersion
-	}
-
-	standalonePodEmitted := false
-	for _, agg := range podAggregates {
-		if agg.Phase == string(corev1.PodSucceeded) || agg.Phase == string(corev1.PodFailed) {
-			continue
-		}
-		// The workloads view shows OWN-rows plus pods with no owner; a pod with a
-		// controller owner is folded into its workload (podsByOwner above) and is never
-		// emitted as a row, even when its owning workload is absent from this snapshot.
-		if agg.OwnerKey != "" {
-			continue
-		}
-		// The standalone row reads the pod's projected PodSummary (status/age/ports/
-		// ready/restarts) plus this aggregate (resources), byte-identical to the prior
-		// typed buildStandalonePodSummary. A missing summary (race between the two
-		// halves) falls back to the aggregate-only fields, never panicking.
-		summary := buildStandalonePodSummaryFromRows(podSummaries[agg.Namespace+"/"+agg.Name], agg, podUsage)
-		appendSummary(summary, nil)
-		standalonePodEmitted = true
-	}
-	// Standalone-pod rows carry no per-object RV (the typed pod is gone); when any is
-	// emitted the pod store's RV is folded into the watermark. Workload-owned pods never
-	// contributed (they were not appended as rows), so the fold is gated on a standalone row.
-	if standalonePodEmitted && podIngestVersion > version {
-		version = podIngestVersion
-	}
-
+	assembler.appendWorkloads(ownRows, workloadIngestVersion)
+	assembler.appendStandalonePods(podAggregates, podIngestVersion)
 	// Ordering is the caller's concern: buildSnapshot sorts only for the window
 	// branch (the query branch's engine ignores input order).
-	return items, version
+	return assembler.items, assembler.version
+}
+
+type workloadRowAssembler struct {
+	hpaTargets   map[string]struct{}
+	hpaKnown     bool
+	podUsage     map[string]metrics.PodUsage
+	podSummaries map[string]streamrows.PodSummary
+	podsByOwner  map[string][]streamrows.PodAggregate
+	items        []WorkloadSummary
+	version      uint64
+}
+
+func groupPodAggregatesByOwner(aggregates []streamrows.PodAggregate) map[string][]streamrows.PodAggregate {
+	grouped := make(map[string][]streamrows.PodAggregate)
+	for _, aggregate := range aggregates {
+		if aggregate.OwnerKey != "" {
+			grouped[aggregate.OwnerKey] = append(grouped[aggregate.OwnerKey], aggregate)
+		}
+	}
+	return grouped
+}
+
+func (a *workloadRowAssembler) append(summary WorkloadSummary) {
+	// Mark as HPA-managed only when the HPA target carries the same full GVK.
+	if a.hpaKnown {
+		_, managed := a.hpaTargets[workloadHPATargetKey(summary)]
+		summary.HPAManaged = &managed
+	}
+	a.items = append(a.items, summary)
+}
+
+func (a *workloadRowAssembler) appendWorkloads(rows []WorkloadSummary, version uint64) {
+	for _, row := range rows {
+		key := workloadOwnerKey(row.Ref.Kind, row.Ref.Namespace, row.Ref.Name)
+		a.append(reaggregateWorkloadSummary(row, a.podsByOwner[key], a.podUsage))
+	}
+	if len(rows) > 0 && version > a.version {
+		a.version = version
+	}
+}
+
+func (a *workloadRowAssembler) appendStandalonePods(aggregates []streamrows.PodAggregate, version uint64) {
+	emitted := false
+	for _, aggregate := range aggregates {
+		if !standaloneWorkloadPod(aggregate) {
+			continue
+		}
+		summary := buildStandalonePodSummaryFromRows(a.podSummaries[aggregate.Namespace+"/"+aggregate.Name], aggregate, a.podUsage)
+		a.append(summary)
+		emitted = true
+	}
+	if emitted && version > a.version {
+		a.version = version
+	}
+}
+
+func standaloneWorkloadPod(aggregate streamrows.PodAggregate) bool {
+	terminal := aggregate.Phase == string(corev1.PodSucceeded) || aggregate.Phase == string(corev1.PodFailed)
+	return !terminal && aggregate.OwnerKey == ""
 }
 
 // allowedWorkloadKinds is the set of kinds the request may see — each domain kind gated on

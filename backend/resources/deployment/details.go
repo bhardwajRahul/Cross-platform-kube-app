@@ -180,29 +180,48 @@ func filterPodsForDeployment(
 		return nil
 	}
 
-	rsUIDs := map[string]struct{}{}
-	if replicaSets != nil {
-		for _, rs := range replicaSets.Items {
-			for _, owner := range rs.OwnerReferences {
-				if owner.Controller != nil && *owner.Controller && owner.Kind == "Deployment" && owner.UID == deployment.UID {
-					rsUIDs[string(rs.UID)] = struct{}{}
-					break
-				}
-			}
-		}
-	}
+	rsUIDs := deploymentReplicaSetUIDs(deployment.UID, replicaSets)
 
 	var filtered []corev1.Pod
 	for _, pod := range podList.Items {
-		for _, owner := range pod.OwnerReferences {
-			if owner.Kind == "ReplicaSet" {
-				if _, ok := rsUIDs[string(owner.UID)]; ok {
-					filtered = append(filtered, pod)
-					break
-				}
-			}
+		if podOwnedByReplicaSetUIDs(pod, rsUIDs) {
+			filtered = append(filtered, pod)
 		}
 	}
 
 	return filtered
+}
+
+func deploymentReplicaSetUIDs(deploymentUID k8stypes.UID, replicaSets *appsv1.ReplicaSetList) map[string]struct{} {
+	uids := make(map[string]struct{})
+	if replicaSets == nil {
+		return uids
+	}
+	for _, replicaSet := range replicaSets.Items {
+		if replicaSetHasController(replicaSet, deploymentUID) {
+			uids[string(replicaSet.UID)] = struct{}{}
+		}
+	}
+	return uids
+}
+
+func replicaSetHasController(replicaSet appsv1.ReplicaSet, deploymentUID k8stypes.UID) bool {
+	for _, owner := range replicaSet.OwnerReferences {
+		if owner.Controller != nil && *owner.Controller && owner.Kind == "Deployment" && owner.UID == deploymentUID {
+			return true
+		}
+	}
+	return false
+}
+
+func podOwnedByReplicaSetUIDs(pod corev1.Pod, replicaSetUIDs map[string]struct{}) bool {
+	for _, owner := range pod.OwnerReferences {
+		if owner.Kind == "ReplicaSet" {
+			_, ok := replicaSetUIDs[string(owner.UID)]
+			if ok {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -441,71 +441,97 @@ func deepCopyValue(v reflect.Value) reflect.Value {
 	}
 	switch v.Kind() {
 	case reflect.Ptr:
-		if v.IsNil() {
-			return v
-		}
-		cp := reflect.New(v.Type().Elem())
-		cp.Elem().Set(deepCopyValue(v.Elem()))
-		return cp
+		return deepCopyPointer(v)
 	case reflect.Interface:
-		if v.IsNil() {
-			return v
-		}
-		return deepCopyValue(v.Elem())
+		return deepCopyInterface(v)
 	case reflect.Slice:
-		if v.IsNil() {
-			return v // preserve nil vs empty distinction
-		}
-		cp := reflect.MakeSlice(v.Type(), v.Len(), v.Cap())
-		for i := 0; i < v.Len(); i++ {
-			cp.Index(i).Set(deepCopyValue(v.Index(i)))
-		}
-		return cp
+		return deepCopySlice(v)
 	case reflect.Array:
-		cp := reflect.New(v.Type()).Elem()
-		for i := 0; i < v.Len(); i++ {
-			cp.Index(i).Set(deepCopyValue(v.Index(i)))
-		}
-		return cp
+		return deepCopyArray(v)
 	case reflect.Map:
-		if v.IsNil() {
-			return v // preserve nil vs empty distinction
-		}
-		cp := reflect.MakeMapWithSize(v.Type(), v.Len())
-		for _, k := range v.MapKeys() {
-			cp.SetMapIndex(deepCopyValue(k), deepCopyValue(v.MapIndex(k)))
-		}
-		return cp
+		return deepCopyMap(v)
 	case reflect.Struct:
-		cp := reflect.New(v.Type()).Elem()
-		for i := 0; i < v.NumField(); i++ {
-			src := v.Field(i)
-			dst := cp.Field(i)
-			if !dst.CanSet() {
-				// Unexported field: rebuild exported, settable handles to both source and
-				// destination via their addresses so the bytes are preserved deeply. The
-				// destination is always addressable (cp came from reflect.New). The source
-				// is addressable when v is; when v is a non-addressable read-only value we
-				// fall back to a shallow byte copy of the field, which is exact for the
-				// scalar/leaf fields these represent.
-				dst = reflect.NewAt(dst.Type(), unsafe.Pointer(dst.UnsafeAddr())).Elem()
-				if src.CanAddr() {
-					src = reflect.NewAt(src.Type(), unsafe.Pointer(src.UnsafeAddr())).Elem()
-					dst.Set(deepCopyValue(src))
-				} else {
-					dst.Set(src)
-				}
-				continue
-			}
-			dst.Set(deepCopyValue(src))
-		}
-		return cp
+		return deepCopyStruct(v)
 	default:
 		// Scalars and any other directly-copyable kind: copy by value.
 		cp := reflect.New(v.Type()).Elem()
 		cp.Set(v)
 		return cp
 	}
+}
+
+func deepCopyPointer(v reflect.Value) reflect.Value {
+	if v.IsNil() {
+		return v
+	}
+	cp := reflect.New(v.Type().Elem())
+	cp.Elem().Set(deepCopyValue(v.Elem()))
+	return cp
+}
+
+func deepCopyInterface(v reflect.Value) reflect.Value {
+	if v.IsNil() {
+		return v
+	}
+	return deepCopyValue(v.Elem())
+}
+
+func deepCopySlice(v reflect.Value) reflect.Value {
+	if v.IsNil() {
+		return v // preserve nil vs empty distinction
+	}
+	cp := reflect.MakeSlice(v.Type(), v.Len(), v.Cap())
+	for i := 0; i < v.Len(); i++ {
+		cp.Index(i).Set(deepCopyValue(v.Index(i)))
+	}
+	return cp
+}
+
+func deepCopyArray(v reflect.Value) reflect.Value {
+	cp := reflect.New(v.Type()).Elem()
+	for i := 0; i < v.Len(); i++ {
+		cp.Index(i).Set(deepCopyValue(v.Index(i)))
+	}
+	return cp
+}
+
+func deepCopyMap(v reflect.Value) reflect.Value {
+	if v.IsNil() {
+		return v // preserve nil vs empty distinction
+	}
+	cp := reflect.MakeMapWithSize(v.Type(), v.Len())
+	for _, key := range v.MapKeys() {
+		cp.SetMapIndex(deepCopyValue(key), deepCopyValue(v.MapIndex(key)))
+	}
+	return cp
+}
+
+func deepCopyStruct(v reflect.Value) reflect.Value {
+	cp := reflect.New(v.Type()).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		deepCopyStructField(cp.Field(i), v.Field(i))
+	}
+	return cp
+}
+
+func deepCopyStructField(dst, src reflect.Value) {
+	if dst.CanSet() {
+		dst.Set(deepCopyValue(src))
+		return
+	}
+	// Unexported field: rebuild exported, settable handles to both source and
+	// destination via their addresses so the bytes are preserved deeply. The
+	// destination is always addressable (cp came from reflect.New). The source
+	// is addressable when v is; when v is a non-addressable read-only value we
+	// fall back to a shallow byte copy of the field, which is exact for the
+	// scalar/leaf fields these represent.
+	dst = reflect.NewAt(dst.Type(), unsafe.Pointer(dst.UnsafeAddr())).Elem()
+	if src.CanAddr() {
+		src = reflect.NewAt(src.Type(), unsafe.Pointer(src.UnsafeAddr())).Elem()
+		dst.Set(deepCopyValue(src))
+		return
+	}
+	dst.Set(src)
 }
 
 // ---- Column store ----
@@ -648,39 +674,69 @@ func (cs *columnStore[R]) forEach(fn func(uid string, r R) bool) {
 // extractors — the facet values and the lowercased search text — so Query never
 // reconstructs a row just to test a filter or search.
 func extractMatchValues[R any](schema Schema[R], r R) matchValues {
-	mv := matchValues{}
-	if len(schema.Facets) > 0 {
-		mv.facets = make(map[string]string, len(schema.Facets))
-		for name, get := range schema.Facets {
-			value := get(r)
-			mv.facets[name] = value
-			if normalize := schema.FacetNormalizers[name]; normalize != nil {
-				if mv.normalizedFacets == nil {
-					mv.normalizedFacets = make(map[string]string)
-				}
-				mv.normalizedFacets[name] = normalize(value)
-			}
-		}
-	}
-	if len(schema.MultiFacets) > 0 {
-		mv.multiFacets = make(map[string][]string, len(schema.MultiFacets))
-		for name, get := range schema.MultiFacets {
-			values := uniqueFacetValues(get(r))
-			mv.multiFacets[name] = values
-			if normalize := schema.FacetNormalizers[name]; normalize != nil {
-				if mv.normalizedMultiFacets == nil {
-					mv.normalizedMultiFacets = make(map[string][]string)
-				}
-				normalized := make([]string, len(values))
-				for i, value := range values {
-					normalized[i] = normalize(value)
-				}
-				mv.normalizedMultiFacets[name] = uniqueFacetValues(normalized)
-			}
-		}
+	mv := matchValues{
+		facets:                extractFacetValues(schema, r),
+		normalizedFacets:      extractNormalizedFacetValues(schema, r),
+		multiFacets:           extractMultiFacetValues(schema, r),
+		normalizedMultiFacets: extractNormalizedMultiFacetValues(schema, r),
 	}
 	if schema.SearchText != nil {
 		mv.searchText = strings.ToLower(schema.SearchText(r))
 	}
 	return mv
+}
+
+func extractFacetValues[R any](schema Schema[R], row R) map[string]string {
+	if len(schema.Facets) == 0 {
+		return nil
+	}
+	values := make(map[string]string, len(schema.Facets))
+	for name, get := range schema.Facets {
+		values[name] = get(row)
+	}
+	return values
+}
+
+func extractNormalizedFacetValues[R any](schema Schema[R], row R) map[string]string {
+	var values map[string]string
+	for name, get := range schema.Facets {
+		if normalize := schema.FacetNormalizers[name]; normalize != nil {
+			if values == nil {
+				values = make(map[string]string)
+			}
+			values[name] = normalize(get(row))
+		}
+	}
+	return values
+}
+
+func extractMultiFacetValues[R any](schema Schema[R], row R) map[string][]string {
+	if len(schema.MultiFacets) == 0 {
+		return nil
+	}
+	values := make(map[string][]string, len(schema.MultiFacets))
+	for name, get := range schema.MultiFacets {
+		values[name] = uniqueFacetValues(get(row))
+	}
+	return values
+}
+
+func extractNormalizedMultiFacetValues[R any](schema Schema[R], row R) map[string][]string {
+	var values map[string][]string
+	for name, get := range schema.MultiFacets {
+		normalize := schema.FacetNormalizers[name]
+		if normalize == nil {
+			continue
+		}
+		if values == nil {
+			values = make(map[string][]string)
+		}
+		raw := uniqueFacetValues(get(row))
+		normalized := make([]string, len(raw))
+		for index, value := range raw {
+			normalized[index] = normalize(value)
+		}
+		values[name] = uniqueFacetValues(normalized)
+	}
+	return values
 }

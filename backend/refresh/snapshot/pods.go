@@ -17,6 +17,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	appslisters "k8s.io/client-go/listers/apps/v1"
@@ -750,46 +751,58 @@ func (b *PodBuilder) collectPods(scope string) ([]*corev1.Pod, error) {
 	case nodeScopeKey:
 		return b.listPodsByNode(value)
 	case workloadScopeKey:
-		parsed, err := parseWorkloadScope(value)
-		if err != nil {
-			return nil, err
-		}
-		pods, err := b.listPodsByNamespace(parsed.namespace)
-		if err != nil {
-			return nil, err
-		}
-		filtered := make([]*corev1.Pod, 0, len(pods))
-		for _, pod := range pods {
-			if matchesWorkload(pod, parsed, b.rsLister) {
-				filtered = append(filtered, pod)
-			}
-		}
-		return filtered, nil
+		return b.collectWorkloadPods(value)
 	case objectScopeKey:
-		parsed, err := parsePodObjectScope(value)
-		if err != nil {
-			return nil, err
-		}
-		pod, err := b.podLister.Pods(parsed.namespace).Get(parsed.name)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				return []*corev1.Pod{}, nil
-			}
-			return nil, err
-		}
-		return []*corev1.Pod{pod}, nil
+		return b.collectObjectPod(value)
 	case namespaceScopeKey:
-		namespace := strings.TrimSpace(value)
-		if namespace == "" {
-			return nil, fmt.Errorf("invalid namespace scope: %s", scope)
-		}
-		if namespace == "all" || namespace == "*" {
-			return b.listAllPods()
-		}
-		return b.listPodsByNamespace(namespace)
+		return b.collectNamespacePods(scope, value)
 	default:
 		return nil, fmt.Errorf("unsupported pods scope: %s", scope)
 	}
+}
+
+func (b *PodBuilder) collectWorkloadPods(value string) ([]*corev1.Pod, error) {
+	parsed, err := parseWorkloadScope(value)
+	if err != nil {
+		return nil, err
+	}
+	pods, err := b.listPodsByNamespace(parsed.namespace)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]*corev1.Pod, 0, len(pods))
+	for _, pod := range pods {
+		if matchesWorkload(pod, parsed, b.rsLister) {
+			filtered = append(filtered, pod)
+		}
+	}
+	return filtered, nil
+}
+
+func (b *PodBuilder) collectObjectPod(value string) ([]*corev1.Pod, error) {
+	parsed, err := parsePodObjectScope(value)
+	if err != nil {
+		return nil, err
+	}
+	pod, err := b.podLister.Pods(parsed.namespace).Get(parsed.name)
+	if apierrors.IsNotFound(err) {
+		return []*corev1.Pod{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return []*corev1.Pod{pod}, nil
+}
+
+func (b *PodBuilder) collectNamespacePods(scope, value string) ([]*corev1.Pod, error) {
+	namespace := strings.TrimSpace(value)
+	if namespace == "" {
+		return nil, fmt.Errorf("invalid namespace scope: %s", scope)
+	}
+	if namespace == "all" || namespace == "*" {
+		return b.listAllPods()
+	}
+	return b.listPodsByNamespace(namespace)
 }
 
 type workloadScope struct {
@@ -899,32 +912,50 @@ func (b *PodBuilder) replicasetDeploymentMap(pods []*corev1.Pod) (map[string]str
 	}
 	result := make(map[string]string)
 	for _, pod := range pods {
-		if pod == nil {
+		owner, ok := replicaSetControllerOwner(pod)
+		if !ok {
 			continue
 		}
-		for _, owner := range pod.OwnerReferences {
-			if owner.Controller == nil || !*owner.Controller || owner.Kind != replicasetpkg.Identity.Kind {
-				continue
-			}
-			if _, exists := result[owner.Name]; exists {
-				continue
-			}
-			rs, err := b.rsLister.ReplicaSets(pod.Namespace).Get(owner.Name)
-			if err != nil {
-				if apierrors.IsNotFound(err) {
-					continue
-				}
-				return nil, err
-			}
-			for _, rsOwner := range rs.OwnerReferences {
-				if rsOwner.Controller != nil && *rsOwner.Controller && rsOwner.Kind == deploymentpkg.Identity.Kind {
-					result[owner.Name] = rsOwner.Name
-					break
-				}
-			}
+		if _, exists := result[owner.Name]; exists {
+			continue
+		}
+		deploymentName, err := b.deploymentForReplicaSet(pod.Namespace, owner.Name)
+		if err != nil {
+			return nil, err
+		}
+		if deploymentName != "" {
+			result[owner.Name] = deploymentName
 		}
 	}
 	return result, nil
+}
+
+func replicaSetControllerOwner(pod *corev1.Pod) (metav1.OwnerReference, bool) {
+	if pod == nil {
+		return metav1.OwnerReference{}, false
+	}
+	for _, owner := range pod.OwnerReferences {
+		if owner.Controller != nil && *owner.Controller && owner.Kind == replicasetpkg.Identity.Kind {
+			return owner, true
+		}
+	}
+	return metav1.OwnerReference{}, false
+}
+
+func (b *PodBuilder) deploymentForReplicaSet(namespace, name string) (string, error) {
+	replicaSet, err := b.rsLister.ReplicaSets(namespace).Get(name)
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	for _, owner := range replicaSet.OwnerReferences {
+		if owner.Controller != nil && *owner.Controller && owner.Kind == deploymentpkg.Identity.Kind {
+			return owner.Name, nil
+		}
+	}
+	return "", nil
 }
 
 func (b *PodBuilder) listPodsByNamespace(namespace string) ([]*corev1.Pod, error) {

@@ -623,51 +623,72 @@ func catalogEngineFacets(rows []Summary, opts QueryOptions, cachedKinds []KindIn
 // filters when any are active. CustomOnly is honored solely by customMatcher gating the
 // universe — there is no separate CustomOnly kind branch.
 func catalogEngineSnapshotFacets(rows []Summary, opts QueryOptions, metadataExact bool) ([]KindInfo, []string) {
-	namespaceMatcher := newNamespaceMatcher(opts.Namespaces)
-	customMatcher := newCustomOnlyMatcher(opts.CustomOnly)
-	hasNamespaceFilter := len(opts.Namespaces) > 0
-	groupFilters := make(map[string]struct{}, len(opts.Groups))
+	if !metadataExact {
+		return nil, nil
+	}
+	filters := newCatalogSnapshotFacetFilters(opts)
+	kinds, namespaces, dependentKinds := collectCatalogSnapshotFacets(rows, filters)
+	if filters.hasDependentKindFilter {
+		kinds = dependentKinds
+	}
+	return snapshotSortedKindInfos(kinds), snapshotSortedKeys(namespaces)
+}
+
+type catalogSnapshotFacetFilters struct {
+	namespaceMatcher       namespaceMatcher
+	customMatcher          customOnlyMatcher
+	hasNamespaceFilter     bool
+	hasDependentKindFilter bool
+	groups                 map[string]struct{}
+	resourceScopes         map[string]struct{}
+}
+
+func newCatalogSnapshotFacetFilters(opts QueryOptions) catalogSnapshotFacetFilters {
+	filters := catalogSnapshotFacetFilters{
+		namespaceMatcher: newNamespaceMatcher(opts.Namespaces), customMatcher: newCustomOnlyMatcher(opts.CustomOnly),
+		hasNamespaceFilter: len(opts.Namespaces) > 0,
+		groups:             make(map[string]struct{}, len(opts.Groups)), resourceScopes: make(map[string]struct{}, len(opts.ResourceScopes)),
+	}
 	for _, group := range normalizeCatalogAPIGroups(opts.Groups) {
-		groupFilters[group] = struct{}{}
+		filters.groups[group] = struct{}{}
 	}
-	resourceScopeFilters := make(map[string]struct{}, len(opts.ResourceScopes))
 	for _, scope := range normalizeCatalogResourceScopes(opts.ResourceScopes) {
-		resourceScopeFilters[scope] = struct{}{}
+		filters.resourceScopes[scope] = struct{}{}
 	}
-	hasDependentKindFilter :=
-		hasNamespaceFilter || len(groupFilters) > 0 || len(resourceScopeFilters) > 0
+	filters.hasDependentKindFilter = filters.hasNamespaceFilter || len(filters.groups) > 0 || len(filters.resourceScopes) > 0
+	return filters
+}
 
-	kindSet := make(map[string]bool)
-	namespaceSet := make(map[string]struct{})
+func collectCatalogSnapshotFacets(
+	rows []Summary,
+	filters catalogSnapshotFacetFilters,
+) (map[string]bool, map[string]struct{}, map[string]bool) {
+	kinds := make(map[string]bool)
+	namespaces := make(map[string]struct{})
 	dependentKinds := make(map[string]bool)
-
-	if metadataExact {
-		for _, item := range rows {
-			if !customMatcher(item) {
-				continue
-			}
-			if item.Ref.Kind != "" {
-				kindSet[item.Ref.Kind] = item.Scope == ScopeNamespace
-			}
-			if item.Ref.Namespace != "" {
-				namespaceSet[item.Ref.Namespace] = struct{}{}
-			}
-			matchesDependentFilters := !hasNamespaceFilter || namespaceMatcher(item.Ref.Namespace, item.Scope)
-			if matchesDependentFilters && len(groupFilters) > 0 {
-				_, matchesDependentFilters = groupFilters[catalogAPIGroupFacetValue(item.Ref.Group)]
-			}
-			if matchesDependentFilters && len(resourceScopeFilters) > 0 {
-				_, matchesDependentFilters = resourceScopeFilters[strings.ToLower(string(item.Scope))]
-			}
-			if matchesDependentFilters && item.Ref.Kind != "" {
-				dependentKinds[item.Ref.Kind] = item.Scope == ScopeNamespace
-			}
+	for _, item := range rows {
+		if !filters.customMatcher(item) {
+			continue
+		}
+		if item.Ref.Kind != "" {
+			kinds[item.Ref.Kind] = item.Scope == ScopeNamespace
+		}
+		if item.Ref.Namespace != "" {
+			namespaces[item.Ref.Namespace] = struct{}{}
+		}
+		if filters.matchesDependentKind(item) && item.Ref.Kind != "" {
+			dependentKinds[item.Ref.Kind] = item.Scope == ScopeNamespace
 		}
 	}
+	return kinds, namespaces, dependentKinds
+}
 
-	kindSource := kindSet
-	if hasDependentKindFilter {
-		kindSource = dependentKinds
+func (f catalogSnapshotFacetFilters) matchesDependentKind(item Summary) bool {
+	if f.hasNamespaceFilter && !f.namespaceMatcher(item.Ref.Namespace, item.Scope) {
+		return false
 	}
-	return snapshotSortedKindInfos(kindSource), snapshotSortedKeys(namespaceSet)
+	if len(f.groups) > 0 && !stringSetContains(f.groups, catalogAPIGroupFacetValue(item.Ref.Group)) {
+		return false
+	}
+	return len(f.resourceScopes) == 0 || stringSetContains(f.resourceScopes, strings.ToLower(string(item.Scope)))
 }

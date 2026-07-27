@@ -180,7 +180,17 @@ func podPersistentVolumeClaimNames(pod corev1.Pod) map[string]struct{} {
 
 func podConfigMapNames(pod corev1.Pod) map[string]struct{} {
 	names := map[string]struct{}{}
-	for _, volume := range pod.Spec.Volumes {
+	addConfigMapNamesFromVolumes(names, pod.Spec.Volumes)
+	addConfigMapNamesFromContainers(names, pod.Spec.Containers)
+	addConfigMapNamesFromContainers(names, pod.Spec.InitContainers)
+	for _, container := range pod.Spec.EphemeralContainers {
+		addConfigMapNamesFromEnvironment(names, container.EnvFrom, container.Env)
+	}
+	return names
+}
+
+func addConfigMapNamesFromVolumes(names map[string]struct{}, volumes []corev1.Volume) {
+	for _, volume := range volumes {
 		if volume.ConfigMap != nil && volume.ConfigMap.Name != "" {
 			names[volume.ConfigMap.Name] = struct{}{}
 		}
@@ -192,41 +202,45 @@ func podConfigMapNames(pod corev1.Pod) map[string]struct{} {
 			}
 		}
 	}
-	addConfigMapNamesFromContainers(names, pod.Spec.Containers)
-	addConfigMapNamesFromContainers(names, pod.Spec.InitContainers)
-	for _, container := range pod.Spec.EphemeralContainers {
-		for _, envFrom := range container.EnvFrom {
-			if envFrom.ConfigMapRef != nil && envFrom.ConfigMapRef.Name != "" {
-				names[envFrom.ConfigMapRef.Name] = struct{}{}
-			}
-		}
-		for _, env := range container.Env {
-			if env.ValueFrom != nil && env.ValueFrom.ConfigMapKeyRef != nil && env.ValueFrom.ConfigMapKeyRef.Name != "" {
-				names[env.ValueFrom.ConfigMapKeyRef.Name] = struct{}{}
-			}
-		}
-	}
-	return names
 }
 
 func addConfigMapNamesFromContainers(names map[string]struct{}, containers []corev1.Container) {
 	for _, container := range containers {
-		for _, envFrom := range container.EnvFrom {
-			if envFrom.ConfigMapRef != nil && envFrom.ConfigMapRef.Name != "" {
-				names[envFrom.ConfigMapRef.Name] = struct{}{}
-			}
+		addConfigMapNamesFromEnvironment(names, container.EnvFrom, container.Env)
+	}
+}
+
+func addConfigMapNamesFromEnvironment(names map[string]struct{}, envFrom []corev1.EnvFromSource, env []corev1.EnvVar) {
+	for _, source := range envFrom {
+		if source.ConfigMapRef != nil && source.ConfigMapRef.Name != "" {
+			names[source.ConfigMapRef.Name] = struct{}{}
 		}
-		for _, env := range container.Env {
-			if env.ValueFrom != nil && env.ValueFrom.ConfigMapKeyRef != nil && env.ValueFrom.ConfigMapKeyRef.Name != "" {
-				names[env.ValueFrom.ConfigMapKeyRef.Name] = struct{}{}
-			}
+	}
+	for _, variable := range env {
+		if variable.ValueFrom != nil && variable.ValueFrom.ConfigMapKeyRef != nil && variable.ValueFrom.ConfigMapKeyRef.Name != "" {
+			names[variable.ValueFrom.ConfigMapKeyRef.Name] = struct{}{}
 		}
 	}
 }
 
 func podSecretNames(pod corev1.Pod) map[string]struct{} {
 	names := map[string]struct{}{}
-	for _, volume := range pod.Spec.Volumes {
+	addSecretNamesFromVolumes(names, pod.Spec.Volumes)
+	for _, pullSecret := range pod.Spec.ImagePullSecrets {
+		if pullSecret.Name != "" {
+			names[pullSecret.Name] = struct{}{}
+		}
+	}
+	addSecretNamesFromContainers(names, pod.Spec.Containers)
+	addSecretNamesFromContainers(names, pod.Spec.InitContainers)
+	for _, container := range pod.Spec.EphemeralContainers {
+		addSecretNamesFromEnvironment(names, container.EnvFrom, container.Env)
+	}
+	return names
+}
+
+func addSecretNamesFromVolumes(names map[string]struct{}, volumes []corev1.Volume) {
+	for _, volume := range volumes {
 		if volume.Secret != nil && volume.Secret.SecretName != "" {
 			names[volume.Secret.SecretName] = struct{}{}
 		}
@@ -238,39 +252,23 @@ func podSecretNames(pod corev1.Pod) map[string]struct{} {
 			}
 		}
 	}
-	for _, pullSecret := range pod.Spec.ImagePullSecrets {
-		if pullSecret.Name != "" {
-			names[pullSecret.Name] = struct{}{}
-		}
-	}
-	addSecretNamesFromContainers(names, pod.Spec.Containers)
-	addSecretNamesFromContainers(names, pod.Spec.InitContainers)
-	for _, container := range pod.Spec.EphemeralContainers {
-		for _, envFrom := range container.EnvFrom {
-			if envFrom.SecretRef != nil && envFrom.SecretRef.Name != "" {
-				names[envFrom.SecretRef.Name] = struct{}{}
-			}
-		}
-		for _, env := range container.Env {
-			if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil && env.ValueFrom.SecretKeyRef.Name != "" {
-				names[env.ValueFrom.SecretKeyRef.Name] = struct{}{}
-			}
-		}
-	}
-	return names
 }
 
 func addSecretNamesFromContainers(names map[string]struct{}, containers []corev1.Container) {
 	for _, container := range containers {
-		for _, envFrom := range container.EnvFrom {
-			if envFrom.SecretRef != nil && envFrom.SecretRef.Name != "" {
-				names[envFrom.SecretRef.Name] = struct{}{}
-			}
+		addSecretNamesFromEnvironment(names, container.EnvFrom, container.Env)
+	}
+}
+
+func addSecretNamesFromEnvironment(names map[string]struct{}, envFrom []corev1.EnvFromSource, env []corev1.EnvVar) {
+	for _, source := range envFrom {
+		if source.SecretRef != nil && source.SecretRef.Name != "" {
+			names[source.SecretRef.Name] = struct{}{}
 		}
-		for _, env := range container.Env {
-			if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil && env.ValueFrom.SecretKeyRef.Name != "" {
-				names[env.ValueFrom.SecretKeyRef.Name] = struct{}{}
-			}
+	}
+	for _, variable := range env {
+		if variable.ValueFrom != nil && variable.ValueFrom.SecretKeyRef != nil && variable.ValueFrom.SecretKeyRef.Name != "" {
+			names[variable.ValueFrom.SecretKeyRef.Name] = struct{}{}
 		}
 	}
 }

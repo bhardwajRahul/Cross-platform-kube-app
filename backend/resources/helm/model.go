@@ -83,6 +83,15 @@ func BuildFacts(rel *release.Release, resources []resourcemodel.ResourceLink, hi
 	if rel == nil {
 		return facts
 	}
+	populateReleaseFacts(&facts, rel)
+	if options.Materialization.Has(resourcemodel.MaterializeDetailFacts) {
+		facts.Notes = releaseNotes(rel)
+		facts.History = helmHistoryFacts(history)
+	}
+	return facts
+}
+
+func populateReleaseFacts(facts *Facts, rel *release.Release) {
 	facts.Revision = rel.Version
 	if rel.Chart != nil && rel.Chart.Metadata != nil {
 		facts.Chart = chartName(rel)
@@ -97,29 +106,40 @@ func BuildFacts(rel *release.Release, resources []resourcemodel.ResourceLink, hi
 		}
 		facts.Description = rel.Info.Description
 	}
-	if options.Materialization.Has(resourcemodel.MaterializeDetailFacts) && rel.Info != nil {
-		facts.Notes = rel.Info.Notes
+}
+
+func releaseNotes(rel *release.Release) string {
+	if rel.Info == nil {
+		return ""
 	}
-	if options.Materialization.Has(resourcemodel.MaterializeDetailFacts) && len(history) > 0 {
-		facts.History = make([]HelmRevisionFacts, 0, len(history))
-		for _, rev := range history {
-			if rev == nil {
-				continue
-			}
-			next := HelmRevisionFacts{Revision: rev.Version}
-			if rev.Chart != nil && rev.Chart.Metadata != nil {
-				next.Chart = chartName(rev)
-				next.AppVersion = rev.Chart.Metadata.AppVersion
-			}
-			if rev.Info != nil {
-				next.Status = rev.Info.Status.String()
-				next.Description = rev.Info.Description
-				if !rev.Info.LastDeployed.IsZero() {
-					updated := metav1.NewTime(rev.Info.LastDeployed.Time)
-					next.Updated = &updated
-				}
-			}
-			facts.History = append(facts.History, next)
+	return rel.Info.Notes
+}
+
+func helmHistoryFacts(history []*release.Release) []HelmRevisionFacts {
+	if len(history) == 0 {
+		return nil
+	}
+	facts := make([]HelmRevisionFacts, 0, len(history))
+	for _, revision := range history {
+		if revision != nil {
+			facts = append(facts, helmRevisionFacts(revision))
+		}
+	}
+	return facts
+}
+
+func helmRevisionFacts(revision *release.Release) HelmRevisionFacts {
+	facts := HelmRevisionFacts{Revision: revision.Version}
+	if revision.Chart != nil && revision.Chart.Metadata != nil {
+		facts.Chart = chartName(revision)
+		facts.AppVersion = revision.Chart.Metadata.AppVersion
+	}
+	if revision.Info != nil {
+		facts.Status = revision.Info.Status.String()
+		facts.Description = revision.Info.Description
+		if !revision.Info.LastDeployed.IsZero() {
+			updated := metav1.NewTime(revision.Info.LastDeployed.Time)
+			facts.Updated = &updated
 		}
 	}
 	return facts

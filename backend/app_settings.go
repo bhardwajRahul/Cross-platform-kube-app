@@ -885,52 +885,40 @@ func (a *App) ClearAppState() error {
 		if err := a.clearKubeconfigSelection(); err != nil {
 			return err
 		}
-
-		var errs []error
-
-		settingsFile, err := a.getSettingsFilePath()
-		if err == nil {
-			if err := removeFileIfExists(settingsFile); err != nil {
-				errs = append(errs, err)
-			}
-		} else {
-			errs = append(errs, err)
-		}
-
-		persistenceFile, err := a.getPersistenceFilePath()
-		if err == nil {
-			if err := removeFileIfExists(persistenceFile); err != nil {
-				errs = append(errs, err)
-			}
-		} else {
-			errs = append(errs, err)
-		}
-
-		// Clear the transient cache subtree (discovery, spill, diagnostics) so a
-		// Factory Reset restores true fresh-install state, not just deleted config
-		// files. clearKubeconfigSelection above already tore down the refresh
-		// subsystem and disconnected every cluster, so no cache writer is active
-		// here; RemoveAll is a no-op when the tree is already absent.
-		cacheDir, err := a.cacheDirPath()
-		if err == nil {
-			if err := os.RemoveAll(cacheDir); err != nil {
-				errs = append(errs, err)
-			}
-		} else {
-			errs = append(errs, err)
-		}
-
-		a.settingsMu.Lock()
-		a.appSettings = nil
-		a.settingsMu.Unlock()
-		a.windowSettings = nil
-
+		errs := a.clearPersistedAppState()
+		a.resetInMemoryAppState()
 		if len(errs) > 0 {
 			return fmt.Errorf("clear app state: %w", errs[0])
 		}
-
 		return nil
 	})
+}
+
+func (a *App) clearPersistedAppState() []error {
+	var errs []error
+	errs = appendPathRemovalError(errs, a.getSettingsFilePath, removeFileIfExists)
+	errs = appendPathRemovalError(errs, a.getPersistenceFilePath, removeFileIfExists)
+	// clearKubeconfigSelection has already stopped cache writers before this removal.
+	errs = appendPathRemovalError(errs, a.cacheDirPath, os.RemoveAll)
+	return errs
+}
+
+func appendPathRemovalError(errs []error, resolve func() (string, error), remove func(string) error) []error {
+	path, err := resolve()
+	if err == nil {
+		err = remove(path)
+	}
+	if err != nil {
+		return append(errs, err)
+	}
+	return errs
+}
+
+func (a *App) resetInMemoryAppState() {
+	a.settingsMu.Lock()
+	a.appSettings = nil
+	a.settingsMu.Unlock()
+	a.windowSettings = nil
 }
 
 // removeFileIfExists ignores missing files so reset can be re-run safely.
@@ -1026,6 +1014,12 @@ type settingsSideEffects struct {
 	metricsInterval            bool
 }
 
+type preparedPreferenceUpdate struct {
+	settings    *AppSettings
+	changedKeys []string
+	effects     settingsSideEffects
+}
+
 func clampInt(value, minValue, maxValue int) int {
 	if value < minValue {
 		return minValue
@@ -1037,11 +1031,20 @@ func clampInt(value, minValue, maxValue int) int {
 }
 
 func (a *App) UpdateAppPreferences(request UpdateAppPreferencesRequest) (*UpdateAppPreferencesResponse, error) {
+	update, err := a.prepareAppPreferenceUpdate(request)
+	if err != nil {
+		return nil, err
+	}
+	a.applySettingsSideEffects(update)
+	return &UpdateAppPreferencesResponse{Settings: update.settings, ChangedKeys: update.changedKeys}, nil
+}
+
+func (a *App) prepareAppPreferenceUpdate(request UpdateAppPreferencesRequest) (*preparedPreferenceUpdate, error) {
 	a.settingsMu.Lock()
+	defer a.settingsMu.Unlock()
 
 	if a.appSettings == nil {
 		if err := a.loadAppSettings(); err != nil {
-			a.settingsMu.Unlock()
 			return nil, err
 		}
 	}
@@ -1054,7 +1057,6 @@ func (a *App) UpdateAppPreferences(request UpdateAppPreferencesRequest) (*Update
 
 	for _, change := range request.Changes {
 		if err := applyAppPreferenceChange(next, change, &effects); err != nil {
-			a.settingsMu.Unlock()
 			return nil, err
 		}
 		if _, ok := seen[change.Key]; !ok {
@@ -1066,7 +1068,6 @@ func (a *App) UpdateAppPreferences(request UpdateAppPreferencesRequest) (*Update
 	a.appSettings = next
 	if err := a.saveAppSettings(); err != nil {
 		a.appSettings = previous
-		a.settingsMu.Unlock()
 		return nil, err
 	}
 
@@ -1074,41 +1075,33 @@ func (a *App) UpdateAppPreferences(request UpdateAppPreferencesRequest) (*Update
 		logPreferenceChange(a.logger, key, preferenceValueForLog(next, key))
 	}
 
-	effectiveQPS := next.KubernetesClientQPS
-	effectiveBurst := next.KubernetesClientBurst
-	perScopeLimit := next.ObjPanelLogsTargetPerScopeLimit
-	globalLimit := next.ObjPanelLogsTargetGlobalLimit
-	metricsIntervalMs := next.MetricsRefreshIntervalMs
-	responseSettings := copyAppSettings(next)
-	a.settingsMu.Unlock()
+	return &preparedPreferenceUpdate{settings: copyAppSettings(next), changedKeys: changedKeys, effects: effects}, nil
+}
 
-	if effects.kubernetesClientRateLimits {
-		a.applyKubernetesClientRateLimits(effectiveQPS, effectiveBurst)
+func (a *App) applySettingsSideEffects(update *preparedPreferenceUpdate) {
+	settings := update.settings
+	if update.effects.kubernetesClientRateLimits {
+		a.applyKubernetesClientRateLimits(settings.KubernetesClientQPS, settings.KubernetesClientBurst)
 	}
-	if effects.containerLogsPerScopeLimit {
-		containerlogs.SetPerScopeTargetLimit(perScopeLimit)
+	if update.effects.containerLogsPerScopeLimit {
+		containerlogs.SetPerScopeTargetLimit(settings.ObjPanelLogsTargetPerScopeLimit)
 	}
-	if effects.containerLogsGlobalLimit {
+	if update.effects.containerLogsGlobalLimit {
 		if limiter := a.sharedContainerLogsTargetLimiter(); limiter != nil {
-			limiter.SetLimit(globalLimit)
+			limiter.SetLimit(settings.ObjPanelLogsTargetGlobalLimit)
 		}
 	}
-	if effects.metricsInterval {
+	if update.effects.metricsInterval {
 		// The metric cadence is server-owned (the doorbell rides collections):
 		// retime every connected cluster's running poller live. Clusters that
 		// connect later read the same setting at subsystem build.
-		interval := time.Duration(metricsIntervalMs) * time.Millisecond
+		interval := time.Duration(settings.MetricsRefreshIntervalMs) * time.Millisecond
 		for _, subsystem := range a.snapshotRefreshSubsystems() {
 			if subsystem != nil && subsystem.Manager != nil {
 				subsystem.Manager.SetMetricsInterval(interval)
 			}
 		}
 	}
-
-	return &UpdateAppPreferencesResponse{
-		Settings:    responseSettings,
-		ChangedKeys: changedKeys,
-	}, nil
 }
 
 func (a *App) kubernetesClientRateLimits() (qps int, burst int) {

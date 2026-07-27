@@ -317,64 +317,66 @@ func (s *Service) getPodMetrics(namespace string) map[string]*metricsv1beta1.Pod
 // getPodMetricsForPods fetches metrics only for specific pods
 func (s *Service) getPodMetricsForPods(namespace string, pods []corev1.Pod) map[string]*metricsv1beta1.PodMetrics {
 	metrics := make(map[string]*metricsv1beta1.PodMetrics)
-
 	if len(pods) == 0 {
 		return metrics
 	}
-
-	client := s.deps.MetricsClient
+	client := s.podMetricsClient()
 	if client == nil {
-		config := s.deps.RestConfig
-		if config != nil {
-			metricsClient, err := metricsclient.NewForConfig(config)
-			if err != nil {
-				s.deps.Logger.Debug(fmt.Sprintf("Metrics client not available: %v", err), logsources.ResourceLoader)
-				return metrics
-			}
-			s.deps.SetMetricsClient(metricsClient)
-			s.deps.MetricsClient = metricsClient
-			client = metricsClient
-		} else {
-			return metrics
-		}
+		return metrics
 	}
-
-	// For small numbers of pods, fetch individually
-	// For larger numbers, it's more efficient to fetch all and filter
 	if len(pods) <= 3 {
-		// Fetch metrics individually
-		for _, pod := range pods {
-			podMetric, err := client.MetricsV1beta1().PodMetricses(namespace).Get(s.deps.Context, pod.Name, metav1.GetOptions{})
-			if err != nil {
-				// Individual pod metrics might not be available yet (new pods)
-				s.deps.Logger.Debug(fmt.Sprintf("No metrics for pod %s: %v", pod.Name, err), logsources.ResourceLoader)
-				continue
-			}
-			metrics[pod.Name] = podMetric
-		}
-	} else {
-		// For many pods, fetch all and filter
-		podMetricsList, err := client.MetricsV1beta1().PodMetricses(namespace).List(s.deps.Context, metav1.ListOptions{})
+		return s.fetchIndividualPodMetrics(client, namespace, pods)
+	}
+	return s.fetchListedPodMetrics(client, namespace, pods)
+}
+
+func (s *Service) podMetricsClient() metricsclient.Interface {
+	if s.deps.MetricsClient != nil {
+		return s.deps.MetricsClient
+	}
+	if s.deps.RestConfig == nil {
+		return nil
+	}
+	client, err := metricsclient.NewForConfig(s.deps.RestConfig)
+	if err != nil {
+		s.deps.Logger.Debug(fmt.Sprintf("Metrics client not available: %v", err), logsources.ResourceLoader)
+		return nil
+	}
+	s.deps.SetMetricsClient(client)
+	s.deps.MetricsClient = client
+	return client
+}
+
+func (s *Service) fetchIndividualPodMetrics(client metricsclient.Interface, namespace string, pods []corev1.Pod) map[string]*metricsv1beta1.PodMetrics {
+	metrics := make(map[string]*metricsv1beta1.PodMetrics)
+	for _, pod := range pods {
+		podMetric, err := client.MetricsV1beta1().PodMetricses(namespace).Get(s.deps.Context, pod.Name, metav1.GetOptions{})
 		if err != nil {
-			s.deps.Logger.Info(fmt.Sprintf("Failed to fetch pod metrics for namespace %s: %v", namespace, err), logsources.ResourceLoader)
-			return metrics
+			s.deps.Logger.Debug(fmt.Sprintf("No metrics for pod %s: %v", pod.Name, err), logsources.ResourceLoader)
+			continue
 		}
+		metrics[pod.Name] = podMetric
+	}
+	return metrics
+}
 
-		// Create a map of pod names for quick lookup
-		podNames := make(map[string]bool)
-		for _, pod := range pods {
-			podNames[pod.Name] = true
-		}
-
-		// Only include metrics for our pods
-		for i := range podMetricsList.Items {
-			pod := &podMetricsList.Items[i]
-			if podNames[pod.Name] {
-				metrics[pod.Name] = pod
-			}
+func (s *Service) fetchListedPodMetrics(client metricsclient.Interface, namespace string, pods []corev1.Pod) map[string]*metricsv1beta1.PodMetrics {
+	metrics := make(map[string]*metricsv1beta1.PodMetrics)
+	podMetricsList, err := client.MetricsV1beta1().PodMetricses(namespace).List(s.deps.Context, metav1.ListOptions{})
+	if err != nil {
+		s.deps.Logger.Info(fmt.Sprintf("Failed to fetch pod metrics for namespace %s: %v", namespace, err), logsources.ResourceLoader)
+		return metrics
+	}
+	podNames := make(map[string]struct{}, len(pods))
+	for _, pod := range pods {
+		podNames[pod.Name] = struct{}{}
+	}
+	for index := range podMetricsList.Items {
+		pod := &podMetricsList.Items[index]
+		if _, ok := podNames[pod.Name]; ok {
+			metrics[pod.Name] = pod
 		}
 	}
-
 	return metrics
 }
 

@@ -45,22 +45,39 @@ func (s *ProjectingStore) PartitionView(namespace string) *StorePartitionView {
 // sibling namespaces' rows. namespace "" delegates to the classic Replace.
 func (s *ProjectingStore) ReplacePartition(namespace string, list []interface{}, resourceVersion string) error {
 	if namespace == "" {
-		if err := s.Replace(list, resourceVersion); err != nil {
-			return err
-		}
-		s.mu.Lock()
-		s.markPartitionSyncedLocked("")
-		s.mu.Unlock()
-		return nil
+		return s.replaceUnpartitioned(list, resourceVersion)
 	}
 
-	next := make(map[string]interface{}, len(list))
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	next, err := s.projectPartitionRows(list)
+	if err != nil {
+		return err
+	}
+	prefix := namespace + "/"
+	s.emitPartitionChanges(prefix, next)
+	s.replacePartitionRows(prefix, next)
+	s.recordPartitionVersion(namespace, resourceVersion)
+	s.rebuildIndexesLocked()
+	return nil
+}
+
+func (s *ProjectingStore) replaceUnpartitioned(list []interface{}, resourceVersion string) error {
+	if err := s.Replace(list, resourceVersion); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.markPartitionSyncedLocked("")
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *ProjectingStore) projectPartitionRows(list []interface{}) (map[string]interface{}, error) {
+	next := make(map[string]interface{}, len(list))
 	for _, obj := range list {
 		key, err := keyOf(obj)
 		if err != nil {
-			return cache.KeyError{Obj: obj, Err: err}
+			return nil, cache.KeyError{Obj: obj, Err: err}
 		}
 		projected, err := s.project(obj)
 		if err != nil {
@@ -72,26 +89,29 @@ func (s *ProjectingStore) ReplacePartition(namespace string, list []interface{},
 		}
 		next[key] = projected
 	}
+	return next, nil
+}
 
-	prefix := namespace + "/"
-	if s.hasSinks() {
-		// Deletes first (vanished keys fan the PREVIOUS stored bundle, whose
-		// Catalog half is retained, so catalog-keyed consumers evict ghosts),
-		// then per-row upserts — feedSinksReplace minus the bulk path.
-		for key, stored := range s.rows {
-			if !strings.HasPrefix(key, prefix) {
-				continue
+func (s *ProjectingStore) emitPartitionChanges(prefix string, next map[string]interface{}) {
+	if !s.hasSinks() {
+		return
+	}
+	// Deletes first (vanished keys fan the PREVIOUS stored bundle, whose
+	// Catalog half is retained, so catalog-keyed consumers evict ghosts),
+	// then per-row upserts — feedSinksReplace minus the bulk path.
+	for key, stored := range s.rows {
+		if strings.HasPrefix(key, prefix) {
+			if _, kept := next[key]; !kept {
+				s.emitDelete(stored)
 			}
-			if _, kept := next[key]; kept {
-				continue
-			}
-			s.emitDelete(stored)
-		}
-		for _, projected := range next {
-			s.emitUpsert(projected)
 		}
 	}
+	for _, projected := range next {
+		s.emitUpsert(projected)
+	}
+}
 
+func (s *ProjectingStore) replacePartitionRows(prefix string, next map[string]interface{}) {
 	for key := range s.rows {
 		if strings.HasPrefix(key, prefix) {
 			delete(s.rows, key)
@@ -100,14 +120,15 @@ func (s *ProjectingStore) ReplacePartition(namespace string, list []interface{},
 	for key, projected := range next {
 		s.rows[key] = s.storedValue(projected)
 	}
+}
+
+func (s *ProjectingStore) recordPartitionVersion(namespace, resourceVersion string) {
 	if s.partitionRVs == nil {
 		s.partitionRVs = make(map[string]string)
 	}
 	s.partitionRVs[namespace] = resourceVersion
 	s.rv = resourceVersion
 	s.markPartitionSyncedLocked(namespace)
-	s.rebuildIndexesLocked()
-	return nil
 }
 
 // MarkPartitionSynced is MarkSynced for one partition — the stage-3 resume

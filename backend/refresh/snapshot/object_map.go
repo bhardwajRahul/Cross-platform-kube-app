@@ -488,49 +488,66 @@ func (idx *objectMapIndex) collectGatewayTyped(
 	}
 	clusterID := idx.meta.ClusterID
 	for _, collector := range objectMapGatewayCollectors {
-		if !gatewayKindPresent(presence, collector.Identity.Kind) {
-			continue
+		if idx.collectGatewayCollector(factory, presence, permissions, collector, clusterID) {
+			return
 		}
-		if permissions != nil && !permissions.CanListWatch(collector.Identity.Group, collector.Identity.Resource) {
-			idx.warnSkippedPermission(collector.Identity.Resource)
-			continue
-		}
-		generic, err := factory.ForResource(collector.Identity.GVR())
+	}
+}
+
+func (idx *objectMapIndex) collectGatewayCollector(
+	factory gatewayinformers.SharedInformerFactory,
+	presence objectMapGatewayPresence,
+	permissions objectMapPermissionChecker,
+	collector objectmapnode.GatewayCollector,
+	clusterID string,
+) bool {
+	if !gatewayKindPresent(presence, collector.Identity.Kind) {
+		return false
+	}
+	if permissions != nil && !permissions.CanListWatch(collector.Identity.Group, collector.Identity.Resource) {
+		idx.warnSkippedPermission(collector.Identity.Resource)
+		return false
+	}
+	items, err := idx.listGatewayCollectorItems(factory, collector)
+	if idx.skipListError(collector.Identity.Resource, err) {
+		return idx.hasListError()
+	}
+	idx.addGatewayCollectorItems(collector, clusterID, items)
+	return false
+}
+
+func (idx *objectMapIndex) listGatewayCollectorItems(factory gatewayinformers.SharedInformerFactory, collector objectmapnode.GatewayCollector) ([]metav1.Object, error) {
+	generic, err := factory.ForResource(collector.Identity.GVR())
+	if err != nil {
+		return nil, err
+	}
+	listed, err := generic.Lister().List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+	items := make([]metav1.Object, 0, len(listed))
+	for _, raw := range listed {
+		obj, err := meta.Accessor(raw)
 		if err != nil {
-			if idx.skipListError(collector.Identity.Resource, err) && idx.hasListError() {
-				return
-			}
-			continue
+			return nil, err
 		}
-		listed, err := generic.Lister().List(labels.Everything())
-		var items []metav1.Object
-		for _, raw := range listed {
-			obj, accessorErr := meta.Accessor(raw)
-			if accessorErr != nil {
-				err = accessorErr
-				break
-			}
-			if collector.Identity.Namespaced && !idx.namespaceAllowed(obj.GetNamespace()) {
-				continue
-			}
+		if !collector.Identity.Namespaced || idx.namespaceAllowed(obj.GetNamespace()) {
 			items = append(items, obj)
 		}
-		if idx.skipListError(collector.Identity.Resource, err) {
-			if idx.hasListError() {
-				return
-			}
-			continue
-		}
-		for _, obj := range items {
-			idx.addRecord(&objectMapRecord{
-				ref:               refFromObject(obj, collector.Identity.Group, collector.Identity.Version, collector.Identity.Kind, collector.Identity.Resource, obj.GetNamespace()),
-				obj:               obj,
-				creationTimestamp: objectCreationTimestamp(obj),
-				owners:            obj.GetOwnerReferences(),
-				labels:            cloneStringMap(obj.GetLabels()),
-				status:            collector.Status(clusterID, obj),
-			})
-		}
+	}
+	return items, nil
+}
+
+func (idx *objectMapIndex) addGatewayCollectorItems(collector objectmapnode.GatewayCollector, clusterID string, items []metav1.Object) {
+	for _, obj := range items {
+		idx.addRecord(&objectMapRecord{
+			ref:               refFromObject(obj, collector.Identity.Group, collector.Identity.Version, collector.Identity.Kind, collector.Identity.Resource, obj.GetNamespace()),
+			obj:               obj,
+			creationTimestamp: objectCreationTimestamp(obj),
+			owners:            obj.GetOwnerReferences(),
+			labels:            cloneStringMap(obj.GetLabels()),
+			status:            collector.Status(clusterID, obj),
+		})
 	}
 }
 
@@ -786,25 +803,44 @@ func (idx *objectMapIndex) findIdentity(namespace string, gvk schema.GroupVersio
 }
 
 func (idx *objectMapIndex) buildGraph(seed *objectMapRecord, maxDepth, maxNodes int) objectMapGraph {
-	allEdges := idx.buildAllEdges()
-	sort.Slice(allEdges, func(i, j int) bool {
-		if allEdges[i].Type != allEdges[j].Type {
-			return allEdges[i].Type < allEdges[j].Type
+	allEdges := sortedObjectMapTraversalEdges(idx.buildAllEdges())
+	graph := idx.newSeedObjectMapGraph(seed, allEdges)
+	seedID := objectMapNodeID(seed.ref)
+	if !usesDirectionalObjectMapTraversal(seed.ref) {
+		idx.traverseObjectMapMixed(&graph, seedID, maxDepth, maxNodes)
+		graph.edges = objectMapEdgesBetweenNodes(graph.edges, graph.nodes)
+		return graph
+	}
+	includedEdges := make(map[string]ObjectMapEdge)
+	idx.traverseObjectMapDirection(&graph, seedID, maxDepth, maxNodes, objectMapTraversalForward, includedEdges)
+	idx.traverseObjectMapDirection(&graph, seedID, maxDepth, maxNodes, objectMapTraversalBackward, includedEdges)
+	graph.edges = objectMapEdgesBetweenNodes(includedEdges, graph.nodes)
+	return graph
+}
+
+func sortedObjectMapTraversalEdges(edges []ObjectMapEdge) []ObjectMapEdge {
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].Type != edges[j].Type {
+			return edges[i].Type < edges[j].Type
 		}
-		if allEdges[i].Source != allEdges[j].Source {
-			return allEdges[i].Source < allEdges[j].Source
+		if edges[i].Source != edges[j].Source {
+			return edges[i].Source < edges[j].Source
 		}
-		if allEdges[i].Target != allEdges[j].Target {
-			return allEdges[i].Target < allEdges[j].Target
+		if edges[i].Target != edges[j].Target {
+			return edges[i].Target < edges[j].Target
 		}
-		return allEdges[i].ID < allEdges[j].ID
+		return edges[i].ID < edges[j].ID
 	})
+	return edges
+}
+
+func (idx *objectMapIndex) newSeedObjectMapGraph(seed *objectMapRecord, edges []ObjectMapEdge) objectMapGraph {
 	graph := objectMapGraph{
 		nodes:     make(map[string]ObjectMapNode),
 		edges:     make(map[string]ObjectMapEdge),
 		adjacency: make(map[string][]objectMapTraversalEdge),
 	}
-	for _, edge := range allEdges {
+	for _, edge := range edges {
 		if !idx.canUseObjectMapEdgeForSeed(seed, edge) {
 			continue
 		}
@@ -812,42 +848,23 @@ func (idx *objectMapIndex) buildGraph(seed *objectMapRecord, maxDepth, maxNodes 
 		graph.adjacency[edge.Target] = append(graph.adjacency[edge.Target], objectMapTraversalEdge{edgeID: edge.ID, reverse: true})
 		graph.edges[edge.ID] = edge
 	}
-
 	seedID := objectMapNodeID(seed.ref)
 	graph.nodes[seedID] = objectMapNodeFromRecord(seedID, 0, seed)
-
-	if !usesDirectionalObjectMapTraversal(seed.ref) {
-		idx.traverseObjectMapMixed(&graph, seedID, maxDepth, maxNodes)
-		includedEdges := make(map[string]ObjectMapEdge)
-		for _, edge := range graph.edges {
-			if _, ok := graph.nodes[edge.Source]; !ok {
-				continue
-			}
-			if _, ok := graph.nodes[edge.Target]; !ok {
-				continue
-			}
-			includedEdges[edge.ID] = edge
-		}
-		graph.edges = includedEdges
-		return graph
-	}
-
-	includedEdges := make(map[string]ObjectMapEdge)
-	idx.traverseObjectMapDirection(&graph, seedID, maxDepth, maxNodes, objectMapTraversalForward, includedEdges)
-	idx.traverseObjectMapDirection(&graph, seedID, maxDepth, maxNodes, objectMapTraversalBackward, includedEdges)
-
-	finalEdges := make(map[string]ObjectMapEdge)
-	for _, edge := range includedEdges {
-		if _, ok := graph.nodes[edge.Source]; !ok {
-			continue
-		}
-		if _, ok := graph.nodes[edge.Target]; !ok {
-			continue
-		}
-		finalEdges[edge.ID] = edge
-	}
-	graph.edges = finalEdges
 	return graph
+}
+
+func objectMapEdgesBetweenNodes(edges map[string]ObjectMapEdge, nodes map[string]ObjectMapNode) map[string]ObjectMapEdge {
+	result := make(map[string]ObjectMapEdge)
+	for _, edge := range edges {
+		if _, ok := nodes[edge.Source]; !ok {
+			continue
+		}
+		if _, ok := nodes[edge.Target]; !ok {
+			continue
+		}
+		result[edge.ID] = edge
+	}
+	return result
 }
 
 func (idx *objectMapIndex) buildNamespaceGraph(namespace string, maxNodes int) objectMapGraph {
@@ -943,35 +960,44 @@ func (idx *objectMapIndex) traverseObjectMapMixed(
 ) {
 	queue := []string{seedID}
 	for head := 0; head < len(queue); head++ {
-		currentID := queue[head]
-		currentDepth := graph.nodes[currentID].Depth
-		if currentDepth >= maxDepth {
+		queue = append(queue, idx.expandMixedObjectMapNode(graph, queue[head], maxDepth, maxNodes)...)
+	}
+}
+
+func (idx *objectMapIndex) expandMixedObjectMapNode(graph *objectMapGraph, currentID string, maxDepth, maxNodes int) []string {
+	currentDepth := graph.nodes[currentID].Depth
+	if currentDepth >= maxDepth {
+		return nil
+	}
+	var added []string
+	for _, traversal := range graph.adjacency[currentID] {
+		edge := graph.edges[traversal.edgeID]
+		if traversal.reverse && !canTraverseObjectMapReverse(edge.Type, currentDepth) {
 			continue
 		}
-		for _, traversal := range graph.adjacency[currentID] {
-			edge := graph.edges[traversal.edgeID]
-			if traversal.reverse && !canTraverseObjectMapReverse(edge.Type, currentDepth) {
-				continue
-			}
-			neighborID := edge.Target
-			if traversal.reverse {
-				neighborID = edge.Source
-			}
-			if _, exists := graph.nodes[neighborID]; exists {
-				continue
-			}
-			if len(graph.nodes) >= maxNodes {
-				graph.truncated = true
-				continue
-			}
-			record, ok := idx.records[neighborID]
-			if !ok {
-				continue
-			}
-			graph.nodes[neighborID] = objectMapNodeFromRecord(neighborID, currentDepth+1, record)
-			queue = append(queue, neighborID)
+		neighborID := objectMapTraversalNeighbor(edge, traversal.reverse)
+		if _, exists := graph.nodes[neighborID]; exists {
+			continue
 		}
+		if len(graph.nodes) >= maxNodes {
+			graph.truncated = true
+			continue
+		}
+		record, ok := idx.records[neighborID]
+		if !ok {
+			continue
+		}
+		graph.nodes[neighborID] = objectMapNodeFromRecord(neighborID, currentDepth+1, record)
+		added = append(added, neighborID)
 	}
+	return added
+}
+
+func objectMapTraversalNeighbor(edge ObjectMapEdge, reverse bool) string {
+	if reverse {
+		return edge.Source
+	}
+	return edge.Target
 }
 
 func (idx *objectMapIndex) traverseObjectMapDirection(
@@ -1099,61 +1125,63 @@ func compareObjectMapRefs(a, b ObjectMapReference) int {
 }
 
 func (idx *objectMapIndex) buildAllEdges() []ObjectMapEdge {
-	edges := make(map[string]ObjectMapEdge)
-	add := func(source, target *objectMapRecord, typ, label, tracedBy string) {
-		if source == nil || target == nil {
-			return
-		}
-		sourceID := objectMapNodeID(source.ref)
-		targetID := objectMapNodeID(target.ref)
-		if sourceID == "" || targetID == "" || sourceID == targetID {
-			return
-		}
-		id := strings.Join([]string{sourceID, typ, targetID, tracedBy}, "|")
-		edges[id] = ObjectMapEdge{
-			ID:       id,
-			Source:   sourceID,
-			Target:   targetID,
-			Type:     typ,
-			Label:    label,
-			TracedBy: tracedBy,
-		}
-	}
-
+	edges := objectMapEdgeSet{}
 	for _, record := range idx.records {
-		for _, owner := range record.owners {
-			ownerRecord := idx.resolveOwner(record, owner)
-			add(ownerRecord, record, objectMapEdgeOwner, objectMapRelationships[objectMapEdgeOwner].label, owner.Name)
-		}
+		idx.addObjectMapOwnerEdges(edges, record)
 	}
-
 	for _, record := range idx.records {
-		// Every kind declares its relationship edges in its own package; the
-		// registry dispatches by kind and resolveEdgeTargets resolves each target.
-		// An ingest-owned record carries no source object, so its edges were resolved
-		// at intake and are read from ingestEdges; an uncut record derives them now
-		// from its obj via the registry edge builder.
-		for _, e := range idx.recordEdges(record) {
-			relationship := objectMapRelationships[e.Type]
-			label := e.Label
-			if label == "" {
-				label = relationship.label
-			}
-			tracedBy := e.TracedBy
-			if tracedBy == "" {
-				tracedBy = relationship.defaultTracedBy
-			}
-			for _, target := range idx.resolveEdgeTargets(record, e) {
-				add(record, target, e.Type, label, tracedBy)
-			}
-		}
+		idx.addObjectMapRelationshipEdges(edges, record)
 	}
-
 	result := make([]ObjectMapEdge, 0, len(edges))
 	for _, edge := range edges {
 		result = append(result, edge)
 	}
 	return result
+}
+
+type objectMapEdgeSet map[string]ObjectMapEdge
+
+func (edges objectMapEdgeSet) add(source, target *objectMapRecord, typ, label, tracedBy string) {
+	if source == nil || target == nil {
+		return
+	}
+	sourceID := objectMapNodeID(source.ref)
+	targetID := objectMapNodeID(target.ref)
+	if sourceID == "" || targetID == "" || sourceID == targetID {
+		return
+	}
+	id := strings.Join([]string{sourceID, typ, targetID, tracedBy}, "|")
+	edges[id] = ObjectMapEdge{ID: id, Source: sourceID, Target: targetID, Type: typ, Label: label, TracedBy: tracedBy}
+}
+
+func (idx *objectMapIndex) addObjectMapOwnerEdges(edges objectMapEdgeSet, record *objectMapRecord) {
+	for _, owner := range record.owners {
+		edges.add(idx.resolveOwner(record, owner), record, objectMapEdgeOwner, objectMapRelationships[objectMapEdgeOwner].label, owner.Name)
+	}
+}
+
+func (idx *objectMapIndex) addObjectMapRelationshipEdges(edges objectMapEdgeSet, record *objectMapRecord) {
+	// Every kind declares its relationship edges in its own package; ingest-owned
+	// records read their pre-resolved edges while retained objects derive them here.
+	for _, edge := range idx.recordEdges(record) {
+		label, tracedBy := objectMapEdgePresentation(edge)
+		for _, target := range idx.resolveEdgeTargets(record, edge) {
+			edges.add(record, target, edge.Type, label, tracedBy)
+		}
+	}
+}
+
+func objectMapEdgePresentation(edge objectmapspec.Edge) (string, string) {
+	relationship := objectMapRelationships[edge.Type]
+	label := edge.Label
+	if label == "" {
+		label = relationship.label
+	}
+	tracedBy := edge.TracedBy
+	if tracedBy == "" {
+		tracedBy = relationship.defaultTracedBy
+	}
+	return label, tracedBy
 }
 
 // recordEdges returns a record's relationship edges: the pre-resolved ingestEdges

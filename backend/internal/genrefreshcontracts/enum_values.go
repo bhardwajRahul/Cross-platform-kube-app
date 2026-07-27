@@ -15,18 +15,7 @@ type enumValue struct {
 }
 
 func resolveEnumSpecs(specs []enumSpec) ([]enumSpec, error) {
-	packagePaths := make([]string, 0)
-	seenPaths := make(map[string]struct{})
-	for _, spec := range specs {
-		path := spec.typeOf.PkgPath()
-		if _, ok := seenPaths[path]; ok {
-			continue
-		}
-		seenPaths[path] = struct{}{}
-		packagePaths = append(packagePaths, path)
-	}
-	sort.Strings(packagePaths)
-
+	packagePaths := enumPackagePaths(specs)
 	loaded, err := packages.Load(&packages.Config{
 		Mode: packages.NeedName | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedSyntax,
 	}, packagePaths...)
@@ -40,41 +29,75 @@ func resolveEnumSpecs(specs []enumSpec) ([]enumSpec, error) {
 	for _, loadedPackage := range loaded {
 		packagesByPath[loadedPackage.PkgPath] = loadedPackage
 	}
-
 	resolved := make([]enumSpec, len(specs))
 	for index, spec := range specs {
 		loadedPackage := packagesByPath[spec.typeOf.PkgPath()]
 		if loadedPackage == nil {
 			return nil, fmt.Errorf("enum %s: package %s was not loaded", spec.name, spec.typeOf.PkgPath())
 		}
-		values := make([]enumValue, 0)
-		for _, object := range loadedPackage.TypesInfo.Defs {
-			constantObject, ok := object.(*types.Const)
-			if !ok {
-				continue
-			}
-			named, ok := constantObject.Type().(*types.Named)
-			if !ok || named.Obj().Pkg() == nil || named.Obj().Pkg().Path() != spec.typeOf.PkgPath() || named.Obj().Name() != spec.typeOf.Name() {
-				continue
-			}
-			if constantObject.Val().Kind() != constant.String {
-				return nil, fmt.Errorf("enum %s constant %s is not a string", spec.name, constantObject.Name())
-			}
-			values = append(values, enumValue{
-				value:  constant.StringVal(constantObject.Val()),
-				offset: loadedPackage.Fset.Position(constantObject.Pos()).Offset,
-			})
+		resolvedSpec, err := resolveEnumSpec(spec, loadedPackage)
+		if err != nil {
+			return nil, err
 		}
-		sort.Slice(values, func(i, j int) bool { return values[i].offset < values[j].offset })
-		if len(values) == 0 {
-			return nil, fmt.Errorf("enum %s has no typed constants", spec.name)
-		}
-
-		resolved[index] = spec
-		resolved[index].values = make([]string, 0, len(values))
-		for _, value := range values {
-			resolved[index].values = append(resolved[index].values, value.value)
-		}
+		resolved[index] = resolvedSpec
 	}
 	return resolved, nil
+}
+
+func enumPackagePaths(specs []enumSpec) []string {
+	packagePaths := make([]string, 0)
+	seenPaths := make(map[string]struct{})
+	for _, spec := range specs {
+		path := spec.typeOf.PkgPath()
+		if _, ok := seenPaths[path]; ok {
+			continue
+		}
+		seenPaths[path] = struct{}{}
+		packagePaths = append(packagePaths, path)
+	}
+	sort.Strings(packagePaths)
+	return packagePaths
+}
+
+func resolveEnumSpec(spec enumSpec, loadedPackage *packages.Package) (enumSpec, error) {
+	values, err := enumValues(spec, loadedPackage)
+	if err != nil {
+		return enumSpec{}, err
+	}
+	if len(values) == 0 {
+		return enumSpec{}, fmt.Errorf("enum %s has no typed constants", spec.name)
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i].offset < values[j].offset })
+	resolved := spec
+	resolved.values = make([]string, 0, len(values))
+	for _, value := range values {
+		resolved.values = append(resolved.values, value.value)
+	}
+	return resolved, nil
+}
+
+func enumValues(spec enumSpec, loadedPackage *packages.Package) ([]enumValue, error) {
+	values := make([]enumValue, 0)
+	for _, object := range loadedPackage.TypesInfo.Defs {
+		constantObject, ok := object.(*types.Const)
+		if !ok || !constantMatchesEnum(constantObject, spec) {
+			continue
+		}
+		if constantObject.Val().Kind() != constant.String {
+			return nil, fmt.Errorf("enum %s constant %s is not a string", spec.name, constantObject.Name())
+		}
+		values = append(values, enumValue{
+			value:  constant.StringVal(constantObject.Val()),
+			offset: loadedPackage.Fset.Position(constantObject.Pos()).Offset,
+		})
+	}
+	return values, nil
+}
+
+func constantMatchesEnum(constantObject *types.Const, spec enumSpec) bool {
+	named, ok := constantObject.Type().(*types.Named)
+	if !ok || named.Obj().Pkg() == nil {
+		return false
+	}
+	return named.Obj().Pkg().Path() == spec.typeOf.PkgPath() && named.Obj().Name() == spec.typeOf.Name()
 }

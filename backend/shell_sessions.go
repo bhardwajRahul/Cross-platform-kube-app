@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/internal/logsources"
+	"github.com/luxury-yacht/app/backend/resources/common"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -171,6 +172,14 @@ type shellEventWriter struct {
 	session   *shellSession
 }
 
+type shellLaunch struct {
+	deps      common.Dependencies
+	pod       *corev1.Pod
+	container string
+	command   []string
+	executor  remotecommand.Executor
+}
+
 func (w *shellEventWriter) Write(p []byte) (int, error) {
 	if len(p) == 0 || w.app == nil {
 		return len(p), nil
@@ -186,19 +195,30 @@ func (w *shellEventWriter) Write(p []byte) (int, error) {
 
 // StartShellSession launches a kubectl exec session and begins streaming data back to the frontend.
 func (a *App) StartShellSession(clusterID string, req ShellSessionRequest) (*ShellSession, error) {
-	if err := requirePodObject(req.Namespace, req.PodName); err != nil {
+	launch, err := a.prepareShellLaunch(clusterID, req)
+	if err != nil {
 		return nil, err
+	}
+	sess, sessionCtx := newShellSession(clusterID, req, launch)
+	lifecycle := a.shellSessionLifecycle()
+	lifecycle.register(sess)
+	go a.monitorShellTimeout(sessionCtx, sess)
+	startShellSessionStream(a, lifecycle, sessionCtx, sess, launch.executor)
+	lifecycle.emitStatus(sess.id, clusterID, "open", "")
+	return shellSessionResponse(sess, launch.pod), nil
+}
+
+func (a *App) prepareShellLaunch(clusterID string, req ShellSessionRequest) (shellLaunch, error) {
+	if err := requirePodObject(req.Namespace, req.PodName); err != nil {
+		return shellLaunch{}, err
 	}
 
 	deps, _, err := a.resolveClusterDependencies(clusterID)
 	if err != nil {
-		return nil, err
+		return shellLaunch{}, err
 	}
-	if deps.KubernetesClient == nil {
-		return nil, fmt.Errorf("kubernetes client not initialized")
-	}
-	if deps.RestConfig == nil {
-		return nil, fmt.Errorf("kubernetes rest config not initialized")
+	if err := validateShellDependencies(deps); err != nil {
+		return shellLaunch{}, err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), config.ShellSessionShutdownTimeout)
@@ -209,26 +229,52 @@ func (a *App) StartShellSession(clusterID string, req ShellSessionRequest) (*She
 		return deps.KubernetesClient.CoreV1().Pods(req.Namespace).Get(ctx, req.PodName, metav1.GetOptions{})
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to load pod: %w", err)
+		return shellLaunch{}, fmt.Errorf("failed to load pod: %w", err)
 	}
-	if len(pod.Spec.Containers) == 0 && len(pod.Spec.EphemeralContainers) == 0 {
-		return nil, fmt.Errorf("pod has no containers available for exec")
+	container, err := shellContainerForPod(pod, req.Container)
+	if err != nil {
+		return shellLaunch{}, err
 	}
+	if err := a.requireShellExecPermission(deps, req); err != nil {
+		return shellLaunch{}, err
+	}
+	command := shellCommand(req.Command)
+	executor, err := buildShellExecutor(deps, req, container, command)
+	if err != nil {
+		return shellLaunch{}, err
+	}
+	return shellLaunch{deps: deps, pod: pod, container: container, command: command, executor: executor}, nil
+}
 
-	container := req.Container
+func validateShellDependencies(deps common.Dependencies) error {
+	if deps.KubernetesClient == nil {
+		return fmt.Errorf("kubernetes client not initialized")
+	}
+	if deps.RestConfig == nil {
+		return fmt.Errorf("kubernetes rest config not initialized")
+	}
+	return nil
+}
+
+func shellContainerForPod(pod *corev1.Pod, requested string) (string, error) {
+	if len(pod.Spec.Containers) == 0 && len(pod.Spec.EphemeralContainers) == 0 {
+		return "", fmt.Errorf("pod has no containers available for exec")
+	}
+	container := requested
+	if container == "" && len(pod.Spec.Containers) > 0 {
+		container = pod.Spec.Containers[0].Name
+	}
 	if container == "" {
-		if len(pod.Spec.Containers) > 0 {
-			container = pod.Spec.Containers[0].Name
-		} else {
-			// Pods normally have regular containers, but allow ephemeral-only fallback.
-			container = pod.Spec.EphemeralContainers[0].Name
-		}
+		container = pod.Spec.EphemeralContainers[0].Name
 	}
 	if !hasContainer(pod.Spec.Containers, container) && !hasEphemeralContainer(pod.Spec.EphemeralContainers, container) {
-		return nil, fmt.Errorf("container %q not found in pod %s", container, req.PodName)
+		return "", fmt.Errorf("container %q not found in pod %s", container, pod.Name)
 	}
+	return container, nil
+}
 
-	if err := a.requireAnyResourcePermission(deps.Context, deps,
+func (a *App) requireShellExecPermission(deps common.Dependencies, req ShellSessionRequest) error {
+	return a.requireAnyResourcePermission(deps.Context, deps,
 		resourcePermissionCheck{
 			Version:     "v1",
 			Kind:        podspkg.Identity.Kind,
@@ -245,20 +291,23 @@ func (a *App) StartShellSession(clusterID string, req ShellSessionRequest) (*She
 			Verb:        "create",
 			Subresource: "exec",
 		},
-	); err != nil {
-		return nil, err
-	}
+	)
+}
 
-	command := req.Command
+func shellCommand(requested []string) []string {
+	command := requested
 	if len(command) == 0 {
 		command = []string{"/bin/sh"}
 	}
+	return command
+}
 
-	sessionID := uuid.NewString()
-	stdinReader, stdinWriter := io.Pipe()
-	sizeQueue := newTerminalSizeQueue()
-	sizeQueue.Set(120, 40)
-
+func buildShellExecutor(
+	deps common.Dependencies,
+	req ShellSessionRequest,
+	container string,
+	command []string,
+) (remotecommand.Executor, error) {
 	execReq := deps.KubernetesClient.CoreV1().
 		RESTClient().
 		Post().
@@ -291,17 +340,24 @@ func (a *App) StartShellSession(clusterID string, req ShellSessionRequest) (*She
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fallback executor: %w", err)
 	}
+	return executor, nil
+}
 
+func newShellSession(clusterID string, req ShellSessionRequest, launch shellLaunch) (*shellSession, context.Context) {
+	sessionID := uuid.NewString()
+	stdinReader, stdinWriter := io.Pipe()
+	sizeQueue := newTerminalSizeQueue()
+	sizeQueue.Set(120, 40)
 	sessionCtx, sessionCancel := context.WithCancel(context.Background())
 	now := time.Now()
 	sess := &shellSession{
 		id:           sessionID,
 		clusterID:    clusterID,
-		clusterName:  deps.ClusterName,
+		clusterName:  launch.deps.ClusterName,
 		namespace:    req.Namespace,
 		podName:      req.PodName,
-		container:    container,
-		command:      append([]string(nil), command...),
+		container:    launch.container,
+		command:      append([]string(nil), launch.command...),
 		stdin:        stdinWriter,
 		stdinR:       stdinReader,
 		sizeQueue:    sizeQueue,
@@ -312,31 +368,34 @@ func (a *App) StartShellSession(clusterID string, req ShellSessionRequest) (*She
 	if sess.clusterName == "" {
 		sess.clusterName = clusterID
 	}
+	return sess, sessionCtx
+}
 
-	lifecycle := a.shellSessionLifecycle()
-	lifecycle.register(sess)
-
-	// Start timeout monitor goroutine
-	go a.monitorShellTimeout(sessionCtx, sess)
-
+func startShellSessionStream(
+	app *App,
+	lifecycle shellSessionLifecycle,
+	sessionCtx context.Context,
+	sess *shellSession,
+	executor remotecommand.Executor,
+) {
 	go func() {
 		streamErr := executor.StreamWithContext(sessionCtx, remotecommand.StreamOptions{
-			Stdin:             stdinReader,
-			Stdout:            &shellEventWriter{app: a, sessionID: sessionID, clusterID: clusterID, stream: "stdout", session: sess},
-			Stderr:            &shellEventWriter{app: a, sessionID: sessionID, clusterID: clusterID, stream: "stderr", session: sess},
+			Stdin:             sess.stdinR,
+			Stdout:            &shellEventWriter{app: app, sessionID: sess.id, clusterID: sess.clusterID, stream: "stdout", session: sess},
+			Stderr:            &shellEventWriter{app: app, sessionID: sess.id, clusterID: sess.clusterID, stream: "stderr", session: sess},
 			Tty:               true,
-			TerminalSizeQueue: sizeQueue,
+			TerminalSizeQueue: sess.sizeQueue,
 		})
 
 		if streamErr != nil {
-			lifecycle.finishStream(sessionID, "error", streamErr.Error())
+			lifecycle.finishStream(sess.id, "error", streamErr.Error())
 		} else {
-			lifecycle.finishStream(sessionID, "closed", "")
+			lifecycle.finishStream(sess.id, "closed", "")
 		}
 	}()
+}
 
-	lifecycle.emitStatus(sessionID, clusterID, "open", "")
-
+func shellSessionResponse(sess *shellSession, pod *corev1.Pod) *ShellSession {
 	containers := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.EphemeralContainers))
 	for _, c := range pod.Spec.Containers {
 		containers = append(containers, c.Name)
@@ -346,13 +405,13 @@ func (a *App) StartShellSession(clusterID string, req ShellSessionRequest) (*She
 	}
 
 	return &ShellSession{
-		SessionID:  sessionID,
-		Namespace:  req.Namespace,
-		PodName:    req.PodName,
-		Container:  container,
-		Command:    command,
+		SessionID:  sess.id,
+		Namespace:  sess.namespace,
+		PodName:    sess.podName,
+		Container:  sess.container,
+		Command:    append([]string(nil), sess.command...),
 		Containers: containers,
-	}, nil
+	}
 }
 
 // SendShellInput writes stdin data to an active exec session.

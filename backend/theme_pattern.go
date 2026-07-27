@@ -34,62 +34,67 @@ func (e *themeClusterPatternError) Error() string {
 func themeClusterPatternRegexp(pattern string) (*regexp.Regexp, error) {
 	var b strings.Builder
 	b.WriteString("^")
-
 	for i := 0; i < len(pattern); {
 		r, size := utf8.DecodeRuneInString(pattern[i:])
-		switch r {
-		case '*':
-			b.WriteString(".*")
-			i += size
-		case '?':
-			b.WriteByte('.')
-			i += size
-		case '[':
-			j := i + size
-			if j < len(pattern) && pattern[j] == '!' {
-				j++
-			}
-			if j < len(pattern) && pattern[j] == '^' {
-				j++
-			}
-			if j < len(pattern) && pattern[j] == ']' {
-				j++
-			}
-			for j < len(pattern) && pattern[j] != ']' {
-				j++
-			}
-			if j >= len(pattern) {
-				return nil, &themeClusterPatternError{
-					pattern: pattern,
-					kind:    themeClusterPatternMissingClosingBracket,
-				}
-			}
-			if i+size < len(pattern) && pattern[i+size] == '!' {
-				b.WriteString("[^")
-				b.WriteString(pattern[i+size+1 : j+1])
-			} else {
-				b.WriteString(pattern[i : j+1])
-			}
-			i = j + 1
-		case '\\':
-			nextIndex := i + size
-			if nextIndex >= len(pattern) {
-				return nil, &themeClusterPatternError{
-					pattern: pattern,
-					kind:    themeClusterPatternTrailingEscape,
-				}
-			}
-			next, nextSize := utf8.DecodeRuneInString(pattern[nextIndex:])
-			b.WriteString(regexp.QuoteMeta(string(next)))
-			i = nextIndex + nextSize
-		default:
-			b.WriteString(regexp.QuoteMeta(string(r)))
-			i += size
+		next, err := appendThemePatternToken(&b, pattern, i, r, size)
+		if err != nil {
+			return nil, err
 		}
+		i = next
 	}
-
 	b.WriteString("$")
 	return regexp.Compile(b.String())
+}
+
+func appendThemePatternToken(builder *strings.Builder, pattern string, index int, token rune, size int) (int, error) {
+	switch token {
+	case '*':
+		builder.WriteString(".*")
+	case '?':
+		builder.WriteByte('.')
+	case '[':
+		return appendThemePatternClass(builder, pattern, index, size)
+	case '\\':
+		return appendEscapedThemePatternRune(builder, pattern, index+size)
+	default:
+		builder.WriteString(regexp.QuoteMeta(string(token)))
+	}
+	return index + size, nil
+}
+
+func appendThemePatternClass(builder *strings.Builder, pattern string, start, size int) (int, error) {
+	end := start + size
+	if end < len(pattern) && pattern[end] == '!' {
+		end++
+	}
+	if end < len(pattern) && pattern[end] == '^' {
+		end++
+	}
+	if end < len(pattern) && pattern[end] == ']' {
+		end++
+	}
+	for end < len(pattern) && pattern[end] != ']' {
+		end++
+	}
+	if end >= len(pattern) {
+		return 0, &themeClusterPatternError{pattern: pattern, kind: themeClusterPatternMissingClosingBracket}
+	}
+	if pattern[start+size] == '!' {
+		builder.WriteString("[^")
+		builder.WriteString(pattern[start+size+1 : end+1])
+	} else {
+		builder.WriteString(pattern[start : end+1])
+	}
+	return end + 1, nil
+}
+
+func appendEscapedThemePatternRune(builder *strings.Builder, pattern string, index int) (int, error) {
+	if index >= len(pattern) {
+		return 0, &themeClusterPatternError{pattern: pattern, kind: themeClusterPatternTrailingEscape}
+	}
+	next, size := utf8.DecodeRuneInString(pattern[index:])
+	builder.WriteString(regexp.QuoteMeta(string(next)))
+	return index + size, nil
 }
 
 func themeClusterPatternValidationMessage(err error) string {

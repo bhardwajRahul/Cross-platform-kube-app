@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/luxury-yacht/app/backend/resourcemodel"
+	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 )
 
@@ -70,37 +71,42 @@ func statusPresentation(slice *discoveryv1.EndpointSlice, facts Facts) resourcem
 func addressFacts(clusterID, fallbackNamespace string, endpoint discoveryv1.Endpoint) []EndpointAddressFacts {
 	addresses := make([]EndpointAddressFacts, 0, len(endpoint.Addresses))
 	for _, address := range endpoint.Addresses {
-		next := EndpointAddressFacts{IP: address}
-		if endpoint.Hostname != nil {
-			next.Hostname = *endpoint.Hostname
-		}
-		if endpoint.NodeName != nil {
-			next.NodeName = *endpoint.NodeName
-		}
-		if endpoint.TargetRef != nil && endpoint.TargetRef.Kind != "" && endpoint.TargetRef.Name != "" {
-			apiVersion := strings.TrimSpace(endpoint.TargetRef.APIVersion)
-			group, version := "", ""
-			if apiVersion != "" {
-				group, version = resourcemodel.SplitAPIVersion(apiVersion)
-			}
-			namespace := endpoint.TargetRef.Namespace
-			if namespace == "" {
-				namespace = fallbackNamespace
-			}
-			if version == "" {
-				link := resourcemodel.NewDisplayResourceLink(clusterID, group, version, endpoint.TargetRef.Kind, "", namespace, endpoint.TargetRef.Name)
-				if link.Display != nil {
-					link.Display.UID = string(endpoint.TargetRef.UID)
-				}
-				next.TargetRef = &link
-			} else {
-				link := resourcemodel.NewNamespacedResourceLink(clusterID, group, version, endpoint.TargetRef.Kind, "", namespace, endpoint.TargetRef.Name, string(endpoint.TargetRef.UID))
-				next.TargetRef = &link
-			}
-		}
+		next := endpointAddressFact(clusterID, fallbackNamespace, endpoint, address)
 		addresses = append(addresses, next)
 	}
 	return addresses
+}
+
+func endpointAddressFact(clusterID, fallbackNamespace string, endpoint discoveryv1.Endpoint, address string) EndpointAddressFacts {
+	fact := EndpointAddressFacts{IP: address}
+	if endpoint.Hostname != nil {
+		fact.Hostname = *endpoint.Hostname
+	}
+	if endpoint.NodeName != nil {
+		fact.NodeName = *endpoint.NodeName
+	}
+	fact.TargetRef = endpointTargetLink(clusterID, fallbackNamespace, endpoint.TargetRef)
+	return fact
+}
+
+func endpointTargetLink(clusterID, fallbackNamespace string, target *corev1.ObjectReference) *resourcemodel.ResourceLink {
+	if target == nil || target.Kind == "" || target.Name == "" {
+		return nil
+	}
+	group, version := resourcemodel.SplitAPIVersion(strings.TrimSpace(target.APIVersion))
+	namespace := target.Namespace
+	if namespace == "" {
+		namespace = fallbackNamespace
+	}
+	if version != "" {
+		link := resourcemodel.NewNamespacedResourceLink(clusterID, group, version, target.Kind, "", namespace, target.Name, string(target.UID))
+		return &link
+	}
+	link := resourcemodel.NewDisplayResourceLink(clusterID, group, version, target.Kind, "", namespace, target.Name)
+	if link.Display != nil {
+		link.Display.UID = string(target.UID)
+	}
+	return &link
 }
 
 func portFacts(ports []discoveryv1.EndpointPort) []EndpointPortFacts {
