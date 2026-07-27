@@ -236,7 +236,7 @@ func objectMutationContext(ctx context.Context, deps common.Dependencies) (conte
 	if deps.Context != nil {
 		return deps.Context, nil
 	}
-	return context.Background(), nil
+	return nil, fmt.Errorf("operation context is required")
 }
 
 func parseMutationObjects(req ObjectYAMLMutationRequest) (*unstructured.Unstructured, *unstructured.Unstructured, error) {

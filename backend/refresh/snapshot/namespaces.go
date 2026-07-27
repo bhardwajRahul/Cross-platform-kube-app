@@ -349,6 +349,18 @@ func (s namespaceQuotaNotifierSink) UpsertBundle(ingest.Bundle)     { s.notifier
 func (s namespaceQuotaNotifierSink) DeleteBundle(ingest.Bundle)     { s.notifier.QuotaChanged() }
 func (s namespaceQuotaNotifierSink) ReplaceBundles([]ingest.Bundle) { s.notifier.QuotaChanged() }
 
+type namespaceBuildInputs struct {
+	meta               ClusterMeta
+	namespaces         []*corev1.Namespace
+	scopeStatuses      map[string]NamespaceScopeStatus
+	trackerReady       bool
+	workloadRollups    namespaceWorkloadRollups
+	warningEvents      map[string]int
+	warningEventsState NamespaceSignalState
+	quotaRollups       map[string]namespaceQuotaRollup
+	quotaState         NamespaceSignalState
+}
+
 // Build returns the namespace snapshot payload.
 func (b *NamespaceBuilder) Build(ctx context.Context, scope string) (*refresh.Snapshot, error) {
 	meta := ClusterMetaFromContext(ctx)
@@ -362,18 +374,19 @@ func (b *NamespaceBuilder) Build(ctx context.Context, scope string) (*refresh.Sn
 	workloadRollups := namespaceWorkloadRollupsFromIngest(b.ingest)
 	warningEvents, warningEventsState := b.warningEventRollups()
 	quotaRollups, quotaState := namespaceQuotaRollupsFromIngest(b.ingest)
-	items, version := b.buildNamespaceSummaries(
-		meta,
-		namespaces,
-		scopeStatuses,
-		trackerReady,
-		workloadRollups,
-		warningEvents,
-		warningEventsState,
-		quotaRollups,
-		quotaState,
-	)
-	return b.namespaceSnapshot(scope, meta, items, version, trackerReady, workloadRollups, warningEvents, warningEventsState, quotaRollups, quotaState, scopeStatuses), nil
+	inputs := namespaceBuildInputs{
+		meta:               meta,
+		namespaces:         namespaces,
+		scopeStatuses:      scopeStatuses,
+		trackerReady:       trackerReady,
+		workloadRollups:    workloadRollups,
+		warningEvents:      warningEvents,
+		warningEventsState: warningEventsState,
+		quotaRollups:       quotaRollups,
+		quotaState:         quotaState,
+	}
+	items, version := b.buildNamespaceSummaries(inputs)
+	return b.namespaceSnapshot(scope, inputs, items, version), nil
 }
 
 func (b *NamespaceBuilder) collectNamespaces(ctx context.Context, scopeValue string) ([]*corev1.Namespace, map[string]NamespaceScopeStatus, error) {
@@ -437,31 +450,21 @@ func (b *NamespaceBuilder) workloadTrackerReady() bool {
 	return b.tracker.Synced()
 }
 
-func (b *NamespaceBuilder) buildNamespaceSummaries(
-	meta ClusterMeta,
-	namespaces []*corev1.Namespace,
-	scopeStatuses map[string]NamespaceScopeStatus,
-	trackerReady bool,
-	workloadRollups namespaceWorkloadRollups,
-	warningEvents map[string]int,
-	warningEventsState NamespaceSignalState,
-	quotaRollups map[string]namespaceQuotaRollup,
-	quotaState NamespaceSignalState,
-) ([]NamespaceSummary, uint64) {
-	workloadNamespaces := workloadRollups.namespaces
-	items := make([]NamespaceSummary, 0, len(namespaces))
+func (b *NamespaceBuilder) buildNamespaceSummaries(inputs namespaceBuildInputs) ([]NamespaceSummary, uint64) {
+	workloadNamespaces := inputs.workloadRollups.namespaces
+	items := make([]NamespaceSummary, 0, len(inputs.namespaces))
 	var version uint64
-	for _, ns := range namespaces {
+	for _, ns := range inputs.namespaces {
 		_, hasWorkloads := workloadNamespaces[ns.Name]
-		reservations := workloadRollups.reservations[ns.Name]
-		quota := quotaRollups[ns.Name]
+		reservations := inputs.workloadRollups.reservations[ns.Name]
+		quota := inputs.quotaRollups[ns.Name]
 		// In scoped mode a tracker that latched synced because NOTHING is
 		// tracked (every workload kind permission-skipped) means presence is
 		// genuinely unknown — reporting it as authoritative would dim every
 		// configured namespace. Unscoped behavior is unchanged.
-		workloadsKnown := hasWorkloads || (trackerReady && (len(b.scope) == 0 || b.tracksAnyWorkloadKind()))
-		model := namespacepkg.BuildResourceModel(meta.ClusterID, ns, hasWorkloads, workloadsKnown, nil, nil)
-		facts := namespacepkg.BuildFacts(meta.ClusterID, ns, hasWorkloads, workloadsKnown, nil, nil, resourcemodel.ResourceModelBuildOptions{})
+		workloadsKnown := hasWorkloads || (inputs.trackerReady && (len(b.scope) == 0 || b.tracksAnyWorkloadKind()))
+		model := namespacepkg.BuildResourceModel(inputs.meta.ClusterID, ns, hasWorkloads, workloadsKnown, nil, nil)
+		facts := namespacepkg.BuildFacts(inputs.meta.ClusterID, ns, hasWorkloads, workloadsKnown, nil, nil, resourcemodel.ResourceModelBuildOptions{})
 		items = append(items, NamespaceSummary{
 			Ref:                        model.Ref,
 			Phase:                      model.Status.State,
@@ -473,9 +476,9 @@ func (b *NamespaceBuilder) buildNamespaceSummaries(
 			CreationUnix:               model.Metadata.CreationTimestamp.Unix(),
 			HasWorkloads:               facts.HasWorkloads,
 			WorkloadsUnknown:           !facts.WorkloadsKnown,
-			UnhealthyWorkloads:         workloadRollups.unhealthy[ns.Name],
-			WarningEvents:              warningEvents[ns.Name],
-			WarningEventsState:         warningEventsState,
+			UnhealthyWorkloads:         inputs.workloadRollups.unhealthy[ns.Name],
+			WarningEvents:              inputs.warningEvents[ns.Name],
+			WarningEventsState:         inputs.warningEventsState,
 			CPURequestsMilli:           reservations.cpuRequestsMilli,
 			CPULimitsMilli:             reservations.cpuLimitsMilli,
 			MemoryRequestsBytes:        reservations.memoryRequestsBytes,
@@ -483,8 +486,8 @@ func (b *NamespaceBuilder) buildNamespaceSummaries(
 			QuotaCount:                 quota.count,
 			QuotaHighestUsedPercentage: quota.highestUsedPercentage,
 			QuotaPressure:              namespaceQuotaPressure(quota.highestUsedPercentage),
-			QuotaPressureState:         quotaState,
-			ScopeStatus:                scopeStatuses[ns.Name],
+			QuotaPressureState:         inputs.quotaState,
+			ScopeStatus:                inputs.scopeStatuses[ns.Name],
 		})
 		if v := parseResourceVersion(ns); v > version {
 			version = v
@@ -495,22 +498,15 @@ func (b *NamespaceBuilder) buildNamespaceSummaries(
 
 func (b *NamespaceBuilder) namespaceSnapshot(
 	scope string,
-	meta ClusterMeta,
+	inputs namespaceBuildInputs,
 	items []NamespaceSummary,
 	version uint64,
-	trackerReady bool,
-	workloadRollups namespaceWorkloadRollups,
-	warningEvents map[string]int,
-	warningEventsState NamespaceSignalState,
-	quotaRollups map[string]namespaceQuotaRollup,
-	quotaState NamespaceSignalState,
-	scopeStatuses map[string]NamespaceScopeStatus,
 ) *refresh.Snapshot {
 	snapshot := &refresh.Snapshot{
 		Domain:  "namespaces",
 		Scope:   scope,
 		Version: version,
-		Payload: NamespaceSnapshot{ClusterMeta: meta, Namespaces: items, WorkloadsReady: trackerReady},
+		Payload: NamespaceSnapshot{ClusterMeta: inputs.meta, Namespaces: items, WorkloadsReady: inputs.trackerReady},
 		Stats: refresh.SnapshotStats{
 			ItemCount: len(items),
 		},
@@ -522,16 +518,16 @@ func (b *NamespaceBuilder) namespaceSnapshot(
 		// readiness changes; otherwise an unchanged validator makes the delivery layer return
 		// 304 Not Modified and the client keeps a stale (e.g. the first, pre-sync) snapshot.
 		SourceVersions: map[string]string{
-			"workloads":      workloadRollupSignature(workloadRollups, trackerReady),
-			"warning-events": warningEventRollupSignature(warningEvents, warningEventsState),
-			"quota-pressure": namespaceQuotaRollupSignature(quotaRollups, quotaState),
+			"workloads":      workloadRollupSignature(inputs.workloadRollups, inputs.trackerReady),
+			"warning-events": warningEventRollupSignature(inputs.warningEvents, inputs.warningEventsState),
+			"quota-pressure": namespaceQuotaRollupSignature(inputs.quotaRollups, inputs.quotaState),
 		},
 	}
 	if len(b.scope) > 0 {
 		// Probe flags are content the namespace RV clock cannot carry (a
 		// flagged row has no RV at all) — publish them as their own source
 		// clock so transitions are delivered instead of 304'd.
-		snapshot.SourceVersions["scope-probe"] = scopeProbeSignature(scopeStatuses)
+		snapshot.SourceVersions["scope-probe"] = scopeProbeSignature(inputs.scopeStatuses)
 	}
 	return snapshot
 }

@@ -133,7 +133,7 @@ func (a *podMetricsAccumulator) addPod(pod corev1.Pod, metrics map[string]*metri
 	addQuantity(&a.memUsage, memUse)
 }
 
-func addQuantity(total *resource.Quantity, value *resource.Quantity) {
+func addQuantity(total, value *resource.Quantity) {
 	if value != nil {
 		total.Add(*value)
 	}

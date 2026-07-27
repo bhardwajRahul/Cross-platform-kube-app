@@ -301,7 +301,7 @@ func (p *objectDetailProvider) FetchHelmManifest(ctx context.Context, namespace,
 
 	service := helm.NewService(helm.Dependencies{Common: resolved.deps})
 	manifestCacheKey := objectDetailCacheKey("HelmManifest", namespace, name)
-	if manifest, revision, ok := cachedHelmDetail[string](p, ctx, resolved, service, manifestCacheKey, "HelmManifest", namespace, name); ok {
+	if manifest, revision, ok := cachedHelmDetail[string](p, ctx, resolved, service, "HelmManifest", namespace, name); ok {
 		return manifest, revision, nil
 	}
 	manifest, err := service.ReleaseManifest(namespace, name)
@@ -331,7 +331,7 @@ func (p *objectDetailProvider) FetchHelmValues(ctx context.Context, namespace, n
 
 	service := helm.NewService(helm.Dependencies{Common: resolved.deps})
 	valuesCacheKey := objectDetailCacheKey("HelmValues", namespace, name)
-	if values, revision, ok := cachedHelmDetail[map[string]interface{}](p, ctx, resolved, service, valuesCacheKey, "HelmValues", namespace, name); ok {
+	if values, revision, ok := cachedHelmDetail[map[string]interface{}](p, ctx, resolved, service, "HelmValues", namespace, name); ok {
 		return values, revision, nil
 	}
 	values, err := service.ReleaseValues(namespace, name)
@@ -349,12 +349,13 @@ func cachedHelmDetail[T any](
 	ctx context.Context,
 	resolved resolvedObjectDetailContext,
 	service *helm.Service,
-	cacheKey, kind, namespace, name string,
+	kind, namespace, name string,
 ) (T, int, bool) {
 	var zero T
 	if p == nil || p.app == nil {
 		return zero, 0, false
 	}
+	cacheKey := objectDetailCacheKey(kind, namespace, name)
 	cached, ok := p.app.responseCacheLookup(resolved.selectionKey, cacheKey)
 	if !ok {
 		return zero, 0, false

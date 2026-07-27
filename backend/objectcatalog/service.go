@@ -171,7 +171,7 @@ func defaultServiceOptions() Options {
 	}
 }
 
-func applyServiceOptions(target *Options, source *Options) {
+func applyServiceOptions(target, source *Options) {
 	if source == nil {
 		return
 	}

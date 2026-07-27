@@ -27,6 +27,8 @@ import (
 	clientfake "k8s.io/client-go/kubernetes/fake"
 	cgotesting "k8s.io/client-go/testing"
 	"k8s.io/utils/ptr"
+
+	"github.com/luxury-yacht/app/backend/resources/common"
 )
 
 func setupYAMLTestApp(t *testing.T) (*App, *dynamicfake.FakeDynamicClient, string) {
@@ -155,6 +157,57 @@ func nextResourceVersion(current string) string {
 		return current
 	}
 	return strconv.Itoa(value + 1)
+}
+
+func TestObjectMutationContextRequiresOperationContext(t *testing.T) {
+	deps := common.Dependencies{
+		KubernetesClient: clientfake.NewClientset(),
+		DynamicClient:    dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
+	}
+
+	//lint:ignore SA1012 This test deliberately exercises the rejected nil-context boundary.
+	ctx, err := objectMutationContext(nil, deps)
+	if err == nil {
+		t.Fatal("expected missing operation context to fail")
+	}
+	if ctx != nil {
+		t.Fatalf("expected no context on failure, got %T", ctx)
+	}
+	if !strings.Contains(err.Error(), "operation context is required") {
+		t.Fatalf("expected operation-context error, got %q", err)
+	}
+}
+
+func TestObjectMutationContextUsesAvailableContext(t *testing.T) {
+	callerContext, cancelCallerContext := context.WithCancel(context.Background())
+	defer cancelCallerContext()
+	dependencyContext, cancelDependencyContext := context.WithCancel(context.Background())
+	defer cancelDependencyContext()
+	baseDependencies := common.Dependencies{
+		KubernetesClient: clientfake.NewClientset(),
+		DynamicClient:    dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
+	}
+
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		deps     common.Dependencies
+		expected context.Context
+	}{
+		{name: "caller context", ctx: callerContext, deps: baseDependencies, expected: callerContext},
+		{name: "dependency context", deps: baseDependencies.CloneWithContext(dependencyContext), expected: dependencyContext},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, err := objectMutationContext(test.ctx, test.deps)
+			if err != nil {
+				t.Fatalf("expected available context to be accepted: %v", err)
+			}
+			if ctx != test.expected {
+				t.Fatal("expected available context to be preserved")
+			}
+		})
+	}
 }
 
 func TestValidateObjectYamlSuccess(t *testing.T) {
