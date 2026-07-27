@@ -601,6 +601,16 @@ describe('ActionsMenu', () => {
     expect(document.body.querySelector('.context-menu')).toBeNull();
   });
 
+  it('dispatches the resolved Node object through the supplied cordon handler', async () => {
+    const onCordon = vi.fn();
+    await renderMenu({ object: makeNode(), onCordon });
+
+    openMenu(container);
+    clickMenuItem(container, 'Cordon');
+
+    expect(onCordon).toHaveBeenCalledTimes(1);
+  });
+
   describe('CronJob actions', () => {
     it('shows trigger and suspend actions for CronJob', async () => {
       await renderMenu({

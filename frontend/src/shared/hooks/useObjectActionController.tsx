@@ -21,8 +21,13 @@ import {
   buildNodeActionPermissionDescriptorMap,
   buildObjectActionPermissionDescriptor,
   OBJECT_ACTION_IDS,
+  type ObjectActionIdentitySource,
   type ObjectActionPermissionDescriptor,
 } from '@shared/actions/objectActionContract';
+import type {
+  ObjectActionPermissionStatuses,
+  PermissionStatus,
+} from '@shared/actions/objectActionPolicy';
 import type { ContextMenuItem } from '@shared/components/ContextMenu';
 import ConfirmationModal from '@shared/components/modals/ConfirmationModal';
 import RollbackModal from '@shared/components/modals/RollbackModal';
@@ -36,7 +41,12 @@ import {
   type ObjectActionHandlers,
 } from '@shared/hooks/useObjectActions';
 import { useCallback, useMemo, useState } from 'react';
-import { getPermissionKey, queryKindPermissions, useUserPermissions } from '@/core/capabilities';
+import {
+  getPermissionKey,
+  type PermissionMap,
+  queryKindPermissions,
+  useUserPermissions,
+} from '@/core/capabilities';
 import type { KubernetesObjectReference } from '@/types/view-state';
 import { errorHandler } from '@/utils/errorHandler';
 
@@ -125,6 +135,257 @@ const permissionKeyInput = (descriptor: ObjectActionPermissionDescriptor) => ({
   version: descriptor.version ?? null,
 });
 
+const permissionStatusFor = (
+  permissionMap: PermissionMap,
+  descriptor: ObjectActionPermissionDescriptor | null
+): PermissionStatus | null => {
+  if (!descriptor) {
+    return null;
+  }
+  const input = permissionKeyInput(descriptor);
+  return (
+    permissionMap.get(
+      getPermissionKey(
+        input.resourceKind,
+        input.verb,
+        input.namespace,
+        input.subresource,
+        input.clusterId,
+        input.group,
+        input.version
+      )
+    ) ?? null
+  );
+};
+
+const resolveNodePermissions = (
+  permissionMap: PermissionMap,
+  source: ObjectActionIdentitySource,
+  normalizedKind: string
+): Pick<ObjectActionPermissionStatuses, 'cordon' | 'drain'> => {
+  if (normalizedKind !== 'Node') {
+    return { cordon: null, drain: null };
+  }
+  const descriptors = buildNodeActionPermissionDescriptorMap(source);
+  return resolveNodeActionPermissionStatuses({
+    nodeGet: permissionStatusFor(permissionMap, descriptors.nodeGet),
+    nodePatch: permissionStatusFor(permissionMap, descriptors.nodePatch),
+    podEvictionCreate: permissionStatusFor(permissionMap, descriptors.podEvictionCreate),
+    podDelete: permissionStatusFor(permissionMap, descriptors.podDelete),
+  });
+};
+
+const actionPermissionStatus = (
+  permissionMap: PermissionMap,
+  actionId: Parameters<typeof buildObjectActionPermissionDescriptor>[0],
+  source: ObjectActionIdentitySource
+): PermissionStatus | null =>
+  permissionStatusFor(permissionMap, buildObjectActionPermissionDescriptor(actionId, source));
+
+const resolveObjectActionPermissions = (
+  object: ObjectActionData,
+  permissionMap: PermissionMap
+): ObjectActionPermissionStatuses => {
+  const normalizedKind = normalizeKind(object.kind);
+  const source: ObjectActionIdentitySource = {
+    clusterId: object.clusterId,
+    group: object.group,
+    version: object.version,
+    kind: normalizedKind,
+    namespace: object.namespace ?? null,
+    name: object.name,
+  };
+  const targetSource: ObjectActionIdentitySource = { ...source, kind: object.kind };
+  const isCronJob = normalizedKind === 'CronJob';
+  const nodePermissions = resolveNodePermissions(permissionMap, source, normalizedKind);
+
+  return {
+    restart: actionPermissionStatus(permissionMap, OBJECT_ACTION_IDS.restart, source),
+    rollback: actionPermissionStatus(permissionMap, OBJECT_ACTION_IDS.rollback, source),
+    delete: actionPermissionStatus(permissionMap, OBJECT_ACTION_IDS.delete, targetSource),
+    scale: actionPermissionStatus(permissionMap, OBJECT_ACTION_IDS.scale, source),
+    trigger: isCronJob
+      ? actionPermissionStatus(permissionMap, OBJECT_ACTION_IDS.triggerNow, source)
+      : null,
+    suspend: isCronJob
+      ? actionPermissionStatus(permissionMap, OBJECT_ACTION_IDS.suspend, source)
+      : null,
+    portForward: actionPermissionStatus(permissionMap, OBJECT_ACTION_IDS.portForward, source),
+    ...nodePermissions,
+  };
+};
+
+interface NavigationHandlerOptions {
+  object: ObjectActionData;
+  onOpen?: ObjectActionControllerOptions['onOpen'];
+  onOpenObjectMap?: ObjectActionControllerOptions['onOpenObjectMap'];
+  onNavigateView?: ObjectActionControllerOptions['onNavigateView'];
+  onViewInvolvedObject?: ObjectActionControllerOptions['onViewInvolvedObject'];
+  openWithObject: ReturnType<typeof useObjectPanel>['openWithObject'];
+  navigateToView: ReturnType<typeof useNavigateToView>['navigateToView'];
+}
+
+const buildNavigationHandlers = ({
+  object,
+  onOpen,
+  onOpenObjectMap,
+  onNavigateView,
+  onViewInvolvedObject,
+  openWithObject,
+  navigateToView,
+}: NavigationHandlerOptions): ObjectActionHandlers => {
+  const actionObject = object as ObjectActionReference;
+  return {
+    onOpen: onOpen ? () => onOpen(actionObject) : undefined,
+    onNavigateView: () => {
+      if (onNavigateView) {
+        onNavigateView(actionObject);
+        return;
+      }
+      navigateToView(actionObject);
+    },
+    onObjectMap: isObjectMapSupportedKind(object.kind)
+      ? () => {
+          if (onOpenObjectMap) {
+            onOpenObjectMap(actionObject);
+            return;
+          }
+          openWithObject(actionObject, { initialTab: 'map' });
+        }
+      : undefined,
+    onViewInvolvedObject: onViewInvolvedObject
+      ? () => onViewInvolvedObject(actionObject)
+      : undefined,
+  };
+};
+
+interface ActionExecutionOptions {
+  object: ObjectActionData;
+  action: string;
+  execute: () => Promise<unknown>;
+  onAfterAction?: ObjectActionControllerOptions['onAfterAction'];
+}
+
+const executeObjectAction = async ({
+  object,
+  action,
+  execute,
+  onAfterAction,
+}: ActionExecutionOptions): Promise<void> => {
+  try {
+    await execute();
+    onAfterAction?.(object, action);
+  } catch (error) {
+    errorHandler.handle(error, { action, kind: object.kind, name: object.name });
+  }
+};
+
+interface DefaultHandlerSetters {
+  setRestartTarget: (object: ObjectActionData) => void;
+  setRollbackTarget: (object: ObjectActionData) => void;
+  setScaleTarget: (state: ScaleState) => void;
+  setScaleConfirmation: (state: ScaleConfirmationState) => void;
+  setDeleteTarget: (object: ObjectActionData) => void;
+  setPortForwardTarget: (target: PortForwardTarget) => void;
+  setTriggerTarget: (object: ObjectActionData) => void;
+}
+
+const buildDefaultActionHandlers = (
+  object: ObjectActionData,
+  enabled: boolean,
+  setters: DefaultHandlerSetters,
+  onAfterAction?: ObjectActionControllerOptions['onAfterAction']
+): ObjectActionHandlers => {
+  if (!enabled) {
+    return {};
+  }
+  return {
+    onRestart: () => setters.setRestartTarget(object),
+    onRollback: () => setters.setRollbackTarget(object),
+    onScale: () =>
+      setters.setScaleTarget({
+        object,
+        value: extractDesiredReplicas(object),
+        loading: false,
+        error: null,
+      }),
+    onScaleToZero: () => setters.setScaleConfirmation({ object, replicas: 0 }),
+    onResumeFromZero: () =>
+      executeObjectAction({
+        object,
+        action: 'scale',
+        execute: () => runObjectScale(actionTargetFor(object, 'scale'), 1),
+        onAfterAction,
+      }),
+    onDelete: () => setters.setDeleteTarget(object),
+    onPortForward: () => {
+      try {
+        setters.setPortForwardTarget(portForwardTargetFor(object));
+      } catch (error) {
+        errorHandler.handle(error, {
+          action: 'portForward',
+          kind: object.kind,
+          name: object.name,
+        });
+      }
+    },
+    onTrigger: () => setters.setTriggerTarget(object),
+    onSuspendToggle: () => {
+      const isSuspended = object.status === 'Suspended';
+      const action = isSuspended ? 'resume' : 'suspend';
+      return executeObjectAction({
+        object,
+        action,
+        execute: () => runCronJobSuspend(actionTargetFor(object, action), !isSuspended),
+        onAfterAction,
+      });
+    },
+  };
+};
+
+const buildPerObjectHandlers = (
+  object: ObjectActionData,
+  handlers?: PerObjectHandlers
+): Pick<ObjectActionHandlers, 'onCordon' | 'onDrain'> => ({
+  onCordon: handlers?.onCordon ? () => handlers.onCordon?.(object) : undefined,
+  onDrain: handlers?.onDrain ? () => handlers.onDrain?.(object) : undefined,
+});
+
+interface ControllerHandlerOptions extends NavigationHandlerOptions {
+  useDefaultHandlers: boolean;
+  handlerOverrides?: ObjectActionHandlers;
+  perObjectHandlers?: PerObjectHandlers;
+  setters: DefaultHandlerSetters;
+  onAfterAction?: ObjectActionControllerOptions['onAfterAction'];
+}
+
+const buildControllerHandlers = (options: ControllerHandlerOptions): ObjectActionHandlers => {
+  const navigation = buildNavigationHandlers(options);
+  const defaults = buildDefaultActionHandlers(
+    options.object,
+    options.useDefaultHandlers,
+    options.setters,
+    options.onAfterAction
+  );
+  const perObject = buildPerObjectHandlers(options.object, options.perObjectHandlers);
+  const overrides = options.handlerOverrides;
+
+  return {
+    ...navigation,
+    onRestart: overrides?.onRestart ?? defaults.onRestart,
+    onRollback: overrides?.onRollback ?? defaults.onRollback,
+    onScale: overrides?.onScale ?? defaults.onScale,
+    onScaleToZero: overrides?.onScaleToZero ?? defaults.onScaleToZero,
+    onResumeFromZero: overrides?.onResumeFromZero ?? defaults.onResumeFromZero,
+    onDelete: overrides?.onDelete ?? defaults.onDelete,
+    onCordon: overrides?.onCordon ?? perObject.onCordon,
+    onDrain: overrides?.onDrain ?? perObject.onDrain,
+    onPortForward: overrides?.onPortForward ?? defaults.onPortForward,
+    onTrigger: overrides?.onTrigger ?? defaults.onTrigger,
+    onSuspendToggle: overrides?.onSuspendToggle ?? defaults.onSuspendToggle,
+  };
+};
+
 export const useObjectActionController = ({
   context,
   actionLoading = false,
@@ -167,210 +428,42 @@ export const useObjectActionController = ({
       if (!object) {
         return [];
       }
-      const actionObject = object as ObjectActionReference;
-      const namespace = object.namespace ?? null;
-      const clusterId = object.clusterId;
-      const group = object.group;
-      const version = object.version;
-      const normalizedKind = normalizeKind(object.kind);
-      const actionPermissionSource = {
-        clusterId,
-        group,
-        version,
-        kind: normalizedKind,
-        namespace,
-        name: object.name,
-      };
-      const targetPermissionSource = {
-        ...actionPermissionSource,
-        kind: object.kind,
-      };
-      const permissionStatusFor = (descriptor: ObjectActionPermissionDescriptor | null) => {
-        if (!descriptor) {
-          return null;
-        }
-        const input = permissionKeyInput(descriptor);
-        return (
-          permissionMap.get(
-            getPermissionKey(
-              input.resourceKind,
-              input.verb,
-              input.namespace,
-              input.subresource,
-              input.clusterId,
-              input.group,
-              input.version
-            )
-          ) ?? null
+      const permissions = resolveObjectActionPermissions(object, permissionMap);
+      if (queryMissingPermissions && !permissions.delete) {
+        queryKindPermissions(
+          object.kind,
+          object.namespace ?? null,
+          object.clusterId,
+          object.group,
+          object.version
         );
-      };
-      const restartStatus = permissionStatusFor(
-        buildObjectActionPermissionDescriptor(OBJECT_ACTION_IDS.restart, actionPermissionSource)
-      );
-      const rollbackStatus = permissionStatusFor(
-        buildObjectActionPermissionDescriptor(OBJECT_ACTION_IDS.rollback, actionPermissionSource)
-      );
-      const deleteStatus = permissionStatusFor(
-        buildObjectActionPermissionDescriptor(OBJECT_ACTION_IDS.delete, targetPermissionSource)
-      );
-      const scaleStatus = permissionStatusFor(
-        buildObjectActionPermissionDescriptor(OBJECT_ACTION_IDS.scale, actionPermissionSource)
-      );
-      const triggerStatus =
-        normalizedKind === 'CronJob'
-          ? permissionStatusFor(
-              buildObjectActionPermissionDescriptor(
-                OBJECT_ACTION_IDS.triggerNow,
-                actionPermissionSource
-              )
-            )
-          : null;
-      const suspendStatus =
-        normalizedKind === 'CronJob'
-          ? permissionStatusFor(
-              buildObjectActionPermissionDescriptor(
-                OBJECT_ACTION_IDS.suspend,
-                actionPermissionSource
-              )
-            )
-          : null;
-      const portForwardStatus = permissionStatusFor(
-        buildObjectActionPermissionDescriptor(OBJECT_ACTION_IDS.portForward, actionPermissionSource)
-      );
-      const nodeDescriptors = buildNodeActionPermissionDescriptorMap(actionPermissionSource);
-      const nodeActionPermissions =
-        normalizedKind === 'Node'
-          ? resolveNodeActionPermissionStatuses({
-              nodeGet: permissionStatusFor(nodeDescriptors.nodeGet),
-              nodePatch: permissionStatusFor(nodeDescriptors.nodePatch),
-              podEvictionCreate: permissionStatusFor(nodeDescriptors.podEvictionCreate),
-              podDelete: permissionStatusFor(nodeDescriptors.podDelete),
-            })
-          : { cordon: null, drain: null };
-
-      if (queryMissingPermissions && !deleteStatus) {
-        queryKindPermissions(object.kind, namespace, clusterId, group, version);
       }
-
       return buildObjectActionItems({
         object,
         context,
-        handlers: {
-          onOpen: onOpen ? () => onOpen(actionObject) : undefined,
-          onNavigateView: () => {
-            if (onNavigateView) {
-              onNavigateView(actionObject);
-              return;
-            }
-            navigateToView(actionObject);
+        handlers: buildControllerHandlers({
+          object,
+          useDefaultHandlers,
+          handlerOverrides,
+          perObjectHandlers,
+          onAfterAction,
+          onOpen,
+          onOpenObjectMap,
+          onNavigateView,
+          onViewInvolvedObject,
+          openWithObject,
+          navigateToView,
+          setters: {
+            setRestartTarget,
+            setRollbackTarget,
+            setScaleTarget: setScaleState,
+            setScaleConfirmation,
+            setDeleteTarget,
+            setPortForwardTarget,
+            setTriggerTarget,
           },
-          onObjectMap: isObjectMapSupportedKind(object.kind)
-            ? () => {
-                if (onOpenObjectMap) {
-                  onOpenObjectMap(actionObject);
-                  return;
-                }
-                openWithObject(actionObject, { initialTab: 'map' });
-              }
-            : undefined,
-          onViewInvolvedObject: onViewInvolvedObject
-            ? () => onViewInvolvedObject(actionObject)
-            : undefined,
-          onRestart:
-            handlerOverrides?.onRestart ??
-            (useDefaultHandlers ? () => setRestartTarget(object) : undefined),
-          onRollback:
-            handlerOverrides?.onRollback ??
-            (useDefaultHandlers ? () => setRollbackTarget(object) : undefined),
-          onScale:
-            handlerOverrides?.onScale ??
-            (useDefaultHandlers
-              ? () =>
-                  setScaleState({
-                    object,
-                    value: extractDesiredReplicas(object),
-                    loading: false,
-                    error: null,
-                  })
-              : undefined),
-          onScaleToZero:
-            handlerOverrides?.onScaleToZero ??
-            (useDefaultHandlers ? () => setScaleConfirmation({ object, replicas: 0 }) : undefined),
-          onResumeFromZero:
-            handlerOverrides?.onResumeFromZero ??
-            (useDefaultHandlers
-              ? async () => {
-                  try {
-                    await runObjectScale(actionTargetFor(object, 'scale'), 1);
-                    onAfterAction?.(object, 'scale');
-                  } catch (error) {
-                    errorHandler.handle(error, {
-                      action: 'scale',
-                      kind: object.kind,
-                      name: object.name,
-                    });
-                  }
-                }
-              : undefined),
-          onDelete:
-            handlerOverrides?.onDelete ??
-            (useDefaultHandlers ? () => setDeleteTarget(object) : undefined),
-          onCordon:
-            handlerOverrides?.onCordon ??
-            (perObjectHandlers?.onCordon ? () => perObjectHandlers.onCordon?.(object) : undefined),
-          onDrain:
-            handlerOverrides?.onDrain ??
-            (perObjectHandlers?.onDrain ? () => perObjectHandlers.onDrain?.(object) : undefined),
-          onPortForward:
-            handlerOverrides?.onPortForward ??
-            (useDefaultHandlers
-              ? () => {
-                  try {
-                    setPortForwardTarget(portForwardTargetFor(object));
-                  } catch (error) {
-                    errorHandler.handle(error, {
-                      action: 'portForward',
-                      kind: object.kind,
-                      name: object.name,
-                    });
-                  }
-                }
-              : undefined),
-          onTrigger:
-            handlerOverrides?.onTrigger ??
-            (useDefaultHandlers ? () => setTriggerTarget(object) : undefined),
-          onSuspendToggle:
-            handlerOverrides?.onSuspendToggle ??
-            (useDefaultHandlers
-              ? async () => {
-                  const isSuspended = object.status === 'Suspended';
-                  try {
-                    await runCronJobSuspend(
-                      actionTargetFor(object, isSuspended ? 'resume' : 'suspend'),
-                      !isSuspended
-                    );
-                    onAfterAction?.(object, isSuspended ? 'resume' : 'suspend');
-                  } catch (error) {
-                    errorHandler.handle(error, {
-                      action: isSuspended ? 'resume' : 'suspend',
-                      kind: object.kind,
-                      name: object.name,
-                    });
-                  }
-                }
-              : undefined),
-        },
-        permissions: {
-          restart: restartStatus,
-          rollback: rollbackStatus,
-          scale: scaleStatus,
-          trigger: triggerStatus,
-          suspend: suspendStatus,
-          delete: deleteStatus,
-          portForward: portForwardStatus,
-          cordon: nodeActionPermissions.cordon,
-          drain: nodeActionPermissions.drain,
-        },
+        }),
+        permissions,
         actionLoading,
       });
     },

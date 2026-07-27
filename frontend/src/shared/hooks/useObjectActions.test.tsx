@@ -128,6 +128,56 @@ describe('buildObjectActionItems', () => {
     expect(findAction(items, OBJECT_ACTION_IDS.goToTable)).toBeUndefined();
   });
 
+  it('builds the involved-object navigation item without treating the Event as diffable', () => {
+    let opened = false;
+    const items = buildObjectActionItems({
+      object: {
+        kind: 'Event',
+        group: '',
+        version: 'v1',
+        name: 'api-created',
+        namespace: 'apps',
+        clusterId: 'cluster-a',
+        involvedObject: 'Pod/api-123',
+      },
+      context: 'gridtable',
+      handlers: {
+        onViewInvolvedObject: () => {
+          opened = true;
+        },
+      },
+      permissions: {},
+    });
+
+    const involvedItem = findAction(items, OBJECT_ACTION_IDS.viewInvolvedObject);
+    expect(involvedItem).toMatchObject({ label: 'View Pod' });
+    involvedItem?.onClick?.();
+    expect(opened).toBe(true);
+    expect(findAction(items, OBJECT_ACTION_IDS.diff)).toBeUndefined();
+  });
+
+  it('places the pending-permission header after the navigation divider', () => {
+    const items = buildObjectActionItems({
+      object: {
+        kind: 'Deployment',
+        group: 'apps',
+        version: 'v1',
+        name: 'api',
+        namespace: 'apps',
+        clusterId: 'cluster-a',
+      },
+      context: 'gridtable',
+      handlers: { onRestart: () => undefined },
+      permissions: { restart: { allowed: false, pending: true } },
+    });
+
+    expect(items.map((item) => ('divider' in item ? 'divider' : item.label))).toEqual([
+      objectActionLabel(OBJECT_ACTION_IDS.diff),
+      'divider',
+      'Awaiting permissions...',
+    ]);
+  });
+
   it('adds a Diff action for gridtable objects with a resolvable identity', () => {
     const items = buildObjectActionItems({
       object: {

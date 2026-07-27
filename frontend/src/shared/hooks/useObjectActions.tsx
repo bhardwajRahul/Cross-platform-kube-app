@@ -13,6 +13,7 @@ import {
 import {
   normalizeKind,
   type ObjectActionData,
+  type ObjectActionPolicy,
   type PermissionStatus,
   resolveObjectActionPolicy,
   SCALABLE_KINDS,
@@ -84,6 +85,288 @@ export interface BuildObjectActionsOptions {
   actionLoading?: boolean;
 }
 
+const compactMenuItems = (items: Array<ContextMenuItem | null | undefined>): ContextMenuItem[] =>
+  items.filter((item): item is ContextMenuItem => item !== null && item !== undefined);
+
+const buildOpenItem = ({
+  context,
+  handlers,
+}: Pick<BuildObjectActionsOptions, 'context' | 'handlers'>): ContextMenuItem | null => {
+  if ((context !== 'gridtable' && context !== 'object-map') || !handlers.onOpen) {
+    return null;
+  }
+  return {
+    actionId: OBJECT_ACTION_IDS.viewDetails,
+    label: objectActionLabel(OBJECT_ACTION_IDS.viewDetails),
+    icon: <OpenIcon />,
+    onClick: handlers.onOpen,
+  };
+};
+
+const buildObjectMapItem = (handlers: ObjectActionHandlers): ContextMenuItem | null => {
+  if (!handlers.onObjectMap) {
+    return null;
+  }
+  return {
+    actionId: OBJECT_ACTION_IDS.viewMap,
+    label: objectActionLabel(OBJECT_ACTION_IDS.viewMap),
+    icon: <ObjectMapIcon />,
+    onClick: handlers.onObjectMap,
+  };
+};
+
+const buildTableNavigationItem = ({
+  context,
+  handlers,
+}: Pick<BuildObjectActionsOptions, 'context' | 'handlers'>): ContextMenuItem | null => {
+  if (context === 'gridtable' || !handlers.onNavigateView) {
+    return null;
+  }
+  return {
+    actionId: OBJECT_ACTION_IDS.goToTable,
+    label: objectActionLabel(OBJECT_ACTION_IDS.goToTable),
+    icon: <OpenIcon />,
+    onClick: handlers.onNavigateView,
+  };
+};
+
+const buildDiffItem = (object: ObjectActionData): ContextMenuItem | null => {
+  const selection =
+    object.kind === 'Event' && object.involvedObject ? null : buildObjectDiffSelection(object);
+  if (!selection) {
+    return null;
+  }
+  return {
+    actionId: OBJECT_ACTION_IDS.diff,
+    label: objectActionLabel(OBJECT_ACTION_IDS.diff),
+    icon: <DiffIcon />,
+    onClick: () => {
+      eventBus.emit('view:open-object-diff', {
+        requestId: nextObjectDiffRequestId++,
+        left: selection,
+      });
+    },
+  };
+};
+
+const buildInvolvedObjectItem = (
+  object: ObjectActionData,
+  handlers: ObjectActionHandlers
+): ContextMenuItem | null => {
+  const hasInvolvedObject = Boolean(object.involvedObject || object.involvedObjectRef);
+  if (object.kind !== 'Event' || !hasInvolvedObject || !handlers.onViewInvolvedObject) {
+    return null;
+  }
+  const involvedKind =
+    resourceLinkDisplayKind(object.involvedObjectRef) ?? object.involvedObject?.split('/')[0];
+  if (!involvedKind || involvedKind === '-') {
+    return null;
+  }
+  return {
+    actionId: OBJECT_ACTION_IDS.viewInvolvedObject,
+    label: objectActionInvolvedObjectLabel(involvedKind),
+    icon: <OpenIcon />,
+    onClick: handlers.onViewInvolvedObject,
+  };
+};
+
+const buildNavigationItems = ({
+  object,
+  context,
+  handlers,
+}: Pick<BuildObjectActionsOptions, 'object' | 'context' | 'handlers'>): ContextMenuItem[] =>
+  compactMenuItems([
+    buildOpenItem({ context, handlers }),
+    buildObjectMapItem(handlers),
+    buildTableNavigationItem({ context, handlers }),
+    buildDiffItem(object),
+    buildInvolvedObjectItem(object, handlers),
+  ]);
+
+const buildCronJobItems = (
+  policy: ObjectActionPolicy,
+  handlers: ObjectActionHandlers,
+  actionLoading: boolean
+): ContextMenuItem[] => {
+  if (policy.normalizedKind !== 'CronJob') {
+    return [];
+  }
+  const triggerItem = policy.triggerEnabled
+    ? {
+        actionId: OBJECT_ACTION_IDS.triggerNow,
+        label: objectActionLabel(OBJECT_ACTION_IDS.triggerNow),
+        icon: '▶',
+        onClick: handlers.onTrigger,
+        disabled: policy.triggerDisabled,
+      }
+    : null;
+  const suspendItem = policy.suspendActionId
+    ? {
+        actionId: policy.suspendActionId,
+        label: objectActionLabel(policy.suspendActionId),
+        icon: policy.suspendActionId === OBJECT_ACTION_IDS.resume ? '▶' : '⏸',
+        onClick: handlers.onSuspendToggle,
+        disabled: actionLoading,
+      }
+    : null;
+  return compactMenuItems([triggerItem, suspendItem]);
+};
+
+const buildRestartItem = (
+  policy: ObjectActionPolicy,
+  handlers: ObjectActionHandlers,
+  actionLoading: boolean
+): ContextMenuItem | null => {
+  if (!policy.restartEnabled || !handlers.onRestart) {
+    return null;
+  }
+  return {
+    actionId: OBJECT_ACTION_IDS.restart,
+    label: objectActionLabel(OBJECT_ACTION_IDS.restart),
+    icon: <RestartIcon />,
+    onClick: handlers.onRestart,
+    disabled: actionLoading,
+  };
+};
+
+const buildRollbackItem = (
+  policy: ObjectActionPolicy,
+  handlers: ObjectActionHandlers,
+  actionLoading: boolean
+): ContextMenuItem | null => {
+  if (!policy.rollbackEnabled || !handlers.onRollback) {
+    return null;
+  }
+  return {
+    actionId: OBJECT_ACTION_IDS.rollback,
+    label: objectActionLabel(OBJECT_ACTION_IDS.rollback),
+    icon: <RollbackIcon />,
+    onClick: handlers.onRollback,
+    disabled: actionLoading,
+  };
+};
+
+const scaleHandlerFor = (
+  actionId: ObjectActionPolicy['scaleActionId'],
+  handlers: ObjectActionHandlers
+): ObjectActionHandlers['onScale'] => {
+  switch (actionId) {
+    case OBJECT_ACTION_IDS.resumeFromZero:
+      return handlers.onResumeFromZero;
+    case OBJECT_ACTION_IDS.scaleToZero:
+      return handlers.onScaleToZero;
+    default:
+      return handlers.onScale;
+  }
+};
+
+const buildScaleItem = (
+  policy: ObjectActionPolicy,
+  handlers: ObjectActionHandlers
+): ContextMenuItem | null => {
+  if (!policy.scaleActionId) {
+    return null;
+  }
+  return {
+    actionId: policy.scaleActionId,
+    label: objectActionLabel(policy.scaleActionId),
+    icon: <ScaleIcon />,
+    onClick: scaleHandlerFor(policy.scaleActionId, handlers),
+    disabled: policy.scaleActionDisabled,
+  };
+};
+
+const buildNodeItems = (
+  policy: ObjectActionPolicy,
+  handlers: ObjectActionHandlers,
+  actionLoading: boolean
+): ContextMenuItem[] => {
+  const cordonItem =
+    policy.cordonActionId && handlers.onCordon
+      ? {
+          actionId: policy.cordonActionId,
+          label: objectActionLabel(policy.cordonActionId),
+          icon: <CordonIcon />,
+          onClick: handlers.onCordon,
+          disabled: actionLoading,
+        }
+      : null;
+  const drainItem =
+    policy.drainEnabled && handlers.onDrain
+      ? {
+          actionId: OBJECT_ACTION_IDS.drain,
+          label: objectActionLabel(OBJECT_ACTION_IDS.drain),
+          icon: <DrainIcon />,
+          onClick: handlers.onDrain,
+          disabled: actionLoading,
+        }
+      : null;
+  return compactMenuItems([cordonItem, drainItem]);
+};
+
+const buildPortForwardItem = (
+  policy: ObjectActionPolicy,
+  handlers: ObjectActionHandlers,
+  actionLoading: boolean
+): ContextMenuItem | null => {
+  if (policy.portForward.show && !policy.portForward.enabled) {
+    return {
+      actionId: OBJECT_ACTION_IDS.portForward,
+      label: objectActionLabel(policy.portForward.actionId),
+      icon: <PortForwardIcon />,
+      disabled: true,
+    };
+  }
+  if (!policy.portForwardEnabled || !handlers.onPortForward) {
+    return null;
+  }
+  return {
+    actionId: OBJECT_ACTION_IDS.portForward,
+    label: objectActionLabel(policy.portForward.actionId),
+    icon: <PortForwardIcon />,
+    onClick: handlers.onPortForward,
+    disabled: actionLoading,
+  };
+};
+
+const buildMutationItems = (
+  policy: ObjectActionPolicy,
+  handlers: ObjectActionHandlers,
+  actionLoading: boolean
+): ContextMenuItem[] =>
+  compactMenuItems([
+    ...buildCronJobItems(policy, handlers, actionLoading),
+    buildRestartItem(policy, handlers, actionLoading),
+    buildRollbackItem(policy, handlers, actionLoading),
+    buildScaleItem(policy, handlers),
+    ...buildNodeItems(policy, handlers, actionLoading),
+    buildPortForwardItem(policy, handlers, actionLoading),
+  ]);
+
+const appendDeleteItem = (
+  menuItems: ContextMenuItem[],
+  policy: ObjectActionPolicy,
+  handlers: ObjectActionHandlers,
+  actionLoading: boolean
+): void => {
+  if (!policy.deleteEnabled || !handlers.onDelete) {
+    return;
+  }
+  const hasOtherActions = menuItems.some((item) => !('header' in item) && !('divider' in item));
+  const lastItem = menuItems[menuItems.length - 1];
+  if (hasOtherActions && !(lastItem && 'divider' in lastItem && lastItem.divider)) {
+    menuItems.push({ divider: true });
+  }
+  menuItems.push({
+    actionId: OBJECT_ACTION_IDS.delete,
+    label: objectActionLabel(OBJECT_ACTION_IDS.delete),
+    icon: <DeleteIcon />,
+    danger: true,
+    onClick: handlers.onDelete,
+    disabled: actionLoading,
+  });
+};
+
 /**
  * Build menu items for an object. Production callers should go through
  * useObjectActionController so permission lookup and action execution stay centralized.
@@ -95,9 +378,6 @@ export function buildObjectActionItems({
   permissions,
   actionLoading = false,
 }: BuildObjectActionsOptions): ContextMenuItem[] {
-  const menuItems: ContextMenuItem[] = [];
-  const diffSelection =
-    object.kind === 'Event' && object.involvedObject ? null : buildObjectDiffSelection(object);
   const policy = resolveObjectActionPolicy({
     object,
     context,
@@ -117,203 +397,14 @@ export function buildObjectActionItems({
     permissions,
     actionLoading,
   });
-
-  // Open - only for surfaces that are not already the object panel.
-  if ((context === 'gridtable' || context === 'object-map') && handlers.onOpen) {
-    menuItems.push({
-      actionId: OBJECT_ACTION_IDS.viewDetails,
-      label: objectActionLabel(OBJECT_ACTION_IDS.viewDetails),
-      icon: <OpenIcon />,
-      onClick: handlers.onOpen,
-    });
-  }
-
-  // Map - sits with the navigation block so it picks up the
-  // shared section divider (see useGridTableContextMenuItems). The
-  // handler is opt-in per call site; when omitted, no item is added.
-  if (handlers.onObjectMap) {
-    menuItems.push({
-      actionId: OBJECT_ACTION_IDS.viewMap,
-      label: objectActionLabel(OBJECT_ACTION_IDS.viewMap),
-      icon: <ObjectMapIcon />,
-      onClick: handlers.onObjectMap,
-    });
-  }
-
-  if (context !== 'gridtable' && handlers.onNavigateView) {
-    menuItems.push({
-      actionId: OBJECT_ACTION_IDS.goToTable,
-      label: objectActionLabel(OBJECT_ACTION_IDS.goToTable),
-      icon: <OpenIcon />,
-      onClick: handlers.onNavigateView,
-    });
-  }
-
-  if (diffSelection) {
-    menuItems.push({
-      actionId: OBJECT_ACTION_IDS.diff,
-      label: objectActionLabel(OBJECT_ACTION_IDS.diff),
-      icon: <DiffIcon />,
-      onClick: () => {
-        eventBus.emit('view:open-object-diff', {
-          requestId: nextObjectDiffRequestId++,
-          left: diffSelection,
-        });
-      },
-    });
-  }
-
-  // Event-specific actions - view the involved object
-  if (
-    object.kind === 'Event' &&
-    (object.involvedObject || object.involvedObjectRef) &&
-    handlers.onViewInvolvedObject
-  ) {
-    const involvedKind =
-      resourceLinkDisplayKind(object.involvedObjectRef) ?? object.involvedObject?.split('/')[0];
-    if (involvedKind && involvedKind !== '-') {
-      menuItems.push({
-        actionId: OBJECT_ACTION_IDS.viewInvolvedObject,
-        label: objectActionInvolvedObjectLabel(involvedKind),
-        icon: <OpenIcon />,
-        onClick: handlers.onViewInvolvedObject,
-      });
-    }
-  }
-
-  // Permission pending header
+  const menuItems = buildNavigationItems({ object, context, handlers });
   if (menuItems.length > 0 && policy.hasActionSection) {
     menuItems.push({ divider: true });
   }
-
   if (policy.anyPending) {
     menuItems.push({ header: true, label: 'Awaiting permissions...' });
   }
-
-  // CronJob-specific actions
-  if (policy.normalizedKind === 'CronJob') {
-    if (policy.triggerEnabled) {
-      menuItems.push({
-        actionId: OBJECT_ACTION_IDS.triggerNow,
-        label: objectActionLabel(OBJECT_ACTION_IDS.triggerNow),
-        icon: '▶',
-        onClick: handlers.onTrigger,
-        disabled: policy.triggerDisabled,
-      });
-    }
-
-    if (policy.suspendActionId) {
-      menuItems.push({
-        actionId: policy.suspendActionId,
-        label: objectActionLabel(policy.suspendActionId),
-        icon: policy.suspendActionId === OBJECT_ACTION_IDS.resume ? '▶' : '⏸',
-        onClick: handlers.onSuspendToggle,
-        disabled: actionLoading,
-      });
-    }
-  }
-
-  // Restart
-  if (policy.restartEnabled && handlers.onRestart) {
-    menuItems.push({
-      actionId: OBJECT_ACTION_IDS.restart,
-      label: objectActionLabel(OBJECT_ACTION_IDS.restart),
-      icon: <RestartIcon />,
-      onClick: handlers.onRestart,
-      disabled: actionLoading,
-    });
-  }
-
-  // Rollback
-  if (policy.rollbackEnabled && handlers.onRollback) {
-    menuItems.push({
-      actionId: OBJECT_ACTION_IDS.rollback,
-      label: objectActionLabel(OBJECT_ACTION_IDS.rollback),
-      icon: <RollbackIcon />,
-      onClick: handlers.onRollback,
-      disabled: actionLoading,
-    });
-  }
-
-  // Scale
-  if (policy.scaleActionId) {
-    let scaleHandler: ObjectActionHandlers['onScale'];
-
-    if (policy.scaleActionId === OBJECT_ACTION_IDS.resumeFromZero) {
-      scaleHandler = handlers.onResumeFromZero;
-    } else if (policy.scaleActionId === OBJECT_ACTION_IDS.scaleToZero) {
-      scaleHandler = handlers.onScaleToZero;
-    } else {
-      scaleHandler = handlers.onScale;
-    }
-
-    menuItems.push({
-      actionId: policy.scaleActionId,
-      label: objectActionLabel(policy.scaleActionId),
-      icon: <ScaleIcon />,
-      onClick: scaleHandler,
-      disabled: policy.scaleActionDisabled,
-    });
-  }
-
-  // Cordon / Uncordon (Node-only)
-  if (policy.cordonActionId && handlers.onCordon) {
-    menuItems.push({
-      actionId: policy.cordonActionId,
-      label: objectActionLabel(policy.cordonActionId),
-      icon: <CordonIcon />,
-      onClick: handlers.onCordon,
-      disabled: actionLoading,
-    });
-  }
-
-  // Drain (Node-only)
-  if (policy.drainEnabled && handlers.onDrain) {
-    menuItems.push({
-      actionId: OBJECT_ACTION_IDS.drain,
-      label: objectActionLabel(OBJECT_ACTION_IDS.drain),
-      icon: <DrainIcon />,
-      onClick: handlers.onDrain,
-      disabled: actionLoading,
-    });
-  }
-
-  // Port Forward
-  if (policy.portForward.show && !policy.portForward.enabled) {
-    menuItems.push({
-      actionId: OBJECT_ACTION_IDS.portForward,
-      label: objectActionLabel(policy.portForward.actionId),
-      icon: <PortForwardIcon />,
-      disabled: true,
-    });
-  } else if (policy.portForwardEnabled && handlers.onPortForward) {
-    menuItems.push({
-      actionId: OBJECT_ACTION_IDS.portForward,
-      label: objectActionLabel(policy.portForward.actionId),
-      icon: <PortForwardIcon />,
-      onClick: handlers.onPortForward,
-      disabled: actionLoading,
-    });
-  }
-
-  // Delete (with divider if there are other items)
-  if (policy.deleteEnabled && handlers.onDelete) {
-    // Add divider before Delete if there are other action items
-    const hasOtherActions = menuItems.some((item) => !('header' in item) && !('divider' in item));
-    const lastItem = menuItems[menuItems.length - 1];
-    if (hasOtherActions && !(lastItem && 'divider' in lastItem && lastItem.divider)) {
-      menuItems.push({ divider: true });
-    }
-
-    menuItems.push({
-      actionId: OBJECT_ACTION_IDS.delete,
-      label: objectActionLabel(OBJECT_ACTION_IDS.delete),
-      icon: <DeleteIcon />,
-      danger: true,
-      onClick: handlers.onDelete,
-      disabled: actionLoading,
-    });
-  }
-
+  menuItems.push(...buildMutationItems(policy, handlers, actionLoading));
+  appendDeleteItem(menuItems, policy, handlers, actionLoading);
   return menuItems;
 }

@@ -157,6 +157,102 @@ const extractDesiredReplicas = (object: ObjectActionData): number | null => {
   return Number.isFinite(candidate) ? Math.max(0, candidate) : null;
 };
 
+const hasPendingPermission = (permissions: ObjectActionPermissionStatuses): boolean =>
+  Boolean(
+    permissions.restart?.pending ||
+      permissions.rollback?.pending ||
+      permissions.scale?.pending ||
+      permissions.trigger?.pending ||
+      permissions.suspend?.pending ||
+      permissions.delete?.pending ||
+      permissions.portForward?.pending ||
+      permissions.cordon?.pending ||
+      permissions.drain?.pending
+  );
+
+const resolveSuspendActionId = (
+  isCronJob: boolean,
+  object: ObjectActionData,
+  handlers: ObjectActionHandlerAvailability,
+  permissions: ObjectActionPermissionStatuses
+): ObjectActionPolicy['suspendActionId'] => {
+  if (!isCronJob || !handlers.suspendToggle || !permissionAllows(permissions.suspend)) {
+    return null;
+  }
+  return object.status === 'Suspended' ? OBJECT_ACTION_IDS.resume : OBJECT_ACTION_IDS.suspend;
+};
+
+const resolveScaleActionId = (
+  capability: ReturnType<typeof lookupObjectCapability>,
+  object: ObjectActionData,
+  handlers: ObjectActionHandlerAvailability,
+  permissions: ObjectActionPermissionStatuses
+): ObjectActionPolicy['scaleActionId'] => {
+  const scaleAllowed = Boolean(capability?.scale) && permissionAllows(permissions.scale);
+  if (!scaleAllowed) {
+    return null;
+  }
+  if (object.hpaManaged === true) {
+    return extractDesiredReplicas(object) === 0
+      ? OBJECT_ACTION_IDS.resumeFromZero
+      : OBJECT_ACTION_IDS.scaleToZero;
+  }
+  return object.hpaManaged === false && handlers.scale ? OBJECT_ACTION_IDS.scale : null;
+};
+
+const isScaleActionDisabled = (
+  actionId: ObjectActionPolicy['scaleActionId'],
+  handlers: ObjectActionHandlerAvailability,
+  actionLoading: boolean
+): boolean =>
+  Boolean(
+    actionLoading ||
+      (actionId === OBJECT_ACTION_IDS.scaleToZero && !handlers.scaleToZero) ||
+      (actionId === OBJECT_ACTION_IDS.resumeFromZero && !handlers.resumeFromZero)
+  );
+
+const resolveCordonActionId = (
+  capability: ReturnType<typeof lookupObjectCapability>,
+  object: ObjectActionData,
+  handlers: ObjectActionHandlerAvailability,
+  permissions: ObjectActionPermissionStatuses
+): ObjectActionPolicy['cordonActionId'] => {
+  if (!capability?.cordon || !handlers.cordon || !permissionAllows(permissions.cordon)) {
+    return null;
+  }
+  return object.unschedulable ? OBJECT_ACTION_IDS.uncordon : OBJECT_ACTION_IDS.cordon;
+};
+
+const hasActionSection = ({
+  capability,
+  context,
+  object,
+  handlers,
+  portForward,
+  anyPending,
+  isCronJob,
+}: {
+  capability: ReturnType<typeof lookupObjectCapability>;
+  context: 'gridtable' | 'object-map' | 'object-panel';
+  object: ObjectActionData;
+  handlers: ObjectActionHandlerAvailability;
+  portForward: PortForwardAvailability;
+  anyPending: boolean;
+  isCronJob: boolean;
+}): boolean =>
+  Boolean(
+    anyPending ||
+      isCronJob ||
+      (capability?.restart && handlers.restart) ||
+      (capability?.rollback && handlers.rollback) ||
+      (capability?.scale &&
+        (object.hpaManaged === true || (object.hpaManaged === false && handlers.scale))) ||
+      (capability?.cordon && handlers.cordon) ||
+      (capability?.drain && handlers.drain) ||
+      portForward.show ||
+      (context !== 'gridtable' && handlers.delete)
+  );
+
 export const resolveObjectActionPolicy = ({
   object,
   context,
@@ -174,35 +270,11 @@ export const resolveObjectActionPolicy = ({
   const normalizedKind = capability?.kind ?? normalizeKind(object.kind);
   const isCronJob = Boolean(capability?.trigger || capability?.suspend);
   const portForward = resolvePortForwardAvailability(object, handlers, capability);
-
-  const anyPending = Boolean(
-    permissions.restart?.pending ||
-      permissions.rollback?.pending ||
-      permissions.scale?.pending ||
-      permissions.trigger?.pending ||
-      permissions.suspend?.pending ||
-      permissions.delete?.pending ||
-      permissions.portForward?.pending ||
-      permissions.cordon?.pending ||
-      permissions.drain?.pending
-  );
-
+  const anyPending = hasPendingPermission(permissions);
   const triggerEnabled =
     isCronJob && Boolean(handlers.trigger) && permissionAllows(permissions.trigger);
   const triggerDisabled = object.status === 'Suspended' || actionLoading;
-
-  let suspendActionId: ObjectActionPolicy['suspendActionId'];
-
-  if (isCronJob && handlers.suspendToggle && permissionAllows(permissions.suspend)) {
-    if (object.status === 'Suspended') {
-      suspendActionId = OBJECT_ACTION_IDS.resume;
-    } else {
-      suspendActionId = OBJECT_ACTION_IDS.suspend;
-    }
-  } else {
-    suspendActionId = null;
-  }
-
+  const suspendActionId = resolveSuspendActionId(isCronJob, object, handlers, permissions);
   const restartEnabled =
     Boolean(capability?.restart) &&
     Boolean(handlers.restart) &&
@@ -212,66 +284,28 @@ export const resolveObjectActionPolicy = ({
     Boolean(capability?.rollback) &&
     Boolean(handlers.rollback) &&
     permissionAllows(permissions.rollback);
-
-  const scaleAllowed = Boolean(capability?.scale) && permissionAllows(permissions.scale);
-  const desiredReplicas = extractDesiredReplicas(object);
-  let scaleActionId: ObjectActionPolicy['scaleActionId'];
-
-  if (scaleAllowed && object.hpaManaged === true) {
-    if (desiredReplicas === 0) {
-      scaleActionId = OBJECT_ACTION_IDS.resumeFromZero;
-    } else {
-      scaleActionId = OBJECT_ACTION_IDS.scaleToZero;
-    }
-  } else if (scaleAllowed && object.hpaManaged === false && handlers.scale) {
-    scaleActionId = OBJECT_ACTION_IDS.scale;
-  } else {
-    scaleActionId = null;
-  }
-
-  const scaleActionDisabled = Boolean(
-    actionLoading ||
-      (scaleActionId === OBJECT_ACTION_IDS.scaleToZero && !handlers.scaleToZero) ||
-      (scaleActionId === OBJECT_ACTION_IDS.resumeFromZero && !handlers.resumeFromZero)
-  );
-
-  let cordonActionId: ObjectActionPolicy['cordonActionId'];
-
-  if (capability?.cordon && handlers.cordon && permissionAllows(permissions.cordon)) {
-    if (object.unschedulable) {
-      cordonActionId = OBJECT_ACTION_IDS.uncordon;
-    } else {
-      cordonActionId = OBJECT_ACTION_IDS.cordon;
-    }
-  } else {
-    cordonActionId = null;
-  }
-
+  const scaleActionId = resolveScaleActionId(capability, object, handlers, permissions);
+  const scaleActionDisabled = isScaleActionDisabled(scaleActionId, handlers, actionLoading);
+  const cordonActionId = resolveCordonActionId(capability, object, handlers, permissions);
   const drainEnabled =
     Boolean(capability?.drain) && Boolean(handlers.drain) && permissionAllows(permissions.drain);
-
   const portForwardEnabled =
     portForward.show && portForward.enabled && permissionAllows(permissions.portForward);
-
   const deleteEnabled = Boolean(handlers.delete) && permissionAllows(permissions.delete);
-
-  const hasActionSection =
-    anyPending ||
-    isCronJob ||
-    (Boolean(capability?.restart) && Boolean(handlers.restart)) ||
-    (Boolean(capability?.rollback) && Boolean(handlers.rollback)) ||
-    (Boolean(capability?.scale) &&
-      (object.hpaManaged === true || (object.hpaManaged === false && Boolean(handlers.scale)))) ||
-    (Boolean(capability?.cordon) && Boolean(handlers.cordon)) ||
-    (Boolean(capability?.drain) && Boolean(handlers.drain)) ||
-    portForward.show ||
-    (context !== 'gridtable' && Boolean(handlers.delete));
 
   return {
     normalizedKind,
     portForward,
     anyPending,
-    hasActionSection,
+    hasActionSection: hasActionSection({
+      capability,
+      context,
+      object,
+      handlers,
+      portForward,
+      anyPending,
+      isCronJob,
+    }),
     triggerEnabled,
     triggerDisabled,
     suspendActionId,
