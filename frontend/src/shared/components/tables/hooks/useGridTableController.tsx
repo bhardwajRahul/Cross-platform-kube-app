@@ -67,6 +67,7 @@ export interface GridTableControllerResult<T> {
   focusedRowKey: string | null;
   handleWrapperFocus: (e: React.FocusEvent<HTMLElement>) => void;
   handleWrapperBlur: (e: React.FocusEvent<HTMLElement>) => void;
+  handleWrapperBackgroundClick: () => void;
 
   // Hover
   hoverState: HoverState;
@@ -117,6 +118,7 @@ export function useGridTableController<T>({
   onRowClick,
   onRowPointerClick,
   onRowSelectionToggle,
+  onRowSelectionClear,
   onSort,
   sortConfig,
   loading = false,
@@ -269,6 +271,7 @@ export function useGridTableController<T>({
     lastNavigationMethodRef,
     handleWrapperFocus,
     handleWrapperBlur,
+    handleWrapperBackgroundClick,
     handleRowClick,
     getRowClassNameWithFocus,
     contextMenuNode,
@@ -286,6 +289,7 @@ export function useGridTableController<T>({
     getRowClassName,
     onRowClick,
     onRowPointerClick,
+    onRowSelectionClear,
     enableContextMenu,
     getCustomContextMenuItems,
     sortConfig,
@@ -506,6 +510,7 @@ export function useGridTableController<T>({
     focusedRowKey,
     handleWrapperFocus,
     handleWrapperBlur,
+    handleWrapperBackgroundClick,
     hoverState,
     contextMenuNode,
     headerContextMenuNode,

@@ -591,6 +591,15 @@ var writeSettingsFileAtomic = writeFileAtomic
 
 // writeFileAtomic persists data with a temp file + rename sequence.
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	return writeFileAtomicWithReplace(path, data, perm, os.Rename)
+}
+
+func writeFileAtomicWithReplace(
+	path string,
+	data []byte,
+	perm os.FileMode,
+	replaceFile func(string, string) error,
+) error {
 	dir := filepath.Dir(path)
 	tempFile, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
@@ -613,11 +622,10 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 
-	// Windows cannot rename over an existing file, so remove it first.
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return os.Rename(tempFile.Name(), path)
+	// Replace the destination without unlinking it first. Readers must observe
+	// either the previous state or the new state, including when replacement
+	// fails or another app process is starting concurrently.
+	return replaceFile(tempFile.Name(), path)
 }
 
 func (a *App) SaveWindowSettings() error {

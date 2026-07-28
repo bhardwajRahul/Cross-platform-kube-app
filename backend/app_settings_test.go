@@ -845,6 +845,26 @@ func TestSaveSettingsFileOverwritesExistingData(t *testing.T) {
 	require.Equal(t, "light", loaded.Preferences.AppearanceMode)
 }
 
+func TestWriteFileAtomicPreservesExistingFileWhenReplacementFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	require.NoError(t, os.WriteFile(path, []byte("saved-state"), 0o644))
+
+	err := writeFileAtomicWithReplace(
+		path,
+		[]byte("default-state"),
+		0o644,
+		func(string, string) error {
+			return errors.New("forced replace failure")
+		},
+	)
+	require.ErrorContains(t, err, "forced replace failure")
+
+	data, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	require.Equal(t, "saved-state", string(data))
+}
+
 func TestAppSetPaletteTintPersistsAndClamps(t *testing.T) {
 	setTestConfigEnv(t)
 	app := newTestAppWithDefaults(t)

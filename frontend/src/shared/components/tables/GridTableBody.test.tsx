@@ -66,6 +66,7 @@ describe('GridTableBody', () => {
       renderRowContent: defaultRenderRowContent,
       onWrapperFocus: vi.fn(),
       onWrapperBlur: vi.fn(),
+      onWrapperBackgroundClick: vi.fn(),
       contentWidth: 0,
       allowHorizontalOverflow: false,
       viewportWidth: 0,

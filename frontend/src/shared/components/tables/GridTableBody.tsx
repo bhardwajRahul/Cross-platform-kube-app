@@ -45,6 +45,7 @@ interface GridTableBodyProps<T> {
   renderRowContent: RenderRowContentFn<T>;
   onWrapperFocus: (event: React.FocusEvent<HTMLElement>) => void;
   onWrapperBlur: (event: React.FocusEvent<HTMLElement>) => void;
+  onWrapperBackgroundClick: () => void;
   contentWidth: number;
   allowHorizontalOverflow: boolean;
   viewportWidth: number;
@@ -76,6 +77,7 @@ function GridTableBody<T>({
   renderRowContent,
   onWrapperFocus,
   onWrapperBlur,
+  onWrapperBackgroundClick,
   contentWidth,
   allowHorizontalOverflow,
   viewportWidth,
@@ -113,14 +115,23 @@ function GridTableBody<T>({
       window.getSelection()?.removeAllRanges();
     };
 
+    const handleClick = (event: MouseEvent) => {
+      if (event.button !== 0 || event.target !== wrapper) {
+        return;
+      }
+      onWrapperBackgroundClick();
+    };
+
     wrapper.addEventListener('mousedown', handleMouseDownCapture, true);
     wrapper.addEventListener('contextmenu', handleContextMenuCapture, true);
+    wrapper.addEventListener('click', handleClick);
 
     return () => {
       wrapper.removeEventListener('mousedown', handleMouseDownCapture, true);
       wrapper.removeEventListener('contextmenu', handleContextMenuCapture, true);
+      wrapper.removeEventListener('click', handleClick);
     };
-  }, [wrapperRef]);
+  }, [onWrapperBackgroundClick, wrapperRef]);
 
   const virtualWidth = (() => {
     if (!shouldVirtualize || !allowHorizontalOverflow || contentWidth <= 0) {

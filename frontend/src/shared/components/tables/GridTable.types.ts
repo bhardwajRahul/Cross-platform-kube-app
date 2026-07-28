@@ -201,6 +201,8 @@ export interface GridTableProps<T> {
   onRowPointerClick?: (item: T) => void;
   /** When supplied, Space applies this selection action to the focused row. */
   onRowSelectionToggle?: (item: T) => void;
+  /** Called when unused space in the scrollable table body is clicked. */
+  onRowSelectionClear?: () => void;
   onSort?: (key: string, targetDirection?: 'asc' | 'desc' | null) => void;
   sortConfig?: { key: string; direction: 'asc' | 'desc' | null };
   embedded?: boolean;

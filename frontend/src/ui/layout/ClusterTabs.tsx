@@ -55,6 +55,7 @@ const ClusterTabs: React.FC<ClusterTabsProps> = ({ onOpenCluster }) => {
     closeKubeconfig,
   } = useKubeconfig();
   const [tabOrder, setTabOrder] = useState<string[]>(() => getClusterTabOrder());
+  const [tabOrderHydrated, setTabOrderHydrated] = useState(false);
   const tabsRef = useRef<HTMLDivElement | null>(null);
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
   const fullAddWidthRef = useRef(140);
@@ -68,9 +69,15 @@ const ClusterTabs: React.FC<ClusterTabsProps> = ({ onOpenCluster }) => {
   useEffect(() => {
     let active = true;
     const hydrate = async () => {
-      const order = await hydrateClusterTabOrder();
-      if (active) {
-        setTabOrder(order);
+      try {
+        const order = await hydrateClusterTabOrder();
+        if (active) {
+          setTabOrder(order);
+        }
+      } finally {
+        if (active) {
+          setTabOrderHydrated(true);
+        }
       }
     };
     void hydrate();
@@ -109,11 +116,14 @@ const ClusterTabs: React.FC<ClusterTabsProps> = ({ onOpenCluster }) => {
   }, [selectionOrderIds, tabOrder]);
 
   useEffect(() => {
+    if (kubeconfigsLoading || !tabOrderHydrated) {
+      return;
+    }
     if (ordersMatch(mergedOrder, tabOrder)) {
       return;
     }
     setClusterTabOrder(mergedOrder);
-  }, [mergedOrder, tabOrder]);
+  }, [kubeconfigsLoading, mergedOrder, tabOrder, tabOrderHydrated]);
 
   const tabsById = useMemo(() => {
     const map = new Map<string, ClusterTab>();

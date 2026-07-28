@@ -235,6 +235,7 @@ export const WorkloadsTable: React.FC<WorkloadsTableProps> = React.memo(
             onRowClick={handleWorkloadClick}
             onRowPointerClick={onWorkloadSelect}
             onRowSelectionToggle={onWorkloadSelect}
+            onRowSelectionClear={selectedWorkloadKey ? onWorkloadSelectionClear : undefined}
             getRowClassName={getRowClassName}
             tableClassName="gridtable-workloads"
             enableContextMenu={true}

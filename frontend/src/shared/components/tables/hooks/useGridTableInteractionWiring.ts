@@ -29,6 +29,7 @@ interface UseGridTableInteractionWiringOptions<T> {
   getRowClassName?: (item: T, index: number) => string | undefined | null;
   onRowClick?: (item: T) => void;
   onRowPointerClick?: (item: T) => void;
+  onRowSelectionClear?: () => void;
   enableContextMenu: boolean;
   getCustomContextMenuItems?: (item: T, columnKey: string) => ContextMenuItem[];
   sortConfig?: { key: string; direction: 'asc' | 'desc' | null };
@@ -53,6 +54,7 @@ interface GridTableInteractionWiring<T> {
   lastNavigationMethodRef: RefObject<'pointer' | 'keyboard'>;
   handleWrapperFocus: (event: React.FocusEvent<HTMLElement>) => void;
   handleWrapperBlur: (event: React.FocusEvent<HTMLElement>) => void;
+  handleWrapperBackgroundClick: () => void;
   handleRowClick: (item: T, index: number, event: React.MouseEvent) => void;
   getRowClassNameWithFocus: (item: T, index: number) => string;
   contextMenuNode: ReactNode;
@@ -77,6 +79,7 @@ export function useGridTableInteractionWiring<T>({
   getRowClassName,
   onRowClick,
   onRowPointerClick,
+  onRowSelectionClear,
   enableContextMenu,
   getCustomContextMenuItems,
   sortConfig,
@@ -133,6 +136,7 @@ export function useGridTableInteractionWiring<T>({
     suppressFocusedRowHighlight,
     isWrapperFocused,
     shortcutsActive,
+    pendingPointerFocusRef,
     lastNavigationMethodRef,
     handleWrapperFocus,
     handleWrapperBlur,
@@ -201,6 +205,13 @@ export function useGridTableInteractionWiring<T>({
     [contextMenuActiveRef, handleRowMouseEnter, isWrapperFocused, shortcutsActive, setFocusedRowKey]
   );
 
+  const handleWrapperBackgroundClick = useCallback(() => {
+    pendingPointerFocusRef.current = false;
+    setFocusedRowKey(null);
+    updateHoverForElement(null);
+    onRowSelectionClear?.();
+  }, [onRowSelectionClear, pendingPointerFocusRef, setFocusedRowKey, updateHoverForElement]);
+
   const handleRowMouseLeaveWithReset = useCallback(
     (element?: HTMLDivElement | null) => {
       if (contextMenuActiveRef.current) {
@@ -245,6 +256,7 @@ export function useGridTableInteractionWiring<T>({
     lastNavigationMethodRef,
     handleWrapperFocus,
     handleWrapperBlur,
+    handleWrapperBackgroundClick,
     handleRowClick,
     getRowClassNameWithFocus,
     contextMenuNode,

@@ -112,6 +112,7 @@ type RenderOptions = Partial<{
   loadingOverlay: { show: boolean; message?: string };
   emptyMessage: string;
   onRowClick: (item: SimpleRow) => void;
+  onRowSelectionClear: () => void;
   onSort: (key: string) => void;
   enableContextMenu: boolean;
   enableColumnVisibilityMenu: boolean;
@@ -716,6 +717,37 @@ describe('GridTable interactions (non-virtualized)', () => {
     ).toBe(true);
   });
 
+  it('clears row selection only when unused body space is clicked', async () => {
+    const onRowSelectionClear = vi.fn();
+    const { container, cleanup } = renderGridTable({
+      data: createRows(1),
+      virtualization: { enabled: false },
+      onRowSelectionClear,
+    });
+    cleanupRoot = cleanup;
+
+    await flushAsync();
+
+    const firstRow = container.querySelector<HTMLElement>('.gridtable-row');
+    const wrapper = container.querySelector<HTMLDivElement>('.gridtable-wrapper');
+    expect(firstRow).not.toBeNull();
+    expect(wrapper).not.toBeNull();
+
+    await act(async () => {
+      requireValue(firstRow, 'expected row in GridTable background click test').click();
+    });
+
+    expect(onRowSelectionClear).not.toHaveBeenCalled();
+    expect(firstRow?.classList.contains('gridtable-row--focused')).toBe(true);
+
+    await act(async () => {
+      requireValue(wrapper, 'expected wrapper in GridTable background click test').click();
+    });
+
+    expect(onRowSelectionClear).toHaveBeenCalledTimes(1);
+    expect(firstRow?.classList.contains('gridtable-row--focused')).toBe(false);
+  });
+
   it('ignores pointer clicks inside interactive descendants', async () => {
     const onRowClick = vi.fn();
     const toggleColumns: GridColumnDefinition<SimpleRow>[] = [
@@ -1233,6 +1265,7 @@ function renderGridTable(options: RenderOptions = {}) {
     useShortNames: options.useShortNames ?? false,
     hideHeader: options.hideHeader ?? false,
     onRowClick: options.onRowClick,
+    onRowSelectionClear: options.onRowSelectionClear,
     onSort: options.onSortOverride ?? options.onSort,
     fetchAllRows: options.fetchAllRows,
     exportFilename: options.exportFilename,

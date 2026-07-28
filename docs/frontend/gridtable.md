@@ -64,7 +64,10 @@ workflow and that exception is documented.
   selection action instead. Pointer-only selection uses `onRowPointerClick`,
   which excludes interactive descendants. A view that enables selection must
   expose the selected state through `gridtable-row--selected` so the shared row
-  renderer publishes `aria-selected`.
+  renderer publishes `aria-selected`. A primary click on unused space in the
+  scrollable table body clears the focused-row highlight; controlled-selection
+  views supply `onRowSelectionClear` to clear their selected state at the same
+  boundary. Descendant rows, cells, and controls are excluded.
 - The Columns menu uses `Dropdown`'s shared bulk-action controls. Its options are
   hideable columns only; do not add synthetic show-all or hide-all options.
 - Every multi-select Kinds dropdown exposes search plus `Select all` and

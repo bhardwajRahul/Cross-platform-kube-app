@@ -192,6 +192,99 @@ describe('ClusterTabs', () => {
     expect(container.querySelector('.cluster-tabs')).toBeNull();
   });
 
+  it('does not overwrite saved tab order while saved clusters are loading', async () => {
+    const setClusterTabOrderMock = vi.fn().mockResolvedValue(undefined);
+    const restoreGo = installWindowProperty('go', {
+      backend: {
+        App: {
+          GetClusterTabOrder: vi.fn().mockResolvedValue(['b', 'a']),
+          SetClusterTabOrder: setClusterTabOrderMock,
+        },
+      },
+    });
+    mockState.selectedKubeconfigs = [];
+    mockState.selectedKubeconfig = '';
+    mockState.kubeconfigsLoading = true;
+
+    try {
+      await renderTabs();
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(setClusterTabOrderMock).not.toHaveBeenCalled();
+    } finally {
+      restoreGo();
+    }
+  });
+
+  it('does not persist selection order before saved tab order hydrates', async () => {
+    let resolveSavedOrder: ((order: string[]) => void) | undefined;
+    const savedOrder = new Promise<string[]>((resolve) => {
+      resolveSavedOrder = resolve;
+    });
+    const setClusterTabOrderMock = vi.fn().mockResolvedValue(undefined);
+    const restoreGo = installWindowProperty('go', {
+      backend: {
+        App: {
+          GetClusterTabOrder: vi.fn().mockReturnValue(savedOrder),
+          SetClusterTabOrder: setClusterTabOrderMock,
+        },
+      },
+    });
+    mockState.selectedKubeconfigs = ['a', 'b'];
+    mockState.selectedKubeconfig = 'a';
+    mockState.kubeconfigsLoading = false;
+
+    try {
+      await renderTabs();
+      expect(setClusterTabOrderMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        resolveSavedOrder?.(['b', 'a']);
+        await savedOrder;
+      });
+
+      expect(setClusterTabOrderMock).not.toHaveBeenCalled();
+      const labels = Array.from(container.querySelectorAll('.tab-item__label')).map((node) =>
+        (node as HTMLElement).textContent?.trim()
+      );
+      expect(labels).toEqual(['Global', 'b', 'a']);
+    } finally {
+      restoreGo();
+    }
+  });
+
+  it('persists new clusters after selection and tab-order hydration complete', async () => {
+    const setClusterTabOrderMock = vi.fn().mockResolvedValue(undefined);
+    const restoreGo = installWindowProperty('go', {
+      backend: {
+        App: {
+          GetClusterTabOrder: vi.fn().mockResolvedValue(['b', 'a']),
+          SetClusterTabOrder: setClusterTabOrderMock,
+        },
+      },
+    });
+    mockState.selectedKubeconfigs = [];
+    mockState.selectedKubeconfig = '';
+    mockState.kubeconfigsLoading = true;
+
+    try {
+      await renderTabs();
+      expect(setClusterTabOrderMock).not.toHaveBeenCalled();
+
+      mockState.selectedKubeconfigs = ['a', 'b', 'c'];
+      mockState.selectedKubeconfig = 'a';
+      mockState.kubeconfigsLoading = false;
+      await renderTabs({ onOpenCluster: vi.fn() });
+
+      expect(setClusterTabOrderMock).toHaveBeenCalledTimes(1);
+      expect(setClusterTabOrderMock).toHaveBeenCalledWith(['b', 'a', 'c']);
+    } finally {
+      restoreGo();
+    }
+  });
+
   it('invokes onOpenCluster when the add-cluster button is clicked', async () => {
     const onOpenCluster = vi.fn();
     mockState.selectedKubeconfigs = ['a'];

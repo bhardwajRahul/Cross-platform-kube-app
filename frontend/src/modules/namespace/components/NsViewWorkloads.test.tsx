@@ -437,6 +437,52 @@ describe('NsViewWorkloads', () => {
     expect(podsViewPropsRef.current).toMatchObject({ collapsed: false });
   });
 
+  it('clears the selected workload when GridTable reports an unused-body click', async () => {
+    const workload = makeWorkload('Deployment', 'api', 'team-a', 'path:context');
+    requestRefreshDomainStateMock.mockResolvedValue({
+      status: 'executed',
+      data: {
+        status: 'ready',
+        data: {
+          rows: [workload],
+          total: 1,
+          totalIsExact: true,
+          namespaces: ['team-a'],
+          kinds: ['Deployment'],
+          facetsExact: true,
+        },
+      },
+    });
+
+    await act(async () => {
+      root.render(<NsViewWorkloads namespace="team-a" metrics={null} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(gridTablePropsRef.current.onRowSelectionClear).toBeUndefined();
+    act(() => gridTablePropsRef.current.onRowPointerClick?.(workload));
+    expect(gridTablePropsRef.current.getRowClassName?.(workload, 0)).toContain(
+      'gridtable-row--selected'
+    );
+    expect(gridTablePropsRef.current.onRowSelectionClear).toEqual(expect.any(Function));
+
+    act(() => {
+      const clearSelection = gridTablePropsRef.current.onRowSelectionClear;
+      if (!clearSelection) {
+        throw new Error('Expected the workload table to provide a row-selection clear callback');
+      }
+      clearSelection();
+    });
+
+    expect(podsViewPropsRef.current).toMatchObject({
+      workloadFilterRequest: { type: 'clear' },
+    });
+    expect(gridTablePropsRef.current.getRowClassName?.(workload, 0)).not.toContain(
+      'gridtable-row--selected'
+    );
+  });
+
   it('clears a workload-owned Pods filter when the namespace scope changes', async () => {
     const workload = makeWorkload('Deployment', 'api', 'team-a', 'path:context');
     requestRefreshDomainStateMock.mockResolvedValue({

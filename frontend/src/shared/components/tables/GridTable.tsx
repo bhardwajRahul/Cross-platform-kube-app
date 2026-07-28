@@ -58,6 +58,7 @@ const GridTable = memo(function GridTableComponent<T>(props: GridTableProps<T>) 
     filtersNode,
     handleWrapperFocus,
     handleWrapperBlur,
+    handleWrapperBackgroundClick,
     hoverState,
     contextMenuNode,
     headerContextMenuNode,
@@ -121,6 +122,7 @@ const GridTable = memo(function GridTableComponent<T>(props: GridTableProps<T>) 
       renderRowContent={renderRowContent}
       onWrapperFocus={handleWrapperFocus}
       onWrapperBlur={handleWrapperBlur}
+      onWrapperBackgroundClick={handleWrapperBackgroundClick}
       contentWidth={tableContentWidth}
       allowHorizontalOverflow={allowHorizontalOverflow}
       viewportWidth={tableViewportWidth}
