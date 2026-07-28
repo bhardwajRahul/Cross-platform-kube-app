@@ -146,6 +146,53 @@ describe('KubeconfigContext', () => {
     document.body.innerHTML = '';
   });
 
+  it('reports the initial cluster selection as loading before hydration settles', async () => {
+    let resolveKubeconfigs: (configs: types.KubeconfigInfo[]) => void = () => undefined;
+    let resolveSelectedKubeconfigs: (selections: string[]) => void = () => undefined;
+    getKubeconfigsMock.mockReturnValue(
+      new Promise<types.KubeconfigInfo[]>((resolve) => {
+        resolveKubeconfigs = resolve;
+      })
+    );
+    getSelectedKubeconfigsMock.mockReturnValue(
+      new Promise<string[]>((resolve) => {
+        resolveSelectedKubeconfigs = resolve;
+      })
+    );
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = ReactDOM.createRoot(container);
+    const observedLoadingStates: boolean[] = [];
+
+    const LoadingStateObserver = () => {
+      observedLoadingStates.push(useKubeconfig().kubeconfigsLoading);
+      return null;
+    };
+
+    await act(async () => {
+      root.render(
+        <KubeconfigProvider>
+          <LoadingStateObserver />
+        </KubeconfigProvider>
+      );
+      await Promise.resolve();
+    });
+    const initialLoadingState = observedLoadingStates[0];
+
+    await act(async () => {
+      resolveKubeconfigs([]);
+      resolveSelectedKubeconfigs([]);
+      await flushPromises();
+    });
+    act(() => {
+      root.unmount();
+      container.remove();
+    });
+
+    expect(initialLoadingState).toBe(true);
+  });
+
   it('syncs refresh context with all selected clusters when background refresh is enabled', async () => {
     const kubeconfigs: types.KubeconfigInfo[] = [
       {

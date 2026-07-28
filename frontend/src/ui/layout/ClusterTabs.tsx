@@ -24,6 +24,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { getClusterSelectionPhase } from './clusterSelectionPhase';
 import './ClusterTabs.css';
 
 const ordersMatch = (left: string[], right: string[]) =>
@@ -48,6 +49,7 @@ const ClusterTabs: React.FC<ClusterTabsProps> = ({ onOpenCluster }) => {
   const {
     selectedKubeconfigs,
     selectedKubeconfig,
+    kubeconfigsLoading,
     setActiveKubeconfig,
     getClusterMeta,
     closeKubeconfig,
@@ -58,6 +60,10 @@ const ClusterTabs: React.FC<ClusterTabsProps> = ({ onOpenCluster }) => {
   const fullAddWidthRef = useRef(140);
   const showAddLabelRef = useRef(true);
   const [showAddLabel, setShowAddLabel] = useState(true);
+  const clusterSelectionPhase = getClusterSelectionPhase({
+    hasSelectedClusters: selectedKubeconfigs.length > 0,
+    kubeconfigsLoading,
+  });
 
   useEffect(() => {
     let active = true;
@@ -312,17 +318,19 @@ const ClusterTabs: React.FC<ClusterTabsProps> = ({ onOpenCluster }) => {
       )}
       {/* Pinned to the right, outside the scrolling <Tabs> strip, so it can never
           scroll off. It is also the sole affordance when no clusters are open. */}
-      <button
-        ref={addBtnRef}
-        type="button"
-        className="cluster-tabs-add"
-        title="Open Cluster"
-        aria-label="Open Cluster"
-        onClick={() => onOpenCluster?.()}
-      >
-        {!!showAddLabel && <span className="cluster-tabs-add__label">Open Cluster</span>}
-        <PlusIcon width={14} height={14} />
-      </button>
+      {clusterSelectionPhase !== 'pending' && (
+        <button
+          ref={addBtnRef}
+          type="button"
+          className="cluster-tabs-add"
+          title="Open Cluster"
+          aria-label="Open Cluster"
+          onClick={() => onOpenCluster?.()}
+        >
+          {!!showAddLabel && <span className="cluster-tabs-add__label">Open Cluster</span>}
+          <PlusIcon width={14} height={14} />
+        </button>
+      )}
     </div>
   );
 };

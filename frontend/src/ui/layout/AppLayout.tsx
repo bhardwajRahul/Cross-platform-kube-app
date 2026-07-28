@@ -45,6 +45,7 @@ import {
   useTopLevelAppRegionTracking,
 } from '@ui/layout/appFocusRegions';
 import ClusterTabs from '@ui/layout/ClusterTabs';
+import { getClusterSelectionPhase } from '@ui/layout/clusterSelectionPhase';
 import { DebugOverlay } from '@ui/layout/DebugOverlay';
 import { IconDebugOverlay } from '@ui/layout/IconDebugOverlay';
 import { useAppDebugShortcuts } from '@ui/layout/useAppDebugShortcuts';
@@ -108,6 +109,10 @@ export const AppLayout: React.FC = () => {
   const [isMapDebugOverlayVisible, setIsMapDebugOverlayVisible] = useState(false);
   const [isIconDebugOverlayVisible, setIsIconDebugOverlayVisible] = useState(false);
   const hasActiveClusters = kubeconfig.selectedClusterIds.length > 0;
+  const clusterSelectionPhase = getClusterSelectionPhase({
+    hasSelectedClusters: hasActiveClusters,
+    kubeconfigsLoading: kubeconfig.kubeconfigsLoading,
+  });
 
   // The "+" opens the command palette in kubeconfig mode (the Open Cluster
   // surface). Stable so the memoized ClusterTabs doesn't re-render needlessly.
@@ -255,7 +260,7 @@ export const AppLayout: React.FC = () => {
             <div className="content-body__main">{routeContent}</div>
           </div>
         </div>
-        {!hasActiveClusters && (
+        {clusterSelectionPhase === 'empty' && (
           <div className="no-active-clusters-overlay" role="status">
             {/* Block interactions and loading when no clusters are active. */}
             <div className="no-active-clusters-message">

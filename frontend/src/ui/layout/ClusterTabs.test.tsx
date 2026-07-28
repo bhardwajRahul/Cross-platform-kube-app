@@ -19,6 +19,7 @@ import { installWindowProperty } from '@/test-utils/windowProperty';
 type MockState = {
   selectedKubeconfigs: string[];
   selectedKubeconfig: string;
+  kubeconfigsLoading: boolean;
   setSelectedKubeconfigs: (next: string[]) => Promise<void>;
   closeKubeconfig: (selectionOrClusterId: string) => Promise<void>;
   setActiveKubeconfig: ReturnType<typeof vi.fn<(config: string) => void>>;
@@ -29,6 +30,7 @@ type MockState = {
 const mockState: MockState = {
   selectedKubeconfigs: [],
   selectedKubeconfig: '',
+  kubeconfigsLoading: false,
   setSelectedKubeconfigs: vi.fn().mockResolvedValue(undefined),
   closeKubeconfig: vi.fn().mockResolvedValue(undefined),
   setActiveKubeconfig: vi.fn(),
@@ -61,6 +63,7 @@ describe('ClusterTabs', () => {
     resetClusterTabOrderCacheForTesting();
     mockState.selectedKubeconfigs = [];
     mockState.selectedKubeconfig = '';
+    mockState.kubeconfigsLoading = false;
     mockState.setSelectedKubeconfigs = vi.fn().mockResolvedValue(undefined);
     mockState.closeKubeconfig = vi.fn().mockResolvedValue(undefined);
     mockState.setActiveKubeconfig = vi.fn();
@@ -176,6 +179,16 @@ describe('ClusterTabs', () => {
 
     expect(container.querySelector('.cluster-tabs-add')).not.toBeNull();
     // No tab strip (and therefore no tabs) when there is nothing to switch between.
+    expect(container.querySelector('.cluster-tabs')).toBeNull();
+  });
+
+  it('does not show the empty-selection affordance while saved clusters are loading', async () => {
+    mockState.selectedKubeconfigs = [];
+    mockState.selectedKubeconfig = '';
+    mockState.kubeconfigsLoading = true;
+    await renderTabs();
+
+    expect(container.querySelector('.cluster-tabs-add')).toBeNull();
     expect(container.querySelector('.cluster-tabs')).toBeNull();
   });
 
