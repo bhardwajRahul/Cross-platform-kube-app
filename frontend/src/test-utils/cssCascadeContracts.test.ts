@@ -128,7 +128,9 @@ describe('strict CSS cascade contracts', () => {
 
     const row = document.querySelector<HTMLElement>('.sidebar-item-row');
     const button = document.querySelector<HTMLButtonElement>('.sidebar-item');
-    expect(window.getComputedStyle(row as HTMLElement).marginTop).toBe('0.2rem');
+    // Sidebar.css declares 0.2rem; jsdom resolves font-relative lengths against
+    // the 16px root font size, so the computed value comes back as 3.2px.
+    expect(window.getComputedStyle(row as HTMLElement).marginTop).toBe('3.2px');
     expect(Number.parseFloat(window.getComputedStyle(button as HTMLButtonElement).marginTop)).toBe(
       0
     );
