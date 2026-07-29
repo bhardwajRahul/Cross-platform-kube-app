@@ -28,7 +28,7 @@ runs:
           go:honnef.co/go/tools/cmd/staticcheck
           ${{ inputs.setup-node == 'true' && 'node npm' || '' }}
           ${{ inputs.install-wails == 'true' && 'go:github.com/wailsapp/wails/v2/cmd/wails' || '' }}
-          ${{ inputs.install-mage == 'true' && 'mage' || '' }}
+          ${{ inputs.install-mage == 'true' && 'go:github.com/magefile/mage' || '' }}
 
     - name: Install Linux build dependencies
       if: ${{ inputs.install-linux-deps == 'true' && runner.os == 'Linux' }}
