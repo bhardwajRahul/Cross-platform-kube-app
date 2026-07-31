@@ -26,17 +26,23 @@ Here are some of the features of Luxury Yacht that you might not find in other a
 
 - **Object Maps.** Visualize the relationships between objects in your clusters. View a node-level map, an namespace-level map, or drill down to specific objects.
 
+- **Informative Cluster Overview.** See your cluster's overall utilization and latest warning events at a glance.
+
+- **Attention View.** Quickly identify problems in your cluster. Selectively ignore issues that you don't want to be notified about, per-object, per-cluster, or globally.
+
+- **Split-Pane Workloads View.** See workloads and their associated Pods in a single view. Highlight a specific workload to filter the view to show only that workload's pods.
+
 - **Flexible panel layouts.** Organize your info however you like. Dock panels to the right, bottom, or float them as a resizable window. Open multiple object tabs in each panel. Drag tabs between panels, or drag out to create a new floating panel.
 
-- **Object Diff.** Can't understand why a deployment is working correctly in one cluster, but not the other? Open both deployments in the Diff Objects panel to see exactly what the differences are.
+- **Object Diff.** Can't understand why a deployment is working correctly in one cluster, but not the other? Open both deployments in the Diff Objects panel to see exactly what the differences are. Compare any kind of object to any other object, in any cluster.
 
 - **Command Palette.** Instant access to nearly everything in the app. Open clusters, toggle settings, select a namespace, go straight to a specific object's details, change the app's appearance, and much more.
 
-- **Favorites.** Save a view (and its filters) as a favorite for quick access. Favorites can be cluster-specific, or create a generic favorite that works in any cluster.
+- **Favorites.** Save a view and its filter settings for quick access. Favorites can be cluster-specific, or create a generic favorite that works in any cluster.
 
 - **Themes per cluster.** The flexible theme system allows you to assign colors to specific clusters or patterns in cluster names. Assign your dev clusters a blue theme, and your prod clusters a red theme, so you can instantly know when you're working in production. And, of course, you can have light and dark versions of your themes.
 
-- **Zero-touch setup.** Luxury Yacht uses your existing kubeconfig files. It reads `~/.kube` and loads your clusters into a dropdown menu. Select a cluster from the dropdown to get started. Open Settings to add or change which directories Luxury Yacht scans for kubeconfig files.
+- **Zero-touch setup.** Luxury Yacht automatically parses your existing kubeconfig files. If your kubeconfig works in any other app, it will work in Luxury Yacht. It automatically scans the default `~/.kube` location, but can be configured to scan any directory.
 
 - **Node maintenance.** Cordon, drain, and delete nodes with ease.
 
@@ -76,122 +82,3 @@ Luxury Yacht requires webkit2 4.1. Some distros don't include it, or don't insta
 | Ubuntu 22.04 | `sudo apt install libwebkit2gtk-4.1-0` |
 
 If your distro isn't on this (admittedly short) list, you'll have to search your package manager to determine the exact package name. If you have info you'd like to add to this list, email [admin@luxury-yacht.app](mailto:admin@luxury-yacht.app) or open an issue.
-
-## Development
-
-### Prerequisites
-
-- [Mise](https://mise.jdx.dev/)
-- The platform dependencies reported by `wails doctor`
-
-#### Activate Mise
-
-Add the activation command for your shell to its startup file. This is a one-time setup that makes the tool versions from `mise.toml` available whenever you enter the repository.
-
-| Shell      | Startup file                 | Command.                                                     |
-| ---------- | ---------------------------- | ------------------------------------------------------------ |
-| Zsh        | `~/.zshrc`                   | `eval "$(mise activate zsh)"`                                |
-| Bash       | `~/.bashrc`                  | `eval "$(mise activate bash)"`                               |
-| Fish       | `~/.config/fish/config.fish` | `mise activate fish \| source`                               |
-| PowerShell | `$PROFILE`                   | `(&mise activate pwsh) \| Out-String \| Invoke-Expression`   |
-
-Open a new terminal after saving the startup file.
-
-If you don't want to change your shell configuration,  prefix each repository command with `mise exec --`, for example `mise exec -- mage dev`.
-
-#### Install the Toolchain
-
-From the repository root, install the pinned Go, Node, npm, Wails, Mage, Staticcheck, and Trivy versions from `mise.toml`, then check the platform dependencies required by Wails:
-
-```shell
-mise install
-wails doctor
-```
-
-Luxury Yacht uses [Wails](https://wails.io/) for the desktop app and [Mage](https://magefile.org/) for cross-platform development commands.
-To see what `mage` targets are available, run `mage -l` in the repo root.
-
-### Development Mode
-
-The fastest way to get the app up and running for development is to run in Wails development mode. This gives you hot-reloads and access to the browser console for debugging.
-
-```bash
-mage dev
-```
-
-Note that hot-reload of the Go backend will cause the app to restart, while changes to frontend code will be reflected immediately without an app restart.
-
-### Storybook
-
-[Storybook](https://storybook.js.org/) is available for developing and previewing UI components in isolation.
-
-Run `mise install` first so Storybook uses the canonical Node and npm versions.
-
-```bash
-mage storybook
-```
-
-This starts the Storybook dev server at [http://localhost:6006](http://localhost:6006).
-
-### Build
-
-```bash
-mage build
-```
-
-### Install
-
-To install the app locally:
-
-```bash
-mage install:unsigned
-```
-
-## Versions
-
-The app version and development-tool versions have separate canonical sources. Scripts and workflows must read these sources rather than resolving versions dynamically.
-
-#### App Version
-
-App version is derived from `info.productVersion` in [wails.json](wails.json)
-
-```bash
-APP_VERSION=$(jq -r '.info.productVersion' wails.json)
-```
-
-#### Toolchain Versions
-
-All Mise-managed development-tool versions are canonical in the `[tools]` section of [mise.toml](mise.toml). The Windows-only NSIS version is canonical in that file's `[vars]` section, and CI consumes the config directly.
-
-```bash
-mise config get tools.go
-mise config get tools.node
-mise config get tools.trivy
-```
-
-The Go directive and Mage/Wails requirements in `go.mod` and the Node/npm metadata in `frontend/package.json` are compatibility mirrors. `go test ./mage` checks that they match `mise.toml`.
-
-## Publishing Releases
-
-Run the prerelease checks. This should surface any problems that could cause the release to fail.
-
-```bash
-mage qc:prerelease
-```
-
-You should also run the benchmark tests if you're going to make changes to the backend code. Compare the numbers before and after your change to make sure you haven't introduced any major performance hits.
-
-```bash
-mage qc:benchmark
-```
-
-1. Update the version in [wails.json](wails.json)
-
-1. Commit and push the change.
-
-1. Create and push a tag. The `release` workflow will do the rest.
-
-```bash
-git tag $(jq -r '.info.productVersion' wails.json)
-git push origin main --tags
-```

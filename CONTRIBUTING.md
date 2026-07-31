@@ -6,6 +6,8 @@ Please read the relevant sections below before making your contribution. It will
 
 ## I Want To Contribute
 
+Read [DEVELOPMENT.md](DEVELOPMENT.md) for instructions on setting up the build environment and building the app.
+
 ### Legal Notice
 
 **When contributing to this project, you must agree that you have the necessary rights to the content and that the content you contribute may be provided under the project licence.**
