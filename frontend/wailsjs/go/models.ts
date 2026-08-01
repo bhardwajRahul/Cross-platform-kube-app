@@ -766,11 +766,11 @@ export namespace backend {
 	    path: string;
 	    canceled: boolean;
 	    imported?: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new DataManagementResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
@@ -4978,6 +4978,7 @@ export namespace types {
 	    useShortResourceNames: boolean;
 	    dimInactiveNamespaces: boolean;
 	    exclusiveNamespaces: boolean;
+	    errorReportingEnabled: boolean;
 	    autoRefreshEnabled: boolean;
 	    refreshBackgroundClustersEnabled: boolean;
 	    metricsRefreshIntervalMs: number;
@@ -5021,6 +5022,7 @@ export namespace types {
 	        this.useShortResourceNames = source["useShortResourceNames"];
 	        this.dimInactiveNamespaces = source["dimInactiveNamespaces"];
 	        this.exclusiveNamespaces = source["exclusiveNamespaces"];
+	        this.errorReportingEnabled = source["errorReportingEnabled"];
 	        this.autoRefreshEnabled = source["autoRefreshEnabled"];
 	        this.refreshBackgroundClustersEnabled = source["refreshBackgroundClustersEnabled"];
 	        this.metricsRefreshIntervalMs = source["metricsRefreshIntervalMs"];
@@ -6253,3 +6255,4 @@ export namespace v1 {
 	}
 
 }
+

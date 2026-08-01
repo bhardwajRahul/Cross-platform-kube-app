@@ -17,6 +17,10 @@ interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
 
+declare const __SENTRY_ENABLED__: boolean;
+declare const __SENTRY_FRONTEND_DSN__: string;
+declare const __SENTRY_RELEASE__: string;
+
 declare module '*.png' {
   const value: string;
   export default value;
