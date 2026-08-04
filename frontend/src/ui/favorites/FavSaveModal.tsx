@@ -18,6 +18,7 @@ import {
   filterSelectionValues,
   type MultiSelectFilterSelection,
 } from '@shared/components/dropdowns/multiSelectFilterSelection';
+import { ErrorSurface } from '@shared/components/errors/ErrorSurface';
 import { FavoriteGenericIcon } from '@shared/components/icons/FavoriteIcons';
 import ConfirmationModal from '@shared/components/modals/ConfirmationModal';
 import ModalHeader from '@shared/components/modals/ModalHeader';
@@ -26,6 +27,7 @@ import { useModalFocusTrap } from '@shared/components/modals/useModalFocusTrap';
 import Tooltip from '@shared/components/Tooltip';
 import type { GridTableFilterOptions } from '@shared/components/tables/GridTable.types';
 import { areGridTableFilterStatesEqual } from '@shared/components/tables/gridTableFilterState';
+import { errorHandler } from '@utils/errorHandler';
 import type React from 'react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { type FavoriteRouteScope, resolveFavoriteRoute } from '@/core/navigation/favoriteRoute';
@@ -40,6 +42,7 @@ import type {
   FavoritePaneState,
   FavoriteTableState,
 } from '@/core/persistence/favorites';
+import { runUserAction } from '@/core/telemetry/sentry';
 import '@shared/components/KubeconfigSelector.css';
 import './FavSaveModal.css';
 import { compareUtf16Strings } from '@/shared/utils/sort';
@@ -644,11 +647,15 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
     setSaving(true);
     setSaveError('');
     try {
-      await onSave(fav);
+      await runUserAction('saveFavorite', () => onSave(fav));
       setSaving(false);
       onClose();
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : String(error));
+      const details = errorHandler.handleInline(error, {
+        action: 'saveFavorite',
+        source: 'FavSaveModal',
+      });
+      setSaveError(details.message);
       setSaving(false);
     }
   };
@@ -822,7 +829,7 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
           )}
           {saveError ? (
             <div className="fav-save-error" role="alert">
-              {saveError}
+              <ErrorSurface kind="reported" message={saveError} />
             </div>
           ) : null}
           <div className="fav-save-footer-spacer" />

@@ -77,6 +77,8 @@ describe('Vite configuration', () => {
       release: { name: expectedSentryRelease },
       sourcemaps: { filesToDeleteAfterUpload: './dist/**/*.map' },
       bundleSizeOptimizations: { excludeTracing: true },
+      // Defaults to true, which reports this plugin's own build errors and
+      // timings to Sentry's servers on every release build.
       telemetry: false,
     });
     expect(enabled.define?.__SENTRY_ENABLED__).toBe(JSON.stringify(true));

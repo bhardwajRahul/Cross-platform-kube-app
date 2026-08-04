@@ -21,12 +21,14 @@ import type { ContextMenuItem } from '@shared/components/ContextMenu';
 import ContextMenu from '@shared/components/ContextMenu';
 import type { DropdownOption } from '@shared/components/dropdowns/Dropdown';
 import { Dropdown } from '@shared/components/dropdowns/Dropdown';
+import { ErrorSurface } from '@shared/components/errors/ErrorSurface';
 import Tooltip from '@shared/components/Tooltip';
 
 import { useVirtualScrollbar } from '@shared/scrollbars/useVirtualScrollbar';
 import { resolveTerminalTheme, toXtermThemeDefinition } from '@shared/terminal/terminalTheme';
 import { useDockablePanelState } from '@ui/dockable';
 import { useKeyboardSurface } from '@ui/shortcuts';
+import { errorHandler } from '@utils/errorHandler';
 import type { types } from '@wailsjs/go/models';
 import { EventsOn } from '@wailsjs/runtime/runtime';
 import {
@@ -588,13 +590,17 @@ const ShellTab: React.FC<ShellTabProps> = ({
         setStatusReason(null);
       } catch (error) {
         if (!cancelled) {
-          const reason = error instanceof Error ? error.message : String(error);
+          const details = errorHandler.handleInline(error, {
+            action: 'startShellSession',
+            source: 'ShellTab',
+            clusterId: resolvedClusterId,
+          });
           sessionIdRef.current = null;
           sessionOpenedAtRef.current = null;
           setSession(null);
           statusRef.current = 'error';
           setStatus('error');
-          setStatusReason(reason);
+          setStatusReason(details.message);
           disposeTerminal();
         }
       }
@@ -634,11 +640,19 @@ const ShellTab: React.FC<ShellTabProps> = ({
         return;
       }
       if (evt.status === 'error') {
+        const details = errorHandler.handleInline(
+          new Error(evt.reason || 'Shell session failed.'),
+          {
+            action: 'runShellSession',
+            source: 'ShellTab',
+            clusterId: resolvedClusterId,
+          }
+        );
         pendingReplayRef.current = null;
         sessionOpenedAtRef.current = null;
         statusRef.current = 'error';
         setStatus('error');
-        setStatusReason(evt.reason || 'Shell session failed.');
+        setStatusReason(details.message);
         sessionIdRef.current = null;
         setSession(null);
         disposeTerminal();
@@ -658,9 +672,17 @@ const ShellTab: React.FC<ShellTabProps> = ({
           return;
         }
         if (closedTooSoon) {
+          const details = errorHandler.handleInline(
+            new Error(deriveConnectionFailureReason(evt.reason)),
+            {
+              action: 'runShellSession',
+              source: 'ShellTab',
+              clusterId: resolvedClusterId,
+            }
+          );
           statusRef.current = 'error';
           setStatus('error');
-          setStatusReason(deriveConnectionFailureReason(evt.reason));
+          setStatusReason(details.message);
           return;
         }
         statusRef.current = 'closed';
@@ -680,7 +702,14 @@ const ShellTab: React.FC<ShellTabProps> = ({
       offOutput();
       offStatus();
     };
-  }, [appendOutput, deriveConnectionFailureReason, disposeTerminal, ensureTerminal, writeLine]);
+  }, [
+    appendOutput,
+    deriveConnectionFailureReason,
+    disposeTerminal,
+    ensureTerminal,
+    resolvedClusterId,
+    writeLine,
+  ]);
 
   useEffect(() => {
     void session;
@@ -946,7 +975,12 @@ const ShellTab: React.FC<ShellTabProps> = ({
       void refreshContainers();
       initiateConnection();
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
+      const details = errorHandler.handleInline(error, {
+        action: 'createDebugContainer',
+        source: 'ShellTab',
+        clusterId: resolvedClusterId,
+      });
+      const reason = details.message;
       ensureTerminal();
       terminalRef.current?.reset();
       writeLine(`\r\n\x1b[31mFailed to create debug container: ${reason}\x1b[0m`);
@@ -1195,7 +1229,10 @@ const ShellTab: React.FC<ShellTabProps> = ({
       )}
       {!!connectionErrorMessage && (
         <div className="shell-tab__connection-error" role="status" aria-live="polite">
-          Connection failed: <span>{connectionErrorMessage}</span>
+          Connection failed:{' '}
+          <span>
+            <ErrorSurface kind="reported" message={connectionErrorMessage} />
+          </span>
         </div>
       )}
 

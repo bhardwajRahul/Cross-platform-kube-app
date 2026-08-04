@@ -3,7 +3,10 @@ package capabilities
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/luxury-yacht/app/backend/internal/applog"
 	"github.com/luxury-yacht/app/backend/resources/common"
@@ -18,12 +21,17 @@ type captureLogger struct {
 	debugs []string
 	warns  []string
 	errors []string
+	cause  error
 }
 
 func (l *captureLogger) Debug(message string, _ ...string) { l.debugs = append(l.debugs, message) }
 func (l *captureLogger) Info(string, ...string)            {}
 func (l *captureLogger) Warn(message string, _ ...string)  { l.warns = append(l.warns, message) }
 func (l *captureLogger) Error(message string, _ ...string) { l.errors = append(l.errors, message) }
+func (l *captureLogger) ErrorWithCause(err error, message string, _ ...string) {
+	l.cause = err
+	l.errors = append(l.errors, fmt.Sprintf("%s: %v", message, err))
+}
 
 type stubRateLimiter struct {
 	waits int
@@ -86,6 +94,262 @@ func TestEvaluateAllowed(t *testing.T) {
 
 	if results[0].DeniedReason != "allowed by test" {
 		t.Fatalf("Unexpected denied reason: %s", results[0].DeniedReason)
+	}
+}
+
+func TestEvaluateSlowWarningOmitsCallerIDAndResourceNames(t *testing.T) {
+	client := fake.NewClientset()
+	client.Fake.PrependReactor("create", "selfsubjectaccessreviews", func(action cgotesting.Action) (bool, runtime.Object, error) {
+		review := action.(cgotesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
+		review.Status = authorizationv1.SubjectAccessReviewStatus{Allowed: true}
+		return true, review, nil
+	})
+
+	logger := &captureLogger{}
+	start := time.Date(2026, time.August, 3, 12, 0, 0, 0, time.UTC)
+	times := []time.Time{start, start.Add(2 * time.Second)}
+	timeIndex := 0
+	service := NewService(Dependencies{
+		Common: common.Dependencies{
+			Context:          context.Background(),
+			Logger:           logger,
+			KubernetesClient: client,
+		},
+		WorkerCount:          1,
+		SlowRequestThreshold: time.Second,
+		Now: func() time.Time {
+			current := times[timeIndex]
+			timeIndex++
+			return current
+		},
+	})
+	callerID := "cluster-1|apps/v1|deployment|list|customer-prod|"
+
+	_, err := service.Evaluate(context.Background(), []ReviewAttributes{{
+		ID: callerID,
+		Attributes: &authorizationv1.ResourceAttributes{
+			Group:     "apps",
+			Version:   "v1",
+			Resource:  "deployments",
+			Verb:      "list",
+			Namespace: "customer-prod",
+			Name:      "private-web",
+		},
+	}})
+
+	if err != nil {
+		t.Fatalf("Evaluate returned error: %v", err)
+	}
+	if len(logger.warns) != 1 {
+		t.Fatalf("expected one slow warning, got %v", logger.warns)
+	}
+	warning := logger.warns[0]
+	if strings.Contains(warning, callerID) || strings.Contains(warning, "customer-prod") || strings.Contains(warning, "private-web") {
+		t.Fatalf("slow warning leaked a caller id, namespace, or resource name: %q", warning)
+	}
+	if !strings.Contains(warning, "apps/v1 deployments list namespace-scoped") {
+		t.Fatalf("expected structural check details to remain actionable, got %q", warning)
+	}
+}
+
+// A dropped connection fails every in-flight review at once. Logging each one
+// turns a single fault into an ERROR per check, and every backend ERROR is
+// forwarded to error reporting.
+func TestEvaluateLogsOneSummaryWhenEveryReviewFails(t *testing.T) {
+	client := fake.NewClientset()
+	client.Fake.PrependReactor("create", "selfsubjectaccessreviews", func(cgotesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("http2: client connection lost")
+	})
+
+	logger := &captureLogger{}
+	service := NewService(Dependencies{
+		Common: common.Dependencies{
+			Context:          context.Background(),
+			Logger:           logger,
+			KubernetesClient: client,
+		},
+	})
+
+	checks := make([]ReviewAttributes, 0, 12)
+	for i := range 12 {
+		checks = append(checks, ReviewAttributes{
+			ID: fmt.Sprintf("check-%d", i),
+			Attributes: &authorizationv1.ResourceAttributes{
+				Verb:     "update",
+				Group:    "apps",
+				Resource: "deployments",
+			},
+		})
+	}
+
+	if _, err := service.Evaluate(context.Background(), checks); err == nil {
+		t.Fatalf("expected Evaluate to report that every check failed")
+	}
+
+	if len(logger.errors) != 1 {
+		t.Fatalf("expected exactly 1 error log for the batch, got %d: %v", len(logger.errors), logger.errors)
+	}
+	summary := logger.errors[0]
+	if !strings.Contains(summary, "12 of 12") {
+		t.Fatalf("expected the summary to report the failure count, got %q", summary)
+	}
+	if !strings.Contains(summary, "http2: client connection lost") {
+		t.Fatalf("expected the summary to carry the underlying cause, got %q", summary)
+	}
+	if logger.cause == nil || logger.cause.Error() != "http2: client connection lost" {
+		t.Fatalf("expected the original review error, got %v", logger.cause)
+	}
+}
+
+// The count alone cannot say which checks broke. Keep the structural resource
+// identity, but never put namespace or object names into telemetry-bound text.
+func TestEvaluateSummaryDescribesFailedChecksWithoutResourceNames(t *testing.T) {
+	client := fake.NewClientset()
+	client.Fake.PrependReactor("create", "selfsubjectaccessreviews", func(action cgotesting.Action) (bool, runtime.Object, error) {
+		review := action.(cgotesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
+		if review.Spec.ResourceAttributes.Resource == "secrets" {
+			return true, nil, errors.New("etcdserver: request timed out")
+		}
+		review.Status = authorizationv1.SubjectAccessReviewStatus{Allowed: true}
+		return true, review, nil
+	})
+
+	logger := &captureLogger{}
+	service := NewService(Dependencies{Common: common.Dependencies{
+		Context: context.Background(), Logger: logger, KubernetesClient: client,
+	}})
+
+	checks := []ReviewAttributes{
+		{ID: "ok", Attributes: &authorizationv1.ResourceAttributes{Verb: "get", Resource: "pods"}},
+		{ID: "bad", Attributes: &authorizationv1.ResourceAttributes{
+			Version: "v1", Resource: "secrets", Verb: "update", Namespace: "prod", Name: "tls",
+		}},
+	}
+
+	if _, err := service.Evaluate(context.Background(), checks); err != nil {
+		t.Fatalf("Evaluate returned error for a partial failure: %v", err)
+	}
+
+	if len(logger.errors) != 1 {
+		t.Fatalf("expected exactly 1 error log, got %d: %v", len(logger.errors), logger.errors)
+	}
+	summary := logger.errors[0]
+	if !strings.Contains(summary, "v1 secrets update namespace-scoped") {
+		t.Fatalf("expected structural failed-check details in the summary, got %q", summary)
+	}
+	if strings.Contains(summary, "prod") || strings.Contains(summary, "tls") {
+		t.Fatalf("expected namespace and object names to be omitted, got %q", summary)
+	}
+	if strings.Contains(summary, "pods") {
+		t.Fatalf("expected only failed checks to be named, got %q", summary)
+	}
+}
+
+// Sentry truncates long titles. The cause is the part you cannot reconstruct
+// from anywhere else, so it has to precede the identity list or a wide failure
+// scrolls it off the end.
+func TestEvaluateSummaryPutsTheCauseBeforeTheIdentities(t *testing.T) {
+	client := fake.NewClientset()
+	client.Fake.PrependReactor("create", "selfsubjectaccessreviews", func(cgotesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("connection lost")
+	})
+
+	logger := &captureLogger{}
+	service := NewService(Dependencies{Common: common.Dependencies{
+		Context: context.Background(), Logger: logger, KubernetesClient: client,
+	}})
+
+	// Namespace-scoped checks keep their scope type, never the namespace value.
+	checks := []ReviewAttributes{{ID: "list", Attributes: &authorizationv1.ResourceAttributes{
+		Verb: "list", Resource: "pods", Namespace: "fa-jj-test",
+	}}}
+
+	if _, err := service.Evaluate(context.Background(), checks); err == nil {
+		t.Fatal("expected Evaluate to report the failure")
+	}
+
+	summary := logger.errors[0]
+	if strings.Contains(summary, "fa-jj-test") {
+		t.Fatalf("expected the namespace value to be omitted, got %q", summary)
+	}
+	if !strings.Contains(summary, "pods list namespace-scoped") {
+		t.Fatalf("expected the namespace scope type to remain, got %q", summary)
+	}
+	causeAt := strings.Index(summary, "connection lost")
+	listAt := strings.Index(summary, "pods list")
+	if causeAt < 0 || listAt < 0 {
+		t.Fatalf("expected both the cause and the identities, got %q", summary)
+	}
+	if causeAt > listAt {
+		t.Fatalf("expected the cause before the identity list, got %q", summary)
+	}
+}
+
+func TestEvaluateSummaryCountsOnlyTheFailedReviews(t *testing.T) {
+	client := fake.NewClientset()
+	client.Fake.PrependReactor("create", "selfsubjectaccessreviews", func(action cgotesting.Action) (bool, runtime.Object, error) {
+		review := action.(cgotesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
+		if review.Spec.ResourceAttributes.Resource == "secrets" {
+			return true, nil, errors.New("http2: client connection lost")
+		}
+		review.Status = authorizationv1.SubjectAccessReviewStatus{Allowed: true}
+		return true, review, nil
+	})
+
+	logger := &captureLogger{}
+	service := NewService(Dependencies{
+		Common: common.Dependencies{
+			Context:          context.Background(),
+			Logger:           logger,
+			KubernetesClient: client,
+		},
+	})
+
+	checks := []ReviewAttributes{
+		{ID: "ok-1", Attributes: &authorizationv1.ResourceAttributes{Verb: "get", Resource: "pods"}},
+		{ID: "bad-1", Attributes: &authorizationv1.ResourceAttributes{Verb: "get", Resource: "secrets"}},
+		{ID: "ok-2", Attributes: &authorizationv1.ResourceAttributes{Verb: "get", Resource: "pods"}},
+	}
+
+	if _, err := service.Evaluate(context.Background(), checks); err != nil {
+		t.Fatalf("Evaluate returned error for a partial failure: %v", err)
+	}
+
+	if len(logger.errors) != 1 {
+		t.Fatalf("expected exactly 1 error log, got %d: %v", len(logger.errors), logger.errors)
+	}
+	if !strings.Contains(logger.errors[0], "1 of 3") {
+		t.Fatalf("expected the summary to count only failed reviews, got %q", logger.errors[0])
+	}
+}
+
+func TestEvaluateLogsNothingWhenEveryReviewSucceeds(t *testing.T) {
+	client := fake.NewClientset()
+	client.Fake.PrependReactor("create", "selfsubjectaccessreviews", func(action cgotesting.Action) (bool, runtime.Object, error) {
+		review := action.(cgotesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
+		review.Status = authorizationv1.SubjectAccessReviewStatus{Allowed: true}
+		return true, review, nil
+	})
+
+	logger := &captureLogger{}
+	service := NewService(Dependencies{
+		Common: common.Dependencies{
+			Context:          context.Background(),
+			Logger:           logger,
+			KubernetesClient: client,
+		},
+	})
+
+	checks := []ReviewAttributes{
+		{ID: "ok-1", Attributes: &authorizationv1.ResourceAttributes{Verb: "get", Resource: "pods"}},
+	}
+
+	if _, err := service.Evaluate(context.Background(), checks); err != nil {
+		t.Fatalf("Evaluate returned error: %v", err)
+	}
+
+	if len(logger.errors) != 0 {
+		t.Fatalf("expected no error logs, got %v", logger.errors)
 	}
 }
 
@@ -279,17 +543,26 @@ func TestLogHelpersRespectLogger(t *testing.T) {
 	})
 
 	svc.logWarn("warn")
-	svc.logError("error")
+	svc.logError(errors.New("cause"), "error")
 	svc.logDebug("debug")
 
 	if len(logger.warns) != 1 || logger.warns[0] != "warn" {
 		t.Fatalf("expected warn to be recorded, got %+v", logger.warns)
 	}
-	if len(logger.errors) != 1 || logger.errors[0] != "error" {
+	if len(logger.errors) != 1 || logger.errors[0] != "error: cause" {
 		t.Fatalf("expected error to be recorded, got %+v", logger.errors)
 	}
 	if len(logger.debugs) != 1 || logger.debugs[0] != "debug" {
 		t.Fatalf("expected debug to be recorded, got %+v", logger.debugs)
+	}
+}
+
+func TestCapabilityScopeMetricKeyRetainsOnlyScopeType(t *testing.T) {
+	if got := capabilityScopeMetricKey("customer-prod"); got != "<namespace>" {
+		t.Fatalf("expected a namespace-scoped metric key, got %q", got)
+	}
+	if got := capabilityScopeMetricKey(""); got != "<cluster>" {
+		t.Fatalf("expected a cluster-scoped metric key, got %q", got)
 	}
 }
 

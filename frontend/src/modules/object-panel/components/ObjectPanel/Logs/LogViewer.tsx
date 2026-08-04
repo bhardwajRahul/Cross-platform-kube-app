@@ -15,6 +15,7 @@ import {
   filterSelectionValues,
   isNarrowingFilterSelection,
 } from '@shared/components/dropdowns/multiSelectFilterSelection';
+import { ErrorSurface } from '@shared/components/errors/ErrorSurface';
 import IconBar, { type IconBarItem } from '@shared/components/IconBar/IconBar';
 import {
   AnsiColorIcon,
@@ -61,6 +62,7 @@ import {
   getObjPanelLogsApiTimestampUseLocalTimeZone,
   getObjPanelLogsBufferMaxSize,
 } from '@/core/settings/appPreferences';
+import { reportOperationalError } from '@/utils/errorHandler';
 import {
   DEFAULT_OBJ_PANEL_LOGS_API_TIMESTAMP_FORMAT,
   formatDefaultObjPanelLogsApiTimestamp,
@@ -864,7 +866,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       dispatch({ type: 'SET_IS_LOADING_PREVIOUS_LOGS', payload: true });
       void fetchLogs({ previous: true, isManual: true })
         .catch((error) => {
-          console.error('Failed to reload previous logs', error);
+          reportOperationalError(error, { source: 'LogViewer', action: 'reloadPreviousLogs' });
         })
         .finally(() => {
           dispatch({ type: 'SET_IS_LOADING_PREVIOUS_LOGS', payload: false });
@@ -1003,7 +1005,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
 
     void fetchLogs({ previous: true, isManual: true })
       .catch((error) => {
-        console.error('Failed to load previous logs', error);
+        reportOperationalError(error, { source: 'LogViewer', action: 'loadPreviousLogs' });
       })
       .finally(() => {
         dispatch({ type: 'SET_IS_LOADING_PREVIOUS_LOGS', payload: false });
@@ -1861,7 +1863,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       dispatch({ type: 'SET_COPY_FEEDBACK', payload: 'copied' });
       scheduleCopyReset();
     } catch (err) {
-      console.error('Failed to copy logs', err);
+      reportOperationalError(err, { source: 'LogViewer', action: 'copyLogs' });
       dispatch({ type: 'SET_COPY_FEEDBACK', payload: 'error' });
       scheduleCopyReset();
     }
@@ -1879,7 +1881,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
           return false;
         }
         void navigator.clipboard.writeText(text).catch((err) => {
-          console.error('Failed to copy selected log text', err);
+          reportOperationalError(err, { source: 'LogViewer', action: 'copySelectedLogText' });
         });
         return true;
       }
@@ -1936,7 +1938,9 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     return (
       <div className="object-panel-tab-content">
         <div className="logs-viewer-display-error">
-          <div className="error-message">Error: {displayError}</div>
+          <div className="error-message">
+            Error: <ErrorSurface kind="reported" message={displayError} />
+          </div>
         </div>
       </div>
     );

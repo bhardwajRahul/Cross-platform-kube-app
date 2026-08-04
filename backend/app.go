@@ -13,7 +13,7 @@ import (
 	"github.com/luxury-yacht/app/backend/refresh/containerlogsstream"
 	"github.com/luxury-yacht/app/backend/refresh/system"
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
-	"github.com/luxury-yacht/app/internal/sentryreporting"
+	"github.com/luxury-yacht/app/internal/sentry"
 	apiextinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
 	informers "k8s.io/client-go/informers"
 )
@@ -122,6 +122,10 @@ type App struct {
 	selectionDiag       selectionDiagnosticsState
 	// settingsMu guards appSettings access in runtime watcher/selection/settings flows.
 	settingsMu sync.Mutex
+	// installationTelemetryMu serializes the installation-registration metric and its durable
+	// acknowledgement so startup and a live preference change cannot send it concurrently.
+	// Factory Reset takes it before settingsMu and file deletion; keep that lock order.
+	installationTelemetryMu sync.Mutex
 	// attentionRulesMu serializes persisted Attention mutations with their live
 	// index updates so cluster-scoped and global rules cannot be applied out of
 	// order across multiple cluster runtimes.

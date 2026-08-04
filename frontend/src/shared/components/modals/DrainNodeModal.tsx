@@ -9,6 +9,7 @@
 
 import { buildObjectActionTarget, runStartDrain } from '@shared/actions/objectActionClient';
 import { DrainProgressCard } from '@shared/components/drain/DrainProgressCard';
+import { ErrorSurface } from '@shared/components/errors/ErrorSurface';
 import { DrainIcon } from '@shared/components/icons/SharedIcons';
 import Tooltip from '@shared/components/Tooltip';
 import {
@@ -85,6 +86,9 @@ const toScope = (nodeName: string): string =>
 type NodeMaintenanceSnapshotPayloadState = ReturnType<typeof useRefreshScopedDomain> & {
   data: NodeMaintenanceSnapshotPayload | null;
 };
+
+const toDrainOperationError = (value: unknown, fallback: string): Error =>
+  value instanceof Error ? value : new Error(typeof value === 'string' ? value : fallback);
 
 const DrainNodeModal = ({
   isOpen,
@@ -295,21 +299,11 @@ const DrainNodeModal = ({
       );
       await refreshMaintenance();
     } catch (error) {
-      let message: string;
-
-      if (error instanceof Error) {
-        message = error.message;
-      } else if (typeof error === 'string') {
-        message = error;
-      } else {
-        message = 'Unknown error';
-      }
-
-      setDrainError(message);
-      errorHandler.handle(error instanceof Error ? error : new Error(message || 'Drain failed'), {
+      const details = errorHandler.handle(toDrainOperationError(error, 'Drain failed'), {
         source: 'drain-modal',
         context: { nodeName },
       });
+      setDrainError(details.message);
     } finally {
       setDrainPending(false);
     }
@@ -325,24 +319,11 @@ const DrainNodeModal = ({
       await CancelDrainNodeJob(clusterId, activeDrainJob.id);
       await refreshMaintenance();
     } catch (error) {
-      let message: string;
-
-      if (error instanceof Error) {
-        message = error.message;
-      } else if (typeof error === 'string') {
-        message = error;
-      } else {
-        message = 'Unknown error';
-      }
-
-      setDrainError(message);
-      errorHandler.handle(
-        error instanceof Error ? error : new Error(message || 'Cancel drain failed'),
-        {
-          source: 'drain-modal',
-          context: { action: 'cancel-drain', nodeName, jobId: activeDrainJob.id },
-        }
-      );
+      const details = errorHandler.handle(toDrainOperationError(error, 'Cancel drain failed'), {
+        source: 'drain-modal',
+        context: { action: 'cancel-drain', nodeName, jobId: activeDrainJob.id },
+      });
+      setDrainError(details.message);
     } finally {
       setCancelDrainPending(false);
     }
@@ -563,7 +544,11 @@ const DrainNodeModal = ({
           </div>
         )}
 
-        {!!drainError && <div className="drain-node-modal-error">{drainError}</div>}
+        {!!drainError && (
+          <div className="drain-node-modal-error">
+            <ErrorSurface kind="reported" message={drainError} />
+          </div>
+        )}
         {!activeDrainJob && startPermissionReason && (
           <div className="drain-node-modal-helper" data-test="drain-modal-permission-reason">
             {startPermissionReason}

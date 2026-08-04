@@ -169,12 +169,12 @@ function DataManagementSection() {
         </div>
       </SettingRow>
 
-      <div className="settings-subgroup-label">Data Privacy</div>
+      <div className="settings-subgroup-label">Telemetry</div>
       <hr className="settings-subgroup-divider" />
 
       <SettingRow
         title="Error Reporting"
-        help="Send anonymized data when an error occurs that is used to improve the app. Toggle it off if you do not wish to participate."
+        help="Sends pseudonymous error diagnostics linked to this installation. Reports exclude request data and redact common credentials and infrastructure identifiers. Disable this to stop future reports."
       >
         <ToggleSwitch
           id={`${elementIdPrefix}-error-reporting`}

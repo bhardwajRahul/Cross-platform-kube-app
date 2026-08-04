@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/luxury-yacht/app/backend/internal/applog"
 	"github.com/luxury-yacht/app/backend/internal/errorcapture"
 	"github.com/luxury-yacht/app/backend/internal/logclassify"
 	"github.com/luxury-yacht/app/backend/internal/logsources"
@@ -57,6 +58,7 @@ func (a *App) Startup(ctx context.Context) {
 		a.logger.Warn(fmt.Sprintf("Kubeconfig directory watcher not available: %v", err), logsources.App)
 	}
 	a.startUpdateCheck()
+	a.scheduleInstallationMetricRegistration(ctx)
 }
 
 func (a *App) initializeClusterLifecycle() {
@@ -118,7 +120,7 @@ func (a *App) configureStartupErrorCapture() {
 
 func (a *App) checkStartupBetaExpiry(ctx context.Context) bool {
 	if err := a.checkBetaExpiry(); err != nil {
-		a.logger.Error(err.Error(), logsources.App)
+		applog.ReportError(a.logger, err, "Beta version expired", logsources.App)
 		runtimeMessageDialog(ctx, runtime.MessageDialogOptions{
 			Type:    runtime.ErrorDialog,
 			Title:   "Beta Version Expired",
@@ -158,7 +160,7 @@ func (a *App) restoreStartupWindow(ctx context.Context) {
 func (a *App) initializeStartupClusters() {
 	a.logger.Info("Discovering kubeconfig files...", logsources.App)
 	if err := a.discoverKubeconfigs(); err != nil {
-		a.logger.Error(fmt.Sprintf("Failed to discover kubeconfigs: %v", err), logsources.App)
+		a.logger.ErrorWithCause(err, "Failed to discover kubeconfigs", logsources.App)
 	} else {
 		a.logger.Info(fmt.Sprintf("Found %d kubeconfig file(s)", len(a.availableKubeconfigs)), logsources.App)
 	}
@@ -168,7 +170,7 @@ func (a *App) initializeStartupClusters() {
 	selectedCount, err := a.initializeSelectedClustersAtStartup()
 	if selectedCount > 0 {
 		if err != nil {
-			a.logger.Error(fmt.Sprintf("Failed to connect to cluster(s): %v", err), logsources.App)
+			a.logger.ErrorWithCause(err, "Failed to connect to cluster(s)", logsources.App)
 		} else {
 			a.logger.Info("Successfully connected to Kubernetes cluster(s)", logsources.App)
 		}

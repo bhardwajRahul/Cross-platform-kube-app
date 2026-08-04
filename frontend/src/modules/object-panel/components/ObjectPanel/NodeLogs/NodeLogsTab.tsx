@@ -1,4 +1,5 @@
 import { Dropdown, type DropdownOption } from '@shared/components/dropdowns/Dropdown';
+import { ErrorSurface } from '@shared/components/errors/ErrorSurface';
 import IconBar, { type IconBarItem } from '@shared/components/IconBar/IconBar';
 import {
   AnsiColorIcon,
@@ -39,6 +40,7 @@ import { fetchNodeLogs, type NodeLogFetchResponse, type NodeLogSource } from './
 import '../Logs/LogViewer.css';
 import './NodeLogsTab.css';
 import { useKeyboardSurface } from '@ui/shortcuts';
+import { errorHandler } from '@utils/errorHandler';
 import { useLogMessageRenderer } from '../Logs/hooks/useLogMessageRenderer';
 import { useLogScrollRestoration } from '../Logs/hooks/useLogScrollRestoration';
 import { useTerminalTheme } from '../Logs/hooks/useTerminalTheme';
@@ -324,7 +326,12 @@ const NodeLogsTab = ({
           return;
         }
         if (response.error) {
-          setError(response.error);
+          const details = errorHandler.handleInline(new Error(response.error), {
+            action: 'loadNodeLogs',
+            source: 'NodeLogsTab',
+            clusterId,
+          });
+          setError(details.message);
           if (sourceChanged) {
             setContent('');
           }
@@ -346,7 +353,12 @@ const NodeLogsTab = ({
         if (cancelled) {
           return;
         }
-        setError(fetchError instanceof Error ? fetchError.message : 'Failed to fetch node logs');
+        const details = errorHandler.handleInline(fetchError, {
+          action: 'loadNodeLogs',
+          source: 'NodeLogsTab',
+          clusterId,
+        });
+        setError(details.message || 'Failed to fetch node logs');
         if (sourceChanged) {
           setContent('');
         }
@@ -637,7 +649,11 @@ const NodeLogsTab = ({
             <div className="logs-viewer-display-error">
               <div className="node-log-unavailable-message">
                 <div>Logs are not available on this node</div>
-                {availability.reason ? <div>Error: {availability.reason}</div> : null}
+                {availability.reason ? (
+                  <div>
+                    Error: <ErrorSurface kind="status" message={availability.reason} />
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -655,7 +671,11 @@ const NodeLogsTab = ({
 
   let renderedLogContent: React.ReactNode;
   if (error) {
-    renderedLogContent = <div className="logs-viewer-display-error">{error}</div>;
+    renderedLogContent = (
+      <div className="logs-viewer-display-error">
+        <ErrorSurface kind="reported" message={error} />
+      </div>
+    );
   } else if (!selectedSource) {
     renderedLogContent = (
       <div className="logs-viewer-display-loading">Select a log source to view logs.</div>

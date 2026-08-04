@@ -30,8 +30,8 @@ func NewService(deps common.Dependencies) *Service {
 func (s *Service) NetworkPolicy(namespace, name string) (*NetworkPolicyDetails, error) {
 	np, err := s.deps.KubernetesClient.NetworkingV1().NetworkPolicies(namespace).Get(s.deps.Context, name, metav1.GetOptions{})
 	if err != nil {
-		s.deps.Logger.Error(fmt.Sprintf("Failed to get network policy %s/%s: %v", namespace, name, err), logsources.ResourceLoader)
-		return nil, fmt.Errorf("failed to get network policy: %v", err)
+		err = s.deps.LogResourceRequestFailure(err, fmt.Sprintf("Failed to get network policy %s/%s", namespace, name), "get", Identity, logsources.ResourceLoader)
+		return nil, fmt.Errorf("failed to get network policy: %w", err)
 	}
 	return s.buildNetworkPolicyDetails(np), nil
 }

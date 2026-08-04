@@ -70,11 +70,17 @@ const (
 type settingsFile struct {
 	SchemaVersion int                               `json:"schemaVersion"`
 	UpdatedAt     time.Time                         `json:"updatedAt"`
+	Telemetry     settingsTelemetry                 `json:"telemetry"`
 	Preferences   settingsPreferences               `json:"preferences"`
 	Kubeconfig    settingsKubeconfig                `json:"kubeconfig"`
 	UI            settingsUI                        `json:"ui"`
 	Attention     *settingsGlobalAttentionRules     `json:"attention,omitempty"`
 	Clusters      map[string]settingsClusterSection `json:"clusters,omitempty"`
+}
+
+type settingsTelemetry struct {
+	AnonymizedID               string `json:"anonymizedId"`
+	InstallationMetricReported bool   `json:"installationMetricReported,omitempty"`
 }
 
 type settingsGlobalAttentionRules struct {
@@ -574,6 +580,9 @@ func (a *App) saveSettingsFile(settings *settingsFile) error {
 	}
 
 	settings = normalizeSettingsFile(settings)
+	if _, err := ensureAnonymizedID(settings); err != nil {
+		return err
+	}
 	configFile, err := a.getSettingsFilePath()
 	if err != nil {
 		return err
@@ -709,6 +718,15 @@ func (a *App) loadAppSettings() error {
 	if err != nil {
 		return err
 	}
+	created, err := ensureAnonymizedID(settings)
+	if err != nil {
+		return err
+	}
+	if created {
+		if err := a.saveSettingsFile(settings); err != nil {
+			return err
+		}
+	}
 	a.appSettings = appSettingsFromFile(settings)
 
 	logSettings := resolveObjPanelLogSettings(settings.Preferences.ObjPanelLogs)
@@ -728,6 +746,7 @@ func appSettingsFromFile(settings *settingsFile) *AppSettings {
 	kubernetesAPISettings := resolveKubernetesAPISettings(settings.Preferences.KubernetesAPI)
 
 	return &AppSettings{
+		AnonymizedID:                             settings.Telemetry.AnonymizedID,
 		AppearanceMode:                           settings.Preferences.AppearanceMode,
 		SelectedKubeconfigs:                      append([]string(nil), settings.Kubeconfig.Selected...),
 		UseShortResourceNames:                    settings.Preferences.UseShortResourceNames,
@@ -908,6 +927,11 @@ func (a *App) ClearAppState() error {
 		if err := a.clearKubeconfigSelection(); err != nil {
 			return err
 		}
+		// Registration holds this mutex through both the metric send and its
+		// acknowledgement write. Waiting here makes that worker finish before
+		// persisted settings are removed, so it cannot recreate a pre-reset ID.
+		a.installationTelemetryMu.Lock()
+		defer a.installationTelemetryMu.Unlock()
 		errs := a.clearPersistedAppState()
 		a.resetInMemoryAppState()
 		if len(errs) > 0 {
@@ -958,7 +982,7 @@ func (a *App) GetAppSettings() (*AppSettings, error) {
 
 	if a.appSettings == nil {
 		if err := a.loadAppSettings(); err != nil {
-			return getDefaultAppSettings(), nil
+			return nil, err
 		}
 	}
 
@@ -987,7 +1011,10 @@ func InitializeErrorReporting(a *App) error {
 	}
 	enabled := a.appSettings.ErrorReportingEnabled
 	a.settingsMu.Unlock()
-	return a.errorReporter.SetEnabled(enabled)
+	if err := a.errorReporter.SetEnabled(enabled); err != nil {
+		return err
+	}
+	return nil
 }
 
 func intPtr(v int) *int {
@@ -999,7 +1026,9 @@ func (a *App) GetAppSettingsSchema() (*AppSettingsSchema, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildAppSettingsSchema(settings), nil
+	schema := buildAppSettingsSchema(settings)
+	schema.AnonymizedID = settings.AnonymizedID
+	return schema, nil
 }
 
 func copyAppSettings(settings *AppSettings) *AppSettings {
@@ -1129,6 +1158,8 @@ func (a *App) applySettingsSideEffects(update *preparedPreferenceUpdate) {
 	if update.effects.errorReporting && a.errorReporter != nil {
 		if err := a.errorReporter.SetEnabled(settings.ErrorReportingEnabled); err != nil {
 			a.logger.Warn(fmt.Sprintf("Could not update error reporting: %v", err), logsources.Settings)
+		} else if settings.ErrorReportingEnabled {
+			a.scheduleInstallationMetricRegistration(a.Ctx)
 		}
 	}
 	if update.effects.kubernetesClientRateLimits {

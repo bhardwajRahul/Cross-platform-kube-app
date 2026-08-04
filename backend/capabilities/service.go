@@ -19,6 +19,7 @@ import (
 	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/internal/k8sretry"
 	"github.com/luxury-yacht/app/backend/resources/common"
+	"github.com/luxury-yacht/app/internal/sentry"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -45,7 +46,7 @@ type RateLimiter interface {
 	Stop()
 }
 
-type namespaceMetrics struct {
+type capabilityScopeMetrics struct {
 	Count         int
 	Allowed       int
 	Errors        int
@@ -96,8 +97,18 @@ func (s *Service) Evaluate(ctx context.Context, checks []ReviewAttributes) ([]Ch
 	var wg sync.WaitGroup
 	collectMetrics := s.deps.Common.Logger != nil
 	metricsMu := sync.Mutex{}
-	metricsByNamespace := make(map[string]*namespaceMetrics)
+	metricsByScope := make(map[string]*capabilityScopeMetrics)
 	var failureCount atomic.Int32
+
+	// One dropped connection fails every in-flight review, so the batch reports
+	// its reviews once instead of once per check. Per-check detail still reaches
+	// callers through each CheckResult.Error; the structural check shapes and
+	// distinct causes below make a PARTIAL failure diagnosable without names.
+	reviewFailureMu := sync.Mutex{}
+	reviewFailures := 0
+	var firstReviewErr error
+	var failedIdentities []string
+	var failedChecks []sentryreporting.KubernetesRequest
 
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
@@ -140,7 +151,16 @@ func (s *Service) Evaluate(ctx context.Context, checks []ReviewAttributes) ([]Ch
 				duration := nowFn().Sub(start)
 
 				if err != nil {
-					s.logError(fmt.Sprintf("Capability check %s failed: %v", job.check.ID, err))
+					reviewFailureMu.Lock()
+					reviewFailures++
+					if firstReviewErr == nil {
+						firstReviewErr = err
+					}
+					if len(failedIdentities) < maxReportedFailedChecks {
+						failedIdentities = append(failedIdentities, describeCapabilityShape(attrs))
+						failedChecks = append(failedChecks, capabilityRequest(attrs))
+					}
+					reviewFailureMu.Unlock()
 					result.Error = err.Error()
 				} else if response == nil {
 					result.Error = "permission review returned no response"
@@ -150,17 +170,17 @@ func (s *Service) Evaluate(ctx context.Context, checks []ReviewAttributes) ([]Ch
 					result.EvaluationError = response.Status.EvaluationError
 
 					if slowThreshold > 0 && duration > slowThreshold {
-						s.logWarn(fmt.Sprintf("Capability check %s slow: %s", job.check.ID, duration))
+						s.logWarn(fmt.Sprintf("Capability check %s slow: %s", describeCapabilityShape(attrs), duration))
 					}
 				}
 
 				if collectMetrics {
 					metricsMu.Lock()
-					nsKey := namespaceMetricKey(attrs.Namespace)
-					metric := metricsByNamespace[nsKey]
+					scopeKey := capabilityScopeMetricKey(attrs.Namespace)
+					metric := metricsByScope[scopeKey]
 					if metric == nil {
-						metric = &namespaceMetrics{}
-						metricsByNamespace[nsKey] = metric
+						metric = &capabilityScopeMetrics{}
+						metricsByScope[scopeKey] = metric
 					}
 					metric.Count++
 					if result.Allowed {
@@ -188,14 +208,26 @@ func (s *Service) Evaluate(ctx context.Context, checks []ReviewAttributes) ([]Ch
 	close(jobs)
 	wg.Wait()
 
+	// Safe to read unlocked: wg.Wait establishes happens-before over every worker.
+	if reviewFailures > 0 {
+		// Keep the cause near the front of the operation so Sentry's truncated
+		// summaries retain it, while preserving the original error separately.
+		s.logError(firstReviewErr, fmt.Sprintf(
+			"%d of %d capability checks failed: %v [%s]",
+			reviewFailures, len(checks),
+			firstReviewErr,
+			strings.Join(failedIdentities, ", "),
+		), sentryreporting.NewKubernetesCapabilityBatchOperation(reviewFailures, len(checks), failedChecks))
+	}
+
 	if collectMetrics {
 		metricsMu.Lock()
-		snapshot := make(map[string]namespaceMetrics, len(metricsByNamespace))
-		for ns, metric := range metricsByNamespace {
-			snapshot[ns] = *metric
+		snapshot := make(map[string]capabilityScopeMetrics, len(metricsByScope))
+		for scopeType, metric := range metricsByScope {
+			snapshot[scopeType] = *metric
 		}
 		metricsMu.Unlock()
-		s.logNamespaceMetrics(snapshot)
+		s.logScopeMetrics(snapshot)
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -227,8 +259,64 @@ func (s *Service) ensureClient() error {
 	return nil
 }
 
-func (s *Service) logError(message string) {
-	applog.Error(s.deps.Common.Logger, message, "Capabilities")
+// maxReportedFailedChecks bounds the identity list so a cluster-wide failure
+// cannot bloat the report payload. The total is reported separately.
+const maxReportedFailedChecks = 10
+
+// describeCapabilityShape keeps capability diagnostics useful without logging
+// caller-supplied IDs, namespaces, or object names into telemetry-bound text.
+func describeCapabilityShape(attrs *authorizationv1.ResourceAttributes) string {
+	if attrs == nil {
+		return "unknown"
+	}
+	groupVersion := attrs.Group
+	if groupVersion == "" {
+		groupVersion = attrs.Version
+	} else if attrs.Version != "" {
+		groupVersion += "/" + attrs.Version
+	}
+	resource := attrs.Resource
+	if attrs.Subresource != "" {
+		resource += "/" + attrs.Subresource
+	}
+	scope := "cluster-scoped"
+	if attrs.Namespace != "" {
+		scope = "namespace-scoped"
+	}
+	parts := []string{groupVersion, resource, attrs.Verb, scope}
+	rendered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			rendered = append(rendered, part)
+		}
+	}
+	return strings.Join(rendered, " ")
+}
+
+func capabilityRequest(attrs *authorizationv1.ResourceAttributes) sentryreporting.KubernetesRequest {
+	if attrs == nil {
+		return sentryreporting.KubernetesRequest{}
+	}
+	scope := sentryreporting.KubernetesScopeCluster
+	if attrs.Namespace != "" {
+		scope = sentryreporting.KubernetesScopeNamespaced
+	}
+	return sentryreporting.KubernetesRequest{
+		Action:      sentryreporting.KubernetesAction(attrs.Verb),
+		Group:       attrs.Group,
+		Version:     attrs.Version,
+		Resource:    attrs.Resource,
+		Subresource: attrs.Subresource,
+		Scope:       scope,
+	}
+}
+
+func (s *Service) logError(err error, message string, operations ...sentryreporting.Operation) {
+	if len(operations) > 0 {
+		applog.ReportErrorWithOperation(s.deps.Common.Logger, err, message, operations[0], "Capabilities")
+		return
+	}
+	applog.ReportError(s.deps.Common.Logger, err, message, "Capabilities")
 }
 
 func (s *Service) logWarn(message string) {
@@ -287,25 +375,25 @@ func (s *Service) now() time.Time {
 	return time.Now()
 }
 
-func namespaceMetricKey(namespace string) string {
+func capabilityScopeMetricKey(namespace string) string {
 	if strings.TrimSpace(namespace) == "" {
 		return "<cluster>"
 	}
-	return namespace
+	return "<namespace>"
 }
 
-func (s *Service) logNamespaceMetrics(metrics map[string]namespaceMetrics) {
+func (s *Service) logScopeMetrics(metrics map[string]capabilityScopeMetrics) {
 	if len(metrics) == 0 {
 		return
 	}
 
 	entries := make([]string, 0, len(metrics))
-	for namespace, data := range metrics {
+	for scopeType, data := range metrics {
 		avg := time.Duration(0)
 		if data.Count > 0 {
 			avg = data.TotalDuration / time.Duration(data.Count)
 		}
-		entry := fmt.Sprintf("namespace=%s count=%d allowed=%d errors=%d avg=%s", namespace, data.Count, data.Allowed, data.Errors, avg)
+		entry := fmt.Sprintf("scope=%s count=%d allowed=%d errors=%d avg=%s", scopeType, data.Count, data.Allowed, data.Errors, avg)
 		entries = append(entries, entry)
 	}
 

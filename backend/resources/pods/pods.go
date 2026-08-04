@@ -69,8 +69,8 @@ func (s *Service) DeletePod(namespace, name string) error {
 	defer cancel()
 
 	if err := s.deps.KubernetesClient.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
-		s.deps.Logger.Error(fmt.Sprintf("Failed to delete pod %s/%s: %v", namespace, name, err), "Pod")
-		return fmt.Errorf("failed to delete pod: %v", err)
+		err = s.deps.LogResourceRequestFailure(err, fmt.Sprintf("Failed to delete pod %s/%s", namespace, name), "delete", Identity, "Pod")
+		return fmt.Errorf("failed to delete pod: %w", err)
 	}
 
 	s.deps.Logger.Info(fmt.Sprintf("Deleted pod %s/%s", namespace, name), "Pod")

@@ -144,7 +144,9 @@ func TestAppGetAppSettingsReturnsDefaultWhenMissing(t *testing.T) {
 
 	settings, err := app.GetAppSettings()
 	require.NoError(t, err)
-	require.Equal(t, getDefaultAppSettings(), settings)
+	expected := getDefaultAppSettings()
+	expected.AnonymizedID = settings.AnonymizedID
+	require.Equal(t, expected, settings)
 	require.Equal(t, settings, app.appSettings)
 }
 
@@ -238,6 +240,22 @@ func TestInitializeErrorReportingKeepsReporterDisabledWhenSettingsCannotLoad(t *
 	reporter.mu.Lock()
 	defer reporter.mu.Unlock()
 	require.Equal(t, []bool{false}, reporter.enabledChanges)
+}
+
+func TestSettingsRPCsSurfaceCorruptSettingsInsteadOfReturningDefaultOnValues(t *testing.T) {
+	setTestConfigEnv(t)
+	app := NewApp(&recordingErrorReporter{})
+	configPath, err := app.getSettingsFilePath()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, []byte(`{"preferences":`), 0o644))
+
+	settings, settingsErr := app.GetAppSettings()
+	require.Error(t, settingsErr)
+	require.Nil(t, settings)
+
+	schema, schemaErr := app.GetAppSettingsSchema()
+	require.Error(t, schemaErr)
+	require.Nil(t, schema)
 }
 
 func TestInitializeErrorReportingAllowsMissingAppOrReporter(t *testing.T) {

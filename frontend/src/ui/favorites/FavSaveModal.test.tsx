@@ -14,6 +14,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Favorite, FavoriteFilters, FavoriteTableState } from '@/core/persistence/favorites';
 import { requireValue } from '@/test-utils/requireValue';
 
+const handleInlineMock = vi.hoisted(() => vi.fn());
+const runUserActionMock = vi.hoisted(() => vi.fn());
+
 interface ConfirmationModalMockProps {
   isOpen: boolean;
   onConfirm: () => void;
@@ -48,6 +51,20 @@ vi.mock('@ui/shortcuts', () => ({
 vi.mock('@shared/components/modals/useModalFocusTrap', () => ({
   useModalFocusTrap: vi.fn(),
 }));
+
+vi.mock('@utils/errorHandler', () => ({
+  errorHandler: {
+    handleInline: (...args: unknown[]) => handleInlineMock(...args),
+  },
+}));
+
+vi.mock('@/core/telemetry/sentry', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/core/telemetry/sentry')>();
+  return {
+    ...original,
+    runUserAction: (...args: unknown[]) => runUserActionMock(...args),
+  };
+});
 
 vi.mock('@modules/kubernetes/config/KubeconfigContext', () => ({
   useKubeconfig: () => ({
@@ -269,6 +286,11 @@ describe('FavSaveModal', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = ReactDOM.createRoot(container);
+    handleInlineMock.mockReset();
+    handleInlineMock.mockImplementation((error: unknown) => ({
+      message: error instanceof Error ? error.message : String(error),
+    }));
+    runUserActionMock.mockImplementation((_action: string, work: () => Promise<unknown>) => work());
   });
 
   afterEach(() => {
@@ -588,7 +610,8 @@ describe('FavSaveModal', () => {
   });
 
   it('keeps the modal open and reports a rejected save', async () => {
-    const onSave = vi.fn().mockRejectedValue(new Error('Favorites use a newer schema'));
+    const error = new Error('Favorites use a newer schema');
+    const onSave = vi.fn().mockRejectedValue(error);
     const onClose = vi.fn();
     await renderComponent(makeProps({ onSave, onClose }));
 
@@ -602,6 +625,11 @@ describe('FavSaveModal', () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
       'Favorites use a newer schema'
     );
+    expect(handleInlineMock).toHaveBeenCalledWith(error, {
+      action: 'saveFavorite',
+      source: 'FavSaveModal',
+    });
+    expect(runUserActionMock).toHaveBeenCalledWith('saveFavorite', expect.any(Function));
   });
 
   it('saves Event provider facet selections in favorites', async () => {

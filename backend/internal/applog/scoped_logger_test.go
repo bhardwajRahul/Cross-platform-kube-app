@@ -1,6 +1,8 @@
 package applog
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -54,4 +56,115 @@ func TestClusterScopedPreservesExplicitClusterMetadata(t *testing.T) {
 	logger.Info("ready", "Refresh", "cluster-b", "Bravo")
 
 	require.Equal(t, []string{"Refresh", "cluster-b", "Bravo"}, base.source)
+}
+
+func TestClusterScopedReturnsBaseWithoutClusterMetadata(t *testing.T) {
+	base := &recordingLogger{}
+
+	require.Same(t, base, ClusterScoped(base, " ", " "))
+	require.Nil(t, ClusterScoped(nil, "cluster-a", "Alpha"))
+}
+
+func TestClusterScopedForwardsDebugAndError(t *testing.T) {
+	base := &recordingLogger{}
+	logger := ClusterScoped(base, "cluster-a", "Alpha")
+
+	logger.Debug("trace")
+	require.Equal(t, "debug", base.method)
+	require.Equal(t, []string{"", "cluster-a", "Alpha"}, base.source)
+
+	logger.Error("boom", "Metrics", "cluster-b")
+	require.Equal(t, "error", base.method)
+	require.Equal(t, []string{"Metrics", "cluster-b", "Alpha"}, base.source)
+}
+
+func TestClusterScopedPreservesStructuredFailureAndClusterMetadata(t *testing.T) {
+	base := &recordingStructuredLogger{}
+	logger := ClusterScoped(base, "cluster-a", "Alpha")
+	cause := errors.New("forbidden")
+
+	ReportError(logger, cause, "load pods", "Refresh")
+
+	require.ErrorIs(t, base.cause, cause)
+	require.Equal(t, "load pods", base.message)
+	require.Equal(t, []string{"Refresh", "cluster-a", "Alpha"}, base.source)
+}
+
+func TestClusterScopedPreservesPanicAndClusterMetadata(t *testing.T) {
+	base := &recordingStructuredLogger{}
+	logger := ClusterScoped(base, "cluster-a", "Alpha")
+
+	ReportPanic(logger, "boom", "stream container logs", "ContainerLogs")
+
+	require.Equal(t, "boom", base.recovered)
+	require.Equal(t, "stream container logs", base.message)
+	require.Equal(t, []string{"ContainerLogs", "cluster-a", "Alpha"}, base.source)
+}
+
+func TestOperationScopedComposesWithClusterScope(t *testing.T) {
+	base := &recordingStructuredLogger{}
+	logger := OperationScoped(ClusterScoped(base, "cluster-a", "Alpha"), "backend-op-7")
+	cause := errors.New("forbidden")
+
+	ReportError(logger, cause, "load pods", "Refresh")
+
+	require.ErrorIs(t, base.cause, cause)
+	require.Equal(t, []string{"Refresh", "cluster-a", "Alpha", "backend-op-7"}, base.source)
+}
+
+func TestClusterScopedFillsClusterMetadataWithoutDroppingOperation(t *testing.T) {
+	base := &recordingLogger{}
+	logger := ClusterScoped(OperationScoped(base, "backend-op-7"), "cluster-a", "Alpha")
+
+	logger.Info("ready", "Refresh")
+
+	require.Equal(t, []string{"Refresh", "cluster-a", "Alpha", "backend-op-7"}, base.source)
+}
+
+func TestOperationIDsAreUnique(t *testing.T) {
+	first := NextOperationID("wails")
+	second := NextOperationID("wails")
+
+	require.NotEqual(t, first, second)
+	require.Contains(t, first, "wails-")
+	require.Contains(t, second, "wails-")
+}
+
+func TestOperationContextRoundTrip(t *testing.T) {
+	ctx := ContextWithOperationID(context.Background(), " request-7 ")
+
+	require.Equal(t, "request-7", OperationIDFromContext(ctx))
+	require.Equal(t, "request-7", OperationIDFromContext(ContextWithOperationID(ctx, " ")))
+}
+
+func TestOperationScopedReturnsBaseWithoutOperationMetadata(t *testing.T) {
+	base := &recordingLogger{}
+
+	require.Same(t, base, OperationScoped(base, " "))
+	require.Nil(t, OperationScoped(nil, "request-7"))
+	require.Contains(t, NextOperationID(" "), "operation-")
+}
+
+func TestOperationScopedForwardsEveryLogShape(t *testing.T) {
+	base := &recordingStructuredLogger{}
+	logger := OperationScoped(base, "request-7")
+
+	logger.Debug("debug", "Refresh")
+	require.Equal(t, "debug", base.method)
+	require.Equal(t, []string{"Refresh", "", "", "request-7"}, base.source)
+
+	logger.Warn("warn", "Refresh")
+	require.Equal(t, "warn", base.method)
+	require.Equal(t, []string{"Refresh", "", "", "request-7"}, base.source)
+
+	logger.Error("error", "Refresh")
+	require.Equal(t, "error", base.method)
+	require.Equal(t, []string{"Refresh", "", "", "request-7"}, base.source)
+
+	ReportPanic(logger, "boom", "panic", "Refresh")
+	require.Equal(t, "boom", base.recovered)
+	require.Equal(t, []string{"Refresh", "", "", "request-7"}, base.source)
+
+	logger.Info("explicit", "Refresh", "cluster-a", "Alpha", "request-explicit")
+	require.Equal(t, []string{"Refresh", "cluster-a", "Alpha", "request-explicit"}, base.source)
 }

@@ -44,6 +44,8 @@ export function createViteConfig(
         release: { name: sentryRelease },
         sourcemaps: { filesToDeleteAfterUpload: './dist/**/*.map' },
         bundleSizeOptimizations: { excludeTracing: true },
+        // Defaults to true, which reports this plugin's own build errors and
+        // timings to Sentry's servers on every release build.
         telemetry: false,
       })
     : [];

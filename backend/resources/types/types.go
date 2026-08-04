@@ -34,12 +34,13 @@ type WindowSettings struct {
 
 // AppSettings represents the application settings
 type AppSettings struct {
+	AnonymizedID                             string   `json:"anonymizedId"`                             // Random local installation identifier used for pseudonymous telemetry
 	AppearanceMode                           string   `json:"appearanceMode"`                           // "light", "dark", or "system"
 	SelectedKubeconfigs                      []string `json:"selectedKubeconfigs"`                      // Multi-cluster selections in "path:context" form
 	UseShortResourceNames                    bool     `json:"useShortResourceNames"`                    // Use short names like "po" for pods in badges/headers
 	DimInactiveNamespaces                    bool     `json:"dimInactiveNamespaces"`                    // Dim namespaces with no workloads in the sidebar
 	ExclusiveNamespaces                      bool     `json:"exclusiveNamespaces"`                      // Allow only one expanded namespace in the sidebar
-	ErrorReportingEnabled                    bool     `json:"errorReportingEnabled"`                    // Send anonymized production error reports
+	ErrorReportingEnabled                    bool     `json:"errorReportingEnabled"`                    // Send production error reports
 	AutoRefreshEnabled                       bool     `json:"autoRefreshEnabled"`                       // Enable automatic refresh cycles
 	RefreshBackgroundClustersEnabled         bool     `json:"refreshBackgroundClustersEnabled"`         // Refresh inactive clusters in the background
 	MetricsRefreshIntervalMs                 int      `json:"metricsRefreshIntervalMs"`                 // Metrics refresh interval (ms)
@@ -89,7 +90,8 @@ type AppPreferenceSchema struct {
 
 // AppSettingsSchema describes the persisted/runtime settings contract.
 type AppSettingsSchema struct {
-	Preferences []AppPreferenceSchema `json:"preferences"`
+	AnonymizedID string                `json:"anonymizedId"`
+	Preferences  []AppPreferenceSchema `json:"preferences"`
 }
 
 // AppPreferenceChange updates one persisted/runtime app preference.

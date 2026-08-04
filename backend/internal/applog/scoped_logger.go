@@ -1,6 +1,10 @@
 package applog
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/luxury-yacht/app/internal/sentry"
+)
 
 // Logger is the shared application-log method shape used across backend packages.
 type Logger interface {
@@ -46,25 +50,33 @@ func (l clusterScopedLogger) Error(message string, source ...string) {
 	l.base.Error(message, l.withCluster(source)...)
 }
 
-func (l clusterScopedLogger) withCluster(source []string) []string {
-	if len(source) >= 3 {
-		return source
-	}
-	if len(source) >= 2 && strings.TrimSpace(source[1]) != "" {
-		if len(source) == 2 && l.clusterName != "" {
-			out := append([]string(nil), source...)
-			return append(out, l.clusterName)
-		}
-		return source
-	}
+func (l clusterScopedLogger) ErrorWithCause(err error, message string, source ...string) {
+	ReportError(l.base, err, message, l.withCluster(source)...)
+}
 
+func (l clusterScopedLogger) ErrorWithCauseAndOperation(
+	err error,
+	message string,
+	operation sentryreporting.Operation,
+	source ...string,
+) {
+	ReportErrorWithOperation(l.base, err, message, operation, l.withCluster(source)...)
+}
+
+func (l clusterScopedLogger) Panic(recovered any, message string, source ...string) {
+	ReportPanic(l.base, recovered, message, l.withCluster(source)...)
+}
+
+func (l clusterScopedLogger) withCluster(source []string) []string {
 	out := append([]string(nil), source...)
-	if len(out) == 0 {
+	for len(out) < 3 {
 		out = append(out, "")
 	}
-	if len(out) == 1 {
-		return append(out, l.clusterID, l.clusterName)
+	if strings.TrimSpace(out[1]) == "" {
+		out[1] = l.clusterID
 	}
-	out[1] = l.clusterID
-	return append(out, l.clusterName)
+	if strings.TrimSpace(out[2]) == "" {
+		out[2] = l.clusterName
+	}
+	return out
 }

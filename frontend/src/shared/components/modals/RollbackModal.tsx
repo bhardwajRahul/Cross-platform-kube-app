@@ -17,7 +17,9 @@ import {
   mergeDiffLines,
 } from '@shared/components/diff/diffUtils';
 import { computeBudgetedLineDiff } from '@shared/components/diff/lineDiff';
+import { ErrorSurface } from '@shared/components/errors/ErrorSurface';
 import { RollbackIcon } from '@shared/components/icons/SharedIcons';
+import { errorHandler } from '@utils/errorHandler';
 import type { backend } from '@wailsjs/go/models';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { readRevisionHistoryForRef, requestData } from '@/core/data-access';
@@ -132,7 +134,12 @@ const RollbackModal = ({
         }
       })
       .catch((err) => {
-        setFetchError(String(err));
+        const details = errorHandler.handleInline(err, {
+          action: 'loadRevisionHistory',
+          source: 'RollbackModal',
+          clusterId,
+        });
+        setFetchError(details.message);
       })
       .finally(() => {
         setLoading(false);
@@ -237,7 +244,12 @@ const RollbackModal = ({
         onClose();
       })
       .catch((err) => {
-        setRollbackError(String(err));
+        const details = errorHandler.handleInline(err, {
+          action: 'rollbackWorkload',
+          source: 'RollbackModal',
+          clusterId,
+        });
+        setRollbackError(details.message);
         setConfirmOpen(false);
       })
       .finally(() => {
@@ -280,7 +292,7 @@ const RollbackModal = ({
 
       {!loading && fetchError && (
         <div className="rollback-error" data-testid="rollback-error">
-          {fetchError}
+          <ErrorSurface kind="reported" message={fetchError} />
         </div>
       )}
 
@@ -368,7 +380,7 @@ const RollbackModal = ({
       <div className="rollback-modal-footer">
         {!!rollbackError && (
           <span className="rollback-modal-footer-error" title={rollbackError}>
-            {rollbackError}
+            <ErrorSurface kind="reported" message={rollbackError} />
           </span>
         )}
         <button

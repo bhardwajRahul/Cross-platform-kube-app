@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/luxury-yacht/app/backend/internal/applog"
 	"github.com/luxury-yacht/app/backend/internal/logsources"
+	"github.com/luxury-yacht/app/backend/resourcekind"
 	"github.com/luxury-yacht/app/backend/resources/common"
 )
 
@@ -105,8 +105,8 @@ func summarizeWebhookConfiguration(count int, selector *LabelSelectorFacts) stri
 	return summary + ", NS: " + strings.Join(pairs, ", ")
 }
 
-func (s *Service) logError(msg string) {
-	applog.Error(s.deps.Logger, msg, logsources.ResourceLoader)
+func (s *Service) logError(err error, msg string, identity resourcekind.Identity) error {
+	return s.deps.LogResourceRequestFailure(err, msg, "get", identity, logsources.ResourceLoader)
 }
 
 func copyStringPtr(value *string) *string {

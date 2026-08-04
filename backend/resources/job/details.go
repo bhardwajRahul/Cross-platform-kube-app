@@ -42,8 +42,8 @@ func (s *Service) Job(namespace, name string) (*JobDetails, error) {
 
 	job, err := client.BatchV1().Jobs(namespace).Get(s.deps.Context, name, metav1.GetOptions{})
 	if err != nil {
-		s.deps.Logger.Error(fmt.Sprintf("Failed to get Job %s/%s: %v", namespace, name, err), logsources.ResourceLoader)
-		return nil, fmt.Errorf("failed to get job: %v", err)
+		err = s.deps.LogResourceRequestFailure(err, fmt.Sprintf("Failed to get Job %s/%s", namespace, name), "get", Identity, logsources.ResourceLoader)
+		return nil, fmt.Errorf("failed to get job: %w", err)
 	}
 
 	podList, err := client.CoreV1().Pods(namespace).List(s.deps.Context, metav1.ListOptions{LabelSelector: metav1.FormatLabelSelector(job.Spec.Selector)})

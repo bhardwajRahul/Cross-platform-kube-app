@@ -42,8 +42,8 @@ func (s *Service) DaemonSet(namespace, name string) (*DaemonSetDetails, error) {
 
 	ds, err := client.AppsV1().DaemonSets(namespace).Get(s.deps.Context, name, metav1.GetOptions{})
 	if err != nil {
-		s.deps.Logger.Error(fmt.Sprintf("Failed to get DaemonSet %s/%s: %v", namespace, name, err), logsources.ResourceLoader)
-		return nil, fmt.Errorf("failed to get daemonset: %v", err)
+		err = s.deps.LogResourceRequestFailure(err, fmt.Sprintf("Failed to get DaemonSet %s/%s", namespace, name), "get", Identity, logsources.ResourceLoader)
+		return nil, fmt.Errorf("failed to get daemonset: %w", err)
 	}
 
 	podsForSet, podMetrics, err := s.getDaemonSetPods(ds)

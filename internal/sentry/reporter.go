@@ -1,0 +1,568 @@
+package sentryreporting
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/getsentry/sentry-go"
+	"github.com/getsentry/sentry-go/attribute"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+)
+
+// Config controls backend error reporting.
+type Config struct {
+	DSN         string
+	Environment string
+	Release     string
+	Transport   sentry.Transport
+}
+
+// Context adds application metadata to an error event.
+type Context struct {
+	Source      string
+	ClusterID   string
+	ClusterName string
+	Operation   Operation
+	OperationID string
+}
+
+// Breadcrumb records diagnostic activity that should precede a later error
+// event without creating an issue of its own.
+type Breadcrumb struct {
+	Category    string
+	Message     string
+	Level       string
+	Data        map[string]any
+	OperationID string
+	Timestamp   time.Time
+}
+
+// Reporter sends backend failures to an error-reporting service.
+type Reporter interface {
+	Enabled() bool
+	SetEnabled(enabled bool) error
+	CaptureException(err error, context Context)
+	CaptureLogError(message string, context Context)
+	CapturePanic(recovered any, context Context)
+	AddBreadcrumb(breadcrumb Breadcrumb)
+	Shutdown(timeout time.Duration) bool
+}
+
+// MetricReporter is an optional capability implemented by reporters that can
+// synchronously flush an application metric. Keeping it separate from Reporter
+// lets error-only test doubles and alternate reporters remain small.
+type MetricReporter interface {
+	CaptureCountMetric(ctx context.Context, name string, count int64, attributes map[string]string) bool
+}
+
+type disabledReporter struct{}
+
+func (disabledReporter) CaptureCountMetric(context.Context, string, int64, map[string]string) bool {
+	return false
+}
+
+// ConfigFromEnvironment lets SENTRY_BACKEND_DSN override the DSN embedded by
+// the application build. Release identity and environment remain build-owned.
+func ConfigFromEnvironment(defaultDSN, defaultRelease, defaultEnvironment string) Config {
+	return Config{
+		DSN:         environmentValue("SENTRY_BACKEND_DSN", defaultDSN),
+		Release:     strings.TrimSpace(defaultRelease),
+		Environment: strings.TrimSpace(defaultEnvironment),
+	}
+}
+
+func environmentValue(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return strings.TrimSpace(fallback)
+}
+
+// New creates a reporter. An empty DSN keeps reporting disabled.
+func New(config Config) (Reporter, error) {
+	if strings.TrimSpace(config.DSN) == "" {
+		return disabledReporter{}, nil
+	}
+	reporter := &sentryReporter{config: config}
+	if err := reporter.SetEnabled(true); err != nil {
+		return nil, err
+	}
+	return reporter, nil
+}
+
+// NewDisabled creates a configured reporter that cannot capture events until
+// SetEnabled(true) is called after the persisted preference has been loaded.
+func NewDisabled(config Config) (Reporter, error) {
+	if strings.TrimSpace(config.DSN) == "" {
+		return disabledReporter{}, nil
+	}
+	return &sentryReporter{config: config}, nil
+}
+
+func newSentryHub(config Config) (*sentry.Hub, error) {
+	client, err := sentry.NewClient(sentry.ClientOptions{
+		Dsn:              config.DSN,
+		Environment:      config.Environment,
+		Release:          config.Release,
+		AttachStacktrace: true,
+		// The SDK's defaults collect user information, headers, cookies, query
+		// parameters, and HTTP bodies. Luxury Yacht never needs those to
+		// diagnose a desktop application failure, so each category is explicitly
+		// disabled rather than relying on a denylist.
+		DataCollection: &sentry.DataCollection{
+			UserInfo:   sentry.Set(false),
+			Cookies:    &sentry.KeyValueCollectionBehavior{Mode: sentry.CollectionOff},
+			HTTPBodies: []sentry.BodyType{},
+			HTTPHeaders: &sentry.HeaderCollectionConfig{
+				Request:  &sentry.KeyValueCollectionBehavior{Mode: sentry.CollectionOff},
+				Response: &sentry.KeyValueCollectionBehavior{Mode: sentry.CollectionOff},
+			},
+			QueryParams: &sentry.KeyValueCollectionBehavior{Mode: sentry.CollectionOff},
+		},
+		// Sentry metrics add a server.address attribute and otherwise fall back
+		// to os.Hostname. A fixed product value prevents the local machine name
+		// from leaving the device while preserving the required SDK attribute.
+		ServerName: "luxury-yacht-desktop",
+		BeforeSend: prepareEventForSend,
+		// The buffered telemetry path makes Client.Close flush before it stops,
+		// which would transmit queued events on opt-out and block the caller
+		// for up to the scheduler timeout. Opting out must simply stop sending.
+		DisableTelemetryBuffer: true,
+		Transport:              config.Transport,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return sentry.NewHub(client, sentry.NewScope()), nil
+}
+
+// LoggedError keeps application log failures exception-shaped so Sentry
+// displays the original message and captures the call stack.
+//
+// The name is user-visible: Sentry titles an issue "<type>: <value>", so these
+// read as "sentryreporting.LoggedError: <message>", which also distinguishes
+// them from captured Go errors and recovered panics.
+type LoggedError string
+
+func (e LoggedError) Error() string {
+	return string(e)
+}
+
+const (
+	reporterModule   = "github.com/luxury-yacht/app/internal/sentry"
+	reporterFuncName = "(*sentryReporter)."
+	appLogModule     = "github.com/luxury-yacht/app/backend/internal/applog"
+	appModule        = "github.com/luxury-yacht/app/backend"
+	appLoggerFunc    = "(*Logger)."
+	// appModulePrefix identifies this module's own packages. sentry-go reports
+	// Frame.Module as the package import path; package main is the exception and
+	// arrives as the bare string "main".
+	appModulePrefix = "github.com/luxury-yacht/app"
+	mainModule      = "main"
+)
+
+// isApplicationFrame reports whether a frame is this module's own code.
+//
+// sentry-go marks everything outside GOROOT as in-app, which includes Wails,
+// client-go, and every other dependency under the module cache. Sentry groups
+// only on frames the SDK associates with the application, so leaving that
+// default in place ties the grouping key to dependency internals: upgrading a
+// dependency would re-group unrelated issues.
+func isApplicationFrame(frame sentry.Frame) bool {
+	return frame.Module == mainModule || strings.HasPrefix(frame.Module, appModulePrefix)
+}
+
+// logForwarders are functions whose only job is handing a message to the
+// application logger. They sit between the failing code and the reporter, so
+// leaving them in makes Sentry name the forwarder as an issue's culprit.
+//
+// A forwarder cannot be recognised structurally — a stack cannot say whether a
+// function did work before logging. So this is a maintained list, and its known
+// failure mode is that a NEW forwarder silently becomes the culprit for every
+// issue its callers report. `LogRequestFailure` was added after exactly that
+// happened live. Register new forwarders here; the guard test pins the shapes.
+var logForwarders = map[string]struct{}{
+	// The per-package "log an error for this package" convention. Only the
+	// error-level name is listed: the application logger forwards ERROR entries
+	// alone, so a warn-level wrapper can never appear in a captured stack.
+	"logError":       {},
+	"logDeleteError": {},
+	// resources/common, fronting every resource read.
+	"LogRequestFailure":                {},
+	"LogResourceRequestFailure":        {},
+	"LogDynamicResourceRequestFailure": {},
+	"LogOperationalFailure":            {},
+}
+
+// isLogWrapperFrame reports whether a frame is a registered log forwarder.
+// sentry-go renders these receiver-qualified, e.g. "(*Service).logError" or
+// "Dependencies.LogRequestFailure", so the receiver is stripped before the
+// method name is compared.
+func isLogWrapperFrame(frame sentry.Frame) bool {
+	name := frame.Function
+	if separator := strings.LastIndexByte(name, '.'); separator >= 0 {
+		name = name[separator+1:]
+	}
+	_, forwarder := logForwarders[name]
+	return forwarder
+}
+
+// isReportingFrame reports whether a frame belongs to the machinery that
+// carries a failure to Sentry rather than to the code that failed. The
+// application logger forwards every ERROR entry through this reporter, so
+// these frames sit innermost on every log-forwarded event.
+//
+// Both package matches are narrowed to the forwarding methods themselves, so a
+// failure originating inside either package still reports its own call site.
+func isReportingFrame(frame sentry.Frame) bool {
+	// Applies in any package: services wrap the logger before calling it.
+	if isLogWrapperFrame(frame) {
+		return true
+	}
+	switch frame.Module {
+	case reporterModule:
+		return strings.HasPrefix(frame.Function, reporterFuncName)
+	case appLogModule:
+		return true
+	case appModule:
+		// Only the logger's own methods; the rest of the package is app code.
+		return strings.HasPrefix(frame.Function, appLoggerFunc)
+	default:
+		return false
+	}
+}
+
+// trimReportingFrames drops the reporting machinery from the innermost end of
+// each captured stack. Sentry derives an issue's culprit and grouping key from
+// the innermost frame, so leaving these in groups every backend ERROR under the
+// reporter instead of the failing call site. Nothing else about the event is
+// changed: message, type, tags, level, and fingerprint are left alone.
+func trimReportingFrames(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
+	if event == nil {
+		return nil
+	}
+	for index := range event.Exception {
+		stacktrace := event.Exception[index].Stacktrace
+		if stacktrace == nil {
+			continue
+		}
+		// Frames run oldest-first, so the machinery is at the tail.
+		end := len(stacktrace.Frames)
+		for end > 0 && isReportingFrame(stacktrace.Frames[end-1]) {
+			end--
+		}
+		// Never emit a stackless exception; an all-machinery stack is still
+		// better than none for locating the report.
+		if end > 0 {
+			stacktrace.Frames = stacktrace.Frames[:end]
+		}
+		// Indexed, not ranged by value: the flag has to land on the real frame.
+		for index := range stacktrace.Frames {
+			stacktrace.Frames[index].InApp = isApplicationFrame(stacktrace.Frames[index])
+		}
+	}
+	return event
+}
+
+func (disabledReporter) Enabled() bool {
+	return false
+}
+
+func (disabledReporter) SetEnabled(bool) error           { return nil }
+func (disabledReporter) CaptureException(error, Context) {}
+func (disabledReporter) CaptureLogError(string, Context) {}
+func (disabledReporter) CapturePanic(any, Context)       {}
+func (disabledReporter) AddBreadcrumb(Breadcrumb)        {}
+func (disabledReporter) Shutdown(time.Duration) bool     { return true }
+
+type sentryReporter struct {
+	mu               sync.RWMutex
+	config           Config
+	hub              *sentry.Hub
+	breadcrumbs      []Breadcrumb
+	clusterAliases   map[string]string
+	nextClusterAlias uint64
+	operationID      atomic.Uint64
+}
+
+const maxReporterBreadcrumbs = 100
+
+func (r *sentryReporter) Enabled() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.hub != nil
+}
+
+func (r *sentryReporter) SetEnabled(enabled bool) error {
+	r.mu.Lock()
+	if enabled {
+		if r.hub != nil {
+			r.mu.Unlock()
+			return nil
+		}
+		hub, err := newSentryHub(r.config)
+		if err != nil {
+			r.mu.Unlock()
+			return err
+		}
+		r.hub = hub
+		r.breadcrumbs = nil
+		r.clusterAliases = nil
+		r.nextClusterAlias = 0
+		r.mu.Unlock()
+		return nil
+	}
+
+	hub := r.hub
+	r.hub = nil
+	r.breadcrumbs = nil
+	r.clusterAliases = nil
+	r.nextClusterAlias = 0
+	r.mu.Unlock()
+	if hub != nil {
+		// Opting out closes the transport without flushing buffered events.
+		hub.Client().Close()
+	}
+	return nil
+}
+
+func (r *sentryReporter) CaptureLogError(message string, context Context) {
+	r.withHub(context, func(hub *sentry.Hub) {
+		hub.CaptureException(LoggedError(message))
+	})
+}
+
+func (r *sentryReporter) CaptureException(err error, context Context) {
+	r.withHub(context, func(hub *sentry.Hub) {
+		addKubernetesStatusTags(hub, err)
+		hub.CaptureException(err)
+	})
+}
+
+func addKubernetesStatusTags(hub *sentry.Hub, err error) {
+	if hub == nil || err == nil {
+		return
+	}
+	var statusErr apierrors.APIStatus
+	if !errors.As(err, &statusErr) {
+		return
+	}
+	status := statusErr.Status()
+	hub.ConfigureScope(func(scope *sentry.Scope) {
+		statusContext := sentry.Context{}
+		if status.Status != "" {
+			statusContext["status"] = status.Status
+		}
+		if status.Reason != "" {
+			scope.SetTag("k8s.reason", string(status.Reason))
+			statusContext["reason"] = string(status.Reason)
+		}
+		if status.Code != 0 {
+			scope.SetTag("http.status_code", strconv.FormatInt(int64(status.Code), 10))
+			statusContext["code"] = status.Code
+		}
+		if status.Details != nil {
+			if status.Details.Name != "" {
+				// The object name is needed only inside the SDK privacy pipeline so
+				// the final event can replace it wherever client-go rendered it.
+				scope.SetTag("_privacy.resource_name", status.Details.Name)
+			}
+			if status.Details.Group != "" {
+				statusContext["group"] = status.Details.Group
+			}
+			if status.Details.Kind != "" {
+				statusContext["kind"] = status.Details.Kind
+			}
+			if status.Details.RetryAfterSeconds != 0 {
+				statusContext["retryAfterSeconds"] = status.Details.RetryAfterSeconds
+			}
+			if len(status.Details.Causes) > 0 {
+				causes := make([]map[string]any, 0, len(status.Details.Causes))
+				for _, cause := range status.Details.Causes {
+					safeCause := map[string]any{
+						"reason": sanitizeKubernetesCauseReason(cause.Type),
+					}
+					if fieldPath := sanitizeKubernetesFieldPath(cause.Field); fieldPath != "" {
+						safeCause["field"] = fieldPath
+					}
+					causes = append(causes, safeCause)
+				}
+				statusContext["causes"] = causes
+			}
+		}
+		if len(statusContext) > 0 {
+			scope.SetContext("kubernetes", statusContext)
+		}
+	})
+}
+
+func (r *sentryReporter) CapturePanic(recovered any, context Context) {
+	r.withHub(context, func(hub *sentry.Hub) {
+		hub.Recover(recovered)
+	})
+}
+
+func (r *sentryReporter) AddBreadcrumb(breadcrumb Breadcrumb) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.hub == nil {
+		return
+	}
+	if breadcrumb.Timestamp.IsZero() {
+		breadcrumb.Timestamp = time.Now()
+	}
+	if breadcrumb.OperationID != "" {
+		data := make(map[string]any, len(breadcrumb.Data)+1)
+		for key, value := range breadcrumb.Data {
+			data[key] = value
+		}
+		data["operationId"] = breadcrumb.OperationID
+		breadcrumb.Data = data
+	}
+	r.breadcrumbs = append(r.breadcrumbs, breadcrumb)
+	if len(r.breadcrumbs) > maxReporterBreadcrumbs {
+		start := len(r.breadcrumbs) - maxReporterBreadcrumbs
+		trimmed := make([]Breadcrumb, maxReporterBreadcrumbs)
+		copy(trimmed, r.breadcrumbs[start:])
+		r.breadcrumbs = trimmed
+	}
+}
+
+func (r *sentryReporter) CaptureCountMetric(
+	ctx context.Context,
+	name string,
+	count int64,
+	attributes map[string]string,
+) bool {
+	r.mu.RLock()
+	if r.hub == nil {
+		r.mu.RUnlock()
+		return false
+	}
+	hub := r.hub.Clone()
+	r.mu.RUnlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = sentry.SetHubOnContext(ctx, hub)
+	metricAttributes := make([]attribute.Builder, 0, len(attributes))
+	for key, value := range attributes {
+		metricAttributes = append(metricAttributes, attribute.String(key, value))
+	}
+	sentry.NewMeter(ctx).Count(name, count, sentry.WithAttributes(metricAttributes...))
+	return hub.FlushWithContext(ctx)
+}
+
+func (r *sentryReporter) Shutdown(timeout time.Duration) bool {
+	r.mu.Lock()
+	hub := r.hub
+	r.hub = nil
+	r.breadcrumbs = nil
+	r.clusterAliases = nil
+	r.nextClusterAlias = 0
+	r.mu.Unlock()
+	if hub == nil {
+		return true
+	}
+	flushed := hub.Flush(timeout)
+	hub.Client().Close()
+	return flushed
+}
+
+func (r *sentryReporter) withHub(context Context, capture func(*sentry.Hub)) {
+	if context.OperationID == "" {
+		context.OperationID = fmt.Sprintf("backend-report-%d", r.operationID.Add(1))
+	}
+	clusterAlias := r.aliasForCluster(context.ClusterID)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.hub == nil {
+		return
+	}
+	hub := r.hub.Clone()
+	for _, breadcrumb := range r.breadcrumbs {
+		if breadcrumb.OperationID != context.OperationID {
+			continue
+		}
+		breadcrumbClusterID, _ := breadcrumb.Data["clusterId"].(string)
+		if breadcrumbClusterID != "" && breadcrumbClusterID != context.ClusterID {
+			continue
+		}
+		// Breadcrumb data is closed-by-default. A future caller adding a field
+		// must deliberately extend this schema after a privacy review; arbitrary
+		// maps never become telemetry just because they were logged.
+		data := map[string]any{}
+		if breadcrumb.OperationID != "" {
+			data["operationId"] = breadcrumb.OperationID
+		}
+		if breadcrumbClusterID != "" && clusterAlias != "" {
+			data["cluster.alias"] = clusterAlias
+		}
+		hub.AddBreadcrumb(&sentry.Breadcrumb{
+			Category:  breadcrumb.Category,
+			Message:   breadcrumb.Message,
+			Level:     sentry.Level(breadcrumb.Level),
+			Data:      data,
+			Timestamp: breadcrumb.Timestamp,
+		}, nil)
+	}
+	hub.ConfigureScope(func(scope *sentry.Scope) {
+		if context.Source != "" {
+			scope.SetTag("source", context.Source)
+		}
+		if clusterAlias != "" {
+			scope.SetTag("cluster.alias", clusterAlias)
+			// These private tags exist only inside the SDK pipeline. The final
+			// privacy boundary uses them to replace raw identifiers embedded in
+			// error text, then removes them before transport.
+			scope.SetTag("_privacy.cluster_id", context.ClusterID)
+			if context.ClusterName != "" {
+				scope.SetTag("_privacy.cluster_name", context.ClusterName)
+			}
+		}
+		if context.OperationID != "" {
+			scope.SetTag("operation.id", context.OperationID)
+		}
+		for index, name := range context.Operation.resourceNamesForRedaction() {
+			scope.SetTag(fmt.Sprintf("_privacy.resource_name.%d", index), name)
+		}
+		if !context.Operation.isZero() || context.OperationID != "" {
+			errorContext := sentry.Context{}
+			if !context.Operation.isZero() {
+				errorContext["operation"] = context.Operation.telemetryContext()
+			}
+			if context.OperationID != "" {
+				errorContext["operationId"] = context.OperationID
+			}
+			scope.SetContext("error", errorContext)
+		}
+	})
+	capture(hub)
+}
+
+func (r *sentryReporter) aliasForCluster(clusterID string) string {
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID == "" {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if alias := r.clusterAliases[clusterID]; alias != "" {
+		return alias
+	}
+	if r.clusterAliases == nil {
+		r.clusterAliases = make(map[string]string)
+	}
+	r.nextClusterAlias++
+	alias := fmt.Sprintf("cluster-%d", r.nextClusterAlias)
+	r.clusterAliases[clusterID] = alias
+	return alias
+}

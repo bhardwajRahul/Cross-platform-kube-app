@@ -8,13 +8,22 @@ type NotifyRefreshErrorOptions = {
   scope?: string;
   message: string;
   category?: DomainCategory;
+  error?: unknown;
+  operationId?: string;
 };
 
 export class RefreshErrorNotifier {
   private lastNotifiedErrors = new Map<string, string>();
   private suppressNetworkErrorsUntil = 0;
 
-  notify({ domain, scope, message, category }: NotifyRefreshErrorOptions): void {
+  notify({
+    domain,
+    scope,
+    message,
+    category,
+    error,
+    operationId,
+  }: NotifyRefreshErrorOptions): void {
     if (this.shouldSuppressNetworkError(message)) {
       return;
     }
@@ -44,12 +53,17 @@ export class RefreshErrorNotifier {
     }
 
     this.lastNotifiedErrors.set(key, message);
-    errorHandler.handle(new Error(message), {
-      source: 'refresh-orchestrator',
-      domain,
-      scope: scope ?? 'global',
-      category,
-    });
+    errorHandler.handle(
+      error ?? new Error(message),
+      {
+        source: 'refresh-orchestrator',
+        domain,
+        scope: scope ?? 'global',
+        category,
+        ...(operationId ? { operationId } : {}),
+      },
+      message
+    );
   }
 
   clear(domain: RefreshDomain, scope?: string): void {

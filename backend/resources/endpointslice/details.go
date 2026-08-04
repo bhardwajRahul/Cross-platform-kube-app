@@ -47,8 +47,8 @@ func (s *Service) EndpointSlice(namespace, name string) (*EndpointSliceDetails, 
 	defer cancel()
 	slice, err := s.deps.KubernetesClient.DiscoveryV1().EndpointSlices(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		s.deps.Logger.Error(fmt.Sprintf("Failed to get endpoint slice %s/%s: %v", namespace, name, err), logsources.ResourceLoader)
-		return nil, fmt.Errorf("failed to get endpoint slice: %v", err)
+		err = s.deps.LogResourceRequestFailure(err, fmt.Sprintf("Failed to get endpoint slice %s/%s", namespace, name), "get", Identity, logsources.ResourceLoader)
+		return nil, fmt.Errorf("failed to get endpoint slice: %w", err)
 	}
 	return s.buildEndpointSliceDetails(namespace, name, slice), nil
 }

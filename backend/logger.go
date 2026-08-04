@@ -1,10 +1,12 @@
 package backend
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
-	"github.com/luxury-yacht/app/internal/sentryreporting"
+	"github.com/luxury-yacht/app/backend/internal/logsources"
+	"github.com/luxury-yacht/app/internal/sentry"
 )
 
 // LogLevel represents the severity level of a log entry
@@ -42,6 +44,7 @@ type LogEntry struct {
 	Source      string `json:"source,omitempty"`
 	ClusterID   string `json:"clusterId,omitempty"`
 	ClusterName string `json:"clusterName,omitempty"`
+	OperationID string `json:"operationId,omitempty"`
 }
 
 // Logger manages application logs in memory
@@ -71,9 +74,20 @@ func NewLogger(maxSize int, reporters ...sentryreporting.Reporter) *Logger {
 }
 
 // Log adds a log entry with the specified level, message, and optional metadata.
-// The variadic fields are interpreted as source, cluster ID, and cluster name
-// in that order.
+// The variadic fields are interpreted as source, cluster ID, cluster name, and
+// operation ID in that order.
 func (l *Logger) Log(level LogLevel, message string, source ...string) {
+	l.log(level, message, nil, nil, sentryreporting.Operation{}, source...)
+}
+
+func (l *Logger) log(
+	level LogLevel,
+	message string,
+	cause error,
+	recovered any,
+	operation sentryreporting.Operation,
+	source ...string,
+) {
 	if l == nil {
 		return // Safely handle nil logger
 	}
@@ -99,6 +113,9 @@ func (l *Logger) Log(level LogLevel, message string, source ...string) {
 	if len(source) > 2 {
 		entry.ClusterName = source[2]
 	}
+	if len(source) > 3 {
+		entry.OperationID = source[3]
+	}
 
 	// Add the entry
 	l.entries = append(l.entries, entry)
@@ -122,11 +139,52 @@ func (l *Logger) Log(level LogLevel, message string, source ...string) {
 	if emit != nil {
 		emit("app-logs:added", AppLogsAddedEvent{Sequence: emittedSequence})
 	}
-	if level == LogLevelError && reporter != nil {
-		reporter.CaptureMessage(entry.Message, sentryreporting.Context{
-			Source:    entry.Source,
-			ClusterID: entry.ClusterID,
+	if level != LogLevelError && reporter != nil && entry.Source != logsources.ErrorCapture {
+		data := map[string]any{}
+		if entry.ClusterID != "" {
+			data["clusterId"] = entry.ClusterID
+		}
+		if entry.ClusterName != "" {
+			data["clusterName"] = entry.ClusterName
+		}
+		reporter.AddBreadcrumb(sentryreporting.Breadcrumb{
+			Category:    entry.Source,
+			Message:     entry.Message,
+			Level:       breadcrumbLevel(level),
+			Data:        data,
+			OperationID: entry.OperationID,
 		})
+	}
+	// ErrorCapture republishes third-party stderr (klog from client-go and
+	// friends). Those lines are not this application failing and their stack is
+	// the scraper, so they stay in the local log but never reach the reporter.
+	if level == LogLevelError && reporter != nil && entry.Source != logsources.ErrorCapture {
+		context := sentryreporting.Context{
+			Source:      entry.Source,
+			ClusterID:   entry.ClusterID,
+			ClusterName: entry.ClusterName,
+			OperationID: entry.OperationID,
+		}
+		if recovered != nil {
+			context.Operation = operation
+			reporter.CapturePanic(recovered, context)
+		} else if cause != nil {
+			context.Operation = operation
+			reporter.CaptureException(cause, context)
+		} else {
+			reporter.CaptureLogError(entry.Message, context)
+		}
+	}
+}
+
+func breadcrumbLevel(level LogLevel) string {
+	switch level {
+	case LogLevelDebug:
+		return "debug"
+	case LogLevelWarn:
+		return "warning"
+	default:
+		return "info"
 	}
 }
 
@@ -148,6 +206,41 @@ func (l *Logger) Warn(message string, source ...string) {
 // Error logs an error message
 func (l *Logger) Error(message string, source ...string) {
 	l.Log(LogLevelError, message, source...)
+}
+
+// ErrorWithCause keeps the original error available to the reporter while the
+// local application log retains the operation and error text users expect.
+func (l *Logger) ErrorWithCause(err error, message string, source ...string) {
+	if err == nil {
+		l.Error(message, source...)
+		return
+	}
+	l.log(LogLevelError, fmt.Sprintf("%s: %v", message, err), err, nil, sentryreporting.Operation{}, source...)
+}
+
+// ErrorWithCauseAndOperation attaches only a structured, privacy-reviewed
+// telemetry operation. The local log retains the full human-readable message.
+func (l *Logger) ErrorWithCauseAndOperation(
+	err error,
+	message string,
+	operation sentryreporting.Operation,
+	source ...string,
+) {
+	if err == nil {
+		l.Error(message, source...)
+		return
+	}
+	l.log(LogLevelError, fmt.Sprintf("%s: %v", message, err), err, nil, operation, source...)
+}
+
+// Panic keeps a recovered value available to the reporter while retaining a
+// readable error entry in the local application log.
+func (l *Logger) Panic(recovered any, message string, source ...string) {
+	if recovered == nil {
+		l.Error(message, source...)
+		return
+	}
+	l.log(LogLevelError, fmt.Sprintf("%s: %v", message, recovered), nil, recovered, sentryreporting.Operation{}, source...)
 }
 
 // GetEntries returns a copy of all log entries

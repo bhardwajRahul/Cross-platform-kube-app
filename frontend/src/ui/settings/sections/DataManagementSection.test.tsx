@@ -81,7 +81,7 @@ describe('DataManagementSection', () => {
     expect(container.textContent).toContain('Import Favorites');
     expect(container.textContent).toContain('Error Reporting');
     expect(container.textContent).toContain(
-      'Send anonymized data when an error occurs that is used to improve the app. Toggle it off if you do not wish to participate.'
+      'Sends pseudonymous error diagnostics linked to this installation. Reports exclude request data and redact common credentials and infrastructure identifiers. Disable this to stop future reports.'
     );
   });
 
@@ -91,10 +91,10 @@ describe('DataManagementSection', () => {
     ).map((label) => label.textContent);
     const text = container.textContent ?? '';
 
-    expect(subsectionLabels).toEqual(['Export and Import', 'Data Privacy']);
+    expect(subsectionLabels).toEqual(['Export and Import', 'Telemetry']);
     expect(text.indexOf('Export and Import')).toBeLessThan(text.indexOf('Settings'));
-    expect(text.indexOf('Favorites')).toBeLessThan(text.indexOf('Data Privacy'));
-    expect(text.indexOf('Data Privacy')).toBeLessThan(text.indexOf('Error Reporting'));
+    expect(text.indexOf('Favorites')).toBeLessThan(text.indexOf('Telemetry'));
+    expect(text.indexOf('Telemetry')).toBeLessThan(text.indexOf('Error Reporting'));
   });
 
   it('persists the Error Reporting toggle', async () => {

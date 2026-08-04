@@ -26,7 +26,7 @@ const lintWithPlugin = (pluginName, source) => {
       plugins: [{ path: `./${pluginName}.grit` }],
     })
   );
-  const sourcePath = path.join(directory, 'adversarial.ts');
+  const sourcePath = path.join(directory, 'adversarial.tsx');
   writeFileSync(sourcePath, source);
 
   return spawnSync(
@@ -36,10 +36,14 @@ const lintWithPlugin = (pluginName, source) => {
   );
 };
 
-const lintWithProjectConfig = (source, baseDirectory = path.join(process.cwd(), 'src')) => {
+const lintWithProjectConfig = (
+  source,
+  baseDirectory = path.join(process.cwd(), 'src'),
+  fileName = 'adversarial.ts'
+) => {
   const directory = mkdtempSync(path.join(baseDirectory, '.biome-boundary-'));
   temporaryDirectories.push(directory);
-  const sourcePath = path.join(directory, 'adversarial.ts');
+  const sourcePath = path.join(directory, fileName);
   writeFileSync(sourcePath, source);
   return spawnSync(
     path.join(process.cwd(), 'node_modules', '.bin', 'biome'),
@@ -74,7 +78,48 @@ describe('Biome architectural boundary plugins', () => {
       'orchestrator.triggerManualRefreshForContext({});',
       'triggerManualRefreshForContext',
     ],
-  ])('rejects forbidden calls enforced by %s', (pluginName, source, diagnostic) => {
+    ['no-direct-console-error', 'console.error("load failed", error);', 'errorHandler'],
+    [
+      'no-inline-error-text',
+      'const loadError = "failed"; const View = () => <div>{loadError}</div>;',
+      'ErrorSurface',
+    ],
+    [
+      'no-inline-error-text',
+      'const error = new Error("failed"); const View = () => <div>{error}</div>;',
+      'ErrorSurface',
+    ],
+    [
+      'no-inline-error-text',
+      'const result = { error: "failed" }; const View = () => <div>{result.error}</div>;',
+      'ErrorSurface',
+    ],
+    [
+      'no-inline-error-text',
+      'const error = new Error("failed"); const View = () => <div>{error.message}</div>;',
+      'ErrorSurface',
+    ],
+    [
+      'no-inline-error-text',
+      'const error = new Error("failed"); const View = () => <div>{String(error)}</div>;',
+      'ErrorSurface',
+    ],
+    [
+      'no-inline-error-text',
+      'const error = new Error("failed"); const View = () => <div>{error.toString()}</div>;',
+      'ErrorSurface',
+    ],
+    [
+      'no-inline-error-text',
+      'const message = "failed"; const View = () => <div className="inline-error">{message}</div>;',
+      'ErrorSurface',
+    ],
+    [
+      'no-inline-error-text',
+      'const message = "failed"; const View = () => <div role="alert">{message}</div>;',
+      'ErrorSurface',
+    ],
+  ])('rejects forbidden calls enforced by %s: %s', (pluginName, source, diagnostic) => {
     const result = lintWithPlugin(pluginName, source);
 
     expect(result.status).not.toBe(0);
@@ -91,6 +136,15 @@ describe('Biome architectural boundary plugins', () => {
     expect(result.status).toBe(0);
   });
 
+  it('allows error text passed as data to the shared presentation boundary', () => {
+    const result = lintWithPlugin(
+      'no-inline-error-text',
+      'const validationError = "invalid"; const View = () => <ErrorSurface kind="validation" message={validationError} />;'
+    );
+
+    expect(result.status).toBe(0);
+  });
+
   it.each([
     ['fetch("/api/resources");', 'direct fetch calls'],
     ['runtime.QueryPermissions([]);', 'dataAccess'],
@@ -100,11 +154,23 @@ describe('Biome architectural boundary plugins', () => {
     ['EventsOn("cluster:auth:failed", handler);', 'clusterWorkspaceStore'],
     ['orchestrator.fetchScopedDomain("cluster", {});', 'fetchScopedDomain'],
     ['orchestrator.triggerManualRefreshForContext({});', 'triggerManualRefreshForContext'],
+    ['console.error("load failed", error);', 'errorHandler'],
   ])('rejects forbidden calls through the real project config', (source, diagnostic) => {
     const result = lintWithProjectConfig(source);
 
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toContain(diagnostic);
+  });
+
+  it('rejects inline error text through the real project TSX configuration', () => {
+    const result = lintWithProjectConfig(
+      'const loadError = "failed"; const View = () => <div>{loadError}</div>;',
+      path.join(process.cwd(), 'src'),
+      'adversarial.tsx'
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain('ErrorSurface');
   });
 
   it('rejects relative imports of the generated backend App binding', () => {

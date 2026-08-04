@@ -27,10 +27,12 @@ import {
   ValidateThemeClusterPattern,
 } from '@/core/backend-api';
 import { eventBus } from '@/core/events';
+import { captureBootstrapError } from '@/core/telemetry/sentry';
 import {
   APPEARANCE_BOOTSTRAP_STORAGE_KEY,
   saveAppearanceBootstrapToLocalStorage,
 } from '@/utils/appearanceBootstrap';
+import { reportOperationalError } from '@/utils/errorHandler';
 import {
   DEFAULT_OBJ_PANEL_LOGS_API_TIMESTAMP_FORMAT,
   getObjPanelLogsApiTimestampFormatValidationError,
@@ -77,6 +79,10 @@ export interface AppPreferences {
   accentColorDark: string;
   linkColorLight: string;
   linkColorDark: string;
+}
+
+export interface HydratedAppPreferences extends AppPreferences {
+  anonymizedId: string;
 }
 
 export type AppPreferenceKey = keyof AppPreferences;
@@ -134,6 +140,7 @@ export interface ColorPreferenceInput {
 }
 
 interface AppSettingsPayload {
+  anonymizedId?: string;
   appearanceMode?: string;
   useShortResourceNames?: boolean;
   dimInactiveNamespaces?: boolean;
@@ -447,6 +454,7 @@ const FALLBACK_PREFERENCE_METADATA: {
 };
 
 let preferenceCache: AppPreferences = { ...DEFAULT_PREFERENCES };
+let anonymizedIdCache = '';
 let hydrated = false;
 let preferenceSchemaByKey = new Map<AppPreferenceKey, AppPreferenceMetadata>();
 
@@ -838,7 +846,7 @@ const fireAndForgetPreferenceUpdate = (
   options?: PreferenceMutationOptions
 ): void => {
   void optimisticPreferenceUpdate(updates, changes, options).catch((error) => {
-    console.error(label, error);
+    reportOperationalError(error, { source: 'AppPreferences', action: label });
   });
 };
 
@@ -886,28 +894,36 @@ const createPreferenceWorkflow = <T>({
   return { commit, commitDebounced, cancelPending };
 };
 
-const fetchAppSettings = async (): Promise<AppSettingsPayload | null> => {
+interface PreferenceFetchResult<T> {
+  value: T | null;
+  failed: boolean;
+}
+
+const fetchAppSettings = async (): Promise<PreferenceFetchResult<AppSettingsPayload>> => {
   try {
     const settings = (await requestAppState({
       resource: 'app-settings',
       read: () => readAppSettings(),
     })) as AppSettingsPayload | null;
-    return settings ?? null;
-  } catch {
-    return null;
+    return { value: settings ?? null, failed: false };
+  } catch (error) {
+    captureBootstrapError(error, { action: 'loadAppSettings' });
+    return { value: null, failed: true };
   }
 };
 
-const fetchAppSettingsSchema = async (): Promise<types.AppSettingsSchema | null> => {
+const fetchAppSettingsSchema = async (): Promise<
+  PreferenceFetchResult<types.AppSettingsSchema>
+> => {
   try {
     const schema = (await requestAppState({
       resource: 'app-settings-schema',
       read: () => readAppSettingsSchema(),
     })) as types.AppSettingsSchema | null;
-    return schema ?? null;
+    return { value: schema ?? null, failed: false };
   } catch (error) {
-    console.error('Failed to load app settings schema:', error);
-    return null;
+    captureBootstrapError(error, { action: 'loadAppSettingsSchema' });
+    return { value: null, failed: true };
   }
 };
 
@@ -919,28 +935,37 @@ const schemaPayloadFromPreferences = (
     return null;
   }
   const nextSchema = new Map<AppPreferenceKey, AppPreferenceMetadata>();
-  const payload = schema.preferences.reduce<AppSettingsPayload>((nextPayload, entry) => {
-    const metadata = schemaEntryToMetadata(entry);
-    if (!metadata) {
+  const payload = schema.preferences.reduce<AppSettingsPayload>(
+    (nextPayload, entry) => {
+      const metadata = schemaEntryToMetadata(entry);
+      if (!metadata) {
+        return nextPayload;
+      }
+      nextSchema.set(metadata.key, metadata);
+      (nextPayload as Record<string, unknown>)[metadata.key] = metadata.currentValue;
       return nextPayload;
-    }
-    nextSchema.set(metadata.key, metadata);
-    (nextPayload as Record<string, unknown>)[metadata.key] = metadata.currentValue;
-    return nextPayload;
-  }, {});
+    },
+    { anonymizedId: schema.anonymizedId }
+  );
   preferenceSchemaByKey = nextSchema;
   return payload;
 };
 
 export const hydrateAppPreferences = async (options?: {
   force?: boolean;
-}): Promise<AppPreferences> => {
+}): Promise<HydratedAppPreferences> => {
   if (hydrated && !options?.force) {
-    return { ...preferenceCache };
+    return { ...preferenceCache, anonymizedId: anonymizedIdCache };
   }
 
   const backendSchema = await fetchAppSettingsSchema();
-  const backendSettings = schemaPayloadFromPreferences(backendSchema) ?? (await fetchAppSettings());
+  let backendSettings = schemaPayloadFromPreferences(backendSchema.value);
+  let settingsReadFailed = false;
+  if (backendSettings === null) {
+    const settingsResult = await fetchAppSettings();
+    backendSettings = settingsResult.value;
+    settingsReadFailed = settingsResult.failed;
+  }
   const preferences: AppPreferences = {
     appearanceMode: normalizeAppearanceMode(backendSettings?.appearanceMode),
     useShortResourceNames: normalizeBooleanPreferenceValue(
@@ -955,10 +980,14 @@ export const hydrateAppPreferences = async (options?: {
       'exclusiveNamespaces',
       backendSettings?.exclusiveNamespaces
     ),
-    errorReportingEnabled: normalizeBooleanPreferenceValue(
-      'errorReportingEnabled',
-      backendSettings?.errorReportingEnabled
-    ),
+    // If the persisted preference cannot be read, reporting must fail closed:
+    // sending the hydration error would otherwise risk overriding a saved opt-out.
+    errorReportingEnabled: settingsReadFailed
+      ? false
+      : normalizeBooleanPreferenceValue(
+          'errorReportingEnabled',
+          backendSettings?.errorReportingEnabled
+        ),
     autoRefreshEnabled: normalizeBooleanPreferenceValue(
       'autoRefreshEnabled',
       backendSettings?.autoRefreshEnabled
@@ -1063,12 +1092,13 @@ export const hydrateAppPreferences = async (options?: {
     linkColorDark: normalizeColorPreferenceValue('linkColorDark', backendSettings?.linkColorDark),
   };
 
+  anonymizedIdCache = backendSettings?.anonymizedId?.trim() ?? '';
   hydrated = true;
   updatePreferenceCache(preferences);
   persistAppearanceModeToLocalStorage(preferences.appearanceMode);
   persistAppearanceBootstrapToLocalStorage();
 
-  return { ...preferenceCache };
+  return { ...preferenceCache, anonymizedId: anonymizedIdCache };
 };
 
 export const getAppearanceModePreference = (): AppearanceMode => {
@@ -1538,6 +1568,7 @@ export const matchThemeForCluster = async (contextName: string): Promise<types.T
 // Test helper to reset cached values between test runs.
 export const resetAppPreferencesCacheForTesting = (): void => {
   preferenceCache = { ...DEFAULT_PREFERENCES };
+  anonymizedIdCache = '';
   preferenceSchemaByKey = new Map();
   hydrated = false;
 };

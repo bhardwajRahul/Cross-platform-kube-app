@@ -33,8 +33,8 @@ func NewService(deps common.Dependencies) *Service {
 func (s *Service) ServiceAccount(namespace, name string) (*ServiceAccountDetails, error) {
 	sa, err := s.deps.KubernetesClient.CoreV1().ServiceAccounts(namespace).Get(s.deps.Context, name, metav1.GetOptions{})
 	if err != nil {
-		s.deps.Logger.Error(fmt.Sprintf("Failed to get service account %s/%s: %v", namespace, name, err), "RBAC")
-		return nil, fmt.Errorf("failed to get service account: %v", err)
+		err = s.deps.LogResourceRequestFailure(err, fmt.Sprintf("Failed to get service account %s/%s", namespace, name), "get", Identity, "RBAC")
+		return nil, fmt.Errorf("failed to get service account: %w", err)
 	}
 
 	pods := s.listNamespacePods(namespace)

@@ -14,6 +14,7 @@ import (
 	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/system"
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
+	"github.com/luxury-yacht/app/internal/sentry"
 	"github.com/stretchr/testify/require"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
@@ -452,6 +453,8 @@ func TestStartupBetaExpiryShowsDialogAndQuits(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	app := newTestAppWithDefaults(t)
+	reporter := &recordingErrorReporter{}
+	app.logger = NewLogger(100, reporter)
 	ctx := context.Background()
 	app.Ctx = ctx
 
@@ -470,4 +473,9 @@ func TestStartupBetaExpiryShowsDialogAndQuits(t *testing.T) {
 
 	require.True(t, dialogCalled, "beta expiry dialog expected")
 	require.True(t, quitCalled, "app should quit when beta expired")
+	reporter.mu.Lock()
+	require.Len(t, reporter.exceptions, 1)
+	require.Contains(t, reporter.exceptions[0].err.Error(), "expired")
+	require.Equal(t, sentryreporting.Operation{}, reporter.exceptions[0].context.Operation)
+	reporter.mu.Unlock()
 }

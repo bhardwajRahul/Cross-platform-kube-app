@@ -7,10 +7,12 @@
  */
 
 import { buildObjectActionTarget, runStartPortForward } from '@shared/actions/objectActionClient';
+import { ErrorSurface } from '@shared/components/errors/ErrorSurface';
 import { PortForwardIcon } from '@shared/components/icons/SharedIcons';
 import ModalHeader from '@shared/components/modals/ModalHeader';
 import ModalSurface from '@shared/components/modals/ModalSurface';
 import { useModalFocusTrap } from '@shared/components/modals/useModalFocusTrap';
+import { errorHandler } from '@utils/errorHandler';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { readTargetPortsForRef, requestData } from '@/core/data-access';
 import './PortForwardModal.css';
@@ -245,9 +247,12 @@ const PortForwardModal = ({ target, onClose, onStarted }: PortForwardModalProps)
       onStarted?.(sessionId);
       onClose();
     } catch (err) {
-      // Extract error message without showing a toast - the modal displays the error
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message || 'Failed to start port forward');
+      const details = errorHandler.handleInline(err, {
+        action: 'startPortForward',
+        source: 'PortForwardModal',
+        clusterId: target.clusterId,
+      });
+      setError(details.message || 'Failed to start port forward');
     } finally {
       setIsLoading(false);
     }
@@ -379,7 +384,11 @@ const PortForwardModal = ({ target, onClose, onStarted }: PortForwardModalProps)
       </div>
 
       {/* Error Message */}
-      {!!error && <div className="port-forward-error">{error}</div>}
+      {!!error && (
+        <div className="port-forward-error">
+          <ErrorSurface kind="status" message={error} />
+        </div>
+      )}
 
       {/* Footer */}
       <div className="port-forward-footer">

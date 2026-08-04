@@ -166,10 +166,12 @@ const catalogStreamMocks = vi.hoisted(() => ({
 
 const errorHandlerMock = vi.hoisted(() => ({
   handle: vi.fn(),
+  reportOperationalError: vi.fn(),
 }));
 
 vi.mock('@utils/errorHandler', () => ({
   errorHandler: errorHandlerMock,
+  reportOperationalError: errorHandlerMock.reportOperationalError,
 }));
 
 const orchestratorInternals = refreshOrchestrator as unknown as RefreshOrchestratorInternals;
@@ -208,6 +210,7 @@ describe('refreshOrchestrator', () => {
     clientMocks.invalidateRefreshBaseURLMock.mockClear();
     clientMocks.setMetricsActiveMock.mockClear();
     errorHandlerMock.handle.mockReset();
+    errorHandlerMock.reportOperationalError.mockReset();
 
     orchestratorInternals.configs?.clear?.();
     orchestratorInternals.unsubscriptions?.clear?.();
@@ -1616,7 +1619,8 @@ describe('refreshOrchestrator', () => {
 
   it('records errors and surfaces them via the error handler', async () => {
     const scope = 'cluster-a';
-    clientMocks.fetchSnapshotMock.mockRejectedValue(new Error('offline'));
+    const fetchError = new Error('offline');
+    clientMocks.fetchSnapshotMock.mockRejectedValue(fetchError);
 
     refreshOrchestrator.registerDomain({
       domain: 'cluster-config',
@@ -1631,14 +1635,42 @@ describe('refreshOrchestrator', () => {
     expect(state.status).toBe('error');
     expect(state.error).toBe('offline');
     expect(errorHandlerMock.handle).toHaveBeenCalledWith(
-      expect.objectContaining({ message: 'offline' }),
+      fetchError,
       expect.objectContaining({
         source: 'refresh-orchestrator',
         domain: 'cluster-config',
         scope,
-      })
+      }),
+      'offline'
     );
     expect(getRefreshState().pendingRequests).toBe(0);
+  });
+
+  it('carries a broker correlation id into refresh error reporting', async () => {
+    const scope = 'cluster-correlation';
+    const fetchError = new Error('correlated refresh failed');
+    clientMocks.fetchSnapshotMock.mockRejectedValue(fetchError);
+
+    refreshOrchestrator.registerDomain({
+      domain: 'cluster-config',
+      refresherName: 'cluster-config',
+      category: 'cluster',
+    });
+    refreshOrchestrator.setScopedDomainEnabled('cluster-config', scope, true);
+
+    await refreshOrchestrator.fetchScopedDomain('cluster-config', scope, {
+      isManual: true,
+      correlationId: 'broker-read-42',
+    });
+
+    expect(errorHandlerMock.handle).toHaveBeenCalledWith(
+      fetchError,
+      expect.objectContaining({
+        source: 'refresh-orchestrator',
+        operationId: 'broker-read-42',
+      }),
+      'correlated refresh failed'
+    );
   });
 
   it('clears cached refresh errors gracefully even when no entry exists', () => {
@@ -2651,9 +2683,7 @@ describe('refreshOrchestrator', () => {
     expect(cleanup).toHaveBeenCalled();
   });
 
-  it('cleans up pending streaming promises and logs errors when cleanup fails', async () => {
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-
+  it('cleans up pending streaming promises and reports errors when cleanup fails', async () => {
     refreshOrchestrator.registerDomain({
       domain: 'catalog',
       refresherName: CLUSTER_REFRESHERS.browse,
@@ -2694,21 +2724,27 @@ describe('refreshOrchestrator', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(pendingCleanup).toHaveBeenCalled();
-    expect(consoleSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(consoleSpy.mock.calls).toEqual(
+    expect(errorHandlerMock.reportOperationalError.mock.calls).toEqual(
       expect.arrayContaining([
         [
-          expect.stringContaining('Failed to stop pending streaming domain catalog::scope=test'),
           expect.any(Error),
+          expect.objectContaining({
+            action: 'stopPendingStreamingDomain',
+            domain: 'catalog',
+            scope: 'scope=test',
+          }),
         ],
         [
-          expect.stringContaining('Failed to stop streaming domain catalog::scope=test'),
           expect.any(Error),
+          expect.objectContaining({
+            action: 'stopStreamingDomain',
+            domain: 'catalog',
+            scope: 'scope=test',
+          }),
         ],
       ])
     );
     expect(orchestratorInternals.coordinatorRuntime.streamingCleanup.has(key)).toBe(false);
-    consoleSpy.mockRestore();
   });
 
   it('skips scheduling scoped streaming when domain is disabled', async () => {
@@ -3024,7 +3060,6 @@ describe('refreshOrchestrator', () => {
   });
 
   it('resets state when streaming start fails', async () => {
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const startError = new Error('stream boom');
 
     containerLogsStreamMocks.start.mockRejectedValueOnce(startError);
@@ -3046,28 +3081,23 @@ describe('refreshOrchestrator', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(containerLogsStreamMocks.start).toHaveBeenCalledWith('team-a');
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to start streaming domain container-logs::team-a'),
-      startError
-    );
     expect(orchestratorInternals.coordinatorRuntime.streamingCleanup.size).toBe(0);
     const scopedState = getScopedDomainState('container-logs', 'team-a');
     expect(scopedState.status).toBe('error');
     expect(scopedState.error).toContain('stream boom');
     expect(errorHandlerMock.handle).toHaveBeenCalledWith(
-      expect.any(Error),
+      startError,
       expect.objectContaining({
         domain: 'container-logs',
         scope: 'team-a',
-      })
+      }),
+      'stream boom'
     );
-
-    consoleSpy.mockRestore();
   });
 
   it('surfaces streaming initialisation failures and clears loading state when scope creation fails', async () => {
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    clientMocks.ensureRefreshBaseURLMock.mockRejectedValueOnce(new Error('bootstrap failed'));
+    const bootstrapError = new Error('bootstrap failed');
+    clientMocks.ensureRefreshBaseURLMock.mockRejectedValueOnce(bootstrapError);
 
     refreshOrchestrator.registerDomain({
       domain: 'catalog',
@@ -3089,19 +3119,14 @@ describe('refreshOrchestrator', () => {
     const state = getScopedDomainState('catalog', 'limit=100');
     expect(state.status).toBe('error');
     expect(state.error).toContain('bootstrap failed');
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to initialise streaming for catalog'),
-      expect.any(Error)
-    );
     expect(errorHandlerMock.handle).toHaveBeenCalledWith(
-      expect.any(Error),
+      bootstrapError,
       expect.objectContaining({
         domain: 'catalog',
         scope: 'limit=100',
-      })
+      }),
+      'bootstrap failed'
     );
-
-    consoleSpy.mockRestore();
   });
 
   it('deduplicates identical refresh errors for streaming and snapshot domains', async () => {
