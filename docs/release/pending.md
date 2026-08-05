@@ -1,9 +1,7 @@
-### Changed
+### Added
 
-- Removed unused `Status` column from Browse views.
-- Updated error reporting to be more actionable while maintaining privacy guarantees.
+### Changed
 
 ### Fixed
 
-- `API` column is now sortable in Browse views.
-- Favorites was not restoring filter text data in some cases.
+- When a Kubernetes watch is denied due to the user's permissions, this is the app behaving as designed and is no longer reported as an application error.

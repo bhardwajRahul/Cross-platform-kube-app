@@ -5,10 +5,7 @@
  * Provides shared helper functions for the frontend.
  */
 
-import {
-  captureUserVisibleError,
-  recordExpectedCondition as recordExpectedTelemetryCondition,
-} from '@/core/telemetry/sentry';
+import { captureUserVisibleError } from '@/core/telemetry/sentry';
 
 export const ErrorCategory = {
   NETWORK: 'NETWORK',
@@ -37,6 +34,8 @@ export type ErrorSeverity = (typeof ErrorSeverity)[keyof typeof ErrorSeverity];
 // (e.g. "authorization" in "rbac.authorization.k8s.io" is not an auth error).
 const authWordPattern = /\bauth\b/;
 const authTokenPattern = /\btokens?\b/;
+const forbiddenStatusPattern =
+  /\b(?:http(?:\/\d(?:\.\d)?)?\s+403|status(?:\s+(?:code|of))?(?:\s*[:=]\s*|\s+)403)\b/;
 
 export interface ErrorDetails {
   message: string;
@@ -91,6 +90,17 @@ class ErrorHandler {
     const errorString = this.getErrorString(error);
     const lowerError = errorString.toLowerCase();
 
+    // Permission markers are more specific than API group or resource names
+    // containing broad words such as "network".
+    if (
+      lowerError.includes('forbidden') ||
+      lowerError.includes('permission') ||
+      lowerError.includes('access denied') ||
+      forbiddenStatusPattern.test(lowerError)
+    ) {
+      return ErrorCategory.PERMISSION;
+    }
+
     // Network errors
     if (
       lowerError.includes('network') ||
@@ -113,16 +123,6 @@ class ErrorHandler {
       lowerError.includes('401')
     ) {
       return ErrorCategory.AUTHENTICATION;
-    }
-
-    // Permission errors
-    if (
-      lowerError.includes('forbidden') ||
-      lowerError.includes('permission') ||
-      lowerError.includes('access denied') ||
-      lowerError.includes('403')
-    ) {
-      return ErrorCategory.PERMISSION;
     }
 
     // Not found errors
@@ -337,13 +337,11 @@ class ErrorHandler {
     this.logError(details);
   }
 
-  private recordExpectedCondition(error: unknown, details: ErrorDetails): void {
-    recordExpectedTelemetryCondition(error, {
-      category: details.category,
-      severity: details.severity,
-      context: details.context,
-    });
-    this.logError(details);
+  private logExpectedCondition(details: ErrorDetails): void {
+    if (!this.options.enableLogging || !this.options.logToConsole) {
+      return;
+    }
+    console.info(`[EXPECTED] ${details.category}:`, details.technicalMessage, details.context);
   }
 
   /**
@@ -374,7 +372,7 @@ class ErrorHandler {
       isAuthOverlayError;
 
     if (suppressNotification) {
-      this.recordExpectedCondition(error, errorDetails);
+      this.logExpectedCondition(errorDetails);
     } else {
       this.reportError(error, errorDetails);
       // Store in history

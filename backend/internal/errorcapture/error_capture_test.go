@@ -57,6 +57,62 @@ func TestCaptureIfInterestingStoresLastAndEmits(t *testing.T) {
 	}
 }
 
+func TestPermissionDeniedStderrStaysLocal(t *testing.T) {
+	const line = `E0805 reflector.go:200] "Failed to watch" err="applicationnetworkpolicies.networking.k8s.aws is forbidden: User cannot watch resource"`
+	c := &Capture{buffer: bytes.NewBufferString(line + "\n")}
+	global = c
+	defer func() {
+		global = nil
+		eventEmitter = nil
+		logSink = nil
+	}()
+
+	var emitted []string
+	var logs []string
+	SetEventEmitter(func(msg string) {
+		emitted = append(emitted, msg)
+	})
+	SetLogSink(func(level, message string) {
+		logs = append(logs, level+":"+message)
+	})
+	c.flushCapturedLines([]byte(line + "\n"))
+
+	require.Empty(t, emitted, "expected RBAC denial to remain a local log")
+	require.Equal(t, []string{"info:" + line}, logs, "expected RBAC denial to be informational")
+	require.Empty(t, c.last(), "expected RBAC denial not to become captured application context")
+	original := errors.New("refresh failed")
+	require.Same(t, original, Enhance(original), "expected RBAC denial not to enhance an application error")
+}
+
+func TestExpectedConditionDoesNotMatchIncidental403Numbers(t *testing.T) {
+	lines := []string{
+		`E0805 10:15:30.123456 17 reflector.go:403] "Failed to watch" err="connection refused"`,
+		`E0805 10:15:30.123456 403 shared_informer.go:314] unable to sync caches`,
+		`E0805 10:15:30.123456 17 round_trippers.go:63] dial tcp 10.0.0.1:403: i/o timeout`,
+		`E0805 10:15:30.123456 17 transport.go:301] request took 403 ms`,
+	}
+
+	for _, line := range lines {
+		t.Run(line, func(t *testing.T) {
+			require.False(t, isExpectedCondition(strings.ToLower(line)))
+		})
+	}
+}
+
+func TestExpectedConditionMatchesStructured403Status(t *testing.T) {
+	lines := []string{
+		`request failed with HTTP 403`,
+		`request failed with status code 403`,
+		`server responded with a status of 403`,
+	}
+
+	for _, line := range lines {
+		t.Run(line, func(t *testing.T) {
+			require.True(t, isExpectedCondition(strings.ToLower(line)))
+		})
+	}
+}
+
 func TestCaptureIfInterestingIgnoresTokenSubstrings(t *testing.T) {
 	c := &Capture{buffer: &bytes.Buffer{}}
 	global = c

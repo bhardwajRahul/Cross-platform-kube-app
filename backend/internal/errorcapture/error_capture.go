@@ -39,10 +39,11 @@ var (
 	eventEmitter func(string)                       // function to emit events
 	logSink      func(level string, message string) // function to handle log messages
 	// Word-boundary matching avoids false positives from resource names like "podidentityassociations".
-	tokenPattern   = regexp.MustCompile(`\btokens?\b`)
-	ssoPattern     = regexp.MustCompile(`\bsso\b`)
-	expiredPattern = regexp.MustCompile(`\bexpired\b`)
-	authPatterns   = []*regexp.Regexp{
+	tokenPattern           = regexp.MustCompile(`\btokens?\b`)
+	ssoPattern             = regexp.MustCompile(`\bsso\b`)
+	expiredPattern         = regexp.MustCompile(`\bexpired\b`)
+	forbiddenStatusPattern = regexp.MustCompile(`\b(?:http(?:/\d(?:\.\d)?)?\s+403|status(?:\s+(?:code|of))?(?:\s*[:=]\s*|\s+)403)\b`)
+	authPatterns           = []*regexp.Regexp{
 		tokenPattern,
 		ssoPattern,
 		expiredPattern,
@@ -51,6 +52,12 @@ var (
 		regexp.MustCompile(`\bforbidden\b`),
 		regexp.MustCompile(`\bpermission\s+denied\b`),
 		regexp.MustCompile(`\baccess\s+denied\b`),
+	}
+	expectedConditionPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`\bforbidden\b`),
+		regexp.MustCompile(`\bpermission\s+denied\b`),
+		regexp.MustCompile(`\baccess\s+denied\b`),
+		forbiddenStatusPattern,
 	}
 	fallbackErrorPatterns = []*regexp.Regexp{
 		regexp.MustCompile(`\berrors?\b`),
@@ -242,6 +249,9 @@ func (c *Capture) captureIfInteresting(output string) {
 			return
 		}
 		lower := strings.ToLower(msg)
+		if isExpectedCondition(lower) {
+			return
+		}
 		if !isAuthRelated(lower) {
 			return
 		}
@@ -304,12 +314,19 @@ func scanRecentError(recent string) string {
 		if line == "" {
 			continue
 		}
+		if isExpectedCondition(strings.ToLower(line)) {
+			continue
+		}
 
 		if isFallbackErrorLine(line) {
 			return line
 		}
 	}
 	return ""
+}
+
+func isExpectedCondition(lower string) bool {
+	return matchAnyPattern(lower, expectedConditionPatterns)
 }
 
 // Enhance augments an error with recent stderr output when helpful.
@@ -379,7 +396,11 @@ func getLogSink() func(level string, message string) {
 func (c *Capture) emitToLogSink(chunk []byte) {
 	forEachTrimmedLine(string(chunk), func(msg string) {
 		if sink := getLogSink(); sink != nil {
-			sink(logclassify.Classify(msg), msg)
+			level := logclassify.Classify(msg)
+			if isExpectedCondition(strings.ToLower(msg)) {
+				level = "info"
+			}
+			sink(level, msg)
 		}
 	})
 }
