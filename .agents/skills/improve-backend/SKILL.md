@@ -27,7 +27,8 @@ them to the user, and fix the one they choose.
 
 ### Phase 1: Gather Context
 
-- Read `backend/AGENTS.md` and `frontend/AGENTS.md` for current conventions.
+- Use the injected backend instructions. Open frontend contracts only when a
+  candidate crosses into a frontend consumer.
 - If an `[area]` argument was given, scope file discovery to that package tree.
   Otherwise, sample broadly: pick 8-12 files across different packages, weighting
   toward files with recent git activity or high line counts.
@@ -120,13 +121,16 @@ After the list, ask: **"Which one should we fix? (pick a number, or say 'rescan'
 ## Fixing the Chosen Issue
 
 1. Read the full file context around the issue.
-2. Make the minimal correct fix — don't refactor surrounding code.
+2. Make the narrowest complete fix. Refactor the affected path when its current
+   structure is the source of the issue; do not expand into unrelated cleanup.
 3. If the fix changes a function signature or response shape, check all callers.
-4. If cross-boundary, note what the frontend needs to change (but don't change it
-   here — use `/improve-frontend` for that).
-5. Write or update tests to cover the fix. Aim for the fix to be test-driven:
-   write the failing test first when practical.
-6. Run `mage qc:prerelease` to verify nothing breaks.
+4. If the fix crosses into frontend consumers, trace the producer and every
+   affected consumer, read the owning frontend guidance, and change both layers
+   together. If that materially expands the user's requested scope, explain the
+   tradeoff and ask before editing rather than leaving a one-sided fix.
+5. Follow mandatory red/green/refactor TDD: write and run the failing test first,
+   make the minimum production change that passes it, then refactor under green.
+6. Follow the root final validation gate against the latest worktree.
 
 ## What NOT to Do
 
