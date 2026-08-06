@@ -6,13 +6,46 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/luxury-yacht/app/backend/internal/containerlogs"
+	"github.com/luxury-yacht/app/backend/refresh"
+	"github.com/luxury-yacht/app/backend/refresh/system"
 	"github.com/stretchr/testify/require"
 	"k8s.io/client-go/rest"
 )
+
+type settingsMetricsPoller struct {
+	mu        sync.Mutex
+	intervals []time.Duration
+}
+
+func (*settingsMetricsPoller) Start(context.Context) error { return nil }
+func (*settingsMetricsPoller) Stop(context.Context) error  { return nil }
+
+func (p *settingsMetricsPoller) SetInterval(interval time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.intervals = append(p.intervals, interval)
+}
+
+func (p *settingsMetricsPoller) recordedIntervals() []time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]time.Duration(nil), p.intervals...)
+}
+
+type failingSettingsReporter struct {
+	*recordingInstallationReporter
+	err error
+}
+
+func (r *failingSettingsReporter) SetEnabled(enabled bool) error {
+	_ = r.recordingErrorReporter.SetEnabled(enabled)
+	return r.err
+}
 
 func newTestAppWithDefaults(t *testing.T) *App {
 	t.Helper()
@@ -786,6 +819,124 @@ func TestLoadSettingsFileNormalizesDefaults(t *testing.T) {
 	require.Equal(t, defaultKubeconfigSearchPaths(), settings.Kubeconfig.SearchPaths)
 }
 
+func TestNormalizeSettingsFileIsIdempotentAndPreservesExplicitValues(t *testing.T) {
+	falseValue := false
+	settings := &settingsFile{
+		Preferences: settingsPreferences{
+			AppearanceMode:        "dark",
+			DimInactiveNamespaces: &falseValue,
+			ExclusiveNamespaces:   &falseValue,
+			ErrorReportingEnabled: &falseValue,
+			Refresh: &settingsRefresh{
+				MetricsIntervalMs: 1234,
+			},
+			KubernetesAPI: &settingsKubernetesAPI{
+				ClientQPS:                      maxKubernetesClientQPS + 1,
+				ClientBurst:                    maxKubernetesClientBurst + 1,
+				PermissionSSRRFetchConcurrency: maxPermissionSSRRFetchConcurrency + 1,
+			},
+			ObjPanelLogs: &settingsObjPanelLogs{
+				BufferMaxSize:       maxObjPanelLogsBufferMaxSize + 1,
+				TargetPerScopeLimit: maxObjPanelLogsTargetPerScopeLimit + 1,
+				TargetGlobalLimit:   maxObjPanelLogsTargetGlobalLimit + 1,
+				APITimestampFormat:  "HH:mm:ss",
+			},
+			GridTablePersistenceMode:      "per-cluster",
+			DefaultTablePageSize:          maxTablePageSize + 1,
+			DefaultObjectPanelPosition:    "bottom",
+			ObjectPanelDockedRightWidth:   maxObjectPanelLayoutValue + 1,
+			ObjectPanelDockedBottomHeight: maxObjectPanelLayoutValue + 1,
+			ObjectPanelFloatingWidth:      maxObjectPanelLayoutValue + 1,
+			ObjectPanelFloatingHeight:     maxObjectPanelLayoutValue + 1,
+			ObjectPanelFloatingX:          maxObjectPanelLayoutValue + 1,
+			ObjectPanelFloatingY:          maxObjectPanelLayoutValue + 1,
+			PaletteHue:                    175,
+			PaletteSaturation:             65,
+			PaletteBrightness:             -10,
+			Themes: []Theme{
+				{ID: "custom", Name: "Custom"},
+				{ID: defaultThemeID, Name: "Legacy default", ClusterPattern: "ignored"},
+				{ID: defaultThemeID, Name: "Duplicate default"},
+			},
+		},
+	}
+
+	got := normalizeSettingsFile(settings)
+	require.Same(t, settings, got)
+	require.False(t, *got.Preferences.DimInactiveNamespaces)
+	require.False(t, *got.Preferences.ExclusiveNamespaces)
+	require.False(t, *got.Preferences.ErrorReportingEnabled)
+	require.Equal(t, maxKubernetesClientQPS, got.Preferences.KubernetesAPI.ClientQPS)
+	require.Equal(t, maxKubernetesClientBurst, got.Preferences.KubernetesAPI.ClientBurst)
+	require.Equal(t, maxPermissionSSRRFetchConcurrency, got.Preferences.KubernetesAPI.PermissionSSRRFetchConcurrency)
+	require.Equal(t, maxObjPanelLogsBufferMaxSize, got.Preferences.ObjPanelLogs.BufferMaxSize)
+	require.Equal(t, maxObjPanelLogsTargetPerScopeLimit, got.Preferences.ObjPanelLogs.TargetPerScopeLimit)
+	require.Equal(t, maxObjPanelLogsTargetGlobalLimit, got.Preferences.ObjPanelLogs.TargetGlobalLimit)
+	require.Equal(t, maxTablePageSize, got.Preferences.DefaultTablePageSize)
+	require.Equal(t, maxObjectPanelLayoutValue, got.Preferences.ObjectPanelDockedRightWidth)
+	require.Equal(t, maxObjectPanelLayoutValue, got.Preferences.ObjectPanelFloatingY)
+	require.Equal(t, 175, got.Preferences.PaletteHueLight)
+	require.Equal(t, 175, got.Preferences.PaletteHueDark)
+	require.Zero(t, got.Preferences.PaletteHue)
+	require.Equal(t, defaultKubeconfigSearchPaths(), got.Kubeconfig.SearchPaths)
+	require.Equal(t, []string{"custom", defaultThemeID}, []string{got.Preferences.Themes[0].ID, got.Preferences.Themes[1].ID})
+	require.Equal(t, defaultThemeName, got.Preferences.Themes[1].Name)
+	require.Empty(t, got.Preferences.Themes[1].ClusterPattern)
+
+	once, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.Same(t, got, normalizeSettingsFile(got))
+	twice, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.JSONEq(t, string(once), string(twice))
+}
+
+func TestNormalizeSettingsFileCompletesZeroValueDefaults(t *testing.T) {
+	settings := normalizeSettingsFile(&settingsFile{})
+
+	require.Equal(t, settingsSchemaVersion, settings.SchemaVersion)
+	require.Equal(t, "system", settings.Preferences.AppearanceMode)
+	require.True(t, *settings.Preferences.DimInactiveNamespaces)
+	require.True(t, *settings.Preferences.ExclusiveNamespaces)
+	require.True(t, *settings.Preferences.ErrorReportingEnabled)
+	require.Equal(t, &settingsRefresh{Auto: true, Background: true, MetricsIntervalMs: defaultMetricsIntervalMs()}, settings.Preferences.Refresh)
+	require.Equal(t, &settingsKubernetesAPI{
+		ClientQPS:                      defaultKubernetesClientQPS,
+		ClientBurst:                    defaultKubernetesClientBurst,
+		PermissionSSRRFetchConcurrency: defaultPermissionSSRRFetchConcurrency,
+	}, settings.Preferences.KubernetesAPI)
+	require.Equal(t, &settingsObjPanelLogs{
+		BufferMaxSize:       defaultObjPanelLogsBufferMaxSize,
+		TargetPerScopeLimit: defaultObjPanelLogsTargetPerScopeLimit,
+		TargetGlobalLimit:   defaultObjPanelLogsTargetGlobalLimit,
+		APITimestampFormat:  defaultObjPanelLogsAPITimestampFormat,
+	}, settings.Preferences.ObjPanelLogs)
+	require.Equal(t, defaultTablePageSize, settings.Preferences.DefaultTablePageSize)
+	require.Equal(t, []Theme{defaultTheme()}, settings.Preferences.Themes)
+	require.Equal(t, defaultKubeconfigSearchPaths(), settings.Kubeconfig.SearchPaths)
+}
+
+func TestNormalizeSettingsFileCompletesPartiallyPresentNestedDefaults(t *testing.T) {
+	settings := normalizeSettingsFile(&settingsFile{Preferences: settingsPreferences{
+		Refresh:      &settingsRefresh{},
+		ObjPanelLogs: &settingsObjPanelLogs{},
+	}})
+
+	require.Equal(t, defaultMetricsIntervalMs(), settings.Preferences.Refresh.MetricsIntervalMs)
+	require.Equal(t, defaultObjPanelLogsAPITimestampFormat, settings.Preferences.ObjPanelLogs.APITimestampFormat)
+}
+
+func TestNormalizeSettingsFileNilUsesCompleteDefaults(t *testing.T) {
+	settings := normalizeSettingsFile(nil)
+
+	require.NotNil(t, settings)
+	require.Equal(t, settingsSchemaVersion, settings.SchemaVersion)
+	require.NotNil(t, settings.Preferences.Refresh)
+	require.NotNil(t, settings.Preferences.KubernetesAPI)
+	require.NotNil(t, settings.Preferences.ObjPanelLogs)
+	require.Equal(t, []Theme{defaultTheme()}, settings.Preferences.Themes)
+}
+
 func TestAppGetAppSettingsSchemaIncludesBackendOwnedDefaults(t *testing.T) {
 	setTestConfigEnv(t)
 	app := newTestAppWithDefaults(t)
@@ -920,6 +1071,133 @@ func TestAppUpdateAppPreferencesDoesNotApplySideEffectsWhenPersistenceFails(t *t
 	require.Contains(t, err.Error(), "forced write failure")
 	require.Equal(t, 144, app.appSettings.ObjPanelLogsTargetPerScopeLimit)
 	require.Equal(t, 144, containerlogs.GetPerScopeTargetLimit())
+}
+
+func TestApplySettingsSideEffectsAllowsMissingReporter(t *testing.T) {
+	app := newTestAppWithDefaults(t)
+	settings := getDefaultAppSettings()
+	settings.ErrorReportingEnabled = true
+
+	require.NotPanics(t, func() {
+		app.applySettingsSideEffects(&preparedPreferenceUpdate{
+			settings: settings,
+			effects:  settingsSideEffects{errorReporting: true},
+		})
+	})
+}
+
+func TestApplyContainerLogsGlobalLimitSideEffectAllowsMissingLimiter(t *testing.T) {
+	var app *App
+	require.NotPanics(t, func() {
+		app.applyContainerLogsGlobalLimitSideEffect(true, 2)
+	})
+}
+
+func TestApplySettingsSideEffectsDoesNotScheduleRegistrationAfterReporterFailure(t *testing.T) {
+	setTestConfigEnv(t)
+	reporter := &failingSettingsReporter{
+		recordingInstallationReporter: newRecordingInstallationReporter(true),
+		err:                           errors.New("forced reporter failure"),
+	}
+	app := NewApp(reporter)
+	app.Ctx = context.Background()
+	settings := getDefaultAppSettings()
+	settings.ErrorReportingEnabled = true
+
+	app.applySettingsSideEffects(&preparedPreferenceUpdate{
+		settings: settings,
+		effects:  settingsSideEffects{errorReporting: true},
+	})
+
+	require.Never(t, func() bool {
+		reporter.metricMu.Lock()
+		defer reporter.metricMu.Unlock()
+		return len(reporter.metrics) > 0
+	}, 100*time.Millisecond, 10*time.Millisecond)
+	entries := app.logger.GetEntries()
+	require.NotEmpty(t, entries)
+	require.Contains(t, entries[len(entries)-1].Message, "Could not update error reporting: forced reporter failure")
+}
+
+func TestApplySettingsSideEffectsRetimesEveryConnectedCluster(t *testing.T) {
+	app := newTestAppWithDefaults(t)
+	first := &settingsMetricsPoller{}
+	second := &settingsMetricsPoller{}
+	app.refreshSubsystems = map[string]*system.Subsystem{
+		"cluster-a": {Manager: refresh.NewManager(nil, nil, nil, first, nil)},
+		"cluster-b": {Manager: refresh.NewManager(nil, nil, nil, second, nil)},
+		"cluster-c": nil,
+		"cluster-d": {},
+	}
+	settings := getDefaultAppSettings()
+	settings.MetricsRefreshIntervalMs = 4321
+
+	app.applySettingsSideEffects(&preparedPreferenceUpdate{
+		settings: settings,
+		effects:  settingsSideEffects{metricsInterval: true},
+	})
+
+	want := []time.Duration{4321 * time.Millisecond}
+	require.Equal(t, want, first.recordedIntervals())
+	require.Equal(t, want, second.recordedIntervals())
+}
+
+func TestApplySettingsSideEffectsAppliesCombinedEffects(t *testing.T) {
+	setTestConfigEnv(t)
+	previousPerScopeLimit := containerlogs.GetPerScopeTargetLimit()
+	t.Cleanup(func() { containerlogs.SetPerScopeTargetLimit(previousPerScopeLimit) })
+
+	reporter := &recordingErrorReporter{}
+	app := newTestAppWithDefaults(t)
+	app.errorReporter = reporter
+	app.kubeAPIMetrics = newKubernetesAPIMetricsRegistry()
+	rateLimiter := newMutableKubernetesRateLimiter(defaultKubernetesClientQPS, defaultKubernetesClientBurst)
+	app.clusterClients = map[string]*clusterClients{
+		"cluster-a": {
+			meta:        ClusterMeta{ID: "cluster-a", Name: "Cluster A"},
+			rateLimiter: rateLimiter,
+			restConfig:  &rest.Config{QPS: float32(defaultKubernetesClientQPS), Burst: defaultKubernetesClientBurst},
+		},
+	}
+	metricsPoller := &settingsMetricsPoller{}
+	app.refreshSubsystems = map[string]*system.Subsystem{
+		"cluster-a": {Manager: refresh.NewManager(nil, nil, nil, metricsPoller, nil)},
+	}
+	require.Nil(t, app.containerLogsTargetLimiter)
+
+	settings := getDefaultAppSettings()
+	settings.ErrorReportingEnabled = false
+	settings.KubernetesClientQPS = 111
+	settings.KubernetesClientBurst = 333
+	settings.ObjPanelLogsTargetPerScopeLimit = 77
+	settings.ObjPanelLogsTargetGlobalLimit = 2
+	settings.MetricsRefreshIntervalMs = 6789
+	app.applySettingsSideEffects(&preparedPreferenceUpdate{
+		settings: settings,
+		effects: settingsSideEffects{
+			errorReporting:             true,
+			kubernetesClientRateLimits: true,
+			containerLogsPerScopeLimit: true,
+			containerLogsGlobalLimit:   true,
+			metricsInterval:            true,
+		},
+	})
+
+	reporter.mu.Lock()
+	require.Equal(t, []bool{false}, reporter.enabledChanges)
+	reporter.mu.Unlock()
+	qps, burst := rateLimiter.Limits()
+	require.Equal(t, 111, qps)
+	require.Equal(t, 333, burst)
+	require.Equal(t, 77, containerlogs.GetPerScopeTargetLimit())
+	require.Equal(t, []time.Duration{6789 * time.Millisecond}, metricsPoller.recordedIntervals())
+
+	require.NotNil(t, app.containerLogsTargetLimiter)
+	session := app.containerLogsTargetLimiter.StartSession("cluster-a", "scope-a")
+	defer session.Release()
+	allowed, skipped := session.UpdateDesired([]string{"a", "b", "c"})
+	require.Len(t, allowed, 2)
+	require.Equal(t, 1, skipped)
 }
 
 func TestLoadSettingsFileMigratesOldAppearanceModePreference(t *testing.T) {

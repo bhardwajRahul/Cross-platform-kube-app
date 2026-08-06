@@ -12,6 +12,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -427,6 +428,61 @@ func TestReporterAutoCorrelatesErrorsWithoutAttachingUnscopedBreadcrumbs(t *test
 	require.Contains(t, event.Tags["operation.id"], "backend-report-")
 }
 
+func TestReporterWithHubSkipsCaptureWhenDisabled(t *testing.T) {
+	reporter := &sentryReporter{}
+	captured := false
+
+	reporter.withHub(Context{Source: "App"}, func(*sentry.Hub) {
+		captured = true
+	})
+
+	require.False(t, captured)
+}
+
+func TestReporterWithHubUsesIsolatedCloneAndProtectsCaptureLifecycle(t *testing.T) {
+	rootScope := sentry.NewScope()
+	rootScope.SetTag("root", "retained")
+	reporter := &sentryReporter{hub: sentry.NewHub(nil, rootScope)}
+	var capturedHub *sentry.Hub
+	lockAvailableDuringCapture := true
+
+	reporter.withHub(Context{Source: "Refresh", OperationID: "refresh-op-1"}, func(hub *sentry.Hub) {
+		capturedHub = hub
+		lockAvailableDuringCapture = reporter.mu.TryLock()
+		if lockAvailableDuringCapture {
+			reporter.mu.Unlock()
+		}
+		hub.ConfigureScope(func(scope *sentry.Scope) {
+			scope.SetTag("callback", "isolated")
+		})
+	})
+
+	require.NotNil(t, capturedHub)
+	require.NotSame(t, reporter.hub, capturedHub)
+	require.False(t, lockAvailableDuringCapture)
+	capturedEvent := capturedHub.Scope().ApplyToEvent(sentry.NewEvent(), nil, nil)
+	require.Equal(t, "retained", capturedEvent.Tags["root"])
+	require.Equal(t, "Refresh", capturedEvent.Tags["source"])
+	require.Equal(t, "refresh-op-1", capturedEvent.Tags["operation.id"])
+	require.Equal(t, "isolated", capturedEvent.Tags["callback"])
+
+	rootEvent := reporter.hub.Scope().ApplyToEvent(sentry.NewEvent(), nil, nil)
+	require.Equal(t, map[string]string{"root": "retained"}, rootEvent.Tags)
+}
+
+func TestReporterWithHubReleasesLifecycleLockAfterCapturePanic(t *testing.T) {
+	reporter := &sentryReporter{hub: sentry.NewHub(nil, sentry.NewScope())}
+
+	require.PanicsWithValue(t, "capture failed", func() {
+		reporter.withHub(Context{OperationID: "refresh-op-1"}, func(*sentry.Hub) {
+			panic("capture failed")
+		})
+	})
+
+	require.True(t, reporter.mu.TryLock())
+	reporter.mu.Unlock()
+}
+
 func TestReporterKeepsBreadcrumbsIsolatedByOperation(t *testing.T) {
 	transport := &recordingTransport{}
 	reporter, err := New(Config{
@@ -539,6 +595,76 @@ func TestReporterAddsKubernetesFieldCausesToContext(t *testing.T) {
 	require.Equal(t, "[field]", causes[1]["field"])
 	require.NotContains(t, causes[1], "message")
 	require.NotContains(t, event.Exception[0].Value, "private-workload-7")
+}
+
+func TestAddKubernetesStatusTagsIgnoresNilAndNonStatusErrors(t *testing.T) {
+	hub := sentry.NewHub(nil, sentry.NewScope())
+
+	require.NotPanics(t, func() {
+		addKubernetesStatusTags(nil, errors.New("not a Kubernetes status"))
+		addKubernetesStatusTags(hub, nil)
+		addKubernetesStatusTags(hub, errors.New("not a Kubernetes status"))
+	})
+
+	event := hub.Scope().ApplyToEvent(sentry.NewEvent(), nil, nil)
+	require.NotContains(t, event.Tags, "k8s.reason")
+	require.NotContains(t, event.Tags, "http.status_code")
+	require.NotContains(t, event.Contexts, "kubernetes")
+}
+
+func TestAddKubernetesStatusTagsProjectsAllowlistedStatusFacts(t *testing.T) {
+	hub := sentry.NewHub(nil, sentry.NewScope())
+	statusErr := &apierrors.StatusError{ErrStatus: metav1.Status{
+		Status: metav1.StatusFailure,
+		Reason: metav1.StatusReasonTimeout,
+		Code:   504,
+		Details: &metav1.StatusDetails{
+			Name:              "private-workload-7",
+			Group:             "apps",
+			Kind:              "Deployment",
+			RetryAfterSeconds: 4,
+			Causes: []metav1.StatusCause{
+				{Type: metav1.CauseTypeFieldValueInvalid, Field: "spec.template.spec.containers[0].image"},
+				{Type: metav1.CauseType("PrivateReason"), Field: "metadata.labels[customer-prod]"},
+				{Type: metav1.CauseTypeFieldValueRequired},
+			},
+		},
+	}}
+
+	addKubernetesStatusTags(hub, fmt.Errorf("wrapped: %w", statusErr))
+
+	event := hub.Scope().ApplyToEvent(sentry.NewEvent(), nil, nil)
+	require.Equal(t, map[string]string{
+		"_privacy.resource_name": "private-workload-7",
+		"http.status_code":       "504",
+		"k8s.reason":             "Timeout",
+	}, event.Tags)
+	require.Equal(t, sentry.Context{
+		"status":            metav1.StatusFailure,
+		"reason":            string(metav1.StatusReasonTimeout),
+		"code":              int32(504),
+		"group":             "apps",
+		"kind":              "Deployment",
+		"retryAfterSeconds": int32(4),
+		"causes": []map[string]any{
+			{"reason": string(metav1.CauseTypeFieldValueInvalid), "field": "spec.template.spec.containers[0].image"},
+			{"reason": "Unknown", "field": "[field]"},
+			{"reason": string(metav1.CauseTypeFieldValueRequired)},
+		},
+	}, event.Contexts["kubernetes"])
+}
+
+func TestAddKubernetesStatusTagsKeepsNameOnlyAsPrivateReplacement(t *testing.T) {
+	hub := sentry.NewHub(nil, sentry.NewScope())
+	statusErr := &apierrors.StatusError{ErrStatus: metav1.Status{
+		Details: &metav1.StatusDetails{Name: "private-workload-7"},
+	}}
+
+	addKubernetesStatusTags(hub, statusErr)
+
+	event := hub.Scope().ApplyToEvent(sentry.NewEvent(), nil, nil)
+	require.Equal(t, "private-workload-7", event.Tags["_privacy.resource_name"])
+	require.NotContains(t, event.Contexts, "kubernetes")
 }
 
 func TestReporterRedactsPrivateResourceNameFromNonAPIStatusErrors(t *testing.T) {

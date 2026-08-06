@@ -22,6 +22,30 @@ import (
 const (
 	connectionRefusedReason = "connection refused"
 	connectionResetReason   = "connection reset"
+	noSuchHostReason        = "no such host"
+	tlsHandshakeReason      = "tls handshake"
+)
+
+type retryTextReason struct {
+	token  string
+	reason string
+}
+
+var (
+	urlRetryTextReasons = []retryTextReason{
+		{token: connectionRefusedReason, reason: connectionRefusedReason},
+		{token: connectionResetReason, reason: connectionResetReason},
+		{token: noSuchHostReason, reason: "dns lookup failure"},
+		{token: "tls", reason: tlsHandshakeReason},
+	}
+	genericRetryTextReasons = []retryTextReason{
+		{token: connectionRefusedReason, reason: connectionRefusedReason},
+		{token: connectionResetReason, reason: connectionResetReason},
+		{token: noSuchHostReason, reason: noSuchHostReason},
+		{token: "server misbehaving", reason: "server misbehaving"},
+		{token: "i/o timeout", reason: "i/o timeout"},
+		{token: tlsHandshakeReason, reason: tlsHandshakeReason},
+	}
 )
 
 var fetchRetrySleep = time.Sleep
@@ -146,71 +170,107 @@ func executeWithRetry[T any](ctx context.Context, a *App, clusterID, resourceKin
 	if target == "" {
 		target = "cluster scope"
 	}
+	operation := fetchRetryOperation[T]{
+		app: a, clusterID: clusterID, resourceKind: resourceKind, target: target, fetch: fetchFunc,
+	}
+	return operation.run(ctx)
+}
 
+type fetchRetryOperation[T any] struct {
+	app          *App
+	clusterID    string
+	resourceKind string
+	target       string
+	fetch        func() (T, error)
+}
+
+func (o fetchRetryOperation[T]) run(ctx context.Context) (T, error) {
+	var zero T
 	for attempt := 0; attempt < config.ResourceFetchMaxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return zero, err
 		}
-
-		result, err := fetchFunc()
+		result, err := o.fetch()
 		if err == nil {
-			if a != nil {
-				// Record per-cluster transport success if clusterID is provided
-				if clusterID != "" {
-					a.recordClusterTransportSuccess(clusterID)
-				}
-				if attempt > 0 && a.telemetryRecorder != nil {
-					a.telemetryRecorder.RecordRetrySuccess()
-				}
-			}
+			o.recordSuccess(attempt)
 			return result, nil
 		}
-
 		retryable, reason := isRetryableFetchError(err)
-		isLastAttempt := attempt == config.ResourceFetchMaxAttempts-1
-
-		if retryable && !isLastAttempt {
-			backoff := config.ResourceFetchRetryBaseDelay << attempt
-			if backoff > config.ResourceFetchRetryMaxDelay {
-				backoff = config.ResourceFetchRetryMaxDelay
-			}
-			if a != nil {
-				a.logger.Warn(fmt.Sprintf("Retrying %s %s due to %s (attempt %d/%d)", resourceKind, target, reason, attempt+1, config.ResourceFetchMaxAttempts-1), logsources.ResourceLoader, clusterID, a.clusterNameForID(clusterID))
-				if a.telemetryRecorder != nil {
-					a.telemetryRecorder.RecordRetryAttempt(err)
-				}
-			}
-			if a == nil {
-				fetchRetrySleep(backoff)
-				continue
-			}
-			if err := contextSleep(ctx, backoff); err != nil {
+		if retryable && attempt < config.ResourceFetchMaxAttempts-1 {
+			if err := o.waitForRetry(ctx, attempt, reason, err); err != nil {
 				return zero, err
 			}
 			continue
 		}
-
-		if retryable {
-			if a != nil {
-				if a.telemetryRecorder != nil {
-					a.telemetryRecorder.RecordRetryExhausted(err)
-				}
-				// Record per-cluster transport failure if clusterID is provided
-				if clusterID != "" {
-					a.recordClusterTransportFailure(clusterID, reason, err)
-				}
-			}
-		} else if a != nil {
-			// Record per-cluster transport success if clusterID is provided
-			if clusterID != "" {
-				a.recordClusterTransportSuccess(clusterID)
-			}
-		}
-
+		o.recordTerminalError(retryable, reason, err)
 		return zero, err
 	}
+	return zero, fmt.Errorf("exceeded retry attempts for %s %s", o.resourceKind, o.target)
+}
 
-	return zero, fmt.Errorf("exceeded retry attempts for %s %s", resourceKind, target)
+func (o fetchRetryOperation[T]) recordSuccess(attempt int) {
+	if o.app == nil {
+		return
+	}
+	if o.clusterID != "" {
+		o.app.recordClusterTransportSuccess(o.clusterID)
+	}
+	if attempt > 0 && o.app.telemetryRecorder != nil {
+		o.app.telemetryRecorder.RecordRetrySuccess()
+	}
+}
+
+func (o fetchRetryOperation[T]) waitForRetry(ctx context.Context, attempt int, reason string, fetchErr error) error {
+	backoff := resourceFetchRetryBackoff(attempt)
+	if o.app == nil {
+		fetchRetrySleep(backoff)
+		return nil
+	}
+	o.logRetry(attempt, reason, fetchErr)
+	return contextSleep(ctx, backoff)
+}
+
+func resourceFetchRetryBackoff(attempt int) time.Duration {
+	backoff := config.ResourceFetchRetryBaseDelay << attempt
+	if backoff > config.ResourceFetchRetryMaxDelay {
+		return config.ResourceFetchRetryMaxDelay
+	}
+	return backoff
+}
+
+func (o fetchRetryOperation[T]) logRetry(attempt int, reason string, fetchErr error) {
+	o.app.logger.Warn(
+		fmt.Sprintf(
+			"Retrying %s %s due to %s (attempt %d/%d)",
+			o.resourceKind, o.target, reason, attempt+1, config.ResourceFetchMaxAttempts-1,
+		),
+		logsources.ResourceLoader, o.clusterID, o.app.clusterNameForID(o.clusterID),
+	)
+	if o.app.telemetryRecorder != nil {
+		o.app.telemetryRecorder.RecordRetryAttempt(fetchErr)
+	}
+}
+
+func (o fetchRetryOperation[T]) recordTerminalError(retryable bool, reason string, fetchErr error) {
+	if o.app == nil {
+		return
+	}
+	if !retryable {
+		o.recordNonRetryableTransportSuccess()
+		return
+	}
+	if o.app.telemetryRecorder != nil {
+		o.app.telemetryRecorder.RecordRetryExhausted(fetchErr)
+	}
+	if o.clusterID != "" {
+		o.app.recordClusterTransportFailure(o.clusterID, reason, fetchErr)
+	}
+}
+
+func (o fetchRetryOperation[T]) recordNonRetryableTransportSuccess() {
+	if o.clusterID != "" {
+		o.app.recordClusterTransportSuccess(o.clusterID)
+	}
 }
 
 func isRetryableFetchError(err error) (bool, string) {
@@ -220,58 +280,64 @@ func isRetryableFetchError(err error) (bool, string) {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true, "request timeout"
 	}
-
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		if netErr.Timeout() {
-			return true, "network timeout"
-		}
+	if isNetworkTimeout(err) {
+		return true, "network timeout"
 	}
-
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) && urlErr != nil {
-		if urlErr.Timeout() {
-			return true, "network timeout"
-		}
-		if urlErr.Err != nil {
-			lowered := strings.ToLower(urlErr.Err.Error())
-			if strings.Contains(lowered, connectionRefusedReason) {
-				return true, connectionRefusedReason
-			}
-			if strings.Contains(lowered, connectionResetReason) {
-				return true, connectionResetReason
-			}
-			if strings.Contains(lowered, "no such host") {
-				return true, "dns lookup failure"
-			}
-			if strings.Contains(lowered, "tls") {
-				return true, "tls handshake"
-			}
-		}
+	if reason := retryableURLReason(err); reason != "" {
+		return true, reason
 	}
-
 	if errors.Is(err, io.EOF) {
 		return true, "unexpected eof"
 	}
+	if reason := matchingRetryTextReason(err.Error(), genericRetryTextReasons); reason != "" {
+		return true, reason
+	}
+	if reason := kubernetesRetryReason(err); reason != "" {
+		return true, reason
+	}
+	return false, ""
+}
 
-	lowered := strings.ToLower(err.Error())
-	for _, token := range []string{connectionRefusedReason, connectionResetReason, "no such host", "server misbehaving", "i/o timeout", "tls handshake"} {
-		if strings.Contains(lowered, token) {
-			return true, token
+func isNetworkTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func retryableURLReason(err error) string {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) || urlErr == nil {
+		return ""
+	}
+	if urlErr.Timeout() {
+		return "network timeout"
+	}
+	if urlErr.Err == nil {
+		return ""
+	}
+	return matchingRetryTextReason(urlErr.Err.Error(), urlRetryTextReasons)
+}
+
+func matchingRetryTextReason(message string, reasons []retryTextReason) string {
+	lowered := strings.ToLower(message)
+	for _, candidate := range reasons {
+		if strings.Contains(lowered, candidate.token) {
+			return candidate.reason
 		}
 	}
+	return ""
+}
 
+func kubernetesRetryReason(err error) string {
 	if apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) {
-		return true, "kubernetes timeout"
+		return "kubernetes timeout"
 	}
 	if apierrors.IsTooManyRequests(err) {
-		return true, "rate limited"
+		return "rate limited"
 	}
 	if statusErr, ok := err.(*apierrors.StatusError); ok && statusErr != nil {
 		if code := statusErr.ErrStatus.Code; code >= 500 && code < 600 {
-			return true, fmt.Sprintf("apiserver %d", code)
+			return fmt.Sprintf("apiserver %d", code)
 		}
 	}
-
-	return false, ""
+	return ""
 }

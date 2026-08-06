@@ -14,6 +14,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/getsentry/sentry-go/attribute"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Config controls backend error reporting.
@@ -347,61 +348,98 @@ func (r *sentryReporter) CaptureException(err error, context Context) {
 	})
 }
 
-func addKubernetesStatusTags(hub *sentry.Hub, err error) {
-	if hub == nil || err == nil {
-		return
-	}
+type kubernetesStatusTelemetry struct {
+	reason       string
+	statusCode   int32
+	resourceName string
+	context      sentry.Context
+}
+
+func kubernetesStatusTelemetryForError(err error) (kubernetesStatusTelemetry, bool) {
 	var statusErr apierrors.APIStatus
 	if !errors.As(err, &statusErr) {
+		return kubernetesStatusTelemetry{}, false
+	}
+	return newKubernetesStatusTelemetry(statusErr.Status()), true
+}
+
+func newKubernetesStatusTelemetry(status metav1.Status) kubernetesStatusTelemetry {
+	telemetry := kubernetesStatusTelemetry{
+		reason:     string(status.Reason),
+		statusCode: status.Code,
+		context:    sentry.Context{},
+	}
+	if status.Status != "" {
+		telemetry.context["status"] = status.Status
+	}
+	if status.Reason != "" {
+		telemetry.context["reason"] = string(status.Reason)
+	}
+	if status.Code != 0 {
+		telemetry.context["code"] = status.Code
+	}
+	if status.Details != nil {
+		telemetry.resourceName = addKubernetesStatusDetailsTelemetry(telemetry.context, status.Details)
+	}
+	return telemetry
+}
+
+func addKubernetesStatusDetailsTelemetry(context sentry.Context, details *metav1.StatusDetails) string {
+	if details.Group != "" {
+		context["group"] = details.Group
+	}
+	if details.Kind != "" {
+		context["kind"] = details.Kind
+	}
+	if details.RetryAfterSeconds != 0 {
+		context["retryAfterSeconds"] = details.RetryAfterSeconds
+	}
+	if len(details.Causes) > 0 {
+		context["causes"] = kubernetesStatusCauseTelemetry(details.Causes)
+	}
+	return details.Name
+}
+
+func kubernetesStatusCauseTelemetry(causes []metav1.StatusCause) []map[string]any {
+	result := make([]map[string]any, 0, len(causes))
+	for _, cause := range causes {
+		safeCause := map[string]any{
+			"reason": sanitizeKubernetesCauseReason(cause.Type),
+		}
+		if fieldPath := sanitizeKubernetesFieldPath(cause.Field); fieldPath != "" {
+			safeCause["field"] = fieldPath
+		}
+		result = append(result, safeCause)
+	}
+	return result
+}
+
+func (telemetry kubernetesStatusTelemetry) apply(scope *sentry.Scope) {
+	if telemetry.reason != "" {
+		scope.SetTag("k8s.reason", telemetry.reason)
+	}
+	if telemetry.statusCode != 0 {
+		scope.SetTag("http.status_code", strconv.FormatInt(int64(telemetry.statusCode), 10))
+	}
+	if telemetry.resourceName != "" {
+		// The object name is needed only inside the SDK privacy pipeline so
+		// the final event can replace it wherever client-go rendered it.
+		scope.SetTag("_privacy.resource_name", telemetry.resourceName)
+	}
+	if len(telemetry.context) > 0 {
+		scope.SetContext("kubernetes", telemetry.context)
+	}
+}
+
+func addKubernetesStatusTags(hub *sentry.Hub, err error) {
+	if hub == nil {
 		return
 	}
-	status := statusErr.Status()
-	hub.ConfigureScope(func(scope *sentry.Scope) {
-		statusContext := sentry.Context{}
-		if status.Status != "" {
-			statusContext["status"] = status.Status
-		}
-		if status.Reason != "" {
-			scope.SetTag("k8s.reason", string(status.Reason))
-			statusContext["reason"] = string(status.Reason)
-		}
-		if status.Code != 0 {
-			scope.SetTag("http.status_code", strconv.FormatInt(int64(status.Code), 10))
-			statusContext["code"] = status.Code
-		}
-		if status.Details != nil {
-			if status.Details.Name != "" {
-				// The object name is needed only inside the SDK privacy pipeline so
-				// the final event can replace it wherever client-go rendered it.
-				scope.SetTag("_privacy.resource_name", status.Details.Name)
-			}
-			if status.Details.Group != "" {
-				statusContext["group"] = status.Details.Group
-			}
-			if status.Details.Kind != "" {
-				statusContext["kind"] = status.Details.Kind
-			}
-			if status.Details.RetryAfterSeconds != 0 {
-				statusContext["retryAfterSeconds"] = status.Details.RetryAfterSeconds
-			}
-			if len(status.Details.Causes) > 0 {
-				causes := make([]map[string]any, 0, len(status.Details.Causes))
-				for _, cause := range status.Details.Causes {
-					safeCause := map[string]any{
-						"reason": sanitizeKubernetesCauseReason(cause.Type),
-					}
-					if fieldPath := sanitizeKubernetesFieldPath(cause.Field); fieldPath != "" {
-						safeCause["field"] = fieldPath
-					}
-					causes = append(causes, safeCause)
-				}
-				statusContext["causes"] = causes
-			}
-		}
-		if len(statusContext) > 0 {
-			scope.SetContext("kubernetes", statusContext)
-		}
-	})
+	telemetry, ok := kubernetesStatusTelemetryForError(err)
+	if !ok {
+		return
+	}
+	hub.ConfigureScope(telemetry.apply)
 }
 
 func (r *sentryReporter) CapturePanic(recovered any, context Context) {
@@ -477,10 +515,102 @@ func (r *sentryReporter) Shutdown(timeout time.Duration) bool {
 	return flushed
 }
 
-func (r *sentryReporter) withHub(context Context, capture func(*sentry.Hub)) {
+func (r *sentryReporter) ensureOperationID(context Context) Context {
 	if context.OperationID == "" {
 		context.OperationID = fmt.Sprintf("backend-report-%d", r.operationID.Add(1))
 	}
+	return context
+}
+
+func reporterBreadcrumbForCapture(
+	breadcrumb Breadcrumb,
+	context Context,
+	clusterAlias string,
+) (*sentry.Breadcrumb, bool) {
+	if breadcrumb.OperationID != context.OperationID {
+		return nil, false
+	}
+	breadcrumbClusterID, _ := breadcrumb.Data["clusterId"].(string)
+	if breadcrumbClusterID != "" && breadcrumbClusterID != context.ClusterID {
+		return nil, false
+	}
+	return &sentry.Breadcrumb{
+		Category:  breadcrumb.Category,
+		Message:   breadcrumb.Message,
+		Level:     sentry.Level(breadcrumb.Level),
+		Data:      reporterBreadcrumbData(breadcrumb.OperationID, breadcrumbClusterID, clusterAlias),
+		Timestamp: breadcrumb.Timestamp,
+	}, true
+}
+
+// reporterBreadcrumbData is closed-by-default. A future caller adding a field
+// must deliberately extend this schema after a privacy review; arbitrary maps
+// never become telemetry just because they were logged.
+func reporterBreadcrumbData(operationID, breadcrumbClusterID, clusterAlias string) map[string]any {
+	data := map[string]any{}
+	if operationID != "" {
+		data["operationId"] = operationID
+	}
+	if breadcrumbClusterID != "" && clusterAlias != "" {
+		data["cluster.alias"] = clusterAlias
+	}
+	return data
+}
+
+func addReporterBreadcrumbs(
+	hub *sentry.Hub,
+	breadcrumbs []Breadcrumb,
+	context Context,
+	clusterAlias string,
+) {
+	for _, breadcrumb := range breadcrumbs {
+		prepared, include := reporterBreadcrumbForCapture(breadcrumb, context, clusterAlias)
+		if !include {
+			continue
+		}
+		hub.AddBreadcrumb(prepared, nil)
+	}
+}
+
+func setReporterScopeTags(scope *sentry.Scope, context Context, clusterAlias string) {
+	if context.Source != "" {
+		scope.SetTag("source", context.Source)
+	}
+	if clusterAlias != "" {
+		scope.SetTag("cluster.alias", clusterAlias)
+		// These private tags exist only inside the SDK pipeline. The final
+		// privacy boundary uses them to replace raw identifiers embedded in
+		// error text, then removes them before transport.
+		scope.SetTag("_privacy.cluster_id", context.ClusterID)
+		if context.ClusterName != "" {
+			scope.SetTag("_privacy.cluster_name", context.ClusterName)
+		}
+	}
+	if context.OperationID != "" {
+		scope.SetTag("operation.id", context.OperationID)
+	}
+	for index, name := range context.Operation.resourceNamesForRedaction() {
+		scope.SetTag(fmt.Sprintf("_privacy.resource_name.%d", index), name)
+	}
+}
+
+func setReporterErrorContext(scope *sentry.Scope, context Context) {
+	errorContext := sentry.Context{"operationId": context.OperationID}
+	if !context.Operation.isZero() {
+		errorContext["operation"] = context.Operation.telemetryContext()
+	}
+	scope.SetContext("error", errorContext)
+}
+
+func configureReporterScope(hub *sentry.Hub, context Context, clusterAlias string) {
+	hub.ConfigureScope(func(scope *sentry.Scope) {
+		setReporterScopeTags(scope, context, clusterAlias)
+		setReporterErrorContext(scope, context)
+	})
+}
+
+func (r *sentryReporter) withHub(context Context, capture func(*sentry.Hub)) {
+	context = r.ensureOperationID(context)
 	clusterAlias := r.aliasForCluster(context.ClusterID)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -488,63 +618,8 @@ func (r *sentryReporter) withHub(context Context, capture func(*sentry.Hub)) {
 		return
 	}
 	hub := r.hub.Clone()
-	for _, breadcrumb := range r.breadcrumbs {
-		if breadcrumb.OperationID != context.OperationID {
-			continue
-		}
-		breadcrumbClusterID, _ := breadcrumb.Data["clusterId"].(string)
-		if breadcrumbClusterID != "" && breadcrumbClusterID != context.ClusterID {
-			continue
-		}
-		// Breadcrumb data is closed-by-default. A future caller adding a field
-		// must deliberately extend this schema after a privacy review; arbitrary
-		// maps never become telemetry just because they were logged.
-		data := map[string]any{}
-		if breadcrumb.OperationID != "" {
-			data["operationId"] = breadcrumb.OperationID
-		}
-		if breadcrumbClusterID != "" && clusterAlias != "" {
-			data["cluster.alias"] = clusterAlias
-		}
-		hub.AddBreadcrumb(&sentry.Breadcrumb{
-			Category:  breadcrumb.Category,
-			Message:   breadcrumb.Message,
-			Level:     sentry.Level(breadcrumb.Level),
-			Data:      data,
-			Timestamp: breadcrumb.Timestamp,
-		}, nil)
-	}
-	hub.ConfigureScope(func(scope *sentry.Scope) {
-		if context.Source != "" {
-			scope.SetTag("source", context.Source)
-		}
-		if clusterAlias != "" {
-			scope.SetTag("cluster.alias", clusterAlias)
-			// These private tags exist only inside the SDK pipeline. The final
-			// privacy boundary uses them to replace raw identifiers embedded in
-			// error text, then removes them before transport.
-			scope.SetTag("_privacy.cluster_id", context.ClusterID)
-			if context.ClusterName != "" {
-				scope.SetTag("_privacy.cluster_name", context.ClusterName)
-			}
-		}
-		if context.OperationID != "" {
-			scope.SetTag("operation.id", context.OperationID)
-		}
-		for index, name := range context.Operation.resourceNamesForRedaction() {
-			scope.SetTag(fmt.Sprintf("_privacy.resource_name.%d", index), name)
-		}
-		if !context.Operation.isZero() || context.OperationID != "" {
-			errorContext := sentry.Context{}
-			if !context.Operation.isZero() {
-				errorContext["operation"] = context.Operation.telemetryContext()
-			}
-			if context.OperationID != "" {
-				errorContext["operationId"] = context.OperationID
-			}
-			scope.SetContext("error", errorContext)
-		}
-	})
+	addReporterBreadcrumbs(hub, r.breadcrumbs, context, clusterAlias)
+	configureReporterScope(hub, context, clusterAlias)
 	capture(hub)
 }
 
