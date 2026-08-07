@@ -295,6 +295,30 @@ describe('columnFactories', () => {
       expect(fallbackProps['data-gridtable-export-text']).toBe('-');
       expect(fallbackProps.showEmptyState).toBe(false);
     });
+
+    it('exports tebibyte memory usage with the same value shown by ResourceBar', () => {
+      const column = createResourceBarColumn<RowSample>({
+        header: 'Memory',
+        type: 'memory',
+        getUsage: () => '1.5Ti',
+      });
+
+      const element = column.render({ id: 'node' }) as React.ReactElement<Record<string, unknown>>;
+
+      expect(element.props['data-gridtable-export-text']).toBe('1.5Ti');
+    });
+
+    it('exports explicit zero memory usage instead of treating it as absent', () => {
+      const column = createResourceBarColumn<RowSample>({
+        header: 'Memory',
+        type: 'memory',
+        getUsage: () => '0Mi',
+      });
+
+      const element = column.render({ id: 'node' }) as React.ReactElement<Record<string, unknown>>;
+
+      expect(element.props['data-gridtable-export-text']).toBe('0');
+    });
   });
 
   describe('applyColumnSizing', () => {

@@ -9,7 +9,14 @@ import { act, useEffect, useEffectEvent } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { applySelectAll, deriveCopyText, KeyboardProvider, useKeyboardContext } from './context';
+import {
+  applySelectAll,
+  cutContentEditableSelection,
+  deriveCopyText,
+  KeyboardProvider,
+  pasteIntoContentEditable,
+  useKeyboardContext,
+} from './context';
 
 const runtimeMocks = vi.hoisted(() => ({
   eventsOn: vi.fn(),
@@ -60,9 +67,18 @@ describe('KeyboardProvider', () => {
           priority: 1,
           handler: listHandler,
           description: 'List scope action',
+          category: 'Navigation',
+        });
+        const disabledId = ctx.registerShortcut({
+          key: 'x',
+          enabled: false,
+          handler: vi.fn(),
+          description: 'Disabled action',
+          category: 'Navigation',
         });
         return () => {
           ctx.unregisterShortcut(listId);
+          ctx.unregisterShortcut(disabledId);
         };
       });
       useEffect(() => registerListShortcut(), []);
@@ -81,6 +97,19 @@ describe('KeyboardProvider', () => {
 
     expect(apiRef.current).not.toBeNull();
     expect(apiRef.current?.isShortcutAvailable('l')).toBe(true);
+    expect(apiRef.current?.isShortcutAvailable('x')).toBe(false);
+    expect(apiRef.current?.getAvailableShortcuts()).toEqual(
+      expect.arrayContaining([
+        {
+          category: 'Global',
+          shortcuts: [expect.objectContaining({ description: 'Focus active search' })],
+        },
+        {
+          category: 'Navigation',
+          shortcuts: [expect.objectContaining({ description: 'List scope action' })],
+        },
+      ])
+    );
   });
 
   it('executes the highest priority shortcut for matching key events', async () => {
@@ -137,6 +166,19 @@ describe('KeyboardProvider', () => {
     expect(highPriorityHandler).toHaveBeenCalledTimes(1);
     expect(lowPriorityHandler).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(true);
+
+    const repeatedEvent = new KeyboardEvent('keydown', {
+      key: 'k',
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      document.dispatchEvent(repeatedEvent);
+    });
+
+    expect(highPriorityHandler).toHaveBeenCalledTimes(2);
+    expect(repeatedEvent.defaultPrevented).toBe(true);
   });
 
   describe('helper functions', () => {
@@ -182,6 +224,52 @@ describe('KeyboardProvider', () => {
       } else {
         Reflect.deleteProperty(document, 'execCommand');
       }
+    });
+
+    it('cuts a contenteditable selection through the Selection API', () => {
+      const writeText = vi.fn(() => Promise.resolve());
+      Object.assign(navigator, { clipboard: { writeText } });
+      const deleteFromDocument = vi.fn();
+      const selectedNode = document.createTextNode('selected text');
+      const selection = {
+        isCollapsed: false,
+        toString: () => 'selected text',
+        anchorNode: selectedNode,
+        deleteFromDocument,
+      } as unknown as Selection;
+
+      expect(cutContentEditableSelection(selection)).toBe(true);
+      expect(writeText).toHaveBeenCalledWith('selected text');
+      expect(deleteFromDocument).toHaveBeenCalledTimes(1);
+    });
+
+    it('pastes text at a contenteditable range and leaves the caret after it', () => {
+      const insertNode = vi.fn();
+      const setStartAfter = vi.fn();
+      const collapse = vi.fn();
+      const range = {
+        deleteContents: vi.fn(),
+        insertNode,
+        setStartAfter,
+        collapse,
+      } as unknown as Range;
+      const removeAllRanges = vi.fn();
+      const addRange = vi.fn();
+      const selection = {
+        rangeCount: 1,
+        getRangeAt: vi.fn(() => range),
+        removeAllRanges,
+        addRange,
+      } as unknown as Selection;
+
+      expect(pasteIntoContentEditable('pasted text', selection)).toBe(true);
+      const insertedNode = insertNode.mock.calls[0]?.[0] as Text;
+      expect(insertedNode.data).toBe('pasted text');
+      expect(range.deleteContents).toHaveBeenCalledTimes(1);
+      expect(setStartAfter).toHaveBeenCalledWith(insertedNode);
+      expect(collapse).toHaveBeenCalledWith(true);
+      expect(removeAllRanges).toHaveBeenCalledTimes(1);
+      expect(addRange).toHaveBeenCalledWith(range);
     });
   });
 });
@@ -397,6 +485,40 @@ describe('keyboard handling edge cases', () => {
     expect(input.value).toBe(': ConfigMap');
     expect(inputEvents).toHaveBeenCalled();
 
+    input.remove();
+  });
+
+  it('pastes into the focused input through the menu bridge fallback', async () => {
+    await act(async () => {
+      root.render(
+        <KeyboardProvider>
+          <div />
+        </KeyboardProvider>
+      );
+      await Promise.resolve();
+    });
+
+    const input = document.createElement('input');
+    input.value = 'kind: Pod';
+    document.body.appendChild(input);
+    input.focus();
+    input.setSelectionRange(6, 9);
+    const inputEvents = vi.fn();
+    input.addEventListener('input', inputEvents);
+
+    const pasteRegistrations = runtimeMocks.eventsOn.mock.calls.filter(
+      ([event]) => event === 'menu:paste'
+    );
+    const pasteHandler = pasteRegistrations[pasteRegistrations.length - 1]?.[1] as
+      | ((text: string) => void)
+      | undefined;
+
+    act(() => {
+      pasteHandler?.('Service');
+    });
+
+    expect(input.value).toBe('kind: Service');
+    expect(inputEvents).toHaveBeenCalledTimes(1);
     input.remove();
   });
 });
