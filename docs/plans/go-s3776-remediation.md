@@ -660,23 +660,23 @@ Local progress through 2026-08-06 (Sonar confirmation pending):
       removal, ignore pruning, and post-lock callbacks; split snapshot requests
       into permission/readiness preflight, cache/singleflight planning, build,
       finalization, telemetry, and cache publication.
-- [x] `RegisterNamespaceDomain` already measured at the configured limit, so
-      its production code was left unchanged. Scoped/unscoped registration,
-      workload/quota sinks, and namespace/event add-update-delete handlers are
-      now characterized directly.
+- [x] Reduced `RegisterNamespaceDomain` to ordered builder creation, event-
+      informer wiring, namespace-informer wiring, ingest-sink wiring, and
+      registry publication stages. Scoped/unscoped registration, workload/
+      quota sinks, namespace/event add-update-delete handlers, stopped-
+      informer failure, and duplicate registration are characterized directly.
 - [x] Direct target coverage in inventory order is 85.7%, 88.9%, 100.0%,
       100.0%, 85.7%, 84.6%, 100.0%, 100.0%, 82.4%, 81.8%, 100.0%, and
-      88.2%. The repository backend coverage task passes with 81.6% for
+      88.9%. The repository backend coverage task passes with 81.6% for
       `backend/refresh/snapshot`, 75.5% for `backend/refresh/system`, and 77.1%
       for `backend`.
 - [x] Full latest-worktree `-race` runs pass for `backend/refresh/snapshot`,
       `backend/refresh/system`, and `backend`. The full `mage qc:prerelease`
       gate passes; frontend validation covers 459 files and 3,956 tests, and
       Trivy reports zero dependency vulnerabilities.
-- [x] `gocognit` v1.2.1 measures the twelve targets, in inventory order, at 4,
-      5, 1, 4, 4, 5, 5, 3, 4, 2, 3, and 15. No function in the affected
-      production files exceeds 15, and the most complex newly introduced
-      helper is 8.
+- [x] `gocognit` v1.2.1 measures `RegisterNamespaceDomain` at 2, down from 15;
+      the most complex helper extracted from it measures 3. No function in the
+      affected production file exceeds 15.
 - [ ] Confirm all twelve findings close in the next Sonar analysis without
       creating or increasing another S3776 finding; keep the target boxes above
       open until that evidence exists.

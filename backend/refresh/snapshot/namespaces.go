@@ -243,6 +243,24 @@ const namespaceQuotaWarningPercentage = 80
 // broadcast to the resource-stream doorbell once the stream manager exists.
 func RegisterNamespaceDomain(reg *domain.Registry, factory informers.SharedInformerFactory, ingestManager namespacePodIngestSource, allowedNamespaces []string, client kubernetes.Interface, eventsExpected bool) (*NamespaceChangeNotifier, error) {
 	tracker := NewNamespaceWorkloadTracker(ingestManager)
+	builder := newNamespaceDomainBuilder(ingestManager, tracker, allowedNamespaces, client)
+	notifier := NewNamespaceChangeNotifier(ingestManager, tracker)
+	if err := wireNamespaceEventInformer(factory, builder, notifier, eventsExpected); err != nil {
+		return nil, err
+	}
+	if err := wireNamespaceObjectInformer(factory, builder, notifier); err != nil {
+		return nil, err
+	}
+	wireNamespaceIngestSinks(ingestManager, notifier)
+	return registerNamespaceSnapshotBuilder(reg, builder, notifier)
+}
+
+func newNamespaceDomainBuilder(
+	ingestManager namespacePodIngestSource,
+	tracker *NamespaceWorkloadTracker,
+	allowedNamespaces []string,
+	client kubernetes.Interface,
+) *NamespaceBuilder {
 	builder := &NamespaceBuilder{
 		ingest:  ingestManager,
 		tracker: tracker,
@@ -253,44 +271,71 @@ func RegisterNamespaceDomain(reg *domain.Registry, factory informers.SharedInfor
 		// lister and must not issue per-name GETs.
 		builder.client = client
 	}
-	notifier := NewNamespaceChangeNotifier(ingestManager, tracker)
-	if eventsExpected && factory != nil {
-		eventInformer := factory.Core().V1().Events()
-		builder.eventLister = eventInformer.Lister()
-		builder.eventsExpected = true
-		builder.eventsSynced = eventInformer.Informer().HasSynced
-		notifier.eventLister = builder.eventLister
-		notifier.eventsExpected = true
-		notifier.eventsSynced = builder.eventsSynced
-		if _, err := eventInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-			AddFunc:    func(interface{}) { notifier.EventChanged() },
-			UpdateFunc: func(interface{}, interface{}) { notifier.EventChanged() },
-			DeleteFunc: func(interface{}) { notifier.EventChanged() },
-		}); err != nil {
-			return nil, fmt.Errorf("namespaces: register event aggregate handler: %w", err)
-		}
+	return builder
+}
+
+func wireNamespaceEventInformer(
+	factory informers.SharedInformerFactory,
+	builder *NamespaceBuilder,
+	notifier *NamespaceChangeNotifier,
+	eventsExpected bool,
+) error {
+	if !eventsExpected || factory == nil {
+		return nil
 	}
+	eventInformer := factory.Core().V1().Events()
+	builder.eventLister = eventInformer.Lister()
+	builder.eventsExpected = true
+	builder.eventsSynced = eventInformer.Informer().HasSynced
+	notifier.eventLister = builder.eventLister
+	notifier.eventsExpected = true
+	notifier.eventsSynced = builder.eventsSynced
+	if _, err := eventInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(interface{}) { notifier.EventChanged() },
+		UpdateFunc: func(interface{}, interface{}) { notifier.EventChanged() },
+		DeleteFunc: func(interface{}) { notifier.EventChanged() },
+	}); err != nil {
+		return fmt.Errorf("namespaces: register event aggregate handler: %w", err)
+	}
+	return nil
+}
+
+func wireNamespaceObjectInformer(
+	factory informers.SharedInformerFactory,
+	builder *NamespaceBuilder,
+	notifier *NamespaceChangeNotifier,
+) error {
 	// Scoped clusters synthesize rows from the configured names: the
 	// (cluster-scoped, typically denied) namespaces informer is never
 	// instantiated, and namespace add/delete events cannot occur — the row
 	// set only changes through a settings-triggered subsystem rebuild.
-	if len(builder.scope) == 0 {
-		builder.namespaces = factory.Core().V1().Namespaces().Lister()
-		if _, err := factory.Core().V1().Namespaces().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-			AddFunc: func(interface{}) { notifier.NamespaceChanged() },
-			UpdateFunc: func(oldObj, newObj interface{}) {
-				// Informer resyncs re-deliver every namespace with an unchanged
-				// ResourceVersion; only real updates ring the doorbell.
-				if namespaceUpdateIsEcho(oldObj, newObj) {
-					return
-				}
-				notifier.NamespaceChanged()
-			},
-			DeleteFunc: func(interface{}) { notifier.NamespaceChanged() },
-		}); err != nil {
-			return nil, fmt.Errorf("namespaces: register namespace handler: %w", err)
-		}
+	if len(builder.scope) > 0 {
+		return nil
 	}
+	namespaceInformer := factory.Core().V1().Namespaces()
+	builder.namespaces = namespaceInformer.Lister()
+	if _, err := namespaceInformer.Informer().AddEventHandler(namespaceEventHandler(notifier)); err != nil {
+		return fmt.Errorf("namespaces: register namespace handler: %w", err)
+	}
+	return nil
+}
+
+func namespaceEventHandler(notifier *NamespaceChangeNotifier) cache.ResourceEventHandlerFuncs {
+	return cache.ResourceEventHandlerFuncs{
+		AddFunc: func(interface{}) { notifier.NamespaceChanged() },
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			// Informer resyncs re-deliver every namespace with an unchanged
+			// ResourceVersion; only real updates ring the doorbell.
+			if namespaceUpdateIsEcho(oldObj, newObj) {
+				return
+			}
+			notifier.NamespaceChanged()
+		},
+		DeleteFunc: func(interface{}) { notifier.NamespaceChanged() },
+	}
+}
+
+func wireNamespaceIngestSinks(ingestManager namespacePodIngestSource, notifier *NamespaceChangeNotifier) {
 	// Bundle sinks fire on every Upsert/Delete/Replace for their GVR, which is all
 	// the notifier needs: the flush decides via the presence signature whether the
 	// event actually flipped a namespace's workload presence. AddBundleSink returns
@@ -306,6 +351,13 @@ func RegisterNamespaceDomain(reg *domain.Registry, factory informers.SharedInfor
 		}
 		sinks.AddBundleSink(ResourceQuotaGVR, namespaceQuotaNotifierSink{notifier: notifier})
 	}
+}
+
+func registerNamespaceSnapshotBuilder(
+	reg *domain.Registry,
+	builder *NamespaceBuilder,
+	notifier *NamespaceChangeNotifier,
+) (*NamespaceChangeNotifier, error) {
 	if err := reg.Register(refresh.DomainConfig{
 		Name:          "namespaces",
 		BuildSnapshot: builder.Build,

@@ -702,6 +702,36 @@ func TestRegisterNamespaceDomainScopedDoesNotTouchNamespaceInformer(t *testing.T
 	require.NotNil(t, notifier)
 }
 
+func TestRegisterNamespaceDomainReportsStoppedEventInformer(t *testing.T) {
+	client := k8sfake.NewClientset()
+	factory := informers.NewSharedInformerFactory(client, 0)
+	eventInformer := factory.Core().V1().Events().Informer()
+	ctx, cancel := context.WithCancel(context.Background())
+	factory.Start(ctx.Done())
+	cancel()
+	require.Eventually(t, eventInformer.IsStopped, time.Second, 10*time.Millisecond)
+
+	notifier, err := RegisterNamespaceDomain(
+		domain.New(), factory, nil, []string{"prod"}, client, true,
+	)
+
+	require.Nil(t, notifier)
+	require.ErrorContains(t, err, "namespaces: register event aggregate handler")
+}
+
+func TestRegisterNamespaceDomainReportsDuplicateRegistration(t *testing.T) {
+	reg := domain.New()
+	notifier, err := RegisterNamespaceDomain(reg, nil, nil, []string{"prod"}, nil, false)
+	require.NoError(t, err)
+	require.NotNil(t, notifier)
+	defer notifier.Stop()
+
+	duplicateNotifier, err := RegisterNamespaceDomain(reg, nil, nil, []string{"prod"}, nil, false)
+
+	require.Nil(t, duplicateNotifier)
+	require.ErrorContains(t, err, "domain already registered")
+}
+
 func TestRegisterNamespaceDomainUnscopedWiresNamespaceAndEventInformers(t *testing.T) {
 	client := k8sfake.NewClientset()
 	factory := informers.NewSharedInformerFactory(client, 0)
