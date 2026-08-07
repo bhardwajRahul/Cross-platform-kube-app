@@ -18,6 +18,20 @@ import (
 
 const clusterDisconnectedReason = "cluster disconnected"
 
+type KubeconfigDiscoveryState string
+
+const (
+	KubeconfigDiscoveryStateAvailable          KubeconfigDiscoveryState = "available"
+	KubeconfigDiscoveryStateSearchPathsMissing KubeconfigDiscoveryState = "search_paths_missing"
+	KubeconfigDiscoveryStateNoKubeconfigs      KubeconfigDiscoveryState = "no_kubeconfigs"
+)
+
+type KubeconfigDiscoveryResult struct {
+	Kubeconfigs []KubeconfigInfo         `json:"kubeconfigs"`
+	State       KubeconfigDiscoveryState `json:"state"`
+	SearchPaths []string                 `json:"searchPaths"`
+}
+
 type kubeconfigWatchDirectory struct {
 	dir         string
 	unfiltered  bool
@@ -40,14 +54,18 @@ func (a *App) discoverKubeconfigs() error {
 func (a *App) discoverKubeconfigsLocked() error {
 	a.logger.Debug("Starting kubeconfig discovery", logsources.KubeconfigManager)
 	a.availableKubeconfigs = []KubeconfigInfo{}
+	a.kubeconfigSearchPaths = []string{}
+	a.kubeconfigDiscoveryState = KubeconfigDiscoveryStateNoKubeconfigs
 
 	searchPaths, err := a.loadKubeconfigSearchPaths()
 	if err != nil {
 		a.logger.ErrorWithCause(err, "Failed to load kubeconfig search paths", logsources.KubeconfigManager)
 		return err
 	}
+	a.kubeconfigSearchPaths = append([]string(nil), searchPaths...)
 	if len(searchPaths) == 0 {
 		a.logger.Warn("No kubeconfig search paths configured", logsources.KubeconfigManager)
+		a.kubeconfigDiscoveryState = KubeconfigDiscoveryStateSearchPathsMissing
 		return nil
 	}
 
@@ -60,7 +78,11 @@ func (a *App) discoverKubeconfigsLocked() error {
 	}
 
 	if !foundRoot {
-		return fmt.Errorf("no kubeconfig search paths exist")
+		a.kubeconfigDiscoveryState = KubeconfigDiscoveryStateSearchPathsMissing
+		return nil
+	}
+	if len(a.availableKubeconfigs) > 0 {
+		a.kubeconfigDiscoveryState = KubeconfigDiscoveryStateAvailable
 	}
 
 	return nil
@@ -356,23 +378,31 @@ func pathsEqual(left, right string) bool {
 	return left == right
 }
 
-// GetKubeconfigs returns the list of available kubeconfig files
-func (a *App) GetKubeconfigs() ([]KubeconfigInfo, error) {
+// GetKubeconfigs returns the available kubeconfigs and the current discovery state.
+func (a *App) GetKubeconfigs() (KubeconfigDiscoveryResult, error) {
 	a.kubeconfigsMu.RLock()
 	if len(a.availableKubeconfigs) > 0 {
-		result := append([]KubeconfigInfo(nil), a.availableKubeconfigs...)
+		result := KubeconfigDiscoveryResult{
+			Kubeconfigs: append([]KubeconfigInfo(nil), a.availableKubeconfigs...),
+			State:       KubeconfigDiscoveryStateAvailable,
+			SearchPaths: append([]string(nil), a.kubeconfigSearchPaths...),
+		}
 		a.kubeconfigsMu.RUnlock()
 		return result, nil
 	}
 	a.kubeconfigsMu.RUnlock()
 
 	if err := a.discoverKubeconfigs(); err != nil {
-		return nil, err
+		return KubeconfigDiscoveryResult{}, err
 	}
 
 	a.kubeconfigsMu.RLock()
 	defer a.kubeconfigsMu.RUnlock()
-	return append([]KubeconfigInfo(nil), a.availableKubeconfigs...), nil
+	return KubeconfigDiscoveryResult{
+		Kubeconfigs: append([]KubeconfigInfo(nil), a.availableKubeconfigs...),
+		State:       a.kubeconfigDiscoveryState,
+		SearchPaths: append([]string(nil), a.kubeconfigSearchPaths...),
+	}, nil
 }
 
 // GetSelectedKubeconfigs returns the active kubeconfig selections for multi-cluster support.

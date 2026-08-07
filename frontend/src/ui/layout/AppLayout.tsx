@@ -44,6 +44,7 @@ import {
   useContentRegionShiftTabHandoff,
   useTopLevelAppRegionTracking,
 } from '@ui/layout/appFocusRegions';
+import { ClusterSelectionOverlay } from '@ui/layout/ClusterSelectionOverlay';
 import ClusterTabs from '@ui/layout/ClusterTabs';
 import { getClusterSelectionPhase } from '@ui/layout/clusterSelectionPhase';
 import { DebugOverlay } from '@ui/layout/DebugOverlay';
@@ -52,6 +53,7 @@ import { useAppDebugShortcuts } from '@ui/layout/useAppDebugShortcuts';
 import type { NamespaceViewType } from '@ui/navigation/types';
 // Auth Failure Overlay
 import { AuthFailureOverlay } from '@ui/overlays/AuthFailureOverlay';
+import { setLastSettingsTab } from '@ui/settings/settingsTabPreference';
 import { eventBus } from '@/core/events';
 import { shouldShowActiveClusterAuthFailure } from '@/core/navigation/workspace';
 import { DiagnosticsPanel } from '@/core/refresh/components/DiagnosticsPanel';
@@ -61,7 +63,6 @@ import {
   SIDEBAR_MIN_WIDTH,
 } from '@/hooks/useSidebarResize';
 import BrowseView from '@/modules/browse/components/BrowseView';
-import { isMacPlatform } from '@/utils/platform';
 
 const Sidebar = withLazyBoundary(() => import('@ui/layout/Sidebar'), 'Loading sidebar...');
 
@@ -215,20 +216,6 @@ const SidebarResizer = ({ viewState }: { viewState: ViewStateValue }) => {
   );
 };
 
-const ClusterSelectionOverlay = ({ phase }: { phase: string }) => {
-  if (phase !== 'empty') {
-    return null;
-  }
-  return (
-    <div className="no-active-clusters-overlay" role="status">
-      <div className="no-active-clusters-message">
-        No active clusters. Press <kbd>{isMacPlatform() ? '⌘' : 'Ctrl'}</kbd>+<kbd>O</kbd> or click
-        Open Cluster.
-      </div>
-    </div>
-  );
-};
-
 const ActiveClusterAuthOverlay = ({
   hasActiveClusters,
   viewType,
@@ -293,6 +280,10 @@ export const AppLayout: React.FC = () => {
   const handleOpenCluster = useCallback(() => {
     eventBus.emit('command-palette:open-kubeconfigs');
   }, []);
+  const handleOpenKubeconfigSettings = useCallback(() => {
+    setLastSettingsTab('kubeconfigs');
+    viewState.setIsSettingsOpen(true);
+  }, [viewState.setIsSettingsOpen]);
   // Empty-space drop target for dockable tabs: dropping a tab in empty
   // content area spawns a new floating group at the cursor. The ref is
   // merged onto the existing `<main>` element below — no new wrapper,
@@ -356,7 +347,12 @@ export const AppLayout: React.FC = () => {
             <div className="content-body__main">{routeContent}</div>
           </div>
         </div>
-        <ClusterSelectionOverlay phase={clusterSelectionPhase} />
+        <ClusterSelectionOverlay
+          phase={clusterSelectionPhase}
+          discoveryState={kubeconfig.kubeconfigDiscoveryState}
+          searchPaths={kubeconfig.kubeconfigSearchPaths}
+          onOpenKubeconfigSettings={handleOpenKubeconfigSettings}
+        />
         <ActiveClusterAuthOverlay
           hasActiveClusters={hasActiveClusters}
           viewType={viewState.viewType}

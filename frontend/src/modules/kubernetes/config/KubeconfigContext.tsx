@@ -34,8 +34,22 @@ import { eventBus } from '@/core/events';
 import { refreshOrchestrator, useBackgroundRefresh } from '@/core/refresh';
 import { clusterReadiness } from '@/core/refresh/clusterReadiness';
 
+export type KubeconfigDiscoveryState = 'available' | 'search_paths_missing' | 'no_kubeconfigs';
+
+const resolveKubeconfigDiscoveryState = (
+  state: string,
+  kubeconfigs: types.KubeconfigInfo[]
+): KubeconfigDiscoveryState => {
+  if (state === 'search_paths_missing' || state === 'no_kubeconfigs' || state === 'available') {
+    return state;
+  }
+  return kubeconfigs.length > 0 ? 'available' : 'no_kubeconfigs';
+};
+
 interface KubeconfigContextType {
   kubeconfigs: types.KubeconfigInfo[];
+  kubeconfigDiscoveryState: KubeconfigDiscoveryState;
+  kubeconfigSearchPaths: string[];
   selectedKubeconfigs: string[];
   selectedKubeconfig: string;
   selectedClusterId: string;
@@ -190,6 +204,9 @@ const buildSelectionTransitionPlan = (
 
 export const KubeconfigProvider: React.FC<KubeconfigProviderProps> = ({ children }) => {
   const [kubeconfigs, setKubeconfigs] = useState<types.KubeconfigInfo[]>([]);
+  const [kubeconfigDiscoveryState, setKubeconfigDiscoveryState] =
+    useState<KubeconfigDiscoveryState>('available');
+  const [kubeconfigSearchPaths, setKubeconfigSearchPaths] = useState<string[]>([]);
   const [selectedKubeconfigs, setSelectedKubeconfigsState] = useState<string[]>([]);
   const [selectedKubeconfig, setSelectedKubeconfigState] = useState<string>('');
   const [committedSelectedKubeconfigs, setCommittedSelectedKubeconfigs] = useState<string[]>([]);
@@ -343,7 +360,7 @@ export const KubeconfigProvider: React.FC<KubeconfigProviderProps> = ({ children
       setKubeconfigsLoading(true);
       try {
         // Load both the list of configs and the currently selected list.
-        const [configs, currentSelection] = await Promise.all([
+        const [discovery, currentSelection] = await Promise.all([
           requestAppState({
             resource: 'kubeconfigs',
             read: () => readKubeconfigs(),
@@ -351,7 +368,10 @@ export const KubeconfigProvider: React.FC<KubeconfigProviderProps> = ({ children
           refreshWorkspace ? clusterWorkspaceStore.refresh() : clusterWorkspaceStore.hydrate(),
         ]);
 
-        setKubeconfigs(configs || []);
+        const configs = discovery.kubeconfigs || [];
+        setKubeconfigs(configs);
+        setKubeconfigDiscoveryState(resolveKubeconfigDiscoveryState(discovery.state, configs));
+        setKubeconfigSearchPaths(discovery.searchPaths || []);
         // Set the selection from the backend
         const normalizedSelection = normalizeSelections(
           currentSelection?.selectedKubeconfigs || []
@@ -667,6 +687,8 @@ export const KubeconfigProvider: React.FC<KubeconfigProviderProps> = ({ children
   const contextValue = useMemo(
     () => ({
       kubeconfigs,
+      kubeconfigDiscoveryState,
+      kubeconfigSearchPaths,
       selectedKubeconfigs,
       selectedKubeconfig,
       // Cluster-scoped UI follows the selected tab immediately; refresh context
@@ -684,6 +706,8 @@ export const KubeconfigProvider: React.FC<KubeconfigProviderProps> = ({ children
     }),
     [
       kubeconfigs,
+      kubeconfigDiscoveryState,
+      kubeconfigSearchPaths,
       selectedKubeconfigs,
       selectedKubeconfig,
       selectedClusterMeta.id,
