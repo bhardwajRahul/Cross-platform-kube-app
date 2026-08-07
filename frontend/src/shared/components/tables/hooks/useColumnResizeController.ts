@@ -77,8 +77,8 @@ export function useColumnResizeController<T>({
       }
 
       const leftColumn = columnsRef.current.find((col) => col.key === leftKey);
-      const rightColumn = columnsRef.current.find((col) => col.key === rightKey);
-      if (!leftColumn || !rightColumn) {
+      const rightColumnExists = columnsRef.current.some((col) => col.key === rightKey);
+      if (!leftColumn || !rightColumnExists) {
         return;
       }
       if (isFixedColumnKey(leftKey) || isFixedColumnKey(rightKey)) {
@@ -165,8 +165,8 @@ export function useColumnResizeController<T>({
 
     const handleMouseMove = (event: MouseEvent) => {
       const leftColumn = columnsRef.current.find((col) => col.key === resizing.leftKey);
-      const rightColumn = columnsRef.current.find((col) => col.key === resizing.rightKey);
-      if (!leftColumn || !rightColumn) {
+      const rightColumnExists = columnsRef.current.some((col) => col.key === resizing.rightKey);
+      if (!leftColumn || !rightColumnExists) {
         return;
       }
 

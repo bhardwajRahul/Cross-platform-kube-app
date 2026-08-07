@@ -314,10 +314,10 @@ func (a *App) waitForCatalogInformerCaches(ctx context.Context, factory *refresh
 	if factory == nil {
 		return fmt.Errorf("informer factory not initialised")
 	}
-	if ok := waitForFactorySync(ctx, factory.SharedInformerFactory()); !ok {
+	if !waitForFactorySync(ctx, factory.SharedInformerFactory()) {
 		return fmt.Errorf("shared informer cache sync failed")
 	}
-	if ok := waitForAPIExtensionsFactorySync(ctx, factory.APIExtensionsInformerFactory()); !ok {
+	if !waitForAPIExtensionsFactorySync(ctx, factory.APIExtensionsInformerFactory()) {
 		return fmt.Errorf("apiextensions informer cache sync failed")
 	}
 	return nil

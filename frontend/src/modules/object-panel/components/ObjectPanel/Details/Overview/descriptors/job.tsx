@@ -429,7 +429,7 @@ export const cronJobDescriptor: OverviewDescriptor<CronJobDetails> = {
       {
         field: 'activeJobs',
         label: 'Active Jobs',
-        hidden: (d) => !(activeJobCount(d) > 0),
+        hidden: (d) => activeJobCount(d) <= 0,
         render: (d) => <StatusChip variant="info">{activeJobCount(d)}</StatusChip>,
       },
       // Run-history timeline — visual strip of recent runs sized by

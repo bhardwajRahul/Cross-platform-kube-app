@@ -75,9 +75,7 @@ export interface OverviewSchema<T> {
  * A constructable Wails model class. Its generated constructor assigns every field of the kind's
  * Go struct unconditionally, so `Object.keys(new C({}))` enumerates the kind's full field set.
  */
-export interface DtoClass<T> {
-  new (source?: unknown): T;
-}
+export type DtoClass<T> = new (source?: unknown) => T;
 
 export interface OverviewDescriptor<T> {
   displayKind: string;

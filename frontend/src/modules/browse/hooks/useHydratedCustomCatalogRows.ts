@@ -55,7 +55,7 @@ const mergeHydratedRows = (
     const hydrated = hydratedByKey.get(customRowKey(row.ref));
     return {
       ...row,
-      ...(hydrated ?? {}),
+      ...hydrated,
       ref: {
         ...(hydrated?.ref ?? row.ref),
         group: row.ref.group,

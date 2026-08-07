@@ -1126,7 +1126,7 @@ func (m *typedMaintainedStore[T]) SwapToMmap(path string) (func() error, error) 
 // normal sync populates it, exactly as a cold start does.
 func (m *typedMaintainedStore[T]) RestoreFrom(path string) error {
 	if err := m.store.RestoreColumnsFromFileInto(path); err != nil {
-		if gobErr := m.store.RestoreFromFile(path); gobErr != nil {
+		if m.store.RestoreFromFile(path) != nil {
 			return err // report the columnar error (the current format); the gob fallback also failed
 		}
 	}

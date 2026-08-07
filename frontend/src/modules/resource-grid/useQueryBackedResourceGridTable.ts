@@ -621,7 +621,7 @@ export function useQueryBackedNamespaceResourceGridTable<
     data: tableParams.persistenceData ?? [],
     keyExtractor: resolvedKeyExtractor,
     filterOptions: {
-      ...(tableParams.filterOptions ?? {}),
+      ...tableParams.filterOptions,
       isNamespaceScoped: namespace !== ALL_NAMESPACES_SCOPE,
     },
     pageSizeOptions: TABLE_PAGE_SIZE_OPTIONS,
@@ -732,7 +732,7 @@ export function useQueryBackedClusterResourceGridTable<
     columns: tableParams.columns,
     data: tableParams.persistenceData ?? [],
     keyExtractor: resolvedKeyExtractor,
-    filterOptions: { ...(tableParams.filterOptions ?? {}), isNamespaceScoped: false },
+    filterOptions: { ...tableParams.filterOptions, isNamespaceScoped: false },
     pageSizeOptions: TABLE_PAGE_SIZE_OPTIONS,
   });
   const liveScope = useMemo(

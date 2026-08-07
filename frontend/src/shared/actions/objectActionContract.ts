@@ -6,18 +6,17 @@ import type { CapabilityDescriptor } from '@/core/capabilities';
 import {
   type GeneratedObjectActionDefinition,
   type GeneratedObjectActionPermission,
-  MUTATING_OBJECT_ACTION_IDS,
   type MutatingObjectActionId,
   NODE_ACTION_PERMISSIONS,
   OBJECT_ACTION_DEFINITIONS,
   OBJECT_ACTION_IDS,
-  OBJECT_ACTIONS,
   type ObjectActionId,
   type ObjectActionName,
   type ObjectActionPayloadField,
   type ObjectActionPermissionSlot,
 } from './objectActions.generated';
 
+export { MUTATING_OBJECT_ACTION_IDS, OBJECT_ACTIONS } from './objectActions.generated';
 export type {
   MutatingObjectActionId,
   ObjectActionId,
@@ -25,7 +24,7 @@ export type {
   ObjectActionPayloadField,
   ObjectActionPermissionSlot,
 };
-export { MUTATING_OBJECT_ACTION_IDS, OBJECT_ACTION_IDS, OBJECT_ACTIONS };
+export { OBJECT_ACTION_IDS };
 
 export interface ObjectActionIdentitySource {
   clusterId?: string | null;

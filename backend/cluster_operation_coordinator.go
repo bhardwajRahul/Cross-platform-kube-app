@@ -93,7 +93,7 @@ func (c *clusterOperationCoordinator) end(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if current := c.slots[clusterID]; current != slot {
+	if c.slots[clusterID] != slot {
 		return
 	}
 	if slot.token != token {

@@ -960,7 +960,7 @@ export class ResourceStreamManager {
         // (the backend back-fills an object clock into every snapshot, so it
         // churns on every fetch and cannot carry signals).
         signalVersions: {
-          ...(previous.signalVersions ?? {}),
+          ...previous.signalVersions,
           ...sourceVersions,
         },
         streamRevision: (previous.streamRevision ?? 0) + 1,

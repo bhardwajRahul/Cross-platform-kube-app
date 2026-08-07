@@ -161,7 +161,7 @@ export function useGridTablePersistence<T>({
         rows: data.length > 0 ? data : undefined,
         keyExtractor: data.length > 0 ? keyExtractor : undefined,
         filterOptions: {
-          ...(filterOptions ?? {}),
+          ...filterOptions,
           isNamespaceScoped,
         },
         pageSizeOptions,
@@ -236,7 +236,7 @@ export function useGridTablePersistence<T>({
         filters,
         pageSize,
         filterOptions: {
-          ...(filterOptions ?? {}),
+          ...filterOptions,
           isNamespaceScoped,
         },
         pageSizeOptions,

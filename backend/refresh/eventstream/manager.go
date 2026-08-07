@@ -389,7 +389,7 @@ func (m *Manager) clearScopeStateLocked(scope string) {
 
 func (m *Manager) trySend(sub *subscription, entry StreamEvent) (sent bool, closed bool, dropped bool) {
 	defer func() {
-		if r := recover(); r != nil {
+		if recover() != nil {
 			closed = true
 			sent = false
 			dropped = false

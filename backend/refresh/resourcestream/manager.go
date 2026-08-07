@@ -1249,7 +1249,7 @@ func (m *Manager) dropSubscriber(domain, scope string, id uint64, sub *subscript
 
 func (m *Manager) trySend(sub *subscription, update Update) (sent bool, closed bool, reset bool) {
 	defer func() {
-		if r := recover(); r != nil {
+		if recover() != nil {
 			closed = true
 			sent = false
 			reset = false

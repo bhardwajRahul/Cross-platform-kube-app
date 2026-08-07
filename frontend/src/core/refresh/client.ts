@@ -17,12 +17,11 @@ import {
   assertTelemetrySummary,
   type RefreshDomain,
   type RefreshSnapshot,
-  type SnapshotStats,
   type TelemetrySummary,
 } from './types';
 
 export type Snapshot<TPayload> = RefreshSnapshot<TPayload>;
-export type { SnapshotStats };
+export type { SnapshotStats } from './types';
 export type NormalizedTelemetrySummary = Omit<TelemetrySummary, 'snapshots' | 'streams'> & {
   snapshots: NonNullable<TelemetrySummary['snapshots']>;
   streams: NonNullable<TelemetrySummary['streams']>;

@@ -30,10 +30,10 @@ import { getGroupForPanel, getGroupTabs } from './tabGroupState';
 import type { GroupKey, PanelRegistration, TabGroupState } from './tabGroupTypes';
 import { useDockablePanelDragResize } from './useDockablePanelDragResize';
 import { useDockablePanelMaximize } from './useDockablePanelMaximize';
-import type { DockPosition } from './useDockablePanelState';
 import {
   clearGroupLeader,
   copyPanelLayoutState,
+  type DockPosition,
   type PanelCloseReason,
   registerPanelCloseHandler,
   setGroupLeader,
@@ -489,7 +489,7 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
     () => resolveDefaultPanelSize(defaultSizeOverride?.width, defaultSizeOverride?.height),
     [defaultSizeOverride?.width, defaultSizeOverride?.height]
   );
-  const isControlled = typeof props.isOpen !== 'undefined';
+  const isControlled = props.isOpen !== undefined;
   const resolvedIsOpen = props.isOpen ?? true;
 
   // Size constraints are read from CSS custom properties on the panel element.

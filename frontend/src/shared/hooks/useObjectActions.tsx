@@ -11,12 +11,10 @@ import {
   objectActionLabel,
 } from '@shared/actions/objectActionContract';
 import {
-  normalizeKind,
   type ObjectActionData,
   type ObjectActionPolicy,
   type PermissionStatus,
   resolveObjectActionPolicy,
-  SCALABLE_KINDS,
 } from '@shared/actions/objectActionPolicy';
 import type { ContextMenuItem } from '@shared/components/ContextMenu';
 import { buildObjectDiffSelection } from '@shared/components/diff/objectDiffSelection';
@@ -63,8 +61,8 @@ export interface ObjectActionHandlers {
 
 let nextObjectDiffRequestId = 1;
 
+export { normalizeKind, SCALABLE_KINDS } from '@shared/actions/objectActionPolicy';
 export type { ObjectActionData, PermissionStatus };
-export { normalizeKind, SCALABLE_KINDS };
 
 // Options for building action items
 export interface BuildObjectActionsOptions {

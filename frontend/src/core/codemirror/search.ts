@@ -16,8 +16,7 @@ import {
   setSearchQuery,
 } from '@codemirror/search';
 import type { Extension } from '@codemirror/state';
-import type { KeyBinding } from '@codemirror/view';
-import { type EditorView, keymap } from '@codemirror/view';
+import { type EditorView, type KeyBinding, keymap } from '@codemirror/view';
 
 export interface SearchExtensionOptions {
   // When true, show the search panel at the top of the editor.

@@ -429,7 +429,7 @@ func (m *Manager) classifyProbeError(err error) ErrorClass {
 	if m.config.ClassifyError == nil {
 		return ErrorClassAuth
 	}
-	if class := m.config.ClassifyError(err); class == ErrorClassConnectivity {
+	if m.config.ClassifyError(err) == ErrorClassConnectivity {
 		return ErrorClassConnectivity
 	}
 	return ErrorClassAuth

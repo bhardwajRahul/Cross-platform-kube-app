@@ -33,7 +33,7 @@ export const applyPodWorkloadFilterRequest = (
   showNamespaceFilter: boolean
 ): GridTableFilterState => {
   const normalized = normalizeGridTableFilterState(current);
-  const queryFacets = { ...(normalized.queryFacets ?? {}) };
+  const queryFacets = { ...normalized.queryFacets };
   let namespaces = normalized.namespaces;
 
   if (request.type === 'set') {

@@ -213,7 +213,7 @@ const GridTableFiltersBar: React.FC<GridTableFiltersBarProps> = ({
         onRemove: () =>
           onFiltersChange({
             queryFacets: {
-              ...(activeFilters.queryFacets ?? {}),
+              ...activeFilters.queryFacets,
               [facet.key]: ALL_MULTISELECT_FILTER,
             },
           }),

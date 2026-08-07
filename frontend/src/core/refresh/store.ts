@@ -248,7 +248,7 @@ export const setScopedDomainState = <K extends RefreshDomain>(
   }
 
   const nextMap: Record<string, DomainSnapshotState<DomainPayloadMap[K]>> = {
-    ...(currentMap ?? {}),
+    ...currentMap,
     [scope]: nextState,
   };
 

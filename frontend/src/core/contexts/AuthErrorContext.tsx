@@ -2,23 +2,19 @@ import type React from 'react';
 import { createContext, useCallback, useContext, useMemo } from 'react';
 import { RetryClusterAuth } from '@/core/backend-api';
 import {
-  applyAuthFailedEvent,
-  applyAuthProgressEvent,
-  applyAuthRecoveringEvent,
   type ClusterAuthState,
   DEFAULT_CLUSTER_AUTH_STATE,
-  isConfirmedAuthFailure,
 } from '@/core/cluster-workspace/clusterWorkspaceStore';
 import { useClusterWorkspaceSnapshot } from '@/core/cluster-workspace/useClusterWorkspace';
 import { reportOperationalError } from '@/utils/errorHandler';
 
-export type { ClusterAuthState };
 export {
   applyAuthFailedEvent,
   applyAuthProgressEvent,
   applyAuthRecoveringEvent,
   isConfirmedAuthFailure,
-};
+} from '@/core/cluster-workspace/clusterWorkspaceStore';
+export type { ClusterAuthState };
 
 export interface AuthErrorContextValue {
   clusterAuthErrors: Map<string, ClusterAuthState>;

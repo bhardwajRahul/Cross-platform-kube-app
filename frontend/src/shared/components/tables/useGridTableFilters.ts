@@ -287,7 +287,7 @@ export function useGridTableFilters<T>({
         ...(invalidates.has('namespaces') ? { namespaces: ALL_MULTISELECT_FILTER } : {}),
         ...(invalidates.has('clusters') ? { clusters: ALL_MULTISELECT_FILTER } : {}),
         queryFacets: {
-          ...(activeFilters.queryFacets ?? {}),
+          ...activeFilters.queryFacets,
           [key]: nextSelection,
         },
       });
