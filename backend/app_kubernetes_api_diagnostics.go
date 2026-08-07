@@ -140,7 +140,7 @@ func (m *kubernetesAPIMetrics) snapshot(now time.Time) KubernetesAPIClientDiagno
 	}
 }
 
-func (m *kubernetesAPIMetrics) countWindowLocked(nowSecond int64, seconds int64) int64 {
+func (m *kubernetesAPIMetrics) countWindowLocked(nowSecond, seconds int64) int64 {
 	var total int64
 	oldest := nowSecond - seconds + 1
 	for _, bucket := range m.buckets {

@@ -32,7 +32,7 @@ func checkGhCli() error {
 }
 
 // Check if the release already exists.
-func releaseExists(repo string, tag string) (bool, error) {
+func releaseExists(repo, tag string) (bool, error) {
 	fmt.Printf("\n🔎 Checking if release %s exists in repo %s\n", tag, repo)
 	if sh.Run("gh", "release", "view", tag, "--repo", repo) != nil {
 		return false, nil

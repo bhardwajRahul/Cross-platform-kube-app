@@ -465,7 +465,7 @@ func (m *Manager) handleCustomResourceDefinition(obj interface{}, updateType Mes
 	m.ensureCustomInformer(crd)
 }
 
-func (m *Manager) broadcastCustomDomainCompletes(oldCRD *apiextensionsv1.CustomResourceDefinition, newCRD *apiextensionsv1.CustomResourceDefinition) {
+func (m *Manager) broadcastCustomDomainCompletes(oldCRD, newCRD *apiextensionsv1.CustomResourceDefinition) {
 	type completeTarget struct {
 		resourceVersion string
 		ref             *resourcemodel.ResourceRef

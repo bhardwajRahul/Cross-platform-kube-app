@@ -415,7 +415,7 @@ func shellSessionResponse(sess *shellSession, pod *corev1.Pod) *ShellSession {
 }
 
 // SendShellInput writes stdin data to an active exec session.
-func (a *App) SendShellInput(sessionID string, data string) error {
+func (a *App) SendShellInput(sessionID, data string) error {
 	if data == "" {
 		return nil
 	}

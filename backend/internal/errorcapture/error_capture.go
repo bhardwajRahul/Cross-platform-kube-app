@@ -355,7 +355,7 @@ func Enhance(err error) error {
 // CaptureWithCluster prefixes a message with the cluster ID and captures it.
 // Use this when you have cluster context and want to explicitly log an error
 // that will be associated with that cluster.
-func CaptureWithCluster(clusterID string, message string) {
+func CaptureWithCluster(clusterID, message string) {
 	if global == nil {
 		return
 	}

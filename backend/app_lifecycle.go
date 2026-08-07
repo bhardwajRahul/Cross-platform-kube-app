@@ -92,7 +92,7 @@ func (a *App) configureStartupErrorCapture() {
 			"source":    "stderr",
 		})
 	})
-	errorcapture.SetLogSink(func(level string, message string) {
+	errorcapture.SetLogSink(func(level, message string) {
 		// Suppress logging when ANY cluster has auth issues to prevent log spam.
 		// Auth-related errors are already being handled by the per-cluster auth managers.
 		if a.anyClusterAuthInvalid() {

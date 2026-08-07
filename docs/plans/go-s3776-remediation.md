@@ -807,6 +807,29 @@ PR #282 cross-rule regression correction (Sonar confirmation pending):
 - [ ] After the correction is pushed, require the public PR issues API to
       return zero open/confirmed issues before calling Phase 6 complete.
 
+Main-branch `godre:S8209` follow-up (Sonar confirmation pending):
+
+- [x] The 2026-08-07 public main-branch issues API reports 22 open or confirmed
+      `godre:S8209` findings across 15 Go files, all with the same request to
+      group consecutive parameters that repeat one type annotation.
+- [x] Group all 22 reported parameter lists without changing parameter names,
+      order, types, call sites, exported method names, or function bodies.
+- [x] `gofmt` and focused tests pass for `backend`,
+      `backend/internal/errorcapture`, `backend/refresh/resourcestream`,
+      `backend/refresh/snapshot`, and `mage`.
+- [x] Repository backend coverage passes. Ten affected declarations measure at
+      least 80% statement coverage; the pre-existing gaps are `SaveCsvFile`
+      0%, `writeCSVFileAtomically` 60%, `logAppLogsFromFrontend` 66.7%,
+      `SetLinkColor` 0%, `pathsEqual` 66.7%, rate-limiter `Set` 77.8%,
+      `SendShellInput` 77.8%, `detectClusterType` 75%, and the four macOS/release
+      helpers 0%. This syntax-only batch adds no executable statements.
+- [x] `mise exec -- mage qc:prerelease` passes Go formatting, vet,
+      staticcheck, race tests, frontend checks/type-check/all 4,160 tests,
+      Knip, and Trivy with zero reported dependency vulnerabilities. The
+      post-gate source and diff checks pass.
+- [ ] Push the follow-up and require all 22 issue keys to close without any new
+      open or confirmed Sonar finding before marking this inventory complete.
+
 ---
 
 ## Validation by wave

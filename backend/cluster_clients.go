@@ -336,7 +336,7 @@ func clusterClientBuildConcurrencyLimit(taskCount int) int {
 	return limit
 }
 
-func (a *App) applyKubernetesClientRateLimits(qps int, burst int) {
+func (a *App) applyKubernetesClientRateLimits(qps, burst int) {
 	if a == nil {
 		return
 	}

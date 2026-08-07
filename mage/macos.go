@@ -112,7 +112,7 @@ func getMacOSSigningEnv() (string, string, string, string, string) {
 }
 
 // Code signs the application.
-func signMacApp(identity string, keychainPath string, appPath string) error {
+func signMacApp(identity, keychainPath, appPath string) error {
 	fmt.Println("\n✍️ Signing", appPath)
 
 	err := sh.RunV("codesign", "--deep", "--force", "--verify",
@@ -130,7 +130,7 @@ func signMacApp(identity string, keychainPath string, appPath string) error {
 }
 
 // Notarizes the application with Apple.
-func notarizeMacApp(appleID string, appleIDPassword string, appleTeamId string, appPath string) error {
+func notarizeMacApp(appleID, appleIDPassword, appleTeamId, appPath string) error {
 	fmt.Println("\n📄 Notarizing", appPath)
 
 	// Copy the app to a zip for notarization.
@@ -186,7 +186,7 @@ func stageMacApp(cfg BuildConfig) error {
 }
 
 // Creates a DMG package for the application.
-func createDMG(archType string, version string) error {
+func createDMG(archType, version string) error {
 	stagingDir := "build/staging/darwin-" + archType
 	artifactsDir := "build/artifacts"
 	dmgName := fmt.Sprintf("luxury-yacht-%s-macos-%s.dmg", version, archType)

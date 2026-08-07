@@ -349,7 +349,7 @@ func kubeconfigPathKey(path string) string {
 }
 
 // pathsEqual compares paths with OS-specific case rules.
-func pathsEqual(left string, right string) bool {
+func pathsEqual(left, right string) bool {
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(left, right)
 	}

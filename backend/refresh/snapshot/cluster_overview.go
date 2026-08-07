@@ -823,7 +823,7 @@ func defaultClusterVersion(existing string) string {
 	return "Unknown"
 }
 
-func detectClusterType(version string, serverHost string) string {
+func detectClusterType(version, serverHost string) string {
 	normalized := strings.ToLower(strings.TrimSpace(version))
 	if normalized != "" && normalized != "unknown" {
 		switch {

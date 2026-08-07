@@ -14,13 +14,13 @@ type mutableKubernetesRateLimiter struct {
 	burst   int
 }
 
-func newMutableKubernetesRateLimiter(qps int, burst int) *mutableKubernetesRateLimiter {
+func newMutableKubernetesRateLimiter(qps, burst int) *mutableKubernetesRateLimiter {
 	limiter := &mutableKubernetesRateLimiter{}
 	limiter.Set(qps, burst)
 	return limiter
 }
 
-func (l *mutableKubernetesRateLimiter) Set(qps int, burst int) {
+func (l *mutableKubernetesRateLimiter) Set(qps, burst int) {
 	if qps < minKubernetesClientQPS {
 		qps = minKubernetesClientQPS
 	}

@@ -1469,7 +1469,7 @@ var validHexColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // SetLinkColor persists a custom link color for the specified resolved appearance mode ("light" or "dark").
 // The color must be a 7-char hex string (#rrggbb) or an empty string to reset to default.
-func (a *App) SetLinkColor(mode string, color string) error {
+func (a *App) SetLinkColor(mode, color string) error {
 	if mode != "light" && mode != "dark" {
 		return fmt.Errorf("invalid link color mode: %s", mode)
 	}
@@ -1489,7 +1489,7 @@ func (a *App) SetLinkColor(mode string, color string) error {
 
 // SetAccentColor persists a custom accent color for the specified resolved appearance mode ("light" or "dark").
 // The color must be a 7-char hex string (#rrggbb) or an empty string to reset to default.
-func (a *App) SetAccentColor(mode string, color string) error {
+func (a *App) SetAccentColor(mode, color string) error {
 	if mode != "light" && mode != "dark" {
 		return fmt.Errorf("invalid accent color mode: %s", mode)
 	}

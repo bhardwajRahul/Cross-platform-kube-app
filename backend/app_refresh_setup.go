@@ -534,7 +534,7 @@ func (a *App) wireNamespacesReadinessObserver(clusterID string, subsystem *syste
 	if a == nil || subsystem == nil || subsystem.NamespacesDoorbell == nil || clusterID == "" {
 		return
 	}
-	subsystem.NamespacesDoorbell.Set(func(_ string, _ string) {
+	subsystem.NamespacesDoorbell.Set(func(_, _ string) {
 		go a.namespacesReadinessSelfBuild(clusterID)
 	})
 }

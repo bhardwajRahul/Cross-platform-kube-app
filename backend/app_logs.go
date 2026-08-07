@@ -39,16 +39,16 @@ func (a *App) ClearAppLogs() error {
 }
 
 // LogAppLogsFromFrontend appends a log entry originating from the frontend to the application log store.
-func (a *App) LogAppLogsFromFrontend(level string, message string, source string) error {
+func (a *App) LogAppLogsFromFrontend(level, message, source string) error {
 	return a.logAppLogsFromFrontend(level, message, source, "", "")
 }
 
 // LogAppLogsFromFrontendWithCluster appends a frontend log entry with structured cluster metadata.
-func (a *App) LogAppLogsFromFrontendWithCluster(level string, message string, source string, clusterID string, clusterName string) error {
+func (a *App) LogAppLogsFromFrontendWithCluster(level, message, source, clusterID, clusterName string) error {
 	return a.logAppLogsFromFrontend(level, message, source, clusterID, clusterName)
 }
 
-func (a *App) logAppLogsFromFrontend(level string, message string, source string, clusterID string, clusterName string) error {
+func (a *App) logAppLogsFromFrontend(level, message, source, clusterID, clusterName string) error {
 	if a.logger == nil {
 		return fmt.Errorf("logger not initialized")
 	}
