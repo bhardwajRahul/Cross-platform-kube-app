@@ -60,6 +60,18 @@ describe('strict CSS cascade contracts', () => {
     expect(window.getComputedStyle(usage as HTMLElement).transition).toBe('none');
   });
 
+  it('keeps interactive tooltips pointer-accessible when component CSS loads before global CSS', () => {
+    const style = installStyles(
+      readProjectFile('src/shared/components/Tooltip.css'),
+      readProjectFile('styles/components/tooltips.css')
+    );
+    style.dataset.cssContract = 'interactive-tooltip';
+    document.body.innerHTML = '<div class="tooltip tooltip--interactive">Sessions</div>';
+
+    const tooltip = document.querySelector<HTMLElement>('.tooltip');
+    expect(window.getComputedStyle(tooltip as HTMLElement).pointerEvents).toBe('auto');
+  });
+
   it('keeps the log timestamp format error border above its input base rule', () => {
     const style = installStyles(
       readProjectFile('styles/components/modals.css').replace(

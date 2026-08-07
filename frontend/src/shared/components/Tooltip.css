@@ -12,7 +12,7 @@
 }
 
 /* Interactive tooltips accept mouse events so users can click buttons/links */
-.tooltip--interactive {
+.tooltip.tooltip--interactive {
   pointer-events: auto;
 }
 
