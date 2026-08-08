@@ -1,4 +1,4 @@
-package main
+package mage
 
 import (
 	"io/fs"
@@ -10,14 +10,15 @@ import (
 )
 
 func TestSonarExcludesGeneratedSources(t *testing.T) {
-	exclusions := readSonarExclusions(t)
+	repoRoot := ".."
+	exclusions := readSonarExclusions(t, repoRoot)
 
 	// Wails output does not consistently carry a generated-code header, so keep
 	// one representative file in the check alongside header-marked generators.
 	assertSonarPathExcluded(t, exclusions, "frontend/wailsjs/go/models.ts")
 
 	for _, root := range []string{"backend", "frontend/src"} {
-		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		err := filepath.WalkDir(filepath.Join(repoRoot, root), func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
@@ -38,7 +39,11 @@ func TestSonarExcludesGeneratedSources(t *testing.T) {
 				return nil
 			}
 
-			assertSonarPathExcluded(t, exclusions, filepath.ToSlash(path))
+			relativePath, err := filepath.Rel(repoRoot, path)
+			if err != nil {
+				return err
+			}
+			assertSonarPathExcluded(t, exclusions, filepath.ToSlash(relativePath))
 			return nil
 		})
 		if err != nil {
@@ -47,10 +52,10 @@ func TestSonarExcludesGeneratedSources(t *testing.T) {
 	}
 }
 
-func readSonarExclusions(t *testing.T) []string {
+func readSonarExclusions(t *testing.T, repoRoot string) []string {
 	t.Helper()
 
-	contents, err := os.ReadFile(".sonarcloud.properties")
+	contents, err := os.ReadFile(filepath.Join(repoRoot, ".sonarcloud.properties"))
 	if err != nil {
 		t.Fatalf("read .sonarcloud.properties: %v", err)
 	}
