@@ -34,6 +34,7 @@ func (r replayIngestSource) RegisterDynamicCatalogReflector(schema.GroupVersionR
 }
 func (r replayIngestSource) StopReflectorFor(schema.GroupVersionResource)  {}
 func (r replayIngestSource) HasSyncedFor(schema.GroupVersionResource) bool { return true }
+func (r replayIngestSource) Tracks(schema.GroupVersionResource) bool       { return true }
 
 // TestRegisterIngestCatalogSinksRebuildsCacheOnce pins the batched registration:
 // every cut kind's replay lands in the catalog index, but the O(all-items) published

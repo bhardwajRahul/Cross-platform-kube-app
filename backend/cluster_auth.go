@@ -365,14 +365,18 @@ func (r clusterSubsystemRebuild) reportBuildError(component, capturePrefix strin
 }
 
 func (r clusterSubsystemRebuild) startManager(subsystem *system.Subsystem) {
-	if r.app.refreshCtx == nil || subsystem.Manager == nil {
+	if subsystem == nil || subsystem.Manager == nil {
 		return
 	}
-	go r.runManager(subsystem)
+	refreshCtx := r.app.ensureRefreshRuntimeContext()
+	if refreshCtx == nil {
+		return
+	}
+	go r.runManager(refreshCtx, subsystem)
 }
 
-func (r clusterSubsystemRebuild) runManager(subsystem *system.Subsystem) {
-	if err := subsystem.Manager.Start(r.app.refreshCtx); err != nil {
+func (r clusterSubsystemRebuild) runManager(ctx context.Context, subsystem *system.Subsystem) {
+	if err := subsystem.Manager.Start(ctx); err != nil {
 		r.app.logger.Warn(fmt.Sprintf("Refresh manager for cluster %s stopped: %v", r.clusterID, err), logsources.Auth, r.clusterID, r.clusterName)
 		return
 	}

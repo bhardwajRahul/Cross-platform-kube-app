@@ -769,6 +769,7 @@ func (b *blockingIngestSource) RegisterDynamicCatalogReflector(schema.GroupVersi
 }
 func (b *blockingIngestSource) StopReflectorFor(schema.GroupVersionResource)  {}
 func (b *blockingIngestSource) HasSyncedFor(schema.GroupVersionResource) bool { return false }
+func (b *blockingIngestSource) Tracks(schema.GroupVersionResource) bool       { return false }
 
 func (r *recordingTelemetry) count() int {
 	r.mu.Lock()

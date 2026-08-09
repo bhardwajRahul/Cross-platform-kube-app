@@ -157,6 +157,10 @@ type IngestSource interface {
 	// dynamic kind from CatalogRows only once its reflector's initial relist has landed
 	// (else it keeps listing — no empty flash).
 	HasSyncedFor(gvr schema.GroupVersionResource) bool
+	// Tracks reports whether the ingest source owns a store for gvr. Static cut kinds
+	// with a tracked store participate in the catalog's pre-collection readiness gate;
+	// unavailable/skipped stores proceed to the existing partial-sync diagnostic.
+	Tracks(gvr schema.GroupVersionResource) bool
 }
 
 // Logger is the minimal logging contract required by the catalog, aliased to

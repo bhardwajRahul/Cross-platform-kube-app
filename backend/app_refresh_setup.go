@@ -31,14 +31,7 @@ func (a *App) setupRefreshSubsystem() error {
 		return errors.New("application context not initialised")
 	}
 
-	ctx, cancel := context.WithCancel(a.Ctx)
-	a.refreshCtx = ctx
-	a.refreshCancel = cancel
-
-	// Start the per-cluster health heartbeat loop. It operates directly on
-	// a.clusterClients, so it must run even if all subsystems fail auth.
-	// Teardown is automatic via a.refreshCancel().
-	go a.startHeartbeatLoop(a.refreshCtx)
+	ctx := a.ensureRefreshRuntimeContext()
 
 	selections, err := a.selectedKubeconfigSelections()
 	if err != nil {
@@ -79,6 +72,29 @@ func (a *App) setupRefreshSubsystem() error {
 	go a.startGovernorPressureLoop(ctx)
 
 	return nil
+}
+
+// ensureRefreshRuntimeContext establishes the process-level lifetime shared by
+// refresh managers and the cluster heartbeat. The normal setup path calls this
+// before building subsystems, but the first selected cluster can fail auth before
+// setup runs at all. Its later auth-recovery rebuild must establish the same
+// lifetime instead of starting an HTTP/catalog shell around stopped producers.
+// Selection mutations serialize setup, teardown, and auth rebuilds.
+func (a *App) ensureRefreshRuntimeContext() context.Context {
+	if a == nil || a.Ctx == nil {
+		return nil
+	}
+	if a.refreshCtx != nil && a.refreshCtx.Err() == nil {
+		return a.refreshCtx
+	}
+	ctx, cancel := context.WithCancel(a.Ctx)
+	a.refreshCtx = ctx
+	a.refreshCancel = cancel
+
+	// The heartbeat reads a.clusterClients directly and must exist even when the
+	// runtime is first established by auth recovery rather than normal setup.
+	go a.startHeartbeatLoop(ctx)
+	return ctx
 }
 
 // subsystemBuildOutcome is one selection's build result: id is always set once the

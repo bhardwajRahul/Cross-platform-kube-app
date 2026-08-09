@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/dynamic/fake"
 	informers "k8s.io/client-go/informers"
 	cgofake "k8s.io/client-go/kubernetes/fake"
@@ -94,6 +95,38 @@ func TestStartObjectCatalogForTargetStartsForForegroundSubsystem(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, app.objectCatalogServiceForCluster(target.meta.ID), "a live cluster must start its catalog")
+}
+
+func TestCatalogWaitsForRebuiltIngestStoreBeforeFirstCollection(t *testing.T) {
+	app, target := catalogLifecycleTestApp(t, system.TierForeground, false)
+	clients := app.clusterClientsForID(target.meta.ID)
+	kubeClient, ok := clients.client.(*cgofake.Clientset)
+	require.True(t, ok)
+	allowSelfSubjectAccessReviews(kubeClient)
+	kubeClient.Discovery().(*fakediscovery.FakeDiscovery).Resources = []*metav1.APIResourceList{{
+		GroupVersion: "v1",
+		APIResources: []metav1.APIResource{{
+			Name: "configmaps", Kind: "ConfigMap", Namespaced: true, Verbs: []string{"list", "watch"},
+		}},
+	}}
+
+	require.NoError(t, app.startObjectCatalogForTarget(target))
+	service := app.objectCatalogServiceForCluster(target.meta.ID)
+	require.NotNil(t, service)
+	require.Never(t, func() bool {
+		return service.Health().Status != objectcatalog.HealthStateUnknown
+	}, 300*time.Millisecond, 10*time.Millisecond,
+		"catalog collection must wait for rebuilt ingest stores instead of publishing a partial sync")
+
+	subsystem := app.getRefreshSubsystem(target.meta.ID)
+	require.NotNil(t, subsystem)
+	configMapStore := subsystem.IngestManager.StoreFor(schema.GroupVersionResource{Version: "v1", Resource: "configmaps"})
+	require.NotNil(t, configMapStore)
+	require.NoError(t, configMapStore.Replace(nil, "1"))
+	require.Eventually(t, func() bool {
+		return service.Health().Status == objectcatalog.HealthStateOK
+	}, 3*time.Second, 10*time.Millisecond,
+		"catalog should complete its first collection after the ingest store syncs")
 }
 
 type catalogStartingGovernorExecutor struct {

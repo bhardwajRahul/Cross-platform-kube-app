@@ -64,6 +64,22 @@ func TestSetupRefreshSubsystemRequiresContext(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestEnsureRefreshRuntimeContextGuardsMissingContextAndReusesLiveRuntime(t *testing.T) {
+	var nilApp *App
+	require.Nil(t, nilApp.ensureRefreshRuntimeContext())
+
+	app := newTestAppWithDefaults(t)
+	require.Nil(t, app.ensureRefreshRuntimeContext())
+
+	app.Ctx = context.Background()
+	first := app.ensureRefreshRuntimeContext()
+	require.NotNil(t, first)
+	t.Cleanup(app.refreshCancel)
+
+	second := app.ensureRefreshRuntimeContext()
+	require.Equal(t, first, second, "an active refresh runtime must not be replaced")
+}
+
 func TestSetupRefreshSubsystemDoesNotStorePermissionCache(t *testing.T) {
 	app := newTestAppWithDefaults(t)
 	ctx, cancel := context.WithCancel(context.Background())

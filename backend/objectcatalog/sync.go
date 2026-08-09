@@ -19,6 +19,7 @@ import (
 	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/internal/parallel"
 	authorizationv1 "k8s.io/api/authorization/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // preflightNamespaces returns the namespaces a descriptor's RBAC preflight
@@ -504,13 +505,58 @@ func (run *catalogSync) evaluateCapabilities(ctx context.Context) {
 
 func (run *catalogSync) waitForCaches(ctx context.Context) error {
 	wait := run.service.deps.WaitForCaches
-	if wait == nil {
-		return nil
+	if wait != nil {
+		if err := wait(ctx); err != nil {
+			return fmt.Errorf("waiting for informer caches: %w", err)
+		}
 	}
-	if err := wait(ctx); err != nil {
-		return fmt.Errorf("waiting for informer caches: %w", err)
+	if err := run.waitForIngest(ctx); err != nil {
+		return fmt.Errorf("waiting for catalog ingest stores: %w", err)
 	}
 	return nil
+}
+
+func (run *catalogSync) waitForIngest(ctx context.Context) error {
+	source := run.service.deps.IngestSource
+	gvrs := catalogStaticIngestGVRs(run.descriptors)
+	if source == nil || len(gvrs) == 0 {
+		return nil
+	}
+	ticker := time.NewTicker(config.RefreshInformerSyncPollInterval)
+	defer ticker.Stop()
+	for {
+		settled := true
+		for _, gvr := range gvrs {
+			if source.Tracks(gvr) && !source.HasSyncedFor(gvr) {
+				settled = false
+				break
+			}
+		}
+		if settled {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func catalogStaticIngestGVRs(descriptors []resourceDescriptor) []schema.GroupVersionResource {
+	gvrs := make([]schema.GroupVersionResource, 0, len(descriptors))
+	seen := make(map[schema.GroupVersionResource]struct{})
+	for _, desc := range descriptors {
+		if _, owned := catalogIngestOwnedGVRs[desc.GVR]; !owned {
+			continue
+		}
+		if _, exists := seen[desc.GVR]; exists {
+			continue
+		}
+		seen[desc.GVR] = struct{}{}
+		gvrs = append(gvrs, desc.GVR)
+	}
+	return gvrs
 }
 
 func (run *catalogSync) failBeforeCollection(err error) error {

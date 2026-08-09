@@ -100,14 +100,27 @@ discarded manager — auth failures then block all traffic forever while the
 tracked manager stays valid and `RetryClusterAuth` no-ops. Pinned by
 `TestRebuildClusterSubsystemPreservesAuthManagerWiring`.
 
+### Refresh runtime invariant
+
+An initial authentication failure can abort cluster selection before normal
+refresh setup creates its process-level context. Recovery therefore establishes
+that shared refresh context and heartbeat before starting the rebuilt cluster
+manager. The manager starts the informer and ingest producers before aggregate
+routing and catalog collection expose the recovered subsystem. A namespace
+snapshot with unsettled workload stores remains Loading; the readiness sweep or
+namespace doorbell rebuilds it after those stores settle and transitions the
+cluster to Ready. Pinned by
+`TestClusterSubsystemRebuildStartsMissingRefreshRuntimeBeforeReadiness`.
+
 ## Change Checklist
 
 When changing auth behavior:
 
 1. Trace the failing cluster from backend detection to frontend presentation.
 2. Confirm unrelated clusters continue refreshing and accepting actions.
-3. Confirm recovery rebuilds clients, refresh subsystems, catalog state, and
-   streams in the right order.
+3. Confirm recovery rebuilds clients, establishes the refresh runtime, starts
+   the rebuilt manager, updates aggregate routing, and starts catalog state and
+   streams in that order.
 4. Test failure, retry/progress, recovery, and cluster removal during failure.
 
 ## Validation

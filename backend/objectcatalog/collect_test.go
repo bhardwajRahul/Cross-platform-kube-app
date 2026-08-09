@@ -135,6 +135,14 @@ func (f *fakeCatalogIngestSource) HasSyncedFor(gvr schema.GroupVersionResource) 
 	return f.synced[gvr]
 }
 
+func (f *fakeCatalogIngestSource) Tracks(gvr schema.GroupVersionResource) bool {
+	if _, ok := f.rows[gvr]; ok {
+		return true
+	}
+	_, ok := f.synced[gvr]
+	return ok
+}
+
 func TestIngestCatalogSinkBulkReplaceScopesGVR(t *testing.T) {
 	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
 	svc := NewService(Dependencies{Now: func() time.Time { return now }}, nil)

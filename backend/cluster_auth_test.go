@@ -10,12 +10,39 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/luxury-yacht/app/backend/internal/authstate"
+	"github.com/luxury-yacht/app/backend/refresh"
+	"github.com/luxury-yacht/app/backend/refresh/snapshot"
 	"github.com/luxury-yacht/app/backend/refresh/system"
 	"github.com/stretchr/testify/require"
 )
+
+type recoveryStartInformerHub struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (h *recoveryStartInformerHub) Start(context.Context) error {
+	h.once.Do(func() { close(h.started) })
+	return nil
+}
+
+func (*recoveryStartInformerHub) HasSynced(context.Context) bool { return true }
+func (*recoveryStartInformerHub) ResourcesSettled([]string) bool { return true }
+func (*recoveryStartInformerHub) Shutdown() error                { return nil }
+
+func (h *recoveryStartInformerHub) isStarted() bool {
+	select {
+	case <-h.started:
+		return true
+	default:
+		return false
+	}
+}
 
 // TestRebuildClusterSubsystemPreservesAuthManagerWiring reproduces the
 // "zombie manager" failure: rebuildClusterSubsystem used to build new clients
@@ -126,4 +153,63 @@ func TestClusterClientsAuthInvalid(t *testing.T) {
 	t.Cleanup(manager.Shutdown)
 	manager.ReportFailure("expired")
 	require.True(t, clusterClientsAuthInvalid(&clusterClients{authManager: manager}))
+}
+
+// When the first selected cluster fails authentication, refresh setup never
+// runs and refreshCtx remains nil. Recovery must create that runtime before it
+// starts the rebuilt manager; otherwise the HTTP/catalog shell comes up around
+// stopped informers and the cluster remains loading_slow forever.
+func TestClusterSubsystemRebuildStartsMissingRefreshRuntimeBeforeReadiness(t *testing.T) {
+	const clusterID = "cluster-a"
+	app := newTestAppWithDefaults(t)
+	app.Ctx = context.Background()
+	t.Cleanup(func() {
+		if app.refreshCancel != nil {
+			app.refreshCancel()
+		}
+	})
+	emitter, _ := collectingEmitter()
+	app.clusterLifecycle = newClusterLifecycleWithSlowThreshold(emitter, time.Minute)
+	app.clusterLifecycle.SetState(clusterID, ClusterStateLoading)
+	require.Nil(t, app.refreshCtx, "precondition: initial auth failure left refresh uninitialised")
+
+	hub := &recoveryStartInformerHub{started: make(chan struct{})}
+	service := stubSnapshotService{build: func(context.Context, string, string) (*refresh.Snapshot, error) {
+		return &refresh.Snapshot{
+			Domain:  "namespaces",
+			Payload: snapshot.NamespaceSnapshot{WorkloadsReady: hub.isStarted()},
+		}, nil
+	}}
+	aggregate := &aggregateSnapshotService{
+		clusterOrder: []string{clusterID},
+		services:     map[string]refresh.SnapshotService{clusterID: service},
+		onNamespaceSnapshot: func(id string) {
+			if app.clusterLifecycle.GetState(id) == ClusterStateLoading {
+				app.clusterLifecycle.SetState(id, ClusterStateReady)
+			}
+		},
+	}
+	app.refreshAggregates.Store(&refreshAggregateHandlers{snapshot: aggregate})
+	subsystem := &system.Subsystem{
+		Manager:            refresh.NewManager(nil, hub, nil, nil, nil),
+		SnapshotService:    service,
+		NamespacesDoorbell: &system.NamespacesDoorbellObserver{},
+	}
+
+	// The readiness gate must reject the invalid early snapshot.
+	_, err := aggregate.Build(context.Background(), "namespaces", refresh.JoinClusterScope(clusterID, ""))
+	require.NoError(t, err)
+	require.Equal(t, ClusterStateLoading, app.clusterLifecycle.GetState(clusterID))
+
+	rebuild := clusterSubsystemRebuild{app: app, clusterID: clusterID, clusterName: "Cluster A"}
+	rebuild.startManager(subsystem)
+	require.Eventually(t, hub.isStarted, time.Second, 10*time.Millisecond,
+		"auth recovery must start the rebuilt manager even when refresh setup never ran")
+	require.NotNil(t, app.refreshCtx)
+
+	app.sweepNamespacesReadiness(map[string]*system.Subsystem{clusterID: subsystem})
+	require.Eventually(t, func() bool {
+		return app.clusterLifecycle.GetState(clusterID) == ClusterStateReady
+	}, time.Second, 10*time.Millisecond,
+		"the started manager must allow the server-owned readiness build to reach Ready")
 }

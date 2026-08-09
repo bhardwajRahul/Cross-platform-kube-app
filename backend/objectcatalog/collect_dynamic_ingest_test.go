@@ -79,6 +79,13 @@ func (f *fakeDynamicIngestSource) HasSyncedFor(gvr schema.GroupVersionResource) 
 	return ok && !f.stopped[gvr]
 }
 
+func (f *fakeDynamicIngestSource) Tracks(gvr schema.GroupVersionResource) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.projects[gvr]
+	return ok
+}
+
 func (f *fakeDynamicIngestSource) CatalogRows(gvr schema.GroupVersionResource) []interface{} {
 	f.mu.Lock()
 	defer f.mu.Unlock()
