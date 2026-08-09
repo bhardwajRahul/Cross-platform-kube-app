@@ -69,7 +69,7 @@ type NamespaceWorkloadsPermissions struct {
 type NamespaceWorkloadsBuilder struct {
 	podIngest           podWorkloadsIngestSource
 	includePods         bool
-	workloadIngest      workloadIngestSource
+	workloadIngest      workloadStoreVersionProvider
 	includeDeployments  bool
 	includeStatefulSets bool
 	includeDaemonSets   bool

@@ -228,7 +228,7 @@ func TestWorkloadsStoreRelistPreservesOtherKinds(t *testing.T) {
 	require.ElementsMatch(t, []string{"Deployment", "StatefulSet"}, workloadStoreKinds(store))
 
 	// The Deployment GVR's reflector relists with only its own kind's bundles.
-	depSink.(ingest.BundleReplaceSink).ReplaceBundles([]ingest.Bundle{depBundle})
+	depSink.(ingest.BundleReplacer).ReplaceBundles([]ingest.Bundle{depBundle})
 
 	// The StatefulSet row must survive a Deployment relist.
 	require.ElementsMatch(t, []string{"Deployment", "StatefulSet"}, workloadStoreKinds(store))

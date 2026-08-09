@@ -224,8 +224,8 @@ type Manager struct {
 	// instantiated; podIngest / workloadIngest / nodeIngest are the production
 	// sources.
 	podIngest        podBundleSource
-	workloadIngest   workloadBundleSource
-	nodeIngest       nodeBundleSource
+	workloadIngest   workloadBundleReader
+	nodeIngest       nodeBundleReader
 	deploymentLister appslisters.DeploymentLister
 	statefulLister   appslisters.StatefulSetLister
 	daemonLister     appslisters.DaemonSetLister

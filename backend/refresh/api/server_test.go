@@ -274,7 +274,7 @@ func TestSnapshotEndpointRejectsMultiClusterScope(t *testing.T) {
 	}
 }
 
-func snapshotService() refresh.SnapshotService {
+func snapshotService() refresh.SnapshotBuilder {
 	return &fakeSnapshotService{snapshot: &refresh.Snapshot{Version: 1, Payload: map[string]int{"items": 1}}}
 }
 

@@ -82,4 +82,4 @@ func (i *JobControllerOwnerIndex) ReplaceBundles(bundles []ingest.Bundle) {
 }
 
 var _ ingest.BundleSink = (*JobControllerOwnerIndex)(nil)
-var _ ingest.BundleReplaceSink = (*JobControllerOwnerIndex)(nil)
+var _ ingest.BundleReplacer = (*JobControllerOwnerIndex)(nil)

@@ -24,7 +24,7 @@ type replayIngestSource struct {
 
 func (r replayIngestSource) CatalogRows(schema.GroupVersionResource) []interface{} { return nil }
 func (r replayIngestSource) AddCatalogSink(gvr schema.GroupVersionResource, sink ingest.Sink) bool {
-	if bulk, ok := sink.(ingest.ReplaceSink); ok {
+	if bulk, ok := sink.(ingest.Replacer); ok {
 		bulk.Replace(r.rows[gvr])
 	}
 	return true

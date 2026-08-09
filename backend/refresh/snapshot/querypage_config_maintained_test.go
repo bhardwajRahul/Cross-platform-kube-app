@@ -154,7 +154,7 @@ func TestConfigMaintainedStoreBulkReplaceScopesSourceKind(t *testing.T) {
 	require.True(t, ok)
 	store.Sink().Upsert(secRow)
 
-	cmSink, ok := store.bundleSinkFor(cmDesc).(ingest.BundleReplaceSink)
+	cmSink, ok := store.bundleSinkFor(cmDesc).(ingest.BundleReplacer)
 	require.True(t, ok, "source-scoped maintained sink must support bulk bundle replace")
 	projectCatalog := objectcatalog.SummaryProjector(meta.ClusterID, configmap.Identity)
 	cmSink.ReplaceBundles([]ingest.Bundle{{

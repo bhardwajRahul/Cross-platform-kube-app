@@ -19,7 +19,7 @@ import (
 type streamDeps struct {
 	informerFactory *informer.Factory
 	ingestManager   *ingest.IngestManager
-	snapshotService refresh.SnapshotService
+	snapshotService refresh.SnapshotBuilder
 	metricsProvider metrics.Provider
 	cfg             Config
 	telemetry       *telemetry.Recorder

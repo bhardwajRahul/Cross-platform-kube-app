@@ -33,7 +33,7 @@ var (
 
 // Server exposes HTTP endpoints for snapshot retrieval and manual refresh.
 type Server struct {
-	snapshots refresh.SnapshotService
+	snapshots refresh.SnapshotBuilder
 	queue     refresh.ManualQueue
 	telemetry telemetry.Summarizer
 	metrics   refresh.ClusterMetricsDemandController
@@ -41,7 +41,7 @@ type Server struct {
 
 // NewServer constructs an API server instance.
 func NewServer(
-	snapshots refresh.SnapshotService,
+	snapshots refresh.SnapshotBuilder,
 	queue refresh.ManualQueue,
 	recorder telemetry.Summarizer,
 	metrics refresh.ClusterMetricsDemandController,

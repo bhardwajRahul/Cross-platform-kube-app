@@ -18,7 +18,7 @@ import (
 // aggregateSnapshotService routes cluster-scoped snapshot builds to per-cluster services.
 type aggregateSnapshotService struct {
 	clusterOrder []string
-	services     map[string]refresh.SnapshotService
+	services     map[string]refresh.SnapshotBuilder
 	mu           sync.RWMutex
 
 	// onNamespaceSnapshot is called when a namespace snapshot builds successfully.
@@ -31,7 +31,7 @@ func newAggregateSnapshotService(
 	clusterOrder []string,
 	subsystems map[string]*system.Subsystem,
 ) *aggregateSnapshotService {
-	services := make(map[string]refresh.SnapshotService)
+	services := make(map[string]refresh.SnapshotBuilder)
 	for id, subsystem := range subsystems {
 		if subsystem == nil || subsystem.SnapshotService == nil {
 			continue
@@ -115,7 +115,7 @@ func namespaceSnapshotWorkloadsReady(snap *refresh.Snapshot) bool {
 func (s *aggregateSnapshotService) resolveTarget(
 	domain string,
 	clusterIDs []string,
-	services map[string]refresh.SnapshotService,
+	services map[string]refresh.SnapshotBuilder,
 ) (string, error) {
 	if len(clusterIDs) == 0 {
 		return "", fmt.Errorf("cluster scope is required for domain %s", domain)
@@ -131,10 +131,10 @@ func (s *aggregateSnapshotService) resolveTarget(
 	return target, nil
 }
 
-func (s *aggregateSnapshotService) snapshotConfig() map[string]refresh.SnapshotService {
+func (s *aggregateSnapshotService) snapshotConfig() map[string]refresh.SnapshotBuilder {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	services := make(map[string]refresh.SnapshotService, len(s.services))
+	services := make(map[string]refresh.SnapshotBuilder, len(s.services))
 	maps.Copy(services, s.services)
 	return services
 }

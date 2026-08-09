@@ -21,18 +21,18 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// workloadIngestSource supplies the cut workload kinds' store RVs for the namespace-workloads
+// workloadStoreVersionProvider supplies the cut workload kinds' store RVs for the namespace-workloads
 // version watermark. The own-rows themselves no longer come from here — they are Sink-fed into the
 // domain's maintained store — so only StoreResourceVersion is needed. *ingest.IngestManager
 // satisfies it.
-type workloadIngestSource interface {
+type workloadStoreVersionProvider interface {
 	StoreResourceVersion(gvr schema.GroupVersionResource) string
 }
 
 // namespaceWorkloadIngestVersion returns the highest store RV across the cut workload
 // kinds' stores as the version watermark contribution for a workloads build that reads
 // workloads through the ingest source. A nil source or unparseable RVs contribute 0.
-func namespaceWorkloadIngestVersion(source workloadIngestSource, gvrs ...schema.GroupVersionResource) uint64 {
+func namespaceWorkloadIngestVersion(source workloadStoreVersionProvider, gvrs ...schema.GroupVersionResource) uint64 {
 	if source == nil {
 		return 0
 	}

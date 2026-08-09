@@ -114,7 +114,7 @@ type Dependencies struct {
 	Common                       common.Dependencies                    // common dependencies
 	Logger                       Logger                                 // logging service
 	CapabilityFactory            CapabilityFactory                      // capability evaluation service
-	Telemetry                    Telemetry                              // telemetry service
+	Telemetry                    TelemetryRecorder                      // telemetry service
 	Now                          func() time.Time                       // function to get the current time
 	InformerFactory              informers.SharedInformerFactory        // Kubernetes informer factory
 	APIExtensionsInformerFactory apiextinformers.SharedInformerFactory  // Kubernetes API extensions informer factory
@@ -170,25 +170,25 @@ type Logger = applog.Logger
 // CapabilityFactory builds capability evaluation services on-demand.
 type CapabilityFactory func() *capabilities.Service
 
-// Telemetry captures catalog ingestion metrics.
-type Telemetry interface {
+// TelemetryRecorder captures catalog ingestion metrics.
+type TelemetryRecorder interface {
 	RecordCatalog(enabled bool, itemCount, resourceCount int, duration time.Duration, err error)
 }
 
 // Options tunes catalog behaviour; zero values fall back to sensible defaults.
 type Options struct {
-	ResyncInterval             time.Duration     // interval between resyncs
-	FailedSyncRetryInterval    time.Duration     // short retry after a failed/incomplete sync (default config.ObjectCatalogFailedSyncRetryInterval)
-	IngestSyncWaitTimeout      time.Duration     // maximum initial wait for tracked ingest stores before collecting partial data (default config.RefreshInformerSyncDeadline)
-	PageSize                   int               // number of items per page
-	ListWorkers                int               // number of workers for listing resources
-	NamespaceWorkers           int               // number of workers for processing namespaces
-	InformerPromotionThreshold int               // threshold for promoting informers
-	EvictionTTL                time.Duration     // time-to-live for evicted items
-	StreamingBatchSize         int               // number of items per streaming batch
-	StreamingFlushInterval     time.Duration     // interval between streaming flushes
-	EnableReactiveUpdates      bool              // enables informer-driven incremental updates (default true)
-	QueryStore                 CatalogQueryStore // optional query execution backend; defaults to in-memory catalog index
+	ResyncInterval             time.Duration // interval between resyncs
+	FailedSyncRetryInterval    time.Duration // short retry after a failed/incomplete sync (default config.ObjectCatalogFailedSyncRetryInterval)
+	IngestSyncWaitTimeout      time.Duration // maximum initial wait for tracked ingest stores before collecting partial data (default config.RefreshInformerSyncDeadline)
+	PageSize                   int           // number of items per page
+	ListWorkers                int           // number of workers for listing resources
+	NamespaceWorkers           int           // number of workers for processing namespaces
+	InformerPromotionThreshold int           // threshold for promoting informers
+	EvictionTTL                time.Duration // time-to-live for evicted items
+	StreamingBatchSize         int           // number of items per streaming batch
+	StreamingFlushInterval     time.Duration // interval between streaming flushes
+	EnableReactiveUpdates      bool          // enables informer-driven incremental updates (default true)
+	QueryStore                 Querier       // optional query execution backend; defaults to in-memory catalog index
 }
 
 // QueryOptions controls catalog queries executed against the in-memory cache.

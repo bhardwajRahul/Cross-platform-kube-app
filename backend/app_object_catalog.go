@@ -200,7 +200,7 @@ func (a *App) startObjectCatalogForTarget(target catalogTarget) error {
 	}
 
 	commonDeps := a.resourceDependenciesForSelection(target.selection, clients, target.meta.ID)
-	telemetryRecorder := objectcatalog.Telemetry(nil)
+	telemetryRecorder := objectcatalog.TelemetryRecorder(nil)
 	if subsystem.Telemetry != nil {
 		telemetryRecorder = subsystem.Telemetry
 	} else if a.telemetryRecorder != nil {

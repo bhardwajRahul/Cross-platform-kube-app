@@ -1,10 +1,10 @@
 package objectcatalog
 
-// CatalogQueryStore owns catalog query execution behind the stable QueryOptions
+// Querier owns catalog query execution behind the stable QueryOptions
 // to QueryResult contract. The default implementation is the current in-memory
 // catalog index; alternative stores must preserve cursor, total, facet, and
 // identity semantics.
-type CatalogQueryStore interface {
+type Querier interface {
 	QueryCatalog(opts QueryOptions) (QueryResult, bool)
 }
 
@@ -12,7 +12,7 @@ type inMemoryCatalogQueryStore struct {
 	service *Service
 }
 
-func newInMemoryCatalogQueryStore(service *Service) CatalogQueryStore {
+func newInMemoryCatalogQueryStore(service *Service) Querier {
 	return inMemoryCatalogQueryStore{service: service}
 }
 

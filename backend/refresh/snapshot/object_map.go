@@ -116,17 +116,17 @@ type objectMapPermissionChecker interface {
 	CanListWatch(group, resource string) bool
 }
 
-// objectMapIngestSource supplies the projected object-map nodes for ingest-owned
+// objectMapRowsProvider supplies the projected object-map nodes for ingest-owned
 // (cut) kinds, whose objects are no longer cached by the shared informer factory.
 // *ingest.IngestManager satisfies it. The object map reads cut kinds' nodes from
 // here and uncut kinds from the shared informer listers.
-type objectMapIngestSource interface {
+type objectMapRowsProvider interface {
 	ObjectMapRows(gvr schema.GroupVersionResource) []interface{}
 }
 
 type objectMapBuilder struct {
 	gatewayShared   gatewayinformers.SharedInformerFactory
-	gatewayPresence objectMapGatewayPresence
+	gatewayPresence objectMapGatewayPresenceChecker
 	catalogService  func() *objectcatalog.Service
 	// shared supplies typed listers backed by the factory's already-synced
 	// informer caches, so the graph is assembled from memory instead of ~21 live
@@ -135,7 +135,7 @@ type objectMapBuilder struct {
 	permissions objectMapPermissionChecker
 	// ingest supplies projected object-map nodes for ingest-owned (cut) kinds. nil
 	// when no kind in the build is ingest-owned (e.g. a unit test with no cut kinds).
-	ingest objectMapIngestSource
+	ingest objectMapRowsProvider
 	// allowedNamespaces is the cluster's namespace scope. Informer-backed
 	// collectors filter their cluster-wide caches to this set.
 	allowedNamespaces []string
@@ -146,14 +146,14 @@ type objectMapTypedSource struct {
 	shared      informers.SharedInformerFactory
 	permissions objectMapPermissionChecker
 	// ingest supplies projected nodes for ingest-owned kinds; nil when none.
-	ingest objectMapIngestSource
+	ingest objectMapRowsProvider
 }
 
 func (s objectMapTypedSource) allowed(group, resource string) bool {
 	return s.permissions == nil || s.permissions.CanListWatch(group, resource)
 }
 
-type objectMapGatewayPresence interface {
+type objectMapGatewayPresenceChecker interface {
 	Has(kind string) bool
 }
 
@@ -232,9 +232,9 @@ func RegisterObjectMapDomain(
 	shared informers.SharedInformerFactory,
 	permissions objectMapPermissionChecker,
 	gatewayShared gatewayinformers.SharedInformerFactory,
-	gatewayPresence objectMapGatewayPresence,
+	gatewayPresence objectMapGatewayPresenceChecker,
 	catalogService func() *objectcatalog.Service,
-	ingestSource objectMapIngestSource,
+	ingestSource objectMapRowsProvider,
 	allowedNamespaces []string,
 ) error {
 	if shared == nil {
@@ -436,7 +436,7 @@ func (idx *objectMapIndex) addTypedCollectorItems(collector objectmapnode.Collec
 // owners, labels, and pre-resolved edges the object-map needs — all computed from
 // the source object's own fields at intake — so the record is byte-equivalent to
 // the lister path's record except that obj is nil (the source object was dropped).
-func (idx *objectMapIndex) collectIngestNodes(identity resourcekind.Identity, source objectMapIngestSource) {
+func (idx *objectMapIndex) collectIngestNodes(identity resourcekind.Identity, source objectMapRowsProvider) {
 	if source == nil {
 		return
 	}
@@ -480,7 +480,7 @@ func (idx *objectMapIndex) warnSkippedPermission(resource string) {
 
 func (idx *objectMapIndex) collectGatewayTyped(
 	factory gatewayinformers.SharedInformerFactory,
-	presence objectMapGatewayPresence,
+	presence objectMapGatewayPresenceChecker,
 	permissions objectMapPermissionChecker,
 ) {
 	if idx == nil || factory == nil {
@@ -496,7 +496,7 @@ func (idx *objectMapIndex) collectGatewayTyped(
 
 func (idx *objectMapIndex) collectGatewayCollector(
 	factory gatewayinformers.SharedInformerFactory,
-	presence objectMapGatewayPresence,
+	presence objectMapGatewayPresenceChecker,
 	permissions objectMapPermissionChecker,
 	collector objectmapnode.GatewayCollector,
 	clusterID string,
@@ -563,7 +563,7 @@ func (idx *objectMapIndex) namespaceAllowed(namespace string) bool {
 	return false
 }
 
-func gatewayKindPresent(presence objectMapGatewayPresence, kind string) bool {
+func gatewayKindPresent(presence objectMapGatewayPresenceChecker, kind string) bool {
 	return presence == nil || presence.Has(kind)
 }
 

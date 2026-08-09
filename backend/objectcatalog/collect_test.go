@@ -163,7 +163,7 @@ func TestIngestCatalogSinkBulkReplaceScopesGVR(t *testing.T) {
 	svc.catalogIndex.rebuildCacheFromItems(cloneSummaryMap(svc.items), svc.Descriptors())
 
 	sink := ingestCatalogSink{service: svc, gvr: cmGVR}
-	bulk, ok := interface{}(sink).(ingest.ReplaceSink)
+	bulk, ok := interface{}(sink).(ingest.Replacer)
 	if !ok {
 		t.Fatal("ingest catalog sink must support bulk replace")
 	}

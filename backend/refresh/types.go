@@ -16,7 +16,7 @@ import (
 type Manager struct {
 	registry        Registry
 	informerHub     InformerHub
-	snapshotService SnapshotService
+	snapshotService SnapshotBuilder
 	metricsPoller   MetricsPoller
 	manualQueue     ManualQueue
 	mu              sync.RWMutex
@@ -58,8 +58,8 @@ type InformerHub interface {
 	Shutdown() error
 }
 
-// SnapshotService builds and caches snapshots per domain.
-type SnapshotService interface {
+// SnapshotBuilder builds and caches snapshots per domain.
+type SnapshotBuilder interface {
 	Build(ctx context.Context, domain, scope string) (*Snapshot, error)
 }
 
@@ -144,7 +144,7 @@ type SnapshotStats struct {
 }
 
 // NewManager constructs a Manager with the supplied collaborators.
-func NewManager(reg Registry, hub InformerHub, svc SnapshotService, poller MetricsPoller, queue ManualQueue) *Manager {
+func NewManager(reg Registry, hub InformerHub, svc SnapshotBuilder, poller MetricsPoller, queue ManualQueue) *Manager {
 	return &Manager{
 		registry:        reg,
 		informerHub:     hub,

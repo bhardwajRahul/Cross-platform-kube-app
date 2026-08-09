@@ -32,7 +32,7 @@ type catalogIndex struct {
 	// queryEngineStore is the shared querypage engine view of the catalog. It is the
 	// authoritative query state: rebuilt wholesale from the published summaries in
 	// publishStreamingState and maintained for Browse/object-catalog queries via
-	// queryViaEngine. (Named distinctly from the Service.queryStore CatalogQueryStore
+	// queryViaEngine. (Named distinctly from the Service.queryStore Querier
 	// to avoid an embedded-field ambiguity.)
 	queryEngineStore *querypage.Store[Summary]
 

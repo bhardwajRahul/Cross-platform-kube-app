@@ -32,7 +32,7 @@ func TestAggregateSnapshotServiceBuildRequiresClusterScope(t *testing.T) {
 		},
 	}
 
-	services := map[string]refresh.SnapshotService{
+	services := map[string]refresh.SnapshotBuilder{
 		"cluster-a": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 				return successSnapshot, nil
@@ -55,7 +55,7 @@ func TestAggregateSnapshotServiceBuildRequiresClusterScope(t *testing.T) {
 }
 
 func TestAggregateSnapshotServiceBuildRejectsMultiClusterScope(t *testing.T) {
-	services := map[string]refresh.SnapshotService{
+	services := map[string]refresh.SnapshotBuilder{
 		"cluster-a": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 				t.Fatalf("multi-cluster snapshot request should not reach a cluster service")
@@ -88,7 +88,7 @@ func TestAggregateSnapshotServiceNamespaceSnapshotTriggersLifecycleCallback(t *t
 			WorkloadsReady: true,
 		},
 	}
-	services := map[string]refresh.SnapshotService{
+	services := map[string]refresh.SnapshotBuilder{
 		"cluster-a": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 				return successSnapshot, nil
@@ -129,7 +129,7 @@ func TestAggregateSnapshotServiceNamespaceSnapshotSkipsCallbackUntilWorkloadsRea
 			WorkloadsReady: false,
 		},
 	}
-	services := map[string]refresh.SnapshotService{
+	services := map[string]refresh.SnapshotBuilder{
 		"cluster-a": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 				return notReady, nil
@@ -157,7 +157,7 @@ func TestAggregateSnapshotServiceNonNamespaceDomainDoesNotTriggerCallback(t *tes
 		Domain:  "cluster-overview",
 		Payload: map[string]string{"test": "data"},
 	}
-	services := map[string]refresh.SnapshotService{
+	services := map[string]refresh.SnapshotBuilder{
 		"cluster-a": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 				return successSnapshot, nil
@@ -187,7 +187,7 @@ func TestAggregateSnapshotServiceNonNamespaceDomainDoesNotTriggerCallback(t *tes
 // wedges in "loading" forever: the Ready transition only ever fires from the
 // namespaces domain.
 func TestAggregateSnapshotServicePermissionDeniedNamespacesStillSignalsReadiness(t *testing.T) {
-	services := map[string]refresh.SnapshotService{
+	services := map[string]refresh.SnapshotBuilder{
 		"cluster-a": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 				return nil, refresh.NewPermissionDeniedError(domain, "core/namespaces")
@@ -223,7 +223,7 @@ func TestNamespacesReadinessSelfBuildFlipsReady(t *testing.T) {
 	lifecycle.SetState("cluster-a", ClusterStateLoading)
 
 	builds := 0
-	services := map[string]refresh.SnapshotService{
+	services := map[string]refresh.SnapshotBuilder{
 		"cluster-a": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 				builds++
@@ -275,7 +275,7 @@ func TestWireNamespacesReadinessObserverFlipsReadyForLateSubsystems(t *testing.T
 	builds := 0
 	aggregate := &aggregateSnapshotService{
 		clusterOrder: []string{"cluster-b"},
-		services: map[string]refresh.SnapshotService{
+		services: map[string]refresh.SnapshotBuilder{
 			"cluster-b": stubSnapshotService{
 				build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 					builds++
@@ -322,7 +322,7 @@ func TestNamespacesReadinessSweepHealsDroppedSettleRing(t *testing.T) {
 
 	aggregate := &aggregateSnapshotService{
 		clusterOrder: []string{"cluster-a"},
-		services: map[string]refresh.SnapshotService{
+		services: map[string]refresh.SnapshotBuilder{
 			"cluster-a": stubSnapshotService{
 				build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 					return &refresh.Snapshot{
@@ -389,7 +389,7 @@ func TestTransitionClusterToLoadingKeepsReadyClustersReady(t *testing.T) {
 // Transient (non-permission) failures are NOT settled: the callback must not
 // fire, so the cluster keeps waiting for a real namespaces build.
 func TestAggregateSnapshotServiceFailedBuildDoesNotTriggerCallback(t *testing.T) {
-	services := map[string]refresh.SnapshotService{
+	services := map[string]refresh.SnapshotBuilder{
 		"cluster-a": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 				return nil, fmt.Errorf("apiserver timeout")
@@ -425,7 +425,7 @@ func TestAggregateSnapshotServiceLifecycleTransitionsReadyAfterInPlaceRebuild(t 
 
 	aggregate := &aggregateSnapshotService{
 		clusterOrder: []string{"cluster-a"},
-		services: map[string]refresh.SnapshotService{
+		services: map[string]refresh.SnapshotBuilder{
 			"cluster-a": stubSnapshotService{
 				build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 					return successSnapshot, nil
@@ -486,7 +486,7 @@ func TestAggregateSnapshotServiceLifecycleIntegration(t *testing.T) {
 	}
 	aggregate := &aggregateSnapshotService{
 		clusterOrder: []string{"cluster-a"},
-		services: map[string]refresh.SnapshotService{
+		services: map[string]refresh.SnapshotBuilder{
 			"cluster-a": stubSnapshotService{
 				build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 					return successSnapshot, nil
@@ -527,7 +527,7 @@ func TestAggregateSnapshotServiceLifecycleNoTransitionIfAlreadyReady(t *testing.
 	}
 	aggregate := &aggregateSnapshotService{
 		clusterOrder: []string{"cluster-a"},
-		services: map[string]refresh.SnapshotService{
+		services: map[string]refresh.SnapshotBuilder{
 			"cluster-a": stubSnapshotService{
 				build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 					return successSnapshot, nil
@@ -552,7 +552,7 @@ func TestAggregateSnapshotServiceLifecycleNoTransitionIfAlreadyReady(t *testing.
 }
 
 func TestAggregateSnapshotServiceBuildReturnsErrorWhenClusterFails(t *testing.T) {
-	services := map[string]refresh.SnapshotService{
+	services := map[string]refresh.SnapshotBuilder{
 		"cluster-a": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 				return nil, refresh.NewPermissionDeniedError(domain, "")
@@ -571,7 +571,7 @@ func TestAggregateSnapshotServiceBuildReturnsErrorWhenClusterFails(t *testing.T)
 }
 
 func TestAggregateSnapshotServiceBuildReturnsErrorWhenClusterUnavailable(t *testing.T) {
-	services := map[string]refresh.SnapshotService{
+	services := map[string]refresh.SnapshotBuilder{
 		"cluster-a": stubSnapshotService{
 			build: func(ctx context.Context, domain, scope string) (*refresh.Snapshot, error) {
 				return &refresh.Snapshot{Domain: domain, Scope: scope}, nil

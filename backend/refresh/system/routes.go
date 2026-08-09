@@ -10,7 +10,7 @@ import (
 
 // MuxConfig groups the dependencies needed to wire core refresh HTTP routes.
 type MuxConfig struct {
-	SnapshotService refresh.SnapshotService
+	SnapshotService refresh.SnapshotBuilder
 	ManualQueue     refresh.ManualQueue
 	Telemetry       telemetry.Summarizer
 	Metrics         refresh.ClusterMetricsDemandController

@@ -30,10 +30,10 @@ import (
 // nodeGVR is the node kind's GVR, the key the node reflector's store is registered under.
 var nodeGVR = schema.GroupVersionResource{Group: nodespkg.Identity.Group, Version: nodespkg.Identity.Version, Resource: nodespkg.Identity.Resource}
 
-// nodeBundleSource supplies the cut node kind's projected bundles for lookupNodeRef (the
+// nodeBundleReader supplies the cut node kind's projected bundles for lookupNodeRef (the
 // pod-derived node signal needs a specific node's UID + name, which the projected bundle's
 // Catalog half carries). *ingest.IngestManager satisfies it.
-type nodeBundleSource interface {
+type nodeBundleReader interface {
 	Rows(gvr schema.GroupVersionResource) []interface{}
 }
 

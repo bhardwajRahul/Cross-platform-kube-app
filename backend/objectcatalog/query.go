@@ -39,7 +39,7 @@ var catalogQueryBuiltinKeys = func() map[resourceIdentityKey]struct{} {
 }()
 
 // Query filters catalog entries and returns a paginated result. It serves through the
-// querypage engine (queryViaEngine via the CatalogQueryStore); the engine path always
+// querypage engine (queryViaEngine via the Querier); the engine path always
 // returns a result, so there is no legacy fallback.
 func (s *Service) Query(opts QueryOptions) QueryResult {
 	if s.queryStore != nil {
@@ -48,7 +48,7 @@ func (s *Service) Query(opts QueryOptions) QueryResult {
 		}
 	}
 	// The default in-memory store always serves a result; this only runs if an
-	// alternative CatalogQueryStore declined the query.
+	// alternative Querier declined the query.
 	result, _ := s.queryViaEngine(opts)
 	return result
 }

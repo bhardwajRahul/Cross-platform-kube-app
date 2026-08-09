@@ -77,11 +77,11 @@ type Sink interface {
 	Delete(tableRow interface{})
 }
 
-// ReplaceSink is an optional Sink extension for relist/Replace delivery. A sink that
+// Replacer is an optional Sink extension for relist/Replace delivery. A sink that
 // maintains an indexed downstream view can replace the whole source set in one batch
 // instead of receiving N incremental Upserts while the reflector's initial relist is
 // still holding the source store lock.
-type ReplaceSink interface {
+type Replacer interface {
 	Replace(rows []interface{})
 }
 
@@ -97,9 +97,9 @@ type BundleSink interface {
 	DeleteBundle(bundle Bundle)
 }
 
-// BundleReplaceSink is an optional BundleSink extension for relist/Replace delivery.
+// BundleReplacer is an optional BundleSink extension for relist/Replace delivery.
 // The rows argument is the complete Bundle set for this store's source after the relist.
-type BundleReplaceSink interface {
+type BundleReplacer interface {
 	ReplaceBundles(rows []Bundle)
 }
 
@@ -323,7 +323,7 @@ func (s *ProjectingStore) AddCatalogSink(sink Sink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.catalogSinks = append(s.catalogSinks, sink)
-	if bulk, ok := sink.(ReplaceSink); ok {
+	if bulk, ok := sink.(Replacer); ok {
 		rows := make([]interface{}, 0, len(s.rows))
 		for _, row := range s.rows {
 			if cat := catalogHalf(row); cat != nil {
@@ -800,7 +800,7 @@ func emitDeleteToIncrementalRowSinks(sinks []Sink, value interface{}) {
 		return
 	}
 	for _, sink := range sinks {
-		if _, bulk := sink.(ReplaceSink); !bulk {
+		if _, bulk := sink.(Replacer); !bulk {
 			sink.Delete(value)
 		}
 	}
@@ -812,7 +812,7 @@ func emitDeleteToIncrementalBundleSinks(sinks []BundleSink, projected interface{
 		return
 	}
 	for _, sink := range sinks {
-		if _, bulk := sink.(BundleReplaceSink); !bulk {
+		if _, bulk := sink.(BundleReplacer); !bulk {
 			sink.DeleteBundle(bundle)
 		}
 	}
@@ -841,7 +841,7 @@ func (s *ProjectingStore) emitReplaceTableRows(rows []interface{}) {
 		return
 	}
 	for _, sink := range s.sinks {
-		if bulk, ok := sink.(ReplaceSink); ok {
+		if bulk, ok := sink.(Replacer); ok {
 			bulk.Replace(rows)
 			continue
 		}
@@ -856,7 +856,7 @@ func (s *ProjectingStore) emitReplaceCatalogRows(rows []interface{}) {
 		return
 	}
 	for _, sink := range s.catalogSinks {
-		if bulk, ok := sink.(ReplaceSink); ok {
+		if bulk, ok := sink.(Replacer); ok {
 			bulk.Replace(rows)
 			continue
 		}
@@ -871,7 +871,7 @@ func (s *ProjectingStore) emitReplaceBundles(rows []Bundle) {
 		return
 	}
 	for _, sink := range s.bundleSinks {
-		if bulk, ok := sink.(BundleReplaceSink); ok {
+		if bulk, ok := sink.(BundleReplacer); ok {
 			bulk.ReplaceBundles(rows)
 			continue
 		}

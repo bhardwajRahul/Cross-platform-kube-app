@@ -95,7 +95,7 @@ type Subsystem struct {
 	IngestManager    *ingest.IngestManager   // Owned-reflector ingestion manager for cut kinds.
 	RuntimePerms     *permissions.Checker    // Checker for runtime permissions.
 	Registry         *domain.Registry        // Registry for managing domain information.
-	SnapshotService  refresh.SnapshotService // Service for managing snapshots.
+	SnapshotService  refresh.SnapshotBuilder // Service for managing snapshots.
 	ManualQueue      refresh.ManualQueue     // Queue for manual refresh requests.
 	EventStream      *eventstream.Manager    // Manager for event streams.
 	ResourceStream   *resourcestream.Manager // Manager for resource streams.

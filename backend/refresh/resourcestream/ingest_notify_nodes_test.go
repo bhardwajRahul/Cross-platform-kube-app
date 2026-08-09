@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// fakeNodeBundleSource is a test nodeBundleSource returning the supplied node bundles for
+// fakeNodeBundleSource is a test nodeBundleReader returning the supplied node bundles for
 // NodeGVR, standing in for the ingest manager's Rows in the node notify unit tests.
 type fakeNodeBundleSource struct {
 	bundles []ingest.Bundle

@@ -64,7 +64,7 @@ type Service struct {
 
 	mu sync.RWMutex
 	catalogIndex
-	queryStore CatalogQueryStore
+	queryStore Querier
 	identity   *resourceIdentityResolver
 
 	// discoveryClient is the per-cluster discovery client the catalog re-discovers through.

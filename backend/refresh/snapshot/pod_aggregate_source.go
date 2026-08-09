@@ -27,7 +27,7 @@ import (
 
 const podOwnerKeyIndexName = "pods:owner-key"
 
-type podWorkloadsIndexedIngestSource interface {
+type podWorkloadsIndexReader interface {
 	RowsByIndex(gvr schema.GroupVersionResource, indexName string, values []string) []interface{}
 }
 
@@ -36,7 +36,7 @@ type podWorkloadsIndexedIngestSource interface {
 // *ingest.IngestManager satisfies it (its AggregateRows returns the Bundle Aggregate
 // halves; StoreResourceVersion returns the store's latest list/watch RV). It is the
 // read path the informer-backed aggregation domains use instead of a typed pod lister,
-// mirroring the objectMapIngestSource the object map already uses.
+// mirroring the objectMapRowsProvider the object map already uses.
 type podAggregateIngestSource interface {
 	AggregateRows(gvr schema.GroupVersionResource) []interface{}
 	StoreResourceVersion(gvr schema.GroupVersionResource) string
@@ -96,7 +96,7 @@ func workloadOwnerPodRowsFromIngest(source podWorkloadsIngestSource, ownRows []W
 		ownerKeys = append(ownerKeys, owner)
 	}
 	sort.Strings(ownerKeys)
-	if indexed, ok := source.(podWorkloadsIndexedIngestSource); ok {
+	if indexed, ok := source.(podWorkloadsIndexReader); ok {
 		bundles := indexed.RowsByIndex(PodGVR, podOwnerKeyIndexName, ownerKeys)
 		return workloadOwnerPodRowsFromBundles(bundles, owners)
 	}

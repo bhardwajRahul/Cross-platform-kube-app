@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// fakeWorkloadIngestSource is a test workloadIngestSource: it projects the supplied typed
+// fakeWorkloadIngestSource is a test workloadStoreVersionProvider: it projects the supplied typed
 // workloads through the SAME per-kind ingest projectors the reflector uses, then serves the
 // resulting Bundles keyed by GVR — so a workloads domain unit test feeds the builder exactly
 // the projected own-field rows ingest would supply for those workloads. It also serves the

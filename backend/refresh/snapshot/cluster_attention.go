@@ -1220,7 +1220,7 @@ func (i *clusterAttentionIndex) deleteEvent(meta ClusterMeta, obj interface{}) {
 	}
 }
 
-var _ ingest.BundleReplaceSink = attentionBundleSink{}
+var _ ingest.BundleReplacer = attentionBundleSink{}
 
 func evaluateAttentionSource(record attentionSourceRecord, now time.Time) attentionEvaluation {
 	if !completeAttentionRef(record.Ref) {

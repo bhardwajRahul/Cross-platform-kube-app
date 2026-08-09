@@ -33,11 +33,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// workloadBundleSource supplies the cut workload kinds' projected bundles for the manager's
+// workloadBundleReader supplies the cut workload kinds' projected bundles for the manager's
 // by-key lookups (the HPA->workload and pod-owner->workload notify paths need a specific
 // workload's UID + namespace/name, which the projected bundle's Catalog half carries).
 // *ingest.IngestManager satisfies it.
-type workloadBundleSource interface {
+type workloadBundleReader interface {
 	Rows(gvr schema.GroupVersionResource) []interface{}
 }
 
