@@ -6,20 +6,9 @@
  */
 
 import { captureUserVisibleError } from '@/core/telemetry/sentry';
+import { ErrorCategory, isExpectedClusterErrorCategory } from '@/shared/constants/errorCategories';
 
-export const ErrorCategory = {
-  NETWORK: 'NETWORK',
-  AUTHENTICATION: 'AUTHENTICATION',
-  PERMISSION: 'PERMISSION',
-  NOT_FOUND: 'NOT_FOUND',
-  VALIDATION: 'VALIDATION',
-  TIMEOUT: 'TIMEOUT',
-  RATE_LIMIT: 'RATE_LIMIT',
-  SERVER_ERROR: 'SERVER_ERROR',
-  UNKNOWN: 'UNKNOWN',
-} as const;
-
-export type ErrorCategory = (typeof ErrorCategory)[keyof typeof ErrorCategory];
+export { ErrorCategory };
 
 export const ErrorSeverity = {
   INFO: 'info',
@@ -36,6 +25,9 @@ const authWordPattern = /\bauth\b/;
 const authTokenPattern = /\btokens?\b/;
 const forbiddenStatusPattern =
   /\b(?:http(?:\/\d(?:\.\d)?)?\s+403|status(?:\s+(?:code|of))?(?:\s*[:=]\s*|\s+)403)\b/;
+const connectivityPattern =
+  /\b(?:network|[a-z0-9_-]*fetch[a-z0-9_-]*|cors|connections?|disconnected|dial tcp|no such host|tls handshake|x509|offline|econnrefused)\b/;
+const timeoutPattern = /\b(?:timeout|timed out)\b/;
 
 export interface ErrorDetails {
   message: string;
@@ -89,9 +81,10 @@ class ErrorHandler {
   private categorizeError(error: unknown): ErrorCategory {
     const errorString = this.getErrorString(error);
     const lowerError = errorString.toLowerCase();
+    const isTimeout = timeoutPattern.test(lowerError);
 
-    // Permission markers are more specific than API group or resource names
-    // containing broad words such as "network".
+    // Permission and authentication markers are more specific than API group
+    // or resource names containing broad words such as "network".
     if (
       lowerError.includes('forbidden') ||
       lowerError.includes('permission') ||
@@ -99,18 +92,6 @@ class ErrorHandler {
       forbiddenStatusPattern.test(lowerError)
     ) {
       return ErrorCategory.PERMISSION;
-    }
-
-    // Network errors
-    if (
-      lowerError.includes('network') ||
-      lowerError.includes('fetch') ||
-      lowerError.includes('cors') ||
-      lowerError.includes('connection') ||
-      lowerError.includes('offline') ||
-      lowerError.includes('econnrefused')
-    ) {
-      return ErrorCategory.NETWORK;
     }
 
     // Authentication errors
@@ -123,6 +104,11 @@ class ErrorHandler {
       lowerError.includes('401')
     ) {
       return ErrorCategory.AUTHENTICATION;
+    }
+
+    // Network errors
+    if (!isTimeout && connectivityPattern.test(lowerError)) {
+      return ErrorCategory.NETWORK;
     }
 
     // Not found errors
@@ -157,7 +143,7 @@ class ErrorHandler {
     }
 
     // Timeout errors
-    if (lowerError.includes('timeout') || lowerError.includes('timed out')) {
+    if (isTimeout) {
       return ErrorCategory.TIMEOUT;
     }
 
@@ -322,7 +308,8 @@ class ErrorHandler {
   private reportError(
     error: unknown,
     details: ErrorDetails,
-    surface: 'operational' | 'user-visible' = 'user-visible'
+    surface: 'operational' | 'user-visible' = 'user-visible',
+    expectedCondition = false
   ): void {
     const reactRootAlreadyCaptured =
       details.context?.source === 'ErrorBoundary' || details.context?.action === 'componentError';
@@ -331,6 +318,7 @@ class ErrorHandler {
         category: details.category,
         severity: details.severity,
         surface,
+        expectedCondition,
         context: details.context,
       });
     }
@@ -374,7 +362,12 @@ class ErrorHandler {
     if (suppressNotification) {
       this.logExpectedCondition(errorDetails);
     } else {
-      this.reportError(error, errorDetails);
+      this.reportError(
+        error,
+        errorDetails,
+        'user-visible',
+        isExpectedClusterErrorCategory(category)
+      );
       // Store in history
       this.addToHistory(errorDetails);
 

@@ -2,6 +2,10 @@ import type { Breadcrumb, ErrorEvent } from '@sentry/react';
 import * as Sentry from '@sentry/react';
 import type { RootOptions } from 'react-dom/client';
 import { eventBus } from '@/core/events/eventBus';
+import {
+  type ErrorCategory,
+  isExpectedClusterErrorCategory,
+} from '@/shared/constants/errorCategories';
 
 export interface SentryRuntimeConfig {
   enabled: boolean;
@@ -12,9 +16,10 @@ export interface SentryRuntimeConfig {
 }
 
 export interface UserVisibleErrorCapture {
-  category: string;
+  category: ErrorCategory;
   severity: string;
   surface?: 'operational' | 'user-visible';
+  expectedCondition?: boolean;
   context?: Record<string, unknown>;
 }
 
@@ -1087,7 +1092,10 @@ const buildErrorBreadcrumb = (capture: ResolvedErrorCapture, category: string): 
 });
 
 export function captureUserVisibleError(error: unknown, details: UserVisibleErrorCapture): void {
-  if (!reportingInitialized) {
+  if (
+    !reportingInitialized ||
+    (details.expectedCondition && isExpectedClusterErrorCategory(details.category))
+  ) {
     return;
   }
 

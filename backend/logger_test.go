@@ -3,12 +3,15 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/getsentry/sentry-go"
 	"github.com/luxury-yacht/app/backend/internal/applog"
+	"github.com/luxury-yacht/app/backend/internal/authstate"
 	"github.com/luxury-yacht/app/backend/internal/errorcapture"
 	"github.com/luxury-yacht/app/backend/internal/logsources"
 	"github.com/luxury-yacht/app/internal/sentry"
@@ -207,6 +210,96 @@ func TestLoggerReportsStructuredErrorWithoutFlatteningCause(t *testing.T) {
 	entries := base.GetEntries()
 	require.Len(t, entries, 1)
 	require.Equal(t, "Failed to get deployment default/web: forbidden", entries[0].Message)
+}
+
+func TestLoggerKeepsExpectedClusterFailuresLocal(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "authentication",
+			err: fmt.Errorf(
+				"request failed: %w",
+				&authstate.AuthInvalidError{Reason: "credentials rejected"},
+			),
+		},
+		{
+			name: "raw structured authentication",
+			err:  apierrors.NewUnauthorized("credentials rejected"),
+		},
+		{
+			name: "raw credential helper failure",
+			err:  errors.New("getting credentials: exec: executable aws failed with exit code 255"),
+		},
+		{
+			name: "connectivity",
+			err: &url.Error{
+				Op:  "Get",
+				URL: "https://cluster.example.test",
+				Err: errors.New("connection refused"),
+			},
+		},
+		{
+			name: "cancellation",
+			err:  context.Canceled,
+		},
+		{
+			name: "API server unavailable",
+			err:  apierrors.NewServiceUnavailable("cluster temporarily unavailable"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reporter := &recordingErrorReporter{}
+			logger := NewLogger(10, reporter)
+
+			logger.ErrorWithCause(tt.err, "cluster request failed", "ResourceLoader", "cluster-a", "Production")
+
+			reporter.mu.Lock()
+			require.Empty(t, reporter.messages)
+			require.Empty(t, reporter.exceptions)
+			reporter.mu.Unlock()
+
+			entries := logger.GetEntries()
+			require.Len(t, entries, 1)
+			require.Equal(t, "ERROR", entries[0].Level)
+			require.Contains(t, entries[0].Message, tt.err.Error())
+		})
+	}
+}
+
+func TestLoggerReportsDeadlineAndUnexpectedURLFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "deadline exceeded", err: context.DeadlineExceeded},
+		{
+			name: "URL application failure",
+			err: &url.Error{
+				Op:  "Get",
+				URL: "https://cluster.example.test",
+				Err: errors.New("redirect policy rejected"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reporter := &recordingErrorReporter{}
+			logger := NewLogger(10, reporter)
+
+			logger.ErrorWithCause(tt.err, "cluster request failed", "ResourceLoader", "cluster-a", "Production")
+
+			reporter.mu.Lock()
+			require.Empty(t, reporter.messages)
+			require.Len(t, reporter.exceptions, 1)
+			require.ErrorIs(t, reporter.exceptions[0].err, tt.err)
+			reporter.mu.Unlock()
+		})
+	}
 }
 
 func TestLoggerSentryReportIncludesOriginalMessageAndCluster(t *testing.T) {

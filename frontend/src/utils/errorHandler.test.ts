@@ -60,6 +60,13 @@ describe('ErrorHandler', () => {
     expect(listener).toHaveBeenCalledWith(
       expect.objectContaining({ category: ErrorCategory.NETWORK })
     );
+    expect(telemetryMocks.captureUserVisibleError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        category: ErrorCategory.NETWORK,
+        expectedCondition: true,
+      })
+    );
 
     unsubscribe();
   });
@@ -94,6 +101,7 @@ describe('ErrorHandler', () => {
       error,
       expect.objectContaining({
         context: { action: 'startPortForward', clusterId: 'cluster-a' },
+        expectedCondition: false,
       })
     );
     expect(listener).not.toHaveBeenCalled();
@@ -111,6 +119,7 @@ describe('ErrorHandler', () => {
       error,
       expect.objectContaining({
         surface: 'operational',
+        expectedCondition: false,
         context: { action: 'persistTableState' },
       })
     );
@@ -155,6 +164,14 @@ describe('ErrorHandler', () => {
 
   it.each([
     ['Failed to fetch: dial tcp 10.0.0.1:8403: connection refused', ErrorCategory.NETWORK],
+    ['Fetching cluster state failed', ErrorCategory.NETWORK],
+    ['Could not refetch cluster state', ErrorCategory.NETWORK],
+    ['All cluster connections were closed', ErrorCategory.NETWORK],
+    [
+      'Post "https://cluster.example.test": dial tcp: lookup cluster.example.test: no such host',
+      ErrorCategory.NETWORK,
+    ],
+    ['Container logs stream disconnected. Reconnecting soon', ErrorCategory.NETWORK],
     ['dial tcp 10.0.0.1:403: i/o timeout', ErrorCategory.TIMEOUT],
     ['request took 403 ms: internal server error', ErrorCategory.SERVER_ERROR],
     ['processed 403 records before too many requests', ErrorCategory.RATE_LIMIT],
@@ -184,6 +201,21 @@ describe('ErrorHandler', () => {
     const details = handler.handle(error, { source: 'backend-fetch' });
 
     expect(details.category).toBe(ErrorCategory.PERMISSION);
+    expect(handler.getHistory()).toHaveLength(0);
+    expect(listener).not.toHaveBeenCalled();
+    expect(telemetryMocks.captureUserVisibleError).not.toHaveBeenCalled();
+  });
+
+  it('suppresses authentication failures for Kubernetes resources with network in their API group', () => {
+    const listener = vi.fn();
+    handler.subscribe(listener);
+    const error = new Error(
+      'failed to watch networking.example.io/v1, Resource=widgets: auth invalid: 401 Unauthorized'
+    );
+
+    const details = handler.handle(error, { source: 'backend-fetch' });
+
+    expect(details.category).toBe(ErrorCategory.AUTHENTICATION);
     expect(handler.getHistory()).toHaveLength(0);
     expect(listener).not.toHaveBeenCalled();
     expect(telemetryMocks.captureUserVisibleError).not.toHaveBeenCalled();
