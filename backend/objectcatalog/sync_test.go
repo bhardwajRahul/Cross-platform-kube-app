@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -771,6 +772,54 @@ func (b *blockingIngestSource) StopReflectorFor(schema.GroupVersionResource)  {}
 func (b *blockingIngestSource) HasSyncedFor(schema.GroupVersionResource) bool { return false }
 func (b *blockingIngestSource) Tracks(schema.GroupVersionResource) bool       { return false }
 
+type controlledIngestSource struct {
+	checked chan struct{}
+	once    sync.Once
+	synced  atomic.Bool
+}
+
+func (*controlledIngestSource) CatalogRows(schema.GroupVersionResource) []interface{} { return nil }
+func (*controlledIngestSource) AddCatalogSink(schema.GroupVersionResource, ingest.Sink) bool {
+	return true
+}
+func (*controlledIngestSource) RegisterDynamicCatalogReflector(schema.GroupVersionResource, schema.GroupVersionKind, ingest.CatalogProjector, bool) bool {
+	return false
+}
+func (*controlledIngestSource) StopReflectorFor(schema.GroupVersionResource) {}
+func (s *controlledIngestSource) HasSyncedFor(schema.GroupVersionResource) bool {
+	return s.synced.Load()
+}
+func (s *controlledIngestSource) Tracks(schema.GroupVersionResource) bool {
+	s.once.Do(func() { close(s.checked) })
+	return true
+}
+
+func newControlledIngestCatalogService(source IngestSource, waitTimeout time.Duration) (*Service, *recordingTelemetry) {
+	client := kubernetesfake.NewClientset()
+	baseDiscovery := client.Discovery().(*fakediscovery.FakeDiscovery)
+	discoveryClient := &preferredDiscovery{
+		FakeDiscovery: baseDiscovery,
+		resources: []*metav1.APIResourceList{{
+			GroupVersion: "v1",
+			APIResources: []metav1.APIResource{{
+				Name: "configmaps", Kind: "ConfigMap", Namespaced: true, Verbs: []string{"list", "watch"},
+			}},
+		}},
+	}
+	recorder := &recordingTelemetry{}
+	return NewService(Dependencies{
+		Common: common.Dependencies{
+			KubernetesClient: &discoveryOverrideClient{Clientset: client, discovery: discoveryClient},
+			DynamicClient:    dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()),
+		},
+		Telemetry:    recorder,
+		IngestSource: source,
+	}, &Options{
+		IngestSyncWaitTimeout: waitTimeout,
+		ResyncInterval:        time.Hour,
+	}), recorder
+}
+
 func (r *recordingTelemetry) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -881,6 +930,86 @@ func TestSyncWaitsForCachesBetweenPreflightAndCollect(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestCatalogContinuesWithPartialSyncWhenTrackedIngestNeverStarts(t *testing.T) {
+	source := &controlledIngestSource{checked: make(chan struct{})}
+	svc, recorder := newControlledIngestCatalogService(source, 25*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- svc.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	require.Eventually(t, func() bool {
+		return svc.Health().Status == HealthStateDegraded
+	}, time.Second, 10*time.Millisecond,
+		"an unstarted ingest manager must degrade to partial catalog data instead of wedging initial sync")
+	require.Error(t, recorder.last().err)
+}
+
+func TestCatalogIngestTimeoutWarningEmittedOncePerService(t *testing.T) {
+	source := &controlledIngestSource{checked: make(chan struct{})}
+	svc, _ := newControlledIngestCatalogService(source, 5*time.Millisecond)
+	logger := &recordingWatchLogger{}
+	svc.deps.Logger = logger
+	descriptors := []resourceDescriptor{{
+		GVR: schema.GroupVersionResource{Version: "v1", Resource: "configmaps"},
+	}}
+
+	for range 2 {
+		run := &catalogSync{service: svc, descriptors: descriptors}
+		require.NoError(t, run.waitForIngest(context.Background()))
+	}
+
+	require.Len(t, logger.warnings, 1,
+		"a permanently unstarted ingest manager must not repeat the startup warning on every resync")
+}
+
+func TestCatalogIngestWaitStopsOnParentCancellation(t *testing.T) {
+	source := &controlledIngestSource{checked: make(chan struct{})}
+	svc, _ := newControlledIngestCatalogService(source, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- svc.Run(ctx) }()
+
+	select {
+	case <-source.checked:
+	case <-time.After(time.Second):
+		t.Fatal("catalog never reached the ingest readiness gate")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("catalog did not stop after parent cancellation")
+	}
+}
+
+func TestCatalogIngestWaitCompletesWhenTrackedStoreSyncs(t *testing.T) {
+	source := &controlledIngestSource{checked: make(chan struct{})}
+	svc, _ := newControlledIngestCatalogService(source, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- svc.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	select {
+	case <-source.checked:
+	case <-time.After(time.Second):
+		t.Fatal("catalog never reached the ingest readiness gate")
+	}
+	source.synced.Store(true)
+	require.Eventually(t, func() bool {
+		return svc.Health().Status == HealthStateOK
+	}, time.Second, 10*time.Millisecond)
 }
 
 // TestFailedInitialSyncRetriesWhileReactiveRegistrationBlocks pins that the

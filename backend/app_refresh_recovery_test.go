@@ -1,9 +1,11 @@
 package backend
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +40,50 @@ func TestTeardownRefreshSubsystem(t *testing.T) {
 	require.Nil(t, app.refreshListener)
 	require.Nil(t, app.refreshHTTPServer)
 	require.Empty(t, app.refreshBaseURL)
+}
+
+func TestTeardownRefreshSubsystemBlocksRuntimeResurrectionUntilSetup(t *testing.T) {
+	app := newTestAppWithDefaults(t)
+	app.Ctx = context.Background()
+	require.NotNil(t, app.ensureRefreshRuntimeContext())
+
+	app.teardownRefreshSubsystem()
+	require.Nil(t, app.ensureRefreshRuntimeContext(),
+		"a late auth or governor rebuild must not resurrect the process refresh runtime after teardown")
+
+	require.NotNil(t, app.beginRefreshRuntimeContext(),
+		"a new selection setup must explicitly reopen the process refresh runtime")
+	require.NotNil(t, app.ensureRefreshRuntimeContext())
+	app.teardownRefreshSubsystem()
+}
+
+func TestTeardownRefreshSubsystemCoordinatesWithConcurrentRuntimeEnsure(t *testing.T) {
+	app := newTestAppWithDefaults(t)
+	app.Ctx = context.Background()
+	require.NotNil(t, app.ensureRefreshRuntimeContext())
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		app.selectionMutationMu.Lock()
+		defer app.selectionMutationMu.Unlock()
+		<-start
+		app.teardownRefreshSubsystem()
+	}()
+	go func() {
+		defer wg.Done()
+		app.governorReconcileMu.Lock()
+		defer app.governorReconcileMu.Unlock()
+		<-start
+		app.ensureRefreshRuntimeContext()
+	}()
+	close(start)
+	wg.Wait()
+
+	require.Nil(t, app.ensureRefreshRuntimeContext(),
+		"teardown must remain authoritative over a concurrent late runtime ensure")
 }
 
 // TestHandlePermissionIssuesLogsWarning verifies that permission issues are logged

@@ -671,7 +671,7 @@ func (a *App) executeSelectionChangeWork(
 }
 
 func (a *App) reconcileRefreshSubsystemSelections(selections []kubeconfigSelection) error {
-	if a.refreshHTTPServer == nil || a.refreshAggregates.Load() == nil || a.refreshCtx == nil {
+	if a.refreshHTTPServer == nil || a.refreshAggregates.Load() == nil || a.currentRefreshRuntimeContext() == nil {
 		return a.setupRefreshSubsystem()
 	}
 	return a.updateRefreshSubsystemSelections(selections)

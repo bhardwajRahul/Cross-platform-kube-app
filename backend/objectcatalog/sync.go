@@ -522,6 +522,8 @@ func (run *catalogSync) waitForIngest(ctx context.Context) error {
 	if source == nil || len(gvrs) == 0 {
 		return nil
 	}
+	waitTimer := time.NewTimer(run.service.opts.IngestSyncWaitTimeout)
+	defer waitTimer.Stop()
 	ticker := time.NewTicker(config.RefreshInformerSyncPollInterval)
 	defer ticker.Stop()
 	for {
@@ -538,6 +540,18 @@ func (run *catalogSync) waitForIngest(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-waitTimer.C:
+			// A manager that never started cannot arm its per-GVR degrade deadline.
+			// That deadline is measured from manager start and normally settles first;
+			// this independent timer starts at catalog entry so the never-started case
+			// remains bounded even though both use the same configured duration.
+			// Continue into collection so synced resources remain usable and the
+			// existing partial-sync diagnostic plus fast retry can report/recover the
+			// unsynced stores instead of wedging the whole catalog before its run loop.
+			run.service.ingestSyncTimeoutWarnOnce.Do(func() {
+				run.service.logWarn("catalog ingest stores did not settle before the startup deadline; continuing with partial collection")
+			})
+			return nil
 		case <-ticker.C:
 		}
 	}

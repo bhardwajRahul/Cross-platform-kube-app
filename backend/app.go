@@ -42,11 +42,18 @@ type App struct {
 	refreshManager    *refresh.Manager
 	refreshHTTPServer *http.Server
 	refreshListener   net.Listener
-	refreshCtx        context.Context
-	refreshCancel     context.CancelFunc
-	refreshBaseURL    string
-	refreshServerDone chan struct{}
-	telemetryRecorder *telemetry.Recorder
+	// refreshRuntimeMu owns refreshCtx and refreshCancel. Selection mutations and
+	// governor reconciliation use different lifecycle locks, so neither is a
+	// substitute for this process-runtime boundary.
+	refreshRuntimeMu sync.Mutex
+	refreshCtx       context.Context
+	refreshCancel    context.CancelFunc
+	// refreshRuntimeStopped distinguishes a deliberate global teardown from the
+	// never-started state that auth recovery is allowed to initialise.
+	refreshRuntimeStopped bool
+	refreshBaseURL        string
+	refreshServerDone     chan struct{}
+	telemetryRecorder     *telemetry.Recorder
 	// containerLogsTargetLimiter is lazily built by sharedContainerLogsTargetLimiter;
 	// its mutex guards the check-then-set because subsystem builds run concurrently
 	// per cluster. Access the limiter only through the accessor. The mutex is a LEAF

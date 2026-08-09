@@ -276,14 +276,26 @@ func (r clusterSubsystemRebuild) run() {
 	if !ok {
 		return
 	}
-	r.startManager(subsystem)
+	if !r.activateSubsystem(newClients, subsystem) {
+		return
+	}
+	r.app.logger.Info(fmt.Sprintf("Successfully rebuilt subsystem for cluster %s", r.clusterID), logsources.Auth, r.clusterID, r.clusterName)
+}
+
+func (r clusterSubsystemRebuild) activateSubsystem(newClients *clusterClients, subsystem *system.Subsystem) bool {
+	if !r.startManager(subsystem) {
+		// A subsystem that cannot start has not been published, but its constructed
+		// notifier timers still need an owner to stop them.
+		subsystem.StopDoorbellNotifiers()
+		return false
+	}
 	r.app.swapRefreshSubsystem(r.clusterID, subsystem)
 	subsystems, clusterOrder := refreshSubsystemTopology(r.app.snapshotRefreshSubsystems())
 	if !r.updateRefreshRouting(subsystems, clusterOrder) {
-		return
+		return false
 	}
 	r.startObjectCatalog(newClients)
-	r.app.logger.Info(fmt.Sprintf("Successfully rebuilt subsystem for cluster %s", r.clusterID), logsources.Auth, r.clusterID, r.clusterName)
+	return true
 }
 
 type clusterSubsystemRebuild struct {
@@ -364,15 +376,16 @@ func (r clusterSubsystemRebuild) reportBuildError(component, capturePrefix strin
 	errorcapture.CaptureWithCluster(r.clusterID, fmt.Sprintf("%s: %v", capturePrefix, err))
 }
 
-func (r clusterSubsystemRebuild) startManager(subsystem *system.Subsystem) {
-	if subsystem == nil || subsystem.Manager == nil {
-		return
+func (r clusterSubsystemRebuild) startManager(subsystem *system.Subsystem) bool {
+	if r.app == nil || subsystem == nil || subsystem.Manager == nil {
+		return false
 	}
 	refreshCtx := r.app.ensureRefreshRuntimeContext()
 	if refreshCtx == nil {
-		return
+		return false
 	}
 	go r.runManager(refreshCtx, subsystem)
+	return true
 }
 
 func (r clusterSubsystemRebuild) runManager(ctx context.Context, subsystem *system.Subsystem) {

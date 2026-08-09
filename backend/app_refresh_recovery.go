@@ -17,11 +17,7 @@ import (
 func (a *App) teardownRefreshSubsystem() {
 	a.stopObjectCatalog()
 
-	if a.refreshCancel != nil {
-		a.refreshCancel()
-		a.refreshCancel = nil
-	}
-	a.refreshCtx = nil
+	a.stopRefreshRuntimeContext()
 	a.clearRefreshPermissionCancels()
 
 	subsystems := a.replaceRefreshSubsystems(nil)

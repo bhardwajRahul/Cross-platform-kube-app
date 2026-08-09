@@ -8,4 +8,4 @@
 
 - When a Kubernetes watch is denied due to the user's permissions, this is the app behaving as designed and is no longer reported as an application error.
 - Expected Kubernetes authentication and connectivity failures no longer create Sentry issues, while operational exceptions, unrecognized failures, and client-side deadline overruns remain reportable.
-- Clusters now recover cleanly after refreshing expired SSO credentials: recovery starts the refresh runtime even when authentication failed before initial setup, and catalog collection waits for rebuilt ingest stores instead of emitting transient incomplete-sync failures.
+- Fixed a regression that would prevent clusters from recovering after expired authentication was refreshed. For example, an expired SSO token would cause an expected authentication warning. Refreshing the SSO token would cause the app to start to load the cluster, but it would never complete.

@@ -386,10 +386,14 @@ func (a *App) shouldForceColdTeardown(subsystem *system.Subsystem) (time.Duratio
 // surfaces that remain visible while a cluster is Cold. The work is server-owned
 // and independent of frontend leases: until it succeeds, the subsystem stays live.
 func (a *App) startColdPreparation(clusterID string, subsystem *system.Subsystem) {
-	if a == nil || clusterID == "" || subsystem == nil || subsystem.SnapshotService == nil || a.refreshCtx == nil || a.clusterLifecycle == nil {
+	if a == nil || clusterID == "" || subsystem == nil || subsystem.SnapshotService == nil || a.clusterLifecycle == nil {
 		return
 	}
-	preparationCtx, started := subsystem.BeginColdPreparation(a.refreshCtx, a.governorTime())
+	refreshCtx := a.currentRefreshRuntimeContext()
+	if refreshCtx == nil {
+		return
+	}
+	preparationCtx, started := subsystem.BeginColdPreparation(refreshCtx, a.governorTime())
 	if !started {
 		return
 	}

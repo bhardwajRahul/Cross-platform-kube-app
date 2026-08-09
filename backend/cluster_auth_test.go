@@ -127,9 +127,9 @@ func TestClusterSubsystemRebuildHelperPaths(t *testing.T) {
 	require.False(t, ok)
 	require.Nil(t, clients)
 
-	rebuild.startManager(&system.Subsystem{})
+	require.False(t, rebuild.startManager(nil))
 	app.refreshCtx = context.Background()
-	rebuild.startManager(&system.Subsystem{})
+	require.False(t, rebuild.startManager(&system.Subsystem{}))
 
 	subsystems, order := refreshSubsystemTopology(map[string]*system.Subsystem{
 		"cluster-b": {},
@@ -202,7 +202,7 @@ func TestClusterSubsystemRebuildStartsMissingRefreshRuntimeBeforeReadiness(t *te
 	require.Equal(t, ClusterStateLoading, app.clusterLifecycle.GetState(clusterID))
 
 	rebuild := clusterSubsystemRebuild{app: app, clusterID: clusterID, clusterName: "Cluster A"}
-	rebuild.startManager(subsystem)
+	require.True(t, rebuild.startManager(subsystem))
 	require.Eventually(t, hub.isStarted, time.Second, 10*time.Millisecond,
 		"auth recovery must start the rebuilt manager even when refresh setup never ran")
 	require.NotNil(t, app.refreshCtx)
@@ -212,4 +212,42 @@ func TestClusterSubsystemRebuildStartsMissingRefreshRuntimeBeforeReadiness(t *te
 		return app.clusterLifecycle.GetState(clusterID) == ClusterStateReady
 	}, time.Second, 10*time.Millisecond,
 		"the started manager must allow the server-owned readiness build to reach Ready")
+}
+
+func TestClusterSubsystemRebuildDoesNotPublishWhenRefreshRuntimeStopped(t *testing.T) {
+	app := newTestAppWithDefaults(t)
+	app.Ctx = context.Background()
+	require.NotNil(t, app.ensureRefreshRuntimeContext())
+	app.stopRefreshRuntimeContext()
+
+	hub := &recoveryStartInformerHub{started: make(chan struct{})}
+	subsystem := &system.Subsystem{Manager: refresh.NewManager(nil, hub, nil, nil, nil)}
+	rebuild := clusterSubsystemRebuild{app: app, clusterID: "cluster-a", clusterName: "Cluster A"}
+	published := rebuild.activateSubsystem(&clusterClients{meta: ClusterMeta{ID: "cluster-a", Name: "Cluster A"}}, subsystem)
+
+	require.False(t, published)
+	require.Nil(t, app.getRefreshSubsystem("cluster-a"),
+		"a subsystem whose manager cannot start must not be published")
+	require.Never(t, hub.isStarted, 100*time.Millisecond, 10*time.Millisecond,
+		"a late auth rebuild must not restart producers after global refresh teardown")
+}
+
+func TestClusterSubsystemRebuildPublishesAfterManagerStartIsScheduled(t *testing.T) {
+	app := newTestAppWithDefaults(t)
+	app.Ctx = context.Background()
+	require.NotNil(t, app.ensureRefreshRuntimeContext())
+	app.refreshHTTPServer = &http.Server{}
+	app.refreshAggregates.Store(&refreshAggregateHandlers{})
+
+	hub := &recoveryStartInformerHub{started: make(chan struct{})}
+	subsystem := &system.Subsystem{Manager: refresh.NewManager(nil, hub, nil, nil, nil)}
+	clients := &clusterClients{meta: ClusterMeta{ID: "cluster-a", Name: "Cluster A"}}
+	rebuild := clusterSubsystemRebuild{app: app, clusterID: "cluster-a", clusterName: "Cluster A"}
+
+	require.True(t, rebuild.activateSubsystem(clients, subsystem))
+	require.Same(t, subsystem, app.getRefreshSubsystem("cluster-a"))
+	require.Eventually(t, hub.isStarted, time.Second, 10*time.Millisecond)
+
+	app.stopRefreshSubsystem(subsystem)
+	app.stopRefreshRuntimeContext()
 }

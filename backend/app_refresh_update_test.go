@@ -24,6 +24,18 @@ func TestUpdateRefreshSubsystemSelectionsValidatesReceiverAndAllowsEmptySelectio
 	require.NoError(t, app.updateRefreshSubsystemSelections(nil))
 }
 
+func TestApplyRefreshSelectionUpdateReportsClustersWhenRuntimeUnavailable(t *testing.T) {
+	app := newTestAppWithDefaults(t)
+	app.Ctx = context.Background()
+	app.stopRefreshRuntimeContext()
+
+	err := app.applyRefreshSelectionUpdate(refreshSelectionPlan{
+		clusterOrder: []string{"cluster-a", "cluster-b"},
+	}, refreshSelectionUpdate{})
+	require.EqualError(t, err,
+		"refresh runtime unavailable while applying selection update for clusters cluster-a, cluster-b")
+}
+
 func TestSetSelectedKubeconfigsKeepsRefreshServerOnSelectionChange(t *testing.T) {
 	setTestConfigEnv(t)
 	app := newTestAppWithDefaults(t)

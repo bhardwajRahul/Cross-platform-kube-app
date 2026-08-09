@@ -19,10 +19,13 @@ Keep `catalog-first`. Do not turn that into `catalog-only`.
   guess from current selection.
 - If discovery is degraded, preserve known identity where safe and surface
   degraded confidence instead of acting on ambiguous objects.
-- After discovery and permission preflight, collection waits for each tracked
-  ingest-owned GVR in that discovery result to settle. Unrelated ingest stores
-  do not gate the catalog, and a rebuilt cluster does not publish transient
-  partial-sync failures while its required reflectors warm.
+- After discovery and permission preflight, collection waits up to the ingest
+  startup deadline for each tracked ingest-owned GVR in that discovery result
+  to settle. This set comes from discovery rather than the catalog's
+  permission-allowed subset; stores outside the discovery result do not gate.
+  If the deadline expires, collection continues with the settled resources,
+  reports the unsynced descriptors through the partial-sync diagnostic, and
+  enters the failed-sync retry cadence instead of blocking the catalog run loop.
 - Metadata controls that describe the object universe, such as namespace, Kind,
   and API-group filters, use catalog-derived metadata rather than the current
   row slice. The core API group uses the non-empty `"(core)"` query value and a

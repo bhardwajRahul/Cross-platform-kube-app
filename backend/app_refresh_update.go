@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/internal/logsources"
@@ -39,7 +40,7 @@ func (a *App) validateRefreshSelectionUpdate() error {
 }
 
 func (a *App) refreshSelectionUpdateNeedsSetup() bool {
-	return a.refreshHTTPServer == nil || a.refreshAggregates.Load() == nil || a.refreshCtx == nil
+	return a.refreshHTTPServer == nil || a.refreshAggregates.Load() == nil || a.currentRefreshRuntimeContext() == nil
 }
 
 type refreshSelectionPlan struct {
@@ -160,7 +161,11 @@ func (a *App) canBuildRefreshSubsystem(id string, meta ClusterMeta, clients *clu
 }
 
 func (a *App) applyRefreshSelectionUpdate(plan refreshSelectionPlan, update refreshSelectionUpdate) error {
-	a.startRefreshSubsystems(a.refreshCtx, update.new)
+	refreshCtx := a.currentRefreshRuntimeContext()
+	if refreshCtx == nil {
+		return fmt.Errorf("refresh runtime unavailable while applying selection update for clusters %s", strings.Join(plan.clusterOrder, ", "))
+	}
+	a.startRefreshSubsystems(refreshCtx, update.new)
 	if err := a.refreshAggregates.Load().Update(plan.clusterOrder, update.next); err != nil {
 		a.stopRefreshSubsystems(update.new)
 		return err

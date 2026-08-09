@@ -67,6 +67,8 @@ func TestSetupRefreshSubsystemRequiresContext(t *testing.T) {
 func TestEnsureRefreshRuntimeContextGuardsMissingContextAndReusesLiveRuntime(t *testing.T) {
 	var nilApp *App
 	require.Nil(t, nilApp.ensureRefreshRuntimeContext())
+	require.Nil(t, nilApp.currentRefreshRuntimeContext())
+	nilApp.stopRefreshRuntimeContext()
 
 	app := newTestAppWithDefaults(t)
 	require.Nil(t, app.ensureRefreshRuntimeContext())
@@ -78,6 +80,44 @@ func TestEnsureRefreshRuntimeContextGuardsMissingContextAndReusesLiveRuntime(t *
 
 	second := app.ensureRefreshRuntimeContext()
 	require.Equal(t, first, second, "an active refresh runtime must not be replaced")
+}
+
+func TestEnsureRefreshRuntimeContextSharesOneRuntimeAcrossLifecycleCallers(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	t.Cleanup(cancelParent)
+	app := newTestAppWithDefaults(t)
+	app.Ctx = parent
+
+	const callers = 32
+	contexts := make([]context.Context, callers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for index := range callers {
+		go func() {
+			defer wg.Done()
+			if index%2 == 0 {
+				app.selectionMutationMu.Lock()
+				defer app.selectionMutationMu.Unlock()
+			} else {
+				app.governorReconcileMu.Lock()
+				defer app.governorReconcileMu.Unlock()
+			}
+			<-start
+			contexts[index] = app.ensureRefreshRuntimeContext()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	first := contexts[0]
+	require.NotNil(t, first)
+	for _, runtimeCtx := range contexts[1:] {
+		require.Same(t, first, runtimeCtx, "all lifecycle paths must share one refresh runtime")
+	}
+	if app.refreshCancel != nil {
+		app.refreshCancel()
+	}
 }
 
 func TestSetupRefreshSubsystemDoesNotStorePermissionCache(t *testing.T) {
