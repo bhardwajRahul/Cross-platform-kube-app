@@ -1,13 +1,6 @@
 ### Added
 
-- Added read-only Object Panel deletion diagnostics with live termination age,
-  finalizer guidance, and Namespace deletion conditions.
-- Added a catalog-wide **Deletion blocked by Finalizer** Attention category for
-  built-in resources and custom resource kinds.
-- Added permission-aware force-removal controls for each finalizer in Object
-  Panel deletion details, including the Namespace `/finalize` path and an
-  early-removal warning during the first five minutes of deletion.
+Finalizer handling
 
-### Changed
-
-### Fixed
+- Objects that are being blocked from deletion by finalizers will now show up in the Attention view.
+- The Object Panel for a blocked object will now show which finalizers are blocking deletion, and give you an option to remove the blocking finalizer, with a warning and confirmation dialog.
