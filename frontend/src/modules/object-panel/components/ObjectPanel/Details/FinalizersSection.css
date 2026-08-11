@@ -1,0 +1,135 @@
+/* Deletion section — a terminating object is a state, not an alarm. The amber
+   rail marks the section; red is reserved for the force-removal control. */
+
+.deletion-section {
+  box-shadow: inset 3px 0 0 var(--color-warning);
+}
+
+.deletion-section .object-panel-section-header {
+  align-items: baseline;
+}
+
+.deletion-age {
+  color: var(--color-warning);
+  font-weight: var(--font-weight-bold);
+  white-space: nowrap;
+}
+
+.deletion-empty {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.deletion-section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.deletion-finalizers-tooltip-copy p {
+  margin: 0;
+}
+
+.deletion-finalizers-tooltip-copy p + p {
+  margin-top: var(--spacing-md);
+}
+
+/* One bordered container for the whole list: rows are separated by hairlines
+   rather than each carrying its own box. */
+.deletion-finalizer-list {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius-md);
+  background: var(--color-bg);
+}
+
+.deletion-finalizer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--spacing-xs) var(--spacing-md);
+  padding: var(--spacing-md);
+}
+
+.deletion-finalizer-row + .deletion-finalizer-row {
+  border-top: 1px solid var(--color-border);
+}
+
+.deletion-finalizer-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+.deletion-finalizer-name {
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-weight: var(--font-weight-bold);
+  line-height: 1.4;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.deletion-finalizer-path {
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-mono);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* The shared danger button owns appearance and interaction; this class only
+   places the compact action within its finalizer row. */
+.button.deletion-remove-button {
+  grid-row: 1;
+  grid-column: 2;
+  padding: 0.15rem var(--spacing-sm);
+}
+
+/* Deletion conditions only exist when something is wrong, so the message is
+   the payload — chip for the type, message on the same line, no hover. */
+.deletion-conditions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-lg);
+}
+
+.deletion-conditions-label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+}
+
+.deletion-condition {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+}
+
+.deletion-condition-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+  line-height: 1.45;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Narrow panel: the action drops below the finalizer it belongs to instead of
+   squeezing the name. */
+@media (max-width: 420px) {
+  .deletion-finalizer-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .button.deletion-remove-button {
+    grid-row: auto;
+    grid-column: 1;
+    justify-self: start;
+  }
+}

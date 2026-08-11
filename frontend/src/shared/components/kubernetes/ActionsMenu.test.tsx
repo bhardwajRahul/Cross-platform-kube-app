@@ -8,6 +8,7 @@
  */
 
 import { OBJECT_ACTION_IDS } from '@shared/actions/objectActionContract';
+import { useObjectActionController } from '@shared/hooks/useObjectActionController';
 import type { ObjectActionData } from '@shared/hooks/useObjectActions';
 import type React from 'react';
 import { act } from 'react';
@@ -26,6 +27,8 @@ const runObjectDeleteMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined
 const runObjectScaleMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const runCronJobTriggerMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const runCronJobSuspendMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const runObjectFinalizerRemovalMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const errorHandlerMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@shared/actions/objectActionClient', () => ({
   buildObjectActionTarget: (object: ObjectActionData, action: string) => ({
@@ -42,6 +45,11 @@ vi.mock('@shared/actions/objectActionClient', () => ({
   runObjectScale: (...args: unknown[]) => runObjectScaleMock(...args),
   runCronJobTrigger: (...args: unknown[]) => runCronJobTriggerMock(...args),
   runCronJobSuspend: (...args: unknown[]) => runCronJobSuspendMock(...args),
+  runObjectFinalizerRemoval: (...args: unknown[]) => runObjectFinalizerRemovalMock(...args),
+}));
+
+vi.mock('@/utils/errorHandler', () => ({
+  errorHandler: { handle: (...args: unknown[]) => errorHandlerMock(...args) },
 }));
 
 // Spy-backed permission mock so tests can assert that getPermissionKey is
@@ -161,6 +169,36 @@ const makeCronJob = (overrides?: Partial<ObjectActionData>): ObjectActionData =>
 const makeNode = (overrides?: Partial<ObjectActionData>): ObjectActionData =>
   makeObject('Node', { group: '', version: 'v1', ...overrides });
 
+const FinalizerControllerHarness = ({
+  object,
+  onAfterAction,
+  deletionTimestamp,
+}: {
+  object: ObjectActionData;
+  onAfterAction: (object: ObjectActionData, action: string) => void;
+  deletionTimestamp?: string;
+}) => {
+  const controller = useObjectActionController({ context: 'object-panel', onAfterAction });
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() =>
+          controller.requestFinalizerRemoval(
+            object,
+            'example.com/cleanup',
+            'metadata.finalizers',
+            deletionTimestamp
+          )
+        }
+      >
+        Request finalizer removal
+      </button>
+      {controller.modals}
+    </>
+  );
+};
+
 describe('ActionsMenu', () => {
   let container: HTMLDivElement;
   let root: ReactDOM.Root;
@@ -183,6 +221,9 @@ describe('ActionsMenu', () => {
     runObjectScaleMock.mockClear();
     runCronJobTriggerMock.mockClear();
     runCronJobSuspendMock.mockClear();
+    runObjectFinalizerRemovalMock.mockClear();
+    runObjectFinalizerRemovalMock.mockResolvedValue(undefined);
+    errorHandlerMock.mockClear();
   });
 
   afterEach(() => {
@@ -191,6 +232,7 @@ describe('ActionsMenu', () => {
       root.unmount();
     });
     container.remove();
+    vi.useRealTimers();
   });
 
   it('renders available actions as native menu buttons', async () => {
@@ -289,6 +331,150 @@ describe('ActionsMenu', () => {
       expect.objectContaining({ kind: 'Deployment', name: 'test-resource', action: 'delete' })
     );
     expect(onAfterDelete).toHaveBeenCalled();
+  });
+
+  it('confirms finalizer removal through the controller with full target identity', async () => {
+    const onAfterAction = vi.fn();
+    const object = makeDeployment();
+
+    await act(async () => {
+      root.render(<FinalizerControllerHarness object={object} onAfterAction={onAfterAction} />);
+      await Promise.resolve();
+    });
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>('button')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await confirmModal('Remove');
+
+    expect(runObjectFinalizerRemovalMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clusterId: 'cluster-1',
+        group: 'apps',
+        version: 'v1',
+        kind: 'Deployment',
+        namespace: 'default',
+        name: 'test-resource',
+        action: 'remove finalizer',
+      }),
+      'example.com/cleanup',
+      'metadata.finalizers'
+    );
+    expect(onAfterAction).toHaveBeenCalledWith(object, 'removeFinalizer');
+  });
+
+  it('warns when finalizer removal is requested less than five minutes after deletion', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-10T12:04:59Z'));
+    const onAfterAction = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <FinalizerControllerHarness
+          object={makeDeployment()}
+          onAfterAction={onAfterAction}
+          deletionTimestamp="2026-08-10T12:00:00Z"
+        />
+      );
+      await Promise.resolve();
+    });
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>('button')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const paragraphs = Array.from(
+      document.querySelectorAll<HTMLElement>('.confirmation-modal-body > p')
+    );
+    expect(paragraphs.map((paragraph) => paragraph.textContent)).toEqual([
+      'Remove finalizer "example.com/cleanup" from deployment "test-resource"?',
+      'Less than 5 minutes has elapsed since the delete was requested. Are you sure you want to delete the finalizer now, without giving the controller more time to clean up?',
+      'This may leave objects in an unknown or bad state. Only continue if the responsible controller cannot complete cleanup.',
+    ]);
+    expect(paragraphs[1]?.classList.contains('confirmation-modal-notice')).toBe(true);
+    expect(paragraphs[2]?.classList.contains('confirmation-modal-warning')).toBe(true);
+  });
+
+  it('omits the cleanup-time notice once five minutes has elapsed', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-10T12:05:00Z'));
+    const onAfterAction = vi.fn();
+
+    await act(async () => {
+      root.render(
+        <FinalizerControllerHarness
+          object={makeDeployment()}
+          onAfterAction={onAfterAction}
+          deletionTimestamp="2026-08-10T12:00:00Z"
+        />
+      );
+      await Promise.resolve();
+    });
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>('button')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(document.querySelector('.confirmation-modal-notice')).toBeNull();
+    expect(document.querySelector('.confirmation-modal-warning')?.textContent).toContain(
+      'This may leave objects in an unknown or bad state.'
+    );
+  });
+
+  it('can cancel finalizer removal and reports backend failures without signaling refresh', async () => {
+    const onAfterAction = vi.fn();
+    const object = makeDeployment();
+
+    await act(async () => {
+      root.render(<FinalizerControllerHarness object={object} onAfterAction={onAfterAction} />);
+      await Promise.resolve();
+    });
+    const requestButton = requireValue(
+      container.querySelector<HTMLButtonElement>('button'),
+      'expected finalizer removal request button'
+    );
+    act(() => requestButton.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await act(async () => {
+      document
+        .querySelector<HTMLButtonElement>('.confirmation-modal .button.generic')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(runObjectFinalizerRemovalMock).not.toHaveBeenCalled();
+
+    runObjectFinalizerRemovalMock.mockRejectedValueOnce(new Error('conflict'));
+    act(() => requestButton.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await confirmModal('Remove');
+
+    expect(errorHandlerMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'conflict' }),
+      expect.objectContaining({ action: 'removeFinalizer', name: 'test-resource' })
+    );
+    expect(onAfterAction).not.toHaveBeenCalled();
+  });
+
+  it('closes restart, delete, and trigger confirmations when canceled', async () => {
+    await renderMenu({ object: makeDeployment() });
+
+    openMenu(container);
+    clickMenuItem(container, 'Restart');
+    await confirmModal('Cancel');
+
+    openMenu(container);
+    clickMenuItem(container, 'Delete');
+    await confirmModal('Cancel');
+
+    await renderMenu({ object: makeCronJob({ status: 'Active' }) });
+    openMenu(container);
+    clickMenuItem(container, 'Trigger Now');
+    await confirmModal('Cancel');
+
+    expect(runObjectRestartMock).not.toHaveBeenCalled();
+    expect(runObjectDeleteMock).not.toHaveBeenCalled();
+    expect(runCronJobTriggerMock).not.toHaveBeenCalled();
   });
 
   it('opens the scale modal, updates replicas, and applies the change', async () => {

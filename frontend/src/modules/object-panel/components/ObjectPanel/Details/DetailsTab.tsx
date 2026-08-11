@@ -10,6 +10,7 @@ import Overview from '@modules/object-panel/components/ObjectPanel/Details/Overv
 import { ErrorSurface } from '@shared/components/errors/ErrorSurface';
 import { WarningIcon } from '@shared/components/icons/SharedIcons';
 import type React from 'react';
+import FinalizersSection from './FinalizersSection';
 import './DetailsTab.css';
 import './DetailsTabData.css';
 
@@ -32,6 +33,8 @@ const DetailsTabContent: React.FC<DetailsTabProps> = ({
   detailModel,
   detailsLoading,
   detailsError,
+  deletion = null,
+  finalizerRemovalCapabilities,
   resourceDeleted = false,
   deletedResourceName = '',
   onAfterDelete,
@@ -80,6 +83,20 @@ const DetailsTabContent: React.FC<DetailsTabProps> = ({
         {!!detailsError && (
           <div className="error-message">
             Error loading details: <ErrorSurface kind="reported" message={detailsError} />
+          </div>
+        )}
+
+        {/* A terminating object leads the tab: what blocks its deletion outranks
+            the object's own summary until the deletion completes. */}
+        {!!deletion && !!objectData && (
+          <div className="details-section-lead">
+            <FinalizersSection
+              deletion={deletion}
+              namespaceFinalization={model.namespaceFinalization}
+              objectData={objectData}
+              removalCapabilities={finalizerRemovalCapabilities}
+              onAfterAction={onAfterAction}
+            />
           </div>
         )}
 

@@ -103,6 +103,116 @@ func TestServiceNamespaceDetailsIncludesUsage(t *testing.T) {
 	require.Equal(t, "limits", detail.LimitRanges[0].Name)
 }
 
+func TestServiceNamespaceDetailsIncludesFinalizationDiagnostics(t *testing.T) {
+	deletionTime := metav1.NewTime(time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "terminating", DeletionTimestamp: &deletionTime},
+		Spec: corev1.NamespaceSpec{
+			Finalizers: []corev1.FinalizerName{corev1.FinalizerKubernetes},
+		},
+		Status: corev1.NamespaceStatus{
+			Phase: corev1.NamespaceTerminating,
+			Conditions: []corev1.NamespaceCondition{{
+				Type:    corev1.NamespaceDeletionDiscoveryFailure,
+				Status:  corev1.ConditionTrue,
+				Reason:  "DiscoveryFailed",
+				Message: "unable to retrieve the complete list of server APIs",
+			}},
+		},
+	}
+	service := newNamespaceService(t, fake.NewClientset(ns))
+
+	detail, err := service.Namespace(context.Background(), "terminating")
+	require.NoError(t, err)
+	require.Equal(t, []string{"kubernetes"}, detail.Finalizers)
+	require.Equal(t, []string{"NamespaceDeletionDiscoveryFailure"}, []string{detail.Conditions[0].Type})
+	require.Equal(t, "DiscoveryFailed", detail.Conditions[0].Reason)
+	require.Equal(t, "unable to retrieve the complete list of server APIs", detail.Conditions[0].Message)
+}
+
+func TestServiceRemoveSpecFinalizerUsesFinalizeSubresource(t *testing.T) {
+	deletingAt := metav1.NewTime(time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "terminating", DeletionTimestamp: &deletingAt},
+		Spec: corev1.NamespaceSpec{Finalizers: []corev1.FinalizerName{
+			corev1.FinalizerKubernetes,
+			corev1.FinalizerName("example.com/keep"),
+		}},
+	}
+	client := fake.NewClientset(ns.DeepCopy())
+	service := newNamespaceService(t, client)
+
+	err := service.RemoveSpecFinalizer(context.Background(), ns.Name, string(corev1.FinalizerKubernetes))
+	require.NoError(t, err)
+
+	updated, err := client.CoreV1().Namespaces().Get(context.Background(), ns.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Equal(t, []corev1.FinalizerName{"example.com/keep"}, updated.Spec.Finalizers)
+	require.True(t, actionSubresourceWasInvoked(client.Actions(), "namespaces", "finalize"), "%#v", client.Actions())
+}
+
+func TestServiceRemoveSpecFinalizerRejectsActiveNamespace(t *testing.T) {
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "active"},
+		Spec:       corev1.NamespaceSpec{Finalizers: []corev1.FinalizerName{corev1.FinalizerKubernetes}},
+	}
+	client := fake.NewClientset(ns.DeepCopy())
+
+	err := newNamespaceService(t, client).RemoveSpecFinalizer(
+		context.Background(), ns.Name, string(corev1.FinalizerKubernetes),
+	)
+	require.ErrorContains(t, err, "not deleting")
+	require.False(t, actionSubresourceWasInvoked(client.Actions(), "namespaces", "finalize"))
+}
+
+func TestServiceRemoveSpecFinalizerValidatesInputsAndMissingObjects(t *testing.T) {
+	client := fake.NewClientset()
+	service := newNamespaceService(t, client)
+
+	require.ErrorContains(t, service.RemoveSpecFinalizer(context.Background(), "", "kubernetes"), "name is required")
+	require.ErrorContains(t, service.RemoveSpecFinalizer(context.Background(), "sample", ""), "finalizer is required")
+	require.ErrorContains(t, service.RemoveSpecFinalizer(context.Background(), "missing", "kubernetes"), "failed to get namespace")
+
+	serviceWithoutClient := NewService(testsupport.NewResourceDependencies())
+	require.Error(t, serviceWithoutClient.RemoveSpecFinalizer(context.Background(), "sample", "kubernetes"))
+}
+
+func TestServiceRemoveSpecFinalizerNoopsWhenAbsentAndReportsFinalizeFailure(t *testing.T) {
+	deletingAt := metav1.NewTime(time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "terminating", DeletionTimestamp: &deletingAt},
+		Spec: corev1.NamespaceSpec{Finalizers: []corev1.FinalizerName{
+			corev1.FinalizerName("example.com/keep"),
+		}},
+	}
+	client := fake.NewClientset(ns.DeepCopy())
+	service := newNamespaceService(t, client)
+
+	require.NoError(t, service.RemoveSpecFinalizer(context.Background(), ns.Name, "example.com/absent"))
+	require.False(t, actionSubresourceWasInvoked(client.Actions(), "namespaces", "finalize"))
+
+	client.PrependReactor("create", "namespaces", func(action cgotesting.Action) (bool, runtime.Object, error) {
+		if action.GetSubresource() == "finalize" {
+			return true, nil, errors.New("finalize failed")
+		}
+		return false, nil, nil
+	})
+	require.ErrorContains(
+		t,
+		service.RemoveSpecFinalizer(context.Background(), ns.Name, "example.com/keep"),
+		"failed to finalize namespace",
+	)
+}
+
+func actionSubresourceWasInvoked(actions []cgotesting.Action, resource, subresource string) bool {
+	for _, action := range actions {
+		if action.GetResource().Resource == resource && action.GetSubresource() == subresource {
+			return true
+		}
+	}
+	return false
+}
+
 func TestServiceNamespaceEnsureClientError(t *testing.T) {
 	client := fake.NewClientset()
 	deps := testsupport.NewResourceDependencies(

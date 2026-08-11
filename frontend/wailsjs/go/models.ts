@@ -1073,6 +1073,8 @@ export namespace backend {
 	    portForward?: ObjectActionPortForwardOptions;
 	    debugContainer?: ObjectActionDebugContainerOptions;
 	    revision?: number;
+	    finalizer?: string;
+	    finalizerPath?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ObjectActionRequest(source);
@@ -1088,6 +1090,8 @@ export namespace backend {
 	        this.portForward = this.convertValues(source["portForward"], ObjectActionPortForwardOptions);
 	        this.debugContainer = this.convertValues(source["debugContainer"], ObjectActionDebugContainerOptions);
 	        this.revision = source["revision"];
+	        this.finalizer = source["finalizer"];
+	        this.finalizerPath = source["finalizerPath"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3116,6 +3120,8 @@ export namespace namespaces {
 	    statusReason?: string;
 	    hasWorkloads: boolean;
 	    workloadsUnknown?: boolean;
+	    finalizers?: string[];
+	    conditions?: types.ConditionState[];
 	    labels?: Record<string, string>;
 	    annotations?: Record<string, string>;
 	    resourceQuotas?: resourcemodel.ResourceRef[];
@@ -3136,6 +3142,8 @@ export namespace namespaces {
 	        this.statusReason = source["statusReason"];
 	        this.hasWorkloads = source["hasWorkloads"];
 	        this.workloadsUnknown = source["workloadsUnknown"];
+	        this.finalizers = source["finalizers"];
+	        this.conditions = this.convertValues(source["conditions"], types.ConditionState);
 	        this.labels = source["labels"];
 	        this.annotations = source["annotations"];
 	        this.resourceQuotas = this.convertValues(source["resourceQuotas"], resourcemodel.ResourceRef);

@@ -21,9 +21,21 @@ const containersMock = vi.fn();
 const rbacRulesMock = vi.fn();
 const dataMock = vi.fn();
 
+vi.mock('@core/contexts/ZoomContext', () => ({
+  useZoom: () => ({ zoomLevel: 100 }),
+}));
+
 vi.mock('@ui/shortcuts', () => ({
   useShortcut: (options: unknown) => useShortcutMock(options),
   useSearchShortcutTarget: () => undefined,
+}));
+
+vi.mock('@shared/hooks/useObjectActionController', () => ({
+  useObjectActionController: () => ({
+    getMenuItems: () => [],
+    modals: null,
+    requestFinalizerRemoval: vi.fn(),
+  }),
 }));
 
 vi.mock('@modules/object-panel/components/ObjectPanel/Details/Overview', () => ({
@@ -108,6 +120,10 @@ const createBaseProps = (
     isActive: true,
     detailsLoading: false,
     detailsError: null,
+    finalizerRemovalCapabilities: {
+      metadata: { allowed: true, pending: false },
+      namespaceSpec: { allowed: true, pending: false },
+    },
     resourceDeleted: false,
     deletedResourceName: '',
     onAfterDelete: vi.fn(),
@@ -309,6 +325,61 @@ describe('DetailsTab', () => {
       'pod-1 no longer exists. Please select another resource.'
     );
     expect(container.textContent).toContain('Error loading details: fetch failed');
+    cleanup();
+  });
+
+  it('renders deletion duration and a removable finalizer for a terminating object', async () => {
+    const props: DetailsTabProps = {
+      ...createBaseProps({
+        kind: 'PersistentVolumeClaim',
+        name: 'data',
+        namespace: 'default',
+      }),
+      deletion: {
+        deletionTimestamp: '2026-08-09T12:34:56Z',
+        finalizers: ['kubernetes.io/pvc-protection'],
+      },
+    };
+
+    const { container, cleanup } = await renderDetailsTab(props);
+
+    expect(container.textContent).toContain('Finalizers');
+    expect(container.textContent).toContain('Terminating for');
+    expect(container.textContent).toContain('kubernetes.io/pvc-protection');
+    expect(container.querySelector('.object-panel-section-title .tooltip-trigger')).not.toBeNull();
+    expect(container.textContent).not.toContain(
+      'Kubernetes keeps this finalizer while the claim is in use'
+    );
+    // A single metadata.finalizers list needs no field-path disambiguation.
+    expect(container.textContent).not.toContain('metadata.finalizers');
+    cleanup();
+  });
+
+  it('renders Namespace spec finalizers and controller-authored deletion conditions', async () => {
+    const props: DetailsTabProps = {
+      ...createBaseProps(
+        { kind: 'Namespace', name: 'apps', namespace: '' },
+        {
+          finalizers: ['kubernetes'],
+          conditions: [
+            {
+              type: 'NamespaceDeletionDiscoveryFailure',
+              status: 'True',
+              reason: 'DiscoveryFailed',
+              message: 'unable to retrieve the complete list of server APIs',
+            },
+          ],
+        }
+      ),
+      deletion: { deletionTimestamp: '2026-08-09T12:34:56Z' },
+    };
+
+    const { container, cleanup } = await renderDetailsTab(props);
+
+    expect(container.textContent).toContain('spec.finalizers');
+    expect(container.textContent).toContain('kubernetes');
+    expect(container.textContent).toContain('NamespaceDeletionDiscoveryFailure');
+    expect(container.textContent).toContain('unable to retrieve the complete list of server APIs');
     cleanup();
   });
 });
