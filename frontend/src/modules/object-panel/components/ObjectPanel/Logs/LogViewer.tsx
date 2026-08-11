@@ -123,8 +123,6 @@ import RawLogViewer, { type RenderedLogRow } from './RawLogViewer';
 import { getSelectedTextWithinRoot, selectAllTextWithinRoot } from './textSelection';
 
 interface LogViewerProps {
-  namespace: string;
-  resourceName: string;
   resourceKind: string;
   /**
    * Refresh-domain scope string for the container-logs producer. Owned by
@@ -280,7 +278,7 @@ const mergeTargetLimitWarnings = (warnings: string[]): string[] => {
   let globalMatch: RegExpMatchArray | null = null;
 
   for (const warning of warnings) {
-    const match = warning.match(TARGET_LIMIT_WARNING_PATTERN);
+    const match = TARGET_LIMIT_WARNING_PATTERN.exec(warning);
     if (!match) {
       merged.push(warning);
       continue;
@@ -2077,8 +2075,8 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     const options: DropdownOption[] = [];
 
     if (isWorkload) {
-      options.push({ value: '_pods_header', label: 'Pods', disabled: true, group: 'header' });
       options.push(
+        { value: '_pods_header', label: 'Pods', disabled: true, group: 'header' },
         ...workloadPodsForSelector.map((pod) => ({
           value: toPodFilterValue(pod),
           label: pod,
@@ -2135,8 +2133,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
         group: 'header',
       });
     }
-    options.push(...regularContainerOptions);
-    options.push(...debugContainerOptions);
+    options.push(...regularContainerOptions, ...debugContainerOptions);
 
     return options;
   }, [containers, isWorkload, workloadPodsForSelector]);
@@ -2618,11 +2615,9 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
 
     // Promote well-known timestamp and level fields to appear first, then add
     // the remaining user-data columns (shared with the node-logs tab).
-    columns.push(
-      ...buildParsedLogDataColumns(derivedFieldKeys, new Set(columns.map((col) => col.key)))
+    return columns.concat(
+      buildParsedLogDataColumns(derivedFieldKeys, new Set(columns.map((col) => col.key)))
     );
-
-    return columns;
   }, [
     derivedFieldKeys,
     handleSelectContainerFilter,

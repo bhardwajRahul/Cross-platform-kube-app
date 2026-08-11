@@ -32,7 +32,7 @@ const parseReadyCounts = (value?: string | null): { ready: number; total: number
   if (!value) {
     return null;
   }
-  const match = value.match(/^(\d+)\s*\/\s*(\d+)$/);
+  const match = /^(\d+)\s*\/\s*(\d+)$/.exec(value);
   if (!match) {
     return null;
   }
@@ -77,8 +77,6 @@ const useWorkloadTableColumns = ({
 
     const metricsStale = Boolean(metrics?.stale);
     const metricsError = metrics?.lastError ?? undefined;
-    const metricsLastUpdated =
-      typeof metrics?.collectedAt === 'number' ? new Date(metrics.collectedAt * 1000) : undefined;
 
     const columns: GridColumnDefinition<WorkloadData>[] = [];
 
@@ -90,10 +88,7 @@ const useWorkloadTableColumns = ({
         onAltClick,
         isInteractive: () => true,
         sortValue: (row) => row.ref.kind.toLowerCase(),
-      })
-    );
-
-    columns.push(
+      }),
       cf.createTextColumn<WorkloadData>('name', 'Name', (row) => row.ref.name, {
         onClick: (row) => handleWorkloadClick(row),
         onAltClick,
@@ -145,9 +140,8 @@ const useWorkloadTableColumns = ({
       }
     );
     restartsColumn.sortValue = (row) => row.restarts ?? 0;
-    columns.push(restartsColumn);
-
     columns.push(
+      restartsColumn,
       cf.createResourceBarColumn<WorkloadData>({
         key: 'cpu',
         header: 'CPU',
@@ -158,7 +152,6 @@ const useWorkloadTableColumns = ({
         getVariant: () => 'compact',
         getMetricsStale: () => metricsStale,
         getMetricsError: () => metricsError,
-        getMetricsLastUpdated: () => metricsLastUpdated,
         getAnimationKey: (row) => `workload:${row.ref.namespace}/${row.ref.name}:cpu`,
         getShowEmptyState: () => true,
         sortable: true,
@@ -166,10 +159,7 @@ const useWorkloadTableColumns = ({
           parseCpuToMillicores(
             row.cpuUsage !== null && row.cpuUsage !== undefined ? String(row.cpuUsage) : undefined
           ),
-      })
-    );
-
-    columns.push(
+      }),
       cf.createResourceBarColumn<WorkloadData>({
         key: 'memory',
         header: 'Memory',
@@ -180,7 +170,6 @@ const useWorkloadTableColumns = ({
         getVariant: () => 'compact',
         getMetricsStale: () => metricsStale,
         getMetricsError: () => metricsError,
-        getMetricsLastUpdated: () => metricsLastUpdated,
         getAnimationKey: (row) => `workload:${row.ref.namespace}/${row.ref.name}:memory`,
         getShowEmptyState: () => true,
         sortable: true,
@@ -188,10 +177,7 @@ const useWorkloadTableColumns = ({
           parseMemToMB(
             row.memUsage !== null && row.memUsage !== undefined ? String(row.memUsage) : undefined
           ),
-      })
-    );
-
-    columns.push(
+      }),
       cf.createAgeColumn<WorkloadData & { age?: string }>('age', 'Age', (row) => {
         return row.age ?? '—';
       }) as GridColumnDefinition<WorkloadData>
@@ -213,7 +199,6 @@ const useWorkloadTableColumns = ({
     return columns;
   }, [
     handleWorkloadClick,
-    metrics?.collectedAt,
     metrics?.lastError,
     metrics?.stale,
     namespaceColumnLink,
