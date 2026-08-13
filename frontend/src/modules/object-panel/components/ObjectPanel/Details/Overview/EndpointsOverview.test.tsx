@@ -7,10 +7,11 @@
  * the old useObjectPanel mock). The frame components are mocked; ObjectPanelLink/StatusChip are real.
  */
 
-import { endpointslice } from '@wailsjs/go/models';
+import type { endpointslice } from '@core/backend-api/models';
 import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { partialModelFixture } from '@/test-utils/partialModelFixture';
 import { endpointSliceDescriptor } from './descriptors/endpointslice';
 import { OverviewRenderer } from './OverviewRenderer';
 
@@ -45,7 +46,7 @@ describe('EndpointSliceOverview', () => {
   let root: ReactDOM.Root;
 
   const renderComponent = async (fixture: Record<string, unknown>) => {
-    const dto = endpointslice.EndpointSliceDetails.createFrom(fixture);
+    const dto = partialModelFixture<endpointslice.EndpointSliceDetails>(fixture);
     await act(async () => {
       root.render(
         <OverviewRenderer descriptor={endpointSliceDescriptor} data={dto} context={context} />

@@ -12,18 +12,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KeyCodes } from '../constants';
 import { GlobalShortcuts } from './GlobalShortcuts';
 
-// Capture event handlers registered via EventsOn so tests can invoke them.
+// Capture event handlers registered via onEvent so tests can invoke them.
 const wailsEventHandlers: Record<string, (...args: unknown[]) => void> = {};
 const QuitMock = vi.fn();
 type ShortcutOptions = Parameters<typeof import('../hooks').useShortcut>[0];
 
-vi.mock('@wailsjs/runtime/runtime', () => ({
-  EventsOnMultiple: () => undefined,
-  EventsOff: (eventName: string) => {
-    delete wailsEventHandlers[eventName];
-  },
-  EventsOn: (eventName: string, handler: (...args: unknown[]) => void) => {
+vi.mock('@core/desktop-runtime', () => ({
+  desktopRuntimeAvailable: () => false,
+  onEventMultiple: () => undefined,
+  onEvent: (eventName: string, handler: (...args: unknown[]) => void) => {
     wailsEventHandlers[eventName] = handler;
+    return () => {
+      if (wailsEventHandlers[eventName] === handler) {
+        delete wailsEventHandlers[eventName];
+      }
+    };
   },
   Quit: (...args: unknown[]) => QuitMock(...args),
 }));

@@ -8,10 +8,10 @@
  * `drainInProgress`/`onOpenDrain` from the OverviewContext the renderer threads through.
  */
 
+import type { nodes } from '@core/backend-api/models';
 import { DrainIcon } from '@shared/components/icons/SharedIcons';
 import { StatusChip, type StatusChipVariant } from '@shared/components/StatusChip';
 import { withStableListKeys } from '@shared/utils/stableListKeys';
-import { nodes } from '@wailsjs/go/models';
 import type React from 'react';
 import type { OverviewContext, OverviewDescriptor } from '../schema';
 import '../shared/OverviewBlocks.css';
@@ -111,7 +111,7 @@ const renderTaints = (d: NodeDetails): React.ReactNode => (
 
 export const nodeDescriptor: OverviewDescriptor<NodeDetails> = {
   displayKind: 'Node',
-  dtoClass: nodes.NodeDetails,
+  dtoName: 'NodeDetails',
   schema: {
     items: [
       // Status + the inline drain affordance. The status block is the shared ResourceStatus; the

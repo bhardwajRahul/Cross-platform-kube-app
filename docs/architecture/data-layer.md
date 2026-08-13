@@ -175,7 +175,8 @@ the completed `v2` rewrite plan.
 ## Delivery — page + refetch-on-signal
 
 - **Pull:** `GET /api/v2/snapshots/{domain}` (`refresh/api/server.go:59`) → `Build`.
-- **Push:** the resources **WebSocket** `/api/v2/stream/resources` carries only a change
+- **Push:** the resource-stream protocol uses the `refresh-resources` named
+  Wails JSON stream and carries only a change
   **signal**; a delta/resync advances the scoped doorbell clocks
   (`signalVersions`, plus the folded `sourceVersion`) and the query-backed view
   refetches its page. **No live row ever crosses the wire** — the
@@ -201,7 +202,7 @@ reviews, not object-state queries).
 - Per-domain `…MaintainedMatchesListPath` byte-identity gates (store serve == list+project).
 - `querypage` fuzz/property test (`apply(deltas) == recompute`) + the catalog brute-force
   oracle.
-- `mage qc:prerelease` (backend `-race`, vitest, knip, trivy) is the release gate.
+- `wails3 task qc:prerelease` (backend `-race`, vitest, knip, trivy) is the release gate.
 
 ## Deliberately not built (do not re-attempt as TODOs)
 

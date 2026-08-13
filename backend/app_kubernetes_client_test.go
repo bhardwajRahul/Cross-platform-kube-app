@@ -10,7 +10,7 @@ import (
 
 func TestInitializeSelectedClustersAtStartupUsesSelectionMutationCoordinator(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	app := NewApp()
+	app := NewApp(nil)
 	app.logger = NewLogger(10)
 	selection := "/tmp/config:cluster-a"
 	app.availableKubeconfigs = []KubeconfigInfo{{
@@ -66,7 +66,7 @@ func TestInitializeSelectedClustersAtStartupUsesSelectionMutationCoordinator(t *
 // primary guard that prevents the app from proceeding without any cluster config.
 func TestInitKubernetesClient_FailsWithNoSelections(t *testing.T) {
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 
 	// No selectedKubeconfigs set — should fail.
 	err := app.initKubernetesClient()
@@ -78,7 +78,7 @@ func TestInitKubernetesClient_FailsWithNoSelections(t *testing.T) {
 // empty selection list also produces the expected error.
 func TestInitKubernetesClient_FailsWithEmptySelections(t *testing.T) {
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 	app.selectedKubeconfigs = []string{}
 
 	err := app.initKubernetesClient()
@@ -90,7 +90,7 @@ func TestInitKubernetesClient_FailsWithEmptySelections(t *testing.T) {
 // kubeconfig selection string causes an error during normalization/validation.
 func TestInitKubernetesClient_FailsWithInvalidSelection(t *testing.T) {
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 
 	// A selection string that doesn't resolve to a valid kubeconfig path.
 	app.selectedKubeconfigs = []string{"/nonexistent/path:context"}

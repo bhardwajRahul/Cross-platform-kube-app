@@ -57,8 +57,8 @@ func TestQueryPermissions_FetchesNamespaceSSRRsConcurrently(t *testing.T) {
 		}, nil
 	}
 
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
+	app := NewApp(nil)
+	setTestAppRuntimeReady(t, app, context.Background())
 	app.clusterClients = map[string]*clusterClients{
 		clusterID: {
 			meta:              ClusterMeta{ID: clusterID, Name: "Concurrent"},
@@ -127,8 +127,8 @@ func TestQueryPermissions_UsesConfiguredSSRRFetchConcurrency(t *testing.T) {
 		}, nil
 	}
 
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
+	app := NewApp(nil)
+	setTestAppRuntimeReady(t, app, context.Background())
 	app.appSettings = &AppSettings{PermissionSSRRFetchConcurrency: 1}
 	app.clusterClients = map[string]*clusterClients{
 		clusterID: {
@@ -214,8 +214,8 @@ func TestQueryPermissions_BuiltinPodBypassesDiscovery(t *testing.T) {
 		return true, review, nil
 	})
 
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
+	app := NewApp(nil)
+	setTestAppRuntimeReady(t, app, context.Background())
 	app.clusterClients = map[string]*clusterClients{
 		clusterID: {
 			meta:              ClusterMeta{ID: clusterID, Name: "Pods"},
@@ -269,8 +269,8 @@ func TestQueryPermissions_NamespacedResourceWithoutNamespaceUsesSSAR(t *testing.
 		return true, review, nil
 	})
 
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
+	app := NewApp(nil)
+	setTestAppRuntimeReady(t, app, context.Background())
 	app.clusterClients = map[string]*clusterClients{
 		clusterID: {
 			meta:              ClusterMeta{ID: clusterID, Name: "Drain"},
@@ -340,8 +340,8 @@ func TestQueryPermissions_CachesCRDResolutionWithinBatch(t *testing.T) {
 		return false, nil, nil
 	})
 
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
+	app := NewApp(nil)
+	setTestAppRuntimeReady(t, app, context.Background())
 	app.clusterClients = map[string]*clusterClients{
 		clusterID: {
 			meta:                ClusterMeta{ID: clusterID, Name: "CRD"},

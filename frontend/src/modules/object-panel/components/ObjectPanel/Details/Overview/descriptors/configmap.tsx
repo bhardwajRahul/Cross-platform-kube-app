@@ -4,7 +4,7 @@
  * ConfigMap Overview descriptor (X1 P0). Presentation moved verbatim from ConfigMapOverview.tsx.
  */
 
-import { configmap } from '@wailsjs/go/models';
+import type { configmap } from '@core/backend-api/models';
 import type { OverviewDescriptor } from '../schema';
 import { renderUsedByLinks } from './shared';
 
@@ -12,7 +12,7 @@ type ConfigMapDetails = configmap.ConfigMapDetails;
 
 export const configMapDescriptor: OverviewDescriptor<ConfigMapDetails> = {
   displayKind: 'ConfigMap',
-  dtoClass: configmap.ConfigMapDetails,
+  dtoName: 'ConfigMapDetails',
   schema: {
     items: [
       {

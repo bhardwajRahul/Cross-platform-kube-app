@@ -160,9 +160,9 @@ vi.mock('../RefreshManager', () => ({
   refreshManager: mockRefreshManager,
 }));
 
-vi.mock('@wailsjs/runtime/runtime', () => ({
-  EventsOn: vi.fn(),
-  EventsOff: vi.fn(),
+vi.mock('@core/desktop-runtime', () => ({
+  desktopRuntimeAvailable: () => false,
+  onEvent: vi.fn(() => () => undefined),
 }));
 
 vi.mock('@/core/contexts/ViewStateContext', () => ({

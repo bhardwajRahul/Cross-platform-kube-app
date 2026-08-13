@@ -5,6 +5,7 @@
  * accent, link, saved themes).
  */
 
+import type { types } from '@core/backend-api/models';
 import { ErrorSurface } from '@shared/components/errors/ErrorSurface';
 import {
   AppearanceModeIcon,
@@ -28,7 +29,6 @@ import {
   MAX_BRIGHTNESS_OFFSET,
   MAX_SATURATION,
 } from '@utils/paletteTint';
-import { types } from '@wailsjs/go/models';
 import {
   type CSSProperties,
   type Dispatch,
@@ -174,7 +174,7 @@ const buildThemeWithCurrentAppearance = ({
   resolvedMode,
   activeValues,
 }: {
-  theme: types.Theme;
+  theme: Pick<types.Theme, 'id' | 'name' | 'clusterPattern'> & Partial<types.Theme>;
   name: string;
   clusterPattern: string;
   resolvedMode: 'light' | 'dark';
@@ -182,7 +182,7 @@ const buildThemeWithCurrentAppearance = ({
 }) => {
   const light = getCurrentAppearanceValues('light', resolvedMode, activeValues);
   const dark = getCurrentAppearanceValues('dark', resolvedMode, activeValues);
-  return new types.Theme({
+  return {
     ...theme,
     name,
     clusterPattern,
@@ -196,7 +196,7 @@ const buildThemeWithCurrentAppearance = ({
     accentColorDark: dark.accent,
     linkColorLight: light.link,
     linkColorDark: dark.link,
-  });
+  };
 };
 
 interface ThemeSavePlan {
@@ -1207,11 +1207,11 @@ function AppearanceSection() {
 
     try {
       const newTheme = buildThemeFromCurrentAppearance({
-        theme: new types.Theme({
+        theme: {
           id: crypto.randomUUID(),
           name: themeDraft.name.trim(),
           clusterPattern,
-        }),
+        },
       });
       await saveThemeEntry(newTheme);
       setEditingThemeId(null);
@@ -1296,7 +1296,7 @@ function AppearanceSection() {
     name = theme.name,
     clusterPattern = theme.clusterPattern,
   }: {
-    theme: types.Theme;
+    theme: Pick<types.Theme, 'id' | 'name' | 'clusterPattern'> & Partial<types.Theme>;
     name?: string;
     clusterPattern?: string;
   }): types.Theme {

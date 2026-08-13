@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ import (
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
 	"github.com/luxury-yacht/app/internal/sentry"
 	"github.com/stretchr/testify/require"
-	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/apimachinery/pkg/runtime"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
@@ -50,7 +51,7 @@ func TestContainsAuthPatternDoesNotTreatPermissionDenialAsAuthentication(t *test
 
 func TestSetupRefreshSubsystemRequiresSelections(t *testing.T) {
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 
 	err := app.setupRefreshSubsystem()
 	require.Error(t, err)
@@ -72,7 +73,7 @@ func TestEnsureRefreshRuntimeContextGuardsMissingContextAndReusesLiveRuntime(t *
 	app := newTestAppWithDefaults(t)
 	require.Nil(t, app.ensureRefreshRuntimeContext())
 
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 	first := app.ensureRefreshRuntimeContext()
 	require.NotNil(t, first)
 	t.Cleanup(app.refreshCancel)
@@ -85,7 +86,7 @@ func TestEnsureRefreshRuntimeContextSharesOneRuntimeAcrossLifecycleCallers(t *te
 	parent, cancelParent := context.WithCancel(context.Background())
 	t.Cleanup(cancelParent)
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(parent)
+	setTestAppRuntimeReady(t, app, parent)
 
 	const callers = 32
 	contexts := make([]context.Context, callers)
@@ -123,7 +124,7 @@ func TestSetupRefreshSubsystemDoesNotStorePermissionCache(t *testing.T) {
 	app := newTestAppWithDefaults(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app.setRuntimeContext(ctx)
+	setTestAppRuntimeReady(t, app, ctx)
 
 	// Create per-cluster clients - there are no global client fields anymore.
 	fakeClient := cgofake.NewClientset()
@@ -172,10 +173,8 @@ func TestSetupRefreshSubsystemDoesNotStorePermissionCache(t *testing.T) {
 
 	// Note: app.refreshManager is now nil by design - there is no global primary cluster.
 	// The manager is per-cluster, accessible via refreshSubsystems[clusterID].Manager.
-	require.NotNil(t, app.refreshHTTPServer)
-	require.NotNil(t, app.refreshListener)
+	require.NotNil(t, app.refreshService.Load())
 	require.NotNil(t, app.refreshCancel)
-	require.NotEmpty(t, app.refreshBaseURL)
 
 	require.Equal(t, fakeClient, capturedCfg.KubernetesClient)
 	require.Equal(t, metricsClient, capturedCfg.MetricsClient)
@@ -251,7 +250,7 @@ func TestStdLogBridgeWritesToLogger(t *testing.T) {
 
 func TestInitKubernetesClientRequiresSelections(t *testing.T) {
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 
 	err := app.initKubernetesClient()
 	require.Error(t, err)
@@ -262,7 +261,7 @@ func TestInitKubernetesClientFailsWhenRefreshSubsystemFails(t *testing.T) {
 	app := newTestAppWithDefaults(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app.setRuntimeContext(ctx)
+	setTestAppRuntimeReady(t, app, ctx)
 
 	kubeconfig := `
 apiVersion: v1
@@ -321,31 +320,13 @@ users:
 	// The test verifies that an error is returned and no object catalog is created.
 }
 
-func TestStartupAppliesWindowSettings(t *testing.T) {
-	origEvents := runtimeEventsEmit
-	origMsg := runtimeMessageDialog
-	origQuit := runtimeQuit
-	origSize := runtimeWindowSetSize
-	origPos := runtimeWindowSetPos
-	origMax := runtimeWindowMaximise
-	origShow := runtimeWindowShow
-	t.Cleanup(func() {
-		runtimeEventsEmit = origEvents
-		runtimeMessageDialog = origMsg
-		runtimeQuit = origQuit
-		runtimeWindowSetSize = origSize
-		runtimeWindowSetPos = origPos
-		runtimeWindowMaximise = origMax
-		runtimeWindowShow = origShow
-	})
-
+func TestStartupLoadsWindowSettingsOnlyAfterRuntimeReady(t *testing.T) {
 	baseDir := t.TempDir()
 	t.Setenv("HOME", baseDir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(baseDir, ".config"))
 	t.Setenv("APPDATA", filepath.Join(baseDir, "AppData", "Roaming"))
 	app := newTestAppWithDefaults(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	app.setRuntimeContext(ctx)
 
 	settingsPath, err := app.getSettingsFilePath()
 	require.NoError(t, err)
@@ -357,55 +338,31 @@ func TestStartupAppliesWindowSettings(t *testing.T) {
 			GridTablePersistenceMode: "shared",
 		},
 		UI: settingsUI{
-			Window: WindowSettings{X: 10, Y: 20, Width: 900, Height: 700, Maximized: true},
+			Window: WindowSettings{X: -1800, Y: 20, Width: 900, Height: 700, Maximized: true},
 		},
 	}
 	bytes, err := json.Marshal(settings)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(settingsPath, bytes, 0o644))
 
-	var sizeCalled, posCalled, maxCalled, showCalled bool
-	runtimeEventsEmit = func(context.Context, string, ...interface{}) {}
-	runtimeMessageDialog = func(context.Context, wailsruntime.MessageDialogOptions) (string, error) { return "", nil }
-	runtimeQuit = func(context.Context) {}
-	runtimeWindowSetSize = func(context.Context, int, int) { sizeCalled = true }
-	runtimeWindowSetPos = func(context.Context, int, int) { posCalled = true }
-	runtimeWindowMaximise = func(context.Context) { maxCalled = true }
-	runtimeWindowShow = func(context.Context) { showCalled = true }
-
-	app.Startup(ctx)
+	require.NoError(t, app.ServiceStartup(ctx, application.ServiceOptions{}))
+	require.Nil(t, app.windowSettings, "service startup must not load interactive window state")
+	require.True(t, app.WindowRuntimeReady())
 	cancel()
 	time.Sleep(50 * time.Millisecond)
 
-	require.True(t, sizeCalled, "expected window size to be restored")
-	require.True(t, posCalled, "expected window position to be restored")
-	require.True(t, maxCalled, "expected window to be maximized")
-	require.True(t, showCalled, "expected window to be shown")
+	require.Equal(t, &settings.UI.Window, app.windowSettings)
 }
 
 func TestBeforeClosePersistsWindowSettings(t *testing.T) {
-	origGetPos := runtimeWindowGetPosition
-	origGetSize := runtimeWindowGetSize
-	origIsMax := runtimeWindowIsMaximised
-	t.Cleanup(func() {
-		runtimeWindowGetPosition = origGetPos
-		runtimeWindowGetSize = origGetSize
-		runtimeWindowIsMaximised = origIsMax
-	})
-
 	t.Setenv("HOME", t.TempDir())
 	app := newTestAppWithDefaults(t)
-	ctx := context.Background()
-	app.setRuntimeContext(ctx)
+	app.windowGeometry = func() (WindowGeometry, error) {
+		return WindowGeometry{X: 11, Y: 22, Width: 800, Height: 600, Maximised: true}, nil
+	}
+	setTestAppRuntimeReady(t, app, context.Background())
 
-	runtimeWindowGetPosition = func(context.Context) (int, int) { return 11, 22 }
-	runtimeWindowGetSize = func(context.Context) (int, int) { return 800, 600 }
-	runtimeWindowIsMaximised = func(context.Context) bool { return true }
-
-	beforeClose := NewBeforeCloseHandler(app)
-
-	prevent := beforeClose(ctx)
-	require.False(t, prevent, "expected the window close to proceed")
+	require.True(t, app.PrepareQuit(), "expected the application quit to proceed")
 
 	settings, err := app.LoadWindowSettings()
 	require.NoError(t, err)
@@ -417,28 +374,16 @@ func TestBeforeClosePersistsWindowSettings(t *testing.T) {
 }
 
 func TestBeforeCloseWaitsForSelectionMutationBeforeSavingWindowSettings(t *testing.T) {
-	origGetPos := runtimeWindowGetPosition
-	origGetSize := runtimeWindowGetSize
-	origIsMax := runtimeWindowIsMaximised
-	t.Cleanup(func() {
-		runtimeWindowGetPosition = origGetPos
-		runtimeWindowGetSize = origGetSize
-		runtimeWindowIsMaximised = origIsMax
-	})
-
 	t.Setenv("HOME", t.TempDir())
 	app := newTestAppWithDefaults(t)
-	ctx := context.Background()
-	app.setRuntimeContext(ctx)
+	setTestAppRuntimeReady(t, app, context.Background())
 
 	saveStarted := make(chan struct{})
 	var saveStartedOnce sync.Once
-	runtimeWindowGetPosition = func(context.Context) (int, int) {
+	app.windowGeometry = func() (WindowGeometry, error) {
 		saveStartedOnce.Do(func() { close(saveStarted) })
-		return 11, 22
+		return WindowGeometry{X: 11, Y: 22, Width: 800, Height: 600}, nil
 	}
-	runtimeWindowGetSize = func(context.Context) (int, int) { return 800, 600 }
-	runtimeWindowIsMaximised = func(context.Context) bool { return false }
 
 	app.selectionMutationMu.Lock()
 	mutationStarted := make(chan struct{})
@@ -458,10 +403,9 @@ func TestBeforeCloseWaitsForSelectionMutationBeforeSavingWindowSettings(t *testi
 		return app.selectionMutationPending == 1
 	}, time.Second, 10*time.Millisecond)
 
-	beforeClose := NewBeforeCloseHandler(app)
 	done := make(chan bool)
 	go func() {
-		done <- beforeClose(ctx)
+		done <- app.PrepareQuit()
 	}()
 
 	select {
@@ -476,8 +420,8 @@ func TestBeforeCloseWaitsForSelectionMutationBeforeSavingWindowSettings(t *testi
 	require.NoError(t, <-mutationDone)
 
 	select {
-	case prevent := <-done:
-		require.False(t, prevent, "expected the window close to proceed")
+	case proceed := <-done:
+		require.True(t, proceed, "expected the application quit to proceed")
 	case <-time.After(time.Second):
 		t.Fatal("before close did not finish after selection mutation completed")
 	}
@@ -489,16 +433,80 @@ func TestBeforeCloseWaitsForSelectionMutationBeforeSavingWindowSettings(t *testi
 	}
 }
 
-func TestStartupBetaExpiryShowsDialogAndQuits(t *testing.T) {
-	origEvents := runtimeEventsEmit
-	origMsg := runtimeMessageDialog
-	origQuit := runtimeQuit
-	t.Cleanup(func() {
-		runtimeEventsEmit = origEvents
-		runtimeMessageDialog = origMsg
-		runtimeQuit = origQuit
-	})
+func TestPrepareQuitWithoutRuntimeSkipsWindowReadAndRemainsIdempotent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	app := newTestAppWithDefaults(t)
+	geometryReads := 0
+	app.windowGeometry = func() (WindowGeometry, error) {
+		geometryReads++
+		return WindowGeometry{}, nil
+	}
 
+	require.True(t, app.PrepareQuit())
+	require.True(t, app.PrepareQuit())
+
+	require.Zero(t, geometryReads)
+	failureLogs := 0
+	for _, entry := range app.logger.GetEntries() {
+		if strings.Contains(entry.Message, "Failed to save window settings: application context is not available") {
+			failureLogs++
+		}
+	}
+	require.Equal(t, 1, failureLogs)
+}
+
+func TestPrepareQuitLogsWindowGeometryReadFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	app := newTestAppWithDefaults(t)
+	setTestAppRuntimeReady(t, app, context.Background())
+	readFailure := errors.New("geometry unavailable")
+	app.windowGeometry = func() (WindowGeometry, error) {
+		return WindowGeometry{}, readFailure
+	}
+
+	require.True(t, app.PrepareQuit())
+
+	require.Nil(t, app.windowSettings)
+	entries := app.logger.GetEntries()
+	require.NotEmpty(t, entries)
+	require.Contains(t, entries[len(entries)-1].Message, "read main window geometry: geometry unavailable")
+}
+
+func TestPrepareQuitPersistsWindowGeometryOnlyOnceAcrossQuitPaths(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	app := newTestAppWithDefaults(t)
+	setTestAppRuntimeReady(t, app, context.Background())
+	geometryReads := 0
+	app.windowGeometry = func() (WindowGeometry, error) {
+		geometryReads++
+		return WindowGeometry{X: 7, Y: 9, Width: 1000, Height: 700}, nil
+	}
+
+	require.True(t, app.PrepareQuit())
+	require.True(t, app.PrepareQuit())
+
+	require.Equal(t, 1, geometryReads)
+	settings, err := app.LoadWindowSettings()
+	require.NoError(t, err)
+	require.Equal(t, &WindowSettings{X: 7, Y: 9, Width: 1000, Height: 700}, settings)
+}
+
+func TestServiceLifecycleContextIsCancelledBeforeShutdownAndThenCleared(t *testing.T) {
+	app := newTestAppWithDefaults(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, app.ServiceStartup(ctx, application.ServiceOptions{}))
+	require.False(t, app.runtimeAvailable())
+
+	serviceContext := app.CtxOrBackground()
+	cancel()
+	require.ErrorIs(t, serviceContext.Err(), context.Canceled)
+
+	require.NoError(t, app.ServiceShutdown())
+	require.False(t, app.runtimeAvailable())
+	require.NoError(t, app.CtxOrBackground().Err())
+}
+
+func TestStartupBetaExpiryReportsAndStopsInteractiveStartup(t *testing.T) {
 	origBeta := BetaExpiry
 	origIsBeta := IsBetaBuild
 	origVersion := Version
@@ -518,23 +526,10 @@ func TestStartupBetaExpiryShowsDialogAndQuits(t *testing.T) {
 	reporter := &recordingErrorReporter{}
 	app.logger = NewLogger(100, reporter)
 	ctx := context.Background()
-	app.setRuntimeContext(ctx)
 
-	dialogCalled := false
-	quitCalled := false
-	runtimeMessageDialog = func(context.Context, wailsruntime.MessageDialogOptions) (string, error) {
-		dialogCalled = true
-		return "", nil
-	}
-	runtimeQuit = func(context.Context) {
-		quitCalled = true
-	}
-	runtimeEventsEmit = func(context.Context, string, ...interface{}) {}
+	require.NoError(t, app.ServiceStartup(ctx, application.ServiceOptions{}))
+	require.True(t, app.WindowRuntimeReady())
 
-	app.Startup(ctx)
-
-	require.True(t, dialogCalled, "beta expiry dialog expected")
-	require.True(t, quitCalled, "app should quit when beta expired")
 	reporter.mu.Lock()
 	require.Len(t, reporter.exceptions, 1)
 	require.Contains(t, reporter.exceptions[0].err.Error(), "expired")

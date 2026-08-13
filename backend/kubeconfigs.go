@@ -11,7 +11,7 @@ import (
 
 	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/internal/logsources"
-	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 )
@@ -271,15 +271,12 @@ func (a *App) OpenKubeconfigSearchPathDialog() (string, error) {
 		return "", fmt.Errorf("application context is not available")
 	}
 
-	var path string
-	var err error
-	a.runWithRuntimeContext(func(ctx context.Context) {
-		path, err = wailsruntime.OpenDirectoryDialog(ctx, wailsruntime.OpenDialogOptions{
-			Title:            "Select kubeconfig directory",
-			DefaultDirectory: a.defaultKubeconfigSearchDirectory(),
-		})
+	return a.promptForOpenFile(&application.OpenFileDialogOptions{
+		CanChooseDirectories: true,
+		CanChooseFiles:       false,
+		Title:                "Select kubeconfig directory",
+		Directory:            a.defaultKubeconfigSearchDirectory(),
 	})
-	return path, err
 }
 
 // defaultKubeconfigSearchDirectory selects a safe default folder for the directory picker.
@@ -676,7 +673,7 @@ func (a *App) executeSelectionChangeWork(
 }
 
 func (a *App) reconcileRefreshSubsystemSelections(selections []kubeconfigSelection) error {
-	if a.refreshHTTPServer == nil || a.refreshAggregates.Load() == nil || a.currentRefreshRuntimeContext() == nil {
+	if a.refreshService.Load() == nil || a.refreshAggregates.Load() == nil || a.currentRefreshRuntimeContext() == nil {
 		return a.setupRefreshSubsystem()
 	}
 	return a.updateRefreshSubsystemSelections(selections)

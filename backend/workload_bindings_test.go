@@ -21,7 +21,7 @@ import (
 
 func TestWorkloadWrappersHappyPath(t *testing.T) {
 	app := wrapperTestApp(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 	clusterID := "config:ctx"
 
 	labels := map[string]string{"app": "web"}

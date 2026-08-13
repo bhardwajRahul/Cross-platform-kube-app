@@ -14,19 +14,19 @@
  * `{kind:'status'}` item — conditions render as a field and `summary` is not surfaced.
  */
 
-import { ObjectPanelLink } from '@shared/components/ObjectPanelLink';
-import { StatusChip, type StatusChipVariant } from '@shared/components/StatusChip';
-import { buildRequiredObjectReference } from '@shared/utils/objectIdentity';
-import { withStableListKeys } from '@shared/utils/stableListKeys';
-import {
+import type {
   backendtlspolicy,
   gateway,
   gatewayclass,
   listenerset,
   referencegrant,
-  type resourcemodel,
+  resourcemodel,
   types,
-} from '@wailsjs/go/models';
+} from '@core/backend-api/models';
+import { ObjectPanelLink } from '@shared/components/ObjectPanelLink';
+import { StatusChip, type StatusChipVariant } from '@shared/components/StatusChip';
+import { buildRequiredObjectReference } from '@shared/utils/objectIdentity';
+import { withStableListKeys } from '@shared/utils/stableListKeys';
 import type React from 'react';
 import type { OverviewDescriptor } from '../schema';
 import { ExternalHostLinks } from '../shared/ExternalHostLinks';
@@ -80,8 +80,8 @@ const getRefParts = (
     return { ref: value };
   }
   return {
-    ref: value.ref,
-    display: value.display,
+    ref: value.ref ?? undefined,
+    display: value.display ?? undefined,
   };
 };
 
@@ -350,7 +350,7 @@ const ReferenceGrantDiagram: React.FC<{
 
 export const gatewayDescriptor: OverviewDescriptor<GatewayDetails> = {
   displayKind: 'Gateway',
-  dtoClass: gateway.GatewayDetails,
+  dtoName: 'GatewayDetails',
   schema: {
     items: [
       {
@@ -390,7 +390,7 @@ export const gatewayDescriptor: OverviewDescriptor<GatewayDetails> = {
 
 export const gatewayClassDescriptor: OverviewDescriptor<GatewayClassDetails> = {
   displayKind: 'GatewayClass',
-  dtoClass: gatewayclass.GatewayClassDetails,
+  dtoName: 'GatewayClassDetails',
   schema: {
     items: [
       { field: 'controller', label: 'Controller', fullWidth: true },
@@ -422,7 +422,7 @@ export const gatewayClassDescriptor: OverviewDescriptor<GatewayClassDetails> = {
 
 export const listenerSetDescriptor: OverviewDescriptor<ListenerSetDetails> = {
   displayKind: 'ListenerSet',
-  dtoClass: listenerset.ListenerSetDetails,
+  dtoName: 'ListenerSetDetails',
   schema: {
     items: [
       {
@@ -455,7 +455,7 @@ export const listenerSetDescriptor: OverviewDescriptor<ListenerSetDetails> = {
  */
 const makeRouteDescriptor = (displayKind: string): OverviewDescriptor<RouteDetails> => ({
   displayKind,
-  dtoClass: types.RouteDetails,
+  dtoName: 'RouteDetails',
   schema: {
     items: [
       {
@@ -507,7 +507,7 @@ export const tlsRouteDescriptor = makeRouteDescriptor('TLSRoute');
 
 export const referenceGrantDescriptor: OverviewDescriptor<ReferenceGrantDetails> = {
   displayKind: 'ReferenceGrant',
-  dtoClass: referencegrant.ReferenceGrantDetails,
+  dtoName: 'ReferenceGrantDetails',
   schema: {
     items: [
       {
@@ -529,7 +529,7 @@ export const referenceGrantDescriptor: OverviewDescriptor<ReferenceGrantDetails>
 
 export const backendTLSPolicyDescriptor: OverviewDescriptor<BackendTLSPolicyDetails> = {
   displayKind: 'BackendTLSPolicy',
-  dtoClass: backendtlspolicy.BackendTLSPolicyDetails,
+  dtoName: 'BackendTLSPolicyDetails',
   schema: {
     items: [
       {

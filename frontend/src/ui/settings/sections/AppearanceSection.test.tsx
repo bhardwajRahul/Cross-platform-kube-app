@@ -4,10 +4,11 @@
  * Tests for Appearance settings interactions and preference workflow wiring.
  */
 
-import { types } from '@wailsjs/go/models';
+import type { types } from '@core/backend-api/models';
 import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { partialModelFixture } from '@/test-utils/partialModelFixture';
 import { requireValue } from '@/test-utils/requireValue';
 import AppearanceSection, { reorderThemeByOffset } from './AppearanceSection';
 
@@ -145,7 +146,7 @@ describe('AppearanceSection', () => {
 
   beforeEach(async () => {
     appPreferenceMocks.getThemes.mockResolvedValue([
-      new types.Theme({ id: 'default', name: 'default', clusterPattern: '' }),
+      partialModelFixture<types.Theme>({ id: 'default', name: 'default', clusterPattern: '' }),
     ]);
     appPreferenceMocks.saveTheme.mockResolvedValue(undefined);
     appPreferenceMocks.validateThemeClusterPattern.mockResolvedValue({ valid: true });

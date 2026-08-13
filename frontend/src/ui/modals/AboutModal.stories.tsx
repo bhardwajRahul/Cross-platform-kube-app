@@ -4,10 +4,11 @@
  * Storybook stories for the AboutModal component.
  */
 
+import type { backend } from '@core/backend-api/models';
 import type { Meta, StoryObj } from '@storybook/react';
+import { partialModelFixture } from '@/test-utils/partialModelFixture';
 import { KeyboardProviderDecorator } from '../../../.storybook/decorators/KeyboardProviderDecorator';
 import { setMockAppInfo } from '../../../.storybook/mocks/wailsBackendApp';
-import { backend } from '../../../.storybook/mocks/wailsModels';
 import AboutModal from './AboutModal';
 
 const meta: Meta<typeof AboutModal> = {
@@ -29,12 +30,12 @@ export const Default: Story = {
   decorators: [
     (Story) => {
       setMockAppInfo(
-        new backend.AppInfo({
+        partialModelFixture<backend.AppInfo>({
           version: '1.3.13',
           buildTime: '2026-03-14T00:00:00Z',
           gitCommit: 'abc1234',
           isBeta: false,
-          update: new backend.UpdateInfo({
+          update: partialModelFixture<backend.UpdateInfo>({
             currentVersion: '1.3.13',
             latestVersion: '1.3.13',
             releaseUrl: '',
@@ -52,12 +53,12 @@ export const UpdateAvailable: Story = {
   decorators: [
     (Story) => {
       setMockAppInfo(
-        new backend.AppInfo({
+        partialModelFixture<backend.AppInfo>({
           version: '1.3.13',
           buildTime: '2026-03-14T00:00:00Z',
           gitCommit: 'abc1234',
           isBeta: false,
-          update: new backend.UpdateInfo({
+          update: partialModelFixture<backend.UpdateInfo>({
             currentVersion: '1.3.13',
             latestVersion: '2.0.0',
             releaseUrl: 'https://github.com/luxury-yacht/app/releases/tag/v2.0.0',
@@ -75,13 +76,13 @@ export const BetaWithExpiry: Story = {
   decorators: [
     (Story) => {
       setMockAppInfo(
-        new backend.AppInfo({
+        partialModelFixture<backend.AppInfo>({
           version: '2.0.0-beta.1',
           buildTime: '2026-03-14T00:00:00Z',
           gitCommit: 'def5678',
           isBeta: true,
           expiryDate: '2026-06-01T00:00:00Z',
-          update: new backend.UpdateInfo({
+          update: partialModelFixture<backend.UpdateInfo>({
             currentVersion: '2.0.0-beta.1',
             latestVersion: '2.0.0-beta.1',
             releaseUrl: '',

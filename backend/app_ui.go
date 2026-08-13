@@ -53,16 +53,37 @@ func (a *App) ToggleObjectDiff() error {
 }
 
 func (a *App) UpdateMenu() {
-	if !a.runtimeAvailable() {
+	if a == nil || !a.runtimeAvailable() || a.menu == nil {
 		return
 	}
-	// On Linux, refreshing the menu rebuilds the GTK menubar without reattaching it,
-	// which invalidates the click callbacks and causes a nil dereference in Wails.
-	// Skip dynamic menu updates there to keep menu callbacks stable.
-	if runtime.GOOS == "linux" {
-		return
+	a.menu.Clear()
+	populateMenu(a.menu, a)
+
+	applyNativeMenuRefresh(
+		runtime.GOOS,
+		func() { a.menu.Update() },
+		func() {
+			if a.wailsApplication != nil {
+				a.wailsApplication.Menu.SetApplicationMenu(a.menu)
+			}
+		},
+		func() {
+			if window, err := a.mainWindow(); err == nil {
+				window.SetMenu(a.menu)
+			}
+		},
+	)
+}
+
+func applyNativeMenuRefresh(goos string, updateMenu, setApplicationMenu, setWindowMenu func()) {
+	switch goos {
+	case "linux":
+		updateMenu()
+	case "darwin":
+		setApplicationMenu()
+	case "windows":
+		setWindowMenu()
 	}
-	a.emitEvent("update-menu")
 }
 
 func (a *App) IsSidebarVisible() bool {

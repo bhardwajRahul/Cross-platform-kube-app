@@ -1,5 +1,5 @@
+import type { types } from '@core/backend-api/models';
 import { errorHandler } from '@utils/errorHandler';
-import { types } from '@wailsjs/go/models';
 import { useCallback, useEffect, useState } from 'react';
 import {
   applyTheme as applyThemeApi,
@@ -51,10 +51,10 @@ export function useThemes() {
       return await validateThemeClusterPattern(pattern);
     } catch (error) {
       errorHandler.handle(error, { action: 'validateThemeClusterPattern' });
-      return new types.ThemeClusterPatternValidationResult({
+      return {
         valid: false,
         message: 'Unable to validate cluster pattern.',
-      });
+      } satisfies types.ThemeClusterPatternValidationResult;
     }
   }, []);
 

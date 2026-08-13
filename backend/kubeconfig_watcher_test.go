@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -122,12 +121,12 @@ func TestKubeconfigWatcher_DebounceAccumulatesPaths(t *testing.T) {
 func TestApp_HandleKubeconfigChange_ContextRemovedDeselectsOnlyAffectedFromSameFile(t *testing.T) {
 	setTestConfigEnv(t)
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 	app.clusterClients = make(map[string]*clusterClients)
 	app.refreshSubsystems = make(map[string]*system.Subsystem)
 	app.objectCatalogEntries = make(map[string]*objectCatalogEntry)
 	app.refreshAggregates.Store(&refreshAggregateHandlers{})
-	app.refreshHTTPServer = &http.Server{}
+	setRefreshServiceReadyForTest(app)
 	setRefreshRuntimeContextForTest(app, context.Background())
 	app.appSettings = getDefaultAppSettings()
 
@@ -265,7 +264,7 @@ func TestClassifyChangedKubeconfigClusterCoversEveryDisposition(t *testing.T) {
 func TestDeselectClusters_AbortsOnReconciliationFailure(t *testing.T) {
 	setTestConfigEnv(t)
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 	app.clusterClients = make(map[string]*clusterClients)
 
 	app.kubeconfigsMu.Lock()
@@ -286,7 +285,7 @@ func TestDeselectClusters_AbortsOnReconciliationFailure(t *testing.T) {
 
 	// Force updateRefreshSubsystemSelections to take the setupRefreshSubsystem path and fail.
 	app.refreshAggregates.Store(nil)
-	app.refreshHTTPServer = nil
+	app.refreshService.Store(nil)
 	setRefreshRuntimeContextForTest(app, nil)
 
 	app.selectionMutationMu.Lock()

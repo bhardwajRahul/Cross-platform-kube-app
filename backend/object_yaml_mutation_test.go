@@ -129,8 +129,8 @@ func setupYAMLTestApp(t *testing.T) (*App, *dynamicfake.FakeDynamicClient, strin
 		}
 		return true, patchedObj, nil
 	})
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
+	app := NewApp(nil)
+	setTestAppRuntimeReady(t, app, context.Background())
 	apiExtClient := apiextensionsfake.NewClientset()
 	clusterID := "config:ctx"
 	// Per-cluster clients are stored in clusterClients, not in global fields.
@@ -951,7 +951,7 @@ func TestGetGVRForGVKFallsBackToCache(t *testing.T) {
 }
 
 func TestGetGVRForGVKWithoutClientFails(t *testing.T) {
-	app := NewApp()
+	app := NewApp(nil)
 	_, _, err := app.getGVRForGVK(context.Background(), "missing", schema.GroupVersionKind{Kind: "Deployment"})
 	if err == nil {
 		t.Fatalf("expected error for missing client")

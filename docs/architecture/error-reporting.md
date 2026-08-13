@@ -265,7 +265,7 @@ including its acknowledgement write, before deleting settings, so that worker
 cannot restore the previous ID after deletion.
 
 The registration flush has a two-second deadline, but it never runs on the
-pre-`wails.Run` initialization path and therefore cannot add that delay to app
+pre-`app.Run` initialization path and therefore cannot add that delay to app
 launch. Shutdown cancellation stops an in-flight registration. Enabling error
 reporting at runtime schedules the same background path rather than blocking
 the settings RPC.
@@ -384,9 +384,10 @@ There is no `SENTRY_BACKEND_PROJECT` setting. The backend SDK selects its Sentry
 project from `SENTRY_BACKEND_DSN`; only the frontend source-map uploader needs a
 project slug.
 
-`mage dev` does not initialize either Sentry SDK or the source-map upload plugin.
-The Wails `dev` build tag disables the backend reporter, while Vite's `serve`
-command injects an empty frontend DSN and produces no Sentry release identity.
+`wails3 dev` does not initialize either Sentry SDK or the source-map upload
+plugin. Wails v3 omits the `production` build tag for development builds, which
+disables the backend reporter, while Vite's development mode injects an empty
+frontend DSN and produces no Sentry release identity.
 Local DSNs, source-map credentials, and the persisted Error Reporting value are
 therefore ignored by the reporters and are not needed.
 

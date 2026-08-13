@@ -16,19 +16,18 @@ const appInfoMock = vi.hoisted(() => ({
 }));
 
 const runtimeMock = vi.hoisted(() => ({
-  eventsOn: vi.fn(),
-  eventsOff: vi.fn(),
-  BrowserOpenURL: vi.fn(),
+  eventsOn: vi.fn(() => () => undefined),
+  openURL: vi.fn(),
 }));
 
-vi.mock('@wailsjs/go/backend/App', () => ({
+vi.mock('@core/backend-api', () => ({
   GetAppInfo: appInfoMock.GetAppInfo,
 }));
 
-vi.mock('@wailsjs/runtime/runtime', () => ({
-  EventsOn: runtimeMock.eventsOn,
-  EventsOff: runtimeMock.eventsOff,
-  BrowserOpenURL: runtimeMock.BrowserOpenURL,
+vi.mock('@core/desktop-runtime', () => ({
+  desktopRuntimeAvailable: () => false,
+  onEvent: runtimeMock.eventsOn,
+  openURL: runtimeMock.openURL,
 }));
 
 vi.mock('@assets/luxury-yacht-logo.png', () => ({ __esModule: true, default: 'logo.png' }));
@@ -75,9 +74,8 @@ const renderModal = async (props: AboutModalProps) => {
 
 describe('AboutModal', () => {
   beforeEach(() => {
-    runtimeMock.eventsOn.mockReset();
-    runtimeMock.eventsOff.mockReset();
-    runtimeMock.BrowserOpenURL.mockReset();
+    runtimeMock.eventsOn.mockReset().mockReturnValue(() => undefined);
+    runtimeMock.openURL.mockReset();
     appInfoMock.GetAppInfo.mockReset();
     document.body.style.overflow = '';
   });
@@ -119,7 +117,7 @@ describe('AboutModal', () => {
       wailsLink?.click();
     });
 
-    expect(runtimeMock.BrowserOpenURL).toHaveBeenCalledWith('https://wails.io/');
+    expect(runtimeMock.openURL).toHaveBeenCalledWith('https://wails.io/');
 
     await unmount();
   });

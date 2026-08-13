@@ -31,20 +31,19 @@ const kubeconfigMocks = vi.hoisted(() => ({
 }));
 
 const runtimeMocks = vi.hoisted(() => ({
-  eventsOn: vi.fn(),
-  eventsOff: vi.fn(),
+  eventsOn: vi.fn(() => () => undefined),
 }));
 
 const appMocks = vi.hoisted(() => ({
   FindCatalogObjectMatch: vi.fn(),
 }));
 
-vi.mock('@wailsjs/runtime/runtime', () => ({
-  EventsOn: runtimeMocks.eventsOn,
-  EventsOff: runtimeMocks.eventsOff,
+vi.mock('@core/desktop-runtime', () => ({
+  desktopRuntimeAvailable: () => false,
+  onEvent: runtimeMocks.eventsOn,
 }));
 
-vi.mock('@wailsjs/go/backend/App', () => ({
+vi.mock('@core/backend-api', () => ({
   FindCatalogObjectMatch: (...args: unknown[]) => appMocks.FindCatalogObjectMatch(...args),
 }));
 
@@ -268,8 +267,7 @@ describe('ObjectDiffModal', () => {
   let root: ReactDOM.Root;
 
   beforeEach(async () => {
-    runtimeMocks.eventsOn.mockReset();
-    runtimeMocks.eventsOff.mockReset();
+    runtimeMocks.eventsOn.mockReset().mockReturnValue(() => undefined);
     appMocks.FindCatalogObjectMatch.mockReset();
     appMocks.FindCatalogObjectMatch.mockResolvedValue(null);
     refreshMocks.useRefreshScopedDomain.mockImplementation((domain: string, scope: string) =>

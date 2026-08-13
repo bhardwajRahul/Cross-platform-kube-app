@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "__APP_VERSION__"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "__APP_VERSION__",
+			"CompanyName": "__APP_COMPANY__",
+			"FileDescription": "__APP_DESCRIPTION__",
+			"LegalCopyright": "__APP_COPYRIGHT__",
+			"ProductName": "__APP_NAME__",
+			"Comments": "__APP_COMMENTS__"
+		}
+	}
+}

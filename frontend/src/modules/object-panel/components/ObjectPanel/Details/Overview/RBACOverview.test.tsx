@@ -6,17 +6,18 @@
  * via the OverviewContext.
  */
 
-import {
+import type {
   clusterrole,
   clusterrolebinding,
   role,
   rolebinding,
   serviceaccount,
-} from '@wailsjs/go/models';
+} from '@core/backend-api/models';
 import type React from 'react';
 import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { partialModelFixture } from '@/test-utils/partialModelFixture';
 import {
   clusterRoleBindingDescriptor,
   clusterRoleDescriptor,
@@ -84,7 +85,7 @@ describe('RBACOverview', () => {
     await renderDescriptor(
       root,
       clusterRoleDescriptor,
-      clusterrole.ClusterRoleDetails.createFrom({
+      partialModelFixture<clusterrole.ClusterRoleDetails>({
         kind: 'ClusterRole',
         name: 'admin',
         labels: { team: 'platform' },
@@ -106,7 +107,7 @@ describe('RBACOverview', () => {
     await renderDescriptor(
       root,
       roleDescriptor,
-      role.RoleDetails.createFrom({
+      partialModelFixture<role.RoleDetails>({
         kind: 'Role',
         name: 'reader',
         labels: { team: 'platform' },
@@ -126,7 +127,7 @@ describe('RBACOverview', () => {
     await renderDescriptor(
       root,
       roleBindingDescriptor,
-      rolebinding.RoleBindingDetails.createFrom({
+      partialModelFixture<rolebinding.RoleBindingDetails>({
         kind: 'RoleBinding',
         name: 'bind-reader',
         labels: { env: 'prod' },
@@ -158,7 +159,7 @@ describe('RBACOverview', () => {
     await renderDescriptor(
       root,
       clusterRoleBindingDescriptor,
-      clusterrolebinding.ClusterRoleBindingDetails.createFrom({
+      partialModelFixture<clusterrolebinding.ClusterRoleBindingDetails>({
         kind: 'ClusterRoleBinding',
         name: 'bind-system',
         roleRef: { kind: 'ClusterRole', name: 'cluster-admin' },
@@ -176,7 +177,7 @@ describe('RBACOverview', () => {
     await renderDescriptor(
       root,
       clusterRoleBindingDescriptor,
-      clusterrolebinding.ClusterRoleBindingDetails.createFrom({
+      partialModelFixture<clusterrolebinding.ClusterRoleBindingDetails>({
         kind: 'ClusterRoleBinding',
         name: 'bind-admin',
         labels: { env: 'prod' },
@@ -199,7 +200,7 @@ describe('RBACOverview', () => {
     await renderDescriptor(
       root,
       serviceAccountDescriptor,
-      serviceaccount.ServiceAccountDetails.createFrom({
+      partialModelFixture<serviceaccount.ServiceAccountDetails>({
         kind: 'ServiceAccount',
         name: 'builder',
         labels: { app: 'builder' },

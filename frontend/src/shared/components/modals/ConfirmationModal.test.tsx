@@ -12,13 +12,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ConfirmationModal from './ConfirmationModal';
 
 const runtimeMocks = vi.hoisted(() => ({
-  eventsOn: vi.fn(),
-  eventsOff: vi.fn(),
+  eventsOn: vi.fn(() => () => undefined),
 }));
 
-vi.mock('@wailsjs/runtime/runtime', () => ({
-  EventsOn: runtimeMocks.eventsOn,
-  EventsOff: runtimeMocks.eventsOff,
+vi.mock('@core/desktop-runtime', () => ({
+  desktopRuntimeAvailable: () => false,
+  onEvent: runtimeMocks.eventsOn,
 }));
 
 describe('ConfirmationModal', () => {
@@ -37,8 +36,7 @@ describe('ConfirmationModal', () => {
     });
     container.remove();
     document.body.innerHTML = '';
-    runtimeMocks.eventsOn.mockReset();
-    runtimeMocks.eventsOff.mockReset();
+    runtimeMocks.eventsOn.mockReset().mockReturnValue(() => undefined);
   });
 
   const renderModal = async (props: Partial<React.ComponentProps<typeof ConfirmationModal>>) => {

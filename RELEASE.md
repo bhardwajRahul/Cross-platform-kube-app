@@ -18,19 +18,20 @@ EOF
 
 Update the values. `.env` is git-ignored. Never commit this file.
 
-Sentry is disabled when running development builds via `mage dev`, even when
+Sentry is disabled when running development builds via `wails3 dev`, even when
 `.env` exists. Packaged builds use the application-owned collection limits and
 final privacy scrubbers documented below; SDK defaults are not the privacy
 contract.
 See [the error-reporting architecture](docs/architecture/error-reporting.md)
 for the reporting and data-collection boundaries.
 
-Installing a local production build enables error reporting only when the
+Packaging a local production build enables error reporting only when the
 corresponding DSNs are present in `.env`. The persisted Error Reporting setting
-still controls whether the packaged app initializes either SDK.
+still controls whether the packaged app initializes either SDK. Platform-native
+artifacts are written to `bin/`.
 
 ```bash
-mage install:unsigned
+wails3 package
 ```
 
 
@@ -63,21 +64,26 @@ The signed macOS build additionally reads:
 Run the prerelease checks. This surfaces problems that could cause the release workflow to fail:
 
 ```bash
-mage qc:prerelease
+wails3 task qc:prerelease
 ```
 
 If the release includes backend changes, run the benchmarks and compare the results with the baseline from before the change:
 
 ```bash
-mage qc:benchmark
+wails3 task qc:benchmark
 ```
 
-1. Update `info.productVersion` in [wails.json](wails.json).
+1. Update `info.version` in [build/config.yml](build/config.yml), then run
+   `wails3 task common:update:build-assets` to refresh platform metadata. The
+   upstream updater overwrites generated build assets, so review the resulting
+   diff and retain the repository's interface-binding, desktop-only, GTK4-only,
+   metadata, and packaging choices before committing.
 2. Commit and push the version change.
 3. Create and push the matching tag. The `release` workflow builds and
    publishes the release:
 
 ```bash
-git tag $(jq -r '.info.productVersion' wails.json)
+VERSION=$(sed -nE 's/^  version: "([^"]+)"/\1/p' build/config.yml)
+git tag "v${VERSION}"
 git push origin main --tags
 ```

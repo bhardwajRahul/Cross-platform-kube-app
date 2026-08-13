@@ -16,13 +16,12 @@ import Dropdown from './Dropdown';
 import type { DropdownOption } from './types';
 
 const runtimeMocks = vi.hoisted(() => ({
-  eventsOn: vi.fn(),
-  eventsOff: vi.fn(),
+  eventsOn: vi.fn(() => () => undefined),
 }));
 
-vi.mock('@wailsjs/runtime/runtime', () => ({
-  EventsOn: runtimeMocks.eventsOn,
-  EventsOff: runtimeMocks.eventsOff,
+vi.mock('@core/desktop-runtime', () => ({
+  desktopRuntimeAvailable: () => false,
+  onEvent: runtimeMocks.eventsOn,
 }));
 
 const OPTIONS: DropdownOption[] = [
@@ -52,8 +51,7 @@ describe('Dropdown', () => {
       root.unmount();
     });
     container.remove();
-    runtimeMocks.eventsOn.mockReset();
-    runtimeMocks.eventsOff.mockReset();
+    runtimeMocks.eventsOn.mockReset().mockReturnValue(() => undefined);
   });
 
   const mount = async (element: React.ReactElement) => {

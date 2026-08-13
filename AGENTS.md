@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Luxury Yacht is a Wails v2 desktop app for viewing and managing Kubernetes
+Luxury Yacht is a Wails v3 desktop app for viewing and managing Kubernetes
 resources. The backend is Go; the frontend is React and TypeScript. Scoped
 instructions in `backend/AGENTS.md` and `frontend/AGENTS.md` apply when work
 touches those trees.
@@ -64,17 +64,23 @@ source contract is unclear.
 
 ## Validation
 
+- In the Codex workspace sandbox, set
+  `GOCACHE=/tmp/luxury-yacht-go-build` and
+  `STATICCHECK_CACHE=/tmp/luxury-yacht-staticcheck`. Full backend, race, and
+  coverage suites—including the prerelease gate—open localhost `httptest`
+  listeners, so request escalated sandbox permission on the first invocation
+  instead of attempting the known-blocked default sandbox.
 - Run focused tests during development and measure directly affected coverage
-  with `mise exec -- mage test:backendCoverage` or
-  `mise exec -- mage test:frontendCoverage`; target 80% statement coverage or
+  with `mise exec -- wails3 task test:backend-coverage` or
+  `mise exec -- wails3 task test:frontend-coverage`; target 80% statement coverage or
   report the measured gap and ask for guidance.
 - Base final evidence on the latest worktree. Before reporting
   non-documentation work, run
-  `mise exec -- mage qc:prerelease`, then inspect the worktree because the gate
+  `mise exec -- wails3 task qc:prerelease`, then inspect the worktree because the gate
   may format files. Report exact failures. Documentation/comment-only work is
   exempt and must at least pass `git diff --check`.
 - Rendered Wails UI validation uses the standalone Playwright MCP when
-  available. Start the app with `mise exec -- mage dev`, use the emitted URL,
+  available. Start the app with `mise exec -- wails3 dev`, use the emitted URL,
   and exercise relevant loading, error, empty, populated, navigation, and
   interaction states. Follow `.agents/setup/browser-automation.md`.
 

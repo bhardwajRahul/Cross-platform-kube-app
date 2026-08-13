@@ -4,8 +4,8 @@
  * Secret Overview descriptor (X1 P3a). Presentation ported verbatim from SecretOverview.tsx.
  */
 
+import type { secret } from '@core/backend-api/models';
 import { StatusChip } from '@shared/components/StatusChip';
-import { secret } from '@wailsjs/go/models';
 import type { OverviewDescriptor } from '../schema';
 import { renderUsedByLinks } from './shared';
 
@@ -37,7 +37,7 @@ const secretTypeTooltip = (type: string): string | undefined => {
 
 export const secretDescriptor: OverviewDescriptor<SecretDetails> = {
   displayKind: 'Secret',
-  dtoClass: secret.SecretDetails,
+  dtoName: 'SecretDetails',
   masksValues: true,
   schema: {
     items: [

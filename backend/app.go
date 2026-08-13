@@ -2,8 +2,6 @@ package backend
 
 import (
 	"context"
-	"net"
-	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,19 +12,22 @@ import (
 	"github.com/luxury-yacht/app/backend/refresh/system"
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
 	"github.com/luxury-yacht/app/internal/sentry"
+	"github.com/wailsapp/wails/v3/pkg/application"
 	apiextinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
 	informers "k8s.io/client-go/informers"
 )
 
-var defaultLoopbackListener = func() (net.Listener, error) {
-	return net.Listen("tcp", "127.0.0.1:0")
-}
+const (
+	refreshResourceStreamName      = "refresh-resources"
+	refreshContainerLogsStreamName = "refresh-container-logs"
+)
 
 // App provides the backend façade exposed to Wails.
 type App struct {
 	appDone                  <-chan struct{}
-	runtimeReady             bool
-	withRuntimeContext       func(func(context.Context))
+	runtimeReady             atomic.Bool
+	wailsApplication         *application.App
+	menu                     *application.Menu
 	selectedKubeconfigs      []string
 	availableKubeconfigs     []KubeconfigInfo
 	kubeconfigSearchPaths    []string
@@ -41,9 +42,8 @@ type App struct {
 	diagnosticsPanelVisible bool
 	appLogsPanelVisible     bool
 
-	refreshManager    *refresh.Manager
-	refreshHTTPServer *http.Server
-	refreshListener   net.Listener
+	refreshManager *refresh.Manager
+	refreshService atomic.Pointer[refreshServiceHandler]
 	// refreshRuntimeMu owns refreshDone and refreshCancel. Selection mutations and
 	// governor reconciliation use different lifecycle locks, so neither is a
 	// substitute for this process-runtime boundary.
@@ -53,8 +53,6 @@ type App struct {
 	// refreshRuntimeStopped distinguishes a deliberate global teardown from the
 	// never-started state that auth recovery is allowed to initialise.
 	refreshRuntimeStopped bool
-	refreshBaseURL        string
-	refreshServerDone     chan struct{}
 	telemetryRecorder     *telemetry.Recorder
 	// containerLogsTargetLimiter is lazily built by sharedContainerLogsTargetLimiter;
 	// its mutex guards the check-then-set because subsystem builds run concurrently
@@ -117,6 +115,7 @@ type App struct {
 	selectionMutationDrainMu   sync.Mutex
 	selectionMutationDrainCond *sync.Cond
 	selectionMutationPending   int
+	preQuitOnce                sync.Once
 	// kubeconfigChangeMu serializes runtime cluster/subsystem mutation paths.
 	// Lock ordering for runtime cluster mutation paths:
 	//   1) selectionMutationMu
@@ -189,21 +188,23 @@ type App struct {
 	clusterHealth            map[string]ClusterHealthState
 	clusterScopeRevisions    map[string]uint64
 
-	listenLoopback func() (net.Listener, error)
-
 	kubeconfigWatcher *kubeconfigWatcher
 
 	eventEmitter          func(context.Context, string, ...interface{})
+	openFileDialog        func(*application.OpenFileDialogOptions) (string, error)
+	saveFileDialog        func(*application.SaveFileDialogOptions) (string, error)
+	windowGeometry        func() (WindowGeometry, error)
 	kubeClientInitializer func() error
 }
 
-// NewApp constructs a backend App with sane defaults.
-func NewApp(reporters ...sentryreporting.Reporter) *App {
+// NewApp constructs a backend App with its Wails application and sane defaults.
+func NewApp(wailsApplication *application.App, reporters ...sentryreporting.Reporter) *App {
 	var reporter sentryreporting.Reporter
 	if len(reporters) > 0 {
 		reporter = reporters[0]
 	}
 	app := &App{
+		wailsApplication:         wailsApplication,
 		logger:                   NewLogger(1000, reporters...),
 		errorReporter:            reporter,
 		responseCache:            newDefaultResponseCache(),
@@ -218,8 +219,10 @@ func NewApp(reporters ...sentryreporting.Reporter) *App {
 		shellSessions:            make(map[string]*shellSession),
 		portForwardSessions:      make(map[string]*portForwardSessionInternal),
 		runtimeOperations:        newRuntimeOperationRegistry(),
-		eventEmitter: func(context.Context, string, ...interface{}) {
-			// Events are ignored until the runtime emitter is installed.
+		eventEmitter: func(_ context.Context, name string, data ...interface{}) {
+			if wailsApplication != nil {
+				wailsApplication.Event.Emit(name, data...)
+			}
 		},
 		clusterHealth:         make(map[string]ClusterHealthState),
 		clusterScopeRevisions: make(map[string]uint64),
@@ -227,7 +230,10 @@ func NewApp(reporters ...sentryreporting.Reporter) *App {
 	app.kubeClientInitializer = func() error {
 		return app.initKubernetesClient()
 	}
-	app.listenLoopback = defaultLoopbackListener
+	if wailsApplication != nil {
+		wailsApplication.HandleStream(refreshResourceStreamName, app.handleResourceStream)
+		wailsApplication.HandleStream(refreshContainerLogsStreamName, app.handleContainerLogsStream)
+	}
 	app.setupEnvironment()
 	app.initAuthManager()
 	app.initGovernor()

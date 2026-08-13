@@ -7,11 +7,11 @@
  * rather than from useObjectPanel — ObjectPanelLink itself still uses the hook for navigation.
  */
 
+import type { endpointslice } from '@core/backend-api/models';
 import { ObjectPanelLink } from '@shared/components/ObjectPanelLink';
 import { StatusChip } from '@shared/components/StatusChip';
 import { buildRequiredObjectReference } from '@shared/utils/objectIdentity';
 import { withStableListKeys } from '@shared/utils/stableListKeys';
-import { endpointslice } from '@wailsjs/go/models';
 import type React from 'react';
 import type { OverviewContext, OverviewDescriptor } from '../schema';
 import '../shared/OverviewBlocks.css';
@@ -149,7 +149,7 @@ const renderStatus = (d: EndpointSliceDetails): React.ReactNode => {
 
 export const endpointSliceDescriptor: OverviewDescriptor<EndpointSliceDetails> = {
   displayKind: 'EndpointSlice',
-  dtoClass: endpointslice.EndpointSliceDetails,
+  dtoName: 'EndpointSliceDetails',
   schema: {
     items: [
       {

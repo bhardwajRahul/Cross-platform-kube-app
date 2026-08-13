@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=__APP_NAME__
+Comment=__APP_DESCRIPTION__
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/__APP_BINARY_NAME__ %u
+Terminal=false
+Type=Application
+Icon=__APP_BINARY_NAME__
+Categories=Utility;
+StartupWMClass=__APP_BINARY_NAME__
+
+ 

@@ -40,7 +40,7 @@ func (a *App) validateRefreshSelectionUpdate() error {
 }
 
 func (a *App) refreshSelectionUpdateNeedsSetup() bool {
-	return a.refreshHTTPServer == nil || a.refreshAggregates.Load() == nil || a.currentRefreshRuntimeContext() == nil
+	return a.refreshService.Load() == nil || a.refreshAggregates.Load() == nil || a.currentRefreshRuntimeContext() == nil
 }
 
 type refreshSelectionPlan struct {
@@ -209,17 +209,30 @@ func (a *App) stopRefreshSubsystem(subsystem *system.Subsystem) {
 	if subsystem == nil {
 		return
 	}
-	subsystem.CancelColdPreparation()
+	a.stopRefreshSubsystemResources(subsystem)
 	if subsystem.Manager == nil {
 		return
-	}
-	subsystem.StopDoorbellNotifiers()
-	if subsystem.ResourceStream != nil {
-		subsystem.ResourceStream.Stop()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), config.RefreshShutdownTimeout)
 	defer cancel()
 	if err := subsystem.Manager.Shutdown(ctx); err != nil {
 		a.logger.Warn(fmt.Sprintf("Failed to shutdown refresh manager: %v", err), logsources.Refresh, subsystem.ClusterMeta.ClusterID, subsystem.ClusterMeta.ClusterName)
+	}
+}
+
+// stopRefreshSubsystemResources cancels work owned directly by a subsystem
+// generation. These resources can exist before Manager construction succeeds,
+// so every teardown path must stop them independently of Manager availability.
+func (a *App) stopRefreshSubsystemResources(subsystem *system.Subsystem) {
+	if subsystem == nil {
+		return
+	}
+	subsystem.CancelColdPreparation()
+	subsystem.StopDoorbellNotifiers()
+	if subsystem.ContainerLogs != nil {
+		subsystem.ContainerLogs.Stop()
+	}
+	if subsystem.ResourceStream != nil {
+		subsystem.ResourceStream.Stop()
 	}
 }

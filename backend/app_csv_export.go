@@ -1,13 +1,12 @@
 package backend
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // sanitizeCsvFilename returns a safe, non-empty default filename ending in .csv for
@@ -39,17 +38,11 @@ func (a *App) SaveCsvFile(defaultFilename, content string) (CatalogQueryCSVExpor
 		return empty, fmt.Errorf("application context is not available")
 	}
 
-	var path string
-	var err error
-	a.runWithRuntimeContext(func(ctx context.Context) {
-		path, err = runtimeSaveFileDialog(ctx, wailsruntime.SaveDialogOptions{
-			Title:           "Export CSV",
-			DefaultFilename: sanitizeCsvFilename(defaultFilename),
-			Filters: []wailsruntime.FileFilter{
-				{DisplayName: "CSV files (*.csv)", Pattern: "*.csv"},
-			},
-			CanCreateDirectories: true,
-		})
+	path, err := a.promptForSaveFile(&application.SaveFileDialogOptions{
+		Title:                "Export CSV",
+		Filename:             sanitizeCsvFilename(defaultFilename),
+		Filters:              []application.FileFilter{{DisplayName: "CSV files (*.csv)", Pattern: "*.csv"}},
+		CanCreateDirectories: true,
 	})
 	if err != nil {
 		return empty, fmt.Errorf("select CSV export file: %w", err)

@@ -12,7 +12,7 @@ import (
 
 func TestCleanupClusterRuntimeOperationsStopsSessionsAndCancelsActiveDrains(t *testing.T) {
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 	clusterID := fmt.Sprintf("cleanup-%s", t.Name())
 	otherClusterID := clusterID + "-other"
 
@@ -69,7 +69,7 @@ func TestCleanupClusterRuntimeOperationsStopsSessionsAndCancelsActiveDrains(t *t
 
 func TestShutdownCleansRuntimeOperationsForActiveClusters(t *testing.T) {
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 	clusterID := fmt.Sprintf("shutdown-%s", t.Name())
 	app.clusterClients = map[string]*clusterClients{
 		clusterID: {meta: ClusterMeta{ID: clusterID, Name: "Cluster"}},
@@ -97,7 +97,7 @@ func TestShutdownCleansRuntimeOperationsForActiveClusters(t *testing.T) {
 		return nil
 	})
 
-	app.Shutdown(context.Background())
+	require.NoError(t, app.ServiceShutdown())
 
 	require.Equal(t, 0, app.GetClusterShellSessionCount(clusterID))
 	require.Equal(t, 0, app.GetClusterPortForwardCount(clusterID))
@@ -109,7 +109,7 @@ func TestShutdownCleansRuntimeOperationsForActiveClusters(t *testing.T) {
 func TestCloseClusterCleansRuntimeOperationsAndUpdatesSelection(t *testing.T) {
 	setTestConfigEnv(t)
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 
 	selection := kubeconfigSelection{Path: "/path/config", Context: "ctx"}
 	app.availableKubeconfigs = []KubeconfigInfo{{

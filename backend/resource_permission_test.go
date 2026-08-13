@@ -32,8 +32,8 @@ func TestRestartWorkloadRequiresPatchPermission(t *testing.T) {
 	})
 	denySelfSubjectAccessReviews(client, "no patch deployments")
 
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
+	app := NewApp(nil)
+	setTestAppRuntimeReady(t, app, context.Background())
 	registerTestClusterWithClients(app, "cluster-a", &clusterClients{
 		meta:              ClusterMeta{ID: "cluster-a", Name: "cluster-a"},
 		kubeconfigPath:    "/path",
@@ -57,8 +57,8 @@ func TestDeleteResourceByGVKRequiresDeletePermission(t *testing.T) {
 	denySelfSubjectAccessReviews(client, "no delete pods")
 	dynamicClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
+	app := NewApp(nil)
+	setTestAppRuntimeReady(t, app, context.Background())
 	registerTestClusterWithClients(app, "cluster-a", &clusterClients{
 		meta:              ClusterMeta{ID: "cluster-a", Name: "cluster-a"},
 		kubeconfigPath:    "/path",
@@ -95,8 +95,8 @@ func TestTriggerCronJobRequiresJobCreatePermission(t *testing.T) {
 	})
 	denySelfSubjectAccessReviews(client, "no create jobs")
 
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
+	app := NewApp(nil)
+	setTestAppRuntimeReady(t, app, context.Background())
 	registerTestClusterWithClients(app, "cluster-a", &clusterClients{
 		meta:              ClusterMeta{ID: "cluster-a", Name: "cluster-a"},
 		kubeconfigPath:    "/path",
@@ -121,8 +121,8 @@ func TestSuspendCronJobRequiresPatchPermission(t *testing.T) {
 	})
 	denySelfSubjectAccessReviews(client, "no patch cronjobs")
 
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
+	app := NewApp(nil)
+	setTestAppRuntimeReady(t, app, context.Background())
 	registerTestClusterWithClients(app, "cluster-a", &clusterClients{
 		meta:              ClusterMeta{ID: "cluster-a", Name: "cluster-a"},
 		kubeconfigPath:    "/path",
@@ -184,7 +184,7 @@ func TestDrainPodPermissionFollowsEvictionSupport(t *testing.T) {
 				return true, review, nil
 			})
 
-			app := NewApp()
+			app := NewApp(nil)
 			deps := common.Dependencies{
 				KubernetesClient: client,
 				ClusterID:        "cluster-a",
@@ -212,8 +212,8 @@ func TestCancelDrainNodeJobRequiresNodeMaintenancePermission(t *testing.T) {
 	})
 	denySelfSubjectAccessReviews(client, "no node maintenance")
 
-	app := NewApp()
-	app.setRuntimeContext(context.Background())
+	app := NewApp(nil)
+	setTestAppRuntimeReady(t, app, context.Background())
 	registerTestClusterWithClients(app, clusterID, &clusterClients{
 		meta:              ClusterMeta{ID: clusterID, Name: clusterID},
 		kubeconfigPath:    "/path",

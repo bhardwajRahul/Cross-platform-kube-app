@@ -5,12 +5,13 @@
  * panel-scoped clusterId to useGridTablePersistence.
  */
 
+import type { types } from '@core/backend-api/models';
 import { OBJECT_ACTION_IDS } from '@shared/actions/objectActionContract';
 import type { GridTableProps } from '@shared/components/tables/GridTable';
-import { types } from '@wailsjs/go/models';
 import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { partialModelFixture } from '@/test-utils/partialModelFixture';
 import { requireReactElement } from '@/test-utils/requireReactElement';
 import { requireValue } from '@/test-utils/requireValue';
 import { JobsTab } from './JobsTab';
@@ -121,7 +122,7 @@ vi.mock('@shared/hooks/useNavigateToView', () => ({
 vi.mock('../shared.css', () => ({}));
 
 const makeJob = (overrides: Partial<types.JobSimpleInfo> = {}): types.JobSimpleInfo =>
-  types.JobSimpleInfo.createFrom({
+  partialModelFixture<types.JobSimpleInfo>({
     kind: 'Job',
     name: 'test-job-1',
     namespace: 'default',

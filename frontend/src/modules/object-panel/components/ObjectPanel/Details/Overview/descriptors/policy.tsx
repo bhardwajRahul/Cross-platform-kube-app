@@ -7,10 +7,10 @@
  * (ResourceHeader / ResourceMetadata).
  */
 
+import type { hpa, limitrange, poddisruptionbudget, resourcequota } from '@core/backend-api/models';
 import { ObjectPanelLink } from '@shared/components/ObjectPanelLink';
 import { buildRequiredRelatedObjectReference } from '@shared/utils/objectIdentity';
 import { withStableListKeys } from '@shared/utils/stableListKeys';
-import { hpa, limitrange, poddisruptionbudget, resourcequota } from '@wailsjs/go/models';
 import type React from 'react';
 import type { OverviewContext, OverviewDescriptor } from '../schema';
 import '../PolicyOverview.css';
@@ -313,7 +313,7 @@ const scaleTargetReference = (d: HorizontalPodAutoscalerDetails, context: Overvi
 
 export const hpaDescriptor: OverviewDescriptor<HorizontalPodAutoscalerDetails> = {
   displayKind: 'HorizontalPodAutoscaler',
-  dtoClass: hpa.HorizontalPodAutoscalerDetails,
+  dtoName: 'HorizontalPodAutoscalerDetails',
   schema: {
     items: [
       {
@@ -362,7 +362,7 @@ export const hpaDescriptor: OverviewDescriptor<HorizontalPodAutoscalerDetails> =
 
 export const limitRangeDescriptor: OverviewDescriptor<LimitRangeDetails> = {
   displayKind: 'LimitRange',
-  dtoClass: limitrange.LimitRangeDetails,
+  dtoName: 'LimitRangeDetails',
   schema: {
     items: [
       {
@@ -382,7 +382,7 @@ export const limitRangeDescriptor: OverviewDescriptor<LimitRangeDetails> = {
 
 export const pdbDescriptor: OverviewDescriptor<PodDisruptionBudgetDetails> = {
   displayKind: 'PodDisruptionBudget',
-  dtoClass: poddisruptionbudget.PodDisruptionBudgetDetails,
+  dtoName: 'PodDisruptionBudgetDetails',
   schema: {
     // Surface selector metadata for PDBs.
     showSelector: true,
@@ -409,7 +409,7 @@ export const pdbDescriptor: OverviewDescriptor<PodDisruptionBudgetDetails> = {
 // ResourceQuota
 // ---------------------------------------------------------------------------
 
-const renderQuotaMap = (entries: Record<string, string>): React.ReactNode =>
+const renderQuotaMap = (entries: Record<string, string | undefined>): React.ReactNode =>
   Object.entries(entries).map(([key, value]) => (
     <div key={key}>
       {key}: {value}
@@ -418,7 +418,7 @@ const renderQuotaMap = (entries: Record<string, string>): React.ReactNode =>
 
 export const resourceQuotaDescriptor: OverviewDescriptor<ResourceQuotaDetails> = {
   displayKind: 'ResourceQuota',
-  dtoClass: resourcequota.ResourceQuotaDetails,
+  dtoName: 'ResourceQuotaDetails',
   schema: {
     items: [
       {

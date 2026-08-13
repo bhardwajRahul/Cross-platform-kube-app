@@ -5,11 +5,16 @@
  * OverviewRenderer. Each case renders the matching descriptor with a DTO-shaped fixture.
  */
 
-import { persistentvolume, persistentvolumeclaim, storageclass } from '@wailsjs/go/models';
+import type {
+  persistentvolume,
+  persistentvolumeclaim,
+  storageclass,
+} from '@core/backend-api/models';
 import type React from 'react';
 import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { partialModelFixture } from '@/test-utils/partialModelFixture';
 import { pvcDescriptor, pvDescriptor, storageClassDescriptor } from './descriptors/storage';
 import { OverviewRenderer } from './OverviewRenderer';
 
@@ -92,7 +97,7 @@ describe('StorageOverview', () => {
   const renderPvc = async (
     fixture: Partial<persistentvolumeclaim.PersistentVolumeClaimDetails>
   ) => {
-    const data = persistentvolumeclaim.PersistentVolumeClaimDetails.createFrom(fixture);
+    const data = partialModelFixture<persistentvolumeclaim.PersistentVolumeClaimDetails>(fixture);
     await act(async () => {
       root.render(<OverviewRenderer descriptor={pvcDescriptor} data={data} context={context} />);
       await Promise.resolve();
@@ -100,7 +105,7 @@ describe('StorageOverview', () => {
   };
 
   const renderPv = async (fixture: Partial<persistentvolume.PersistentVolumeDetails>) => {
-    const data = persistentvolume.PersistentVolumeDetails.createFrom(fixture);
+    const data = partialModelFixture<persistentvolume.PersistentVolumeDetails>(fixture);
     await act(async () => {
       root.render(<OverviewRenderer descriptor={pvDescriptor} data={data} context={context} />);
       await Promise.resolve();
@@ -108,7 +113,7 @@ describe('StorageOverview', () => {
   };
 
   const renderStorageClass = async (fixture: Partial<storageclass.StorageClassDetails>) => {
-    const data = storageclass.StorageClassDetails.createFrom(fixture);
+    const data = partialModelFixture<storageclass.StorageClassDetails>(fixture);
     await act(async () => {
       root.render(
         <OverviewRenderer descriptor={storageClassDescriptor} data={data} context={context} />

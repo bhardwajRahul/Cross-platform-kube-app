@@ -3,8 +3,6 @@ package backend
 import (
 	"context"
 	"errors"
-	"net"
-	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -13,38 +11,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// stubListener is a minimal net.Listener implementation for testing.
-type stubListener struct {
-	closed bool
-}
-
-func (s *stubListener) Accept() (net.Conn, error) { return nil, errors.New("not implemented") }
-func (s *stubListener) Close() error              { s.closed = true; return nil }
-func (s *stubListener) Addr() net.Addr            { return &net.TCPAddr{} }
-
 func TestTeardownRefreshSubsystem(t *testing.T) {
 	app := newTestAppWithDefaults(t)
 
 	cancelled := false
 	app.refreshCancel = func() { cancelled = true }
 
-	listener := &stubListener{}
-	app.refreshListener = listener
-	app.refreshHTTPServer = &http.Server{}
-	app.refreshBaseURL = "http://example"
+	setRefreshServiceReadyForTest(app)
 
 	app.teardownRefreshSubsystem()
 
 	require.True(t, cancelled)
-	require.True(t, listener.closed)
-	require.Nil(t, app.refreshListener)
-	require.Nil(t, app.refreshHTTPServer)
-	require.Empty(t, app.refreshBaseURL)
+	require.Nil(t, app.refreshService.Load())
+}
+
+func TestShutdownRefreshSubsystemCancelsPartialGenerationWithoutManager(t *testing.T) {
+	app := newTestAppWithDefaults(t)
+	subsystem := &system.Subsystem{}
+	preparationCtx, started := subsystem.BeginColdPreparation(context.Background(), time.Now())
+	require.True(t, started)
+
+	app.shutdownRefreshSubsystem(subsystem)
+
+	require.ErrorIs(t, preparationCtx.Err(), context.Canceled,
+		"global teardown must cancel work owned by a partially built subsystem generation")
 }
 
 func TestTeardownRefreshSubsystemBlocksRuntimeResurrectionUntilSetup(t *testing.T) {
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 	require.NotNil(t, app.ensureRefreshRuntimeContext())
 
 	app.teardownRefreshSubsystem()
@@ -59,7 +54,7 @@ func TestTeardownRefreshSubsystemBlocksRuntimeResurrectionUntilSetup(t *testing.
 
 func TestTeardownRefreshSubsystemCoordinatesWithConcurrentRuntimeEnsure(t *testing.T) {
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 	require.NotNil(t, app.ensureRefreshRuntimeContext())
 
 	start := make(chan struct{})

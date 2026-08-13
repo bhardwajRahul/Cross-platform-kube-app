@@ -4,12 +4,12 @@
  * HelmRelease Overview descriptor (X1). Presentation ported verbatim from HelmOverview.tsx.
  */
 
+import type { helm } from '@core/backend-api/models';
 import { useObjectPanel } from '@modules/object-panel/hooks/useObjectPanel';
 import { ObjectPanelLink } from '@shared/components/ObjectPanelLink';
 import { backendStatusTextClass } from '@shared/utils/backendStatusPresentation';
 import { buildRequiredRelatedObjectReference } from '@shared/utils/objectIdentity';
 import { withStableListKeys } from '@shared/utils/stableListKeys';
-import { helm } from '@wailsjs/go/models';
 import type React from 'react';
 import type { OverviewDescriptor } from '../schema';
 import '../shared/LabelsAndAnnotations.css';
@@ -151,7 +151,7 @@ const HelmExtraSections: React.FC<{ data: HelmReleaseDetails }> = ({ data }) => 
 
 export const helmReleaseDescriptor: OverviewDescriptor<HelmReleaseDetails> = {
   displayKind: 'HelmRelease',
-  dtoClass: helm.HelmReleaseDetails,
+  dtoName: 'HelmReleaseDetails',
   schema: {
     items: [
       { field: 'chart', label: 'Chart', hidden: (d) => !d.chart },

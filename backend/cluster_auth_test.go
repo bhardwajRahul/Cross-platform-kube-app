@@ -16,6 +16,7 @@ import (
 
 	"github.com/luxury-yacht/app/backend/internal/authstate"
 	"github.com/luxury-yacht/app/backend/refresh"
+	"github.com/luxury-yacht/app/backend/refresh/resourcestream"
 	"github.com/luxury-yacht/app/backend/refresh/snapshot"
 	"github.com/luxury-yacht/app/backend/refresh/system"
 	"github.com/stretchr/testify/require"
@@ -24,6 +25,28 @@ import (
 type recoveryStartInformerHub struct {
 	started chan struct{}
 	once    sync.Once
+}
+
+type blockingShutdownInformerHub struct {
+	shutdownStarted chan struct{}
+	releaseShutdown chan struct{}
+	startOnce       sync.Once
+	releaseOnce     sync.Once
+}
+
+func (*blockingShutdownInformerHub) Start(context.Context) error { return nil }
+func (*blockingShutdownInformerHub) HasSynced(context.Context) bool {
+	return true
+}
+func (*blockingShutdownInformerHub) ResourcesSettled([]string) bool { return true }
+func (h *blockingShutdownInformerHub) Shutdown() error {
+	h.startOnce.Do(func() { close(h.shutdownStarted) })
+	<-h.releaseShutdown
+	return nil
+}
+
+func (h *blockingShutdownInformerHub) release() {
+	h.releaseOnce.Do(func() { close(h.releaseShutdown) })
 }
 
 func (h *recoveryStartInformerHub) Start(context.Context) error {
@@ -64,7 +87,7 @@ func TestRebuildClusterSubsystemPreservesAuthManagerWiring(t *testing.T) {
 	defer server.Close()
 
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 	app.clusterOps = newClusterOperationCoordinator()
 	configPath := writeTestKubeconfig(t, server.URL)
 
@@ -79,19 +102,20 @@ func TestRebuildClusterSubsystemPreservesAuthManagerWiring(t *testing.T) {
 	originalMgr := authstate.New(authstate.Config{MaxAttempts: 0})
 	defer originalMgr.Shutdown()
 
-	app.clusterClients = map[string]*clusterClients{
-		meta.ID: {
-			meta:              meta,
-			kubeconfigPath:    configPath,
-			kubeconfigContext: "test-context",
-			authManager:       originalMgr,
-		},
+	originalClients := &clusterClients{
+		meta:              meta,
+		kubeconfigPath:    configPath,
+		kubeconfigContext: "test-context",
+		authManager:       originalMgr,
 	}
+	app.clusterClients = map[string]*clusterClients{meta.ID: originalClients}
 
 	app.rebuildClusterSubsystem(meta.ID)
 
 	rebuilt := app.clusterClientsForID(meta.ID)
 	require.NotNil(t, rebuilt)
+	require.Same(t, originalClients, rebuilt,
+		"a rebuild rejected by auth validation must leave the previous client generation installed")
 	require.Same(t, originalMgr, rebuilt.authManager,
 		"rebuild must keep tracking the original auth manager")
 
@@ -138,7 +162,7 @@ func TestClusterSubsystemRebuildHelperPaths(t *testing.T) {
 	require.Len(t, subsystems, 2)
 	require.ElementsMatch(t, []string{"cluster-a", "cluster-b"}, order)
 
-	app.refreshHTTPServer = &http.Server{}
+	setRefreshServiceReadyForTest(app)
 	app.refreshAggregates.Store(&refreshAggregateHandlers{})
 	require.True(t, rebuild.updateRefreshRouting(subsystems, order))
 
@@ -162,7 +186,7 @@ func TestClusterClientsAuthInvalid(t *testing.T) {
 func TestClusterSubsystemRebuildStartsMissingRefreshRuntimeBeforeReadiness(t *testing.T) {
 	const clusterID = "cluster-a"
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 	t.Cleanup(func() {
 		if app.refreshCancel != nil {
 			app.refreshCancel()
@@ -216,7 +240,7 @@ func TestClusterSubsystemRebuildStartsMissingRefreshRuntimeBeforeReadiness(t *te
 
 func TestClusterSubsystemRebuildDoesNotPublishWhenRefreshRuntimeStopped(t *testing.T) {
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	setTestAppRuntimeReady(t, app, context.Background())
 	require.NotNil(t, app.ensureRefreshRuntimeContext())
 	app.stopRefreshRuntimeContext()
 
@@ -234,9 +258,11 @@ func TestClusterSubsystemRebuildDoesNotPublishWhenRefreshRuntimeStopped(t *testi
 
 func TestClusterSubsystemRebuildPublishesAfterManagerStartIsScheduled(t *testing.T) {
 	app := newTestAppWithDefaults(t)
-	app.setRuntimeContext(context.Background())
+	previousClients := &clusterClients{meta: ClusterMeta{ID: "cluster-a", Name: "Cluster A"}}
+	app.clusterClients = map[string]*clusterClients{"cluster-a": previousClients}
+	setTestAppRuntimeReady(t, app, context.Background())
 	require.NotNil(t, app.ensureRefreshRuntimeContext())
-	app.refreshHTTPServer = &http.Server{}
+	setRefreshServiceReadyForTest(app)
 	app.refreshAggregates.Store(&refreshAggregateHandlers{})
 
 	hub := &recoveryStartInformerHub{started: make(chan struct{})}
@@ -246,8 +272,59 @@ func TestClusterSubsystemRebuildPublishesAfterManagerStartIsScheduled(t *testing
 
 	require.True(t, rebuild.activateSubsystem(clients, subsystem))
 	require.Same(t, subsystem, app.getRefreshSubsystem("cluster-a"))
+	require.Same(t, clients, app.clusterClientsForID("cluster-a"),
+		"client and subsystem replacements must be committed by the same successful activation")
 	require.Eventually(t, hub.isStarted, time.Second, 10*time.Millisecond)
 
 	app.stopRefreshSubsystem(subsystem)
+	app.stopRefreshRuntimeContext()
+}
+
+func TestClusterSubsystemRebuildRoutesReplacementBeforeStoppingPrevious(t *testing.T) {
+	const clusterID = "cluster-a"
+	app := newTestAppWithDefaults(t)
+	setTestAppRuntimeReady(t, app, context.Background())
+	require.NotNil(t, app.ensureRefreshRuntimeContext())
+	setRefreshServiceReadyForTest(app)
+
+	oldStream := resourcestream.NewManager(nil, nil, nil, snapshot.ClusterMeta{ClusterID: clusterID}, nil, nil)
+	newStream := resourcestream.NewManager(nil, nil, nil, snapshot.ClusterMeta{ClusterID: clusterID}, nil, nil)
+	resources, err := newAggregateResourceStreamHandler(map[string]*system.Subsystem{
+		clusterID: {ResourceStream: oldStream},
+	}, nil, nil)
+	require.NoError(t, err)
+	app.refreshAggregates.Store(&refreshAggregateHandlers{resources: resources})
+
+	oldHub := &blockingShutdownInformerHub{
+		shutdownStarted: make(chan struct{}),
+		releaseShutdown: make(chan struct{}),
+	}
+	t.Cleanup(oldHub.release)
+	oldManager := refresh.NewManager(nil, oldHub, nil, nil, nil)
+	require.NoError(t, oldManager.Start(context.Background()))
+	app.setRefreshSubsystem(clusterID, &system.Subsystem{
+		Manager:        oldManager,
+		ResourceStream: oldStream,
+	})
+
+	newManager := refresh.NewManager(nil, nil, nil, nil, nil)
+	next := &system.Subsystem{Manager: newManager, ResourceStream: newStream}
+	rebuild := clusterSubsystemRebuild{app: app, clusterID: clusterID, clusterName: "Cluster A"}
+	result := make(chan bool, 1)
+	go func() {
+		result <- rebuild.activateSubsystem(&clusterClients{meta: ClusterMeta{ID: clusterID}}, next)
+	}()
+
+	select {
+	case <-oldHub.shutdownStarted:
+	case <-time.After(time.Second):
+		t.Fatal("previous subsystem shutdown did not start")
+	}
+	require.Same(t, newStream, resources.managerFor(clusterID),
+		"aggregate routing must publish the replacement before old stream shutdown can trigger resubscription")
+
+	oldHub.release()
+	require.True(t, <-result)
+	app.stopRefreshSubsystem(next)
 	app.stopRefreshRuntimeContext()
 }

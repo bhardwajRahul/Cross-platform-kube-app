@@ -6,13 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ObjPanelLogsSettingsModal from './ObjPanelLogsSettingsModal';
 
 const runtimeMocks = vi.hoisted(() => ({
-  eventsOn: vi.fn(),
-  eventsOff: vi.fn(),
+  eventsOn: vi.fn(() => () => undefined),
 }));
 
-vi.mock('@wailsjs/runtime/runtime', () => ({
-  EventsOn: runtimeMocks.eventsOn,
-  EventsOff: runtimeMocks.eventsOff,
+vi.mock('@core/desktop-runtime', () => ({
+  desktopRuntimeAvailable: () => false,
+  onEvent: runtimeMocks.eventsOn,
 }));
 
 vi.mock('@modules/object-panel/components/ObjectPanel/Logs/ObjPanelLogsSettings', () => ({
@@ -25,8 +24,7 @@ describe('ObjPanelLogsSettingsModal', () => {
   let root: ReactDOM.Root;
 
   beforeEach(async () => {
-    runtimeMocks.eventsOn.mockReset();
-    runtimeMocks.eventsOff.mockReset();
+    runtimeMocks.eventsOn.mockReset().mockReturnValue(() => undefined);
     container = document.createElement('div');
     document.body.appendChild(container);
     root = ReactDOM.createRoot(container);

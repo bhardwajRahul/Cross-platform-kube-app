@@ -89,7 +89,7 @@ func TestIsolation_AuthFailureDoesNotAffectOtherClusters(t *testing.T) {
 	app := newTestAppWithDefaults(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app.setRuntimeContext(ctx)
+	setTestAppRuntimeReady(t, app, ctx)
 
 	// Create auth managers for two clusters.
 	// MaxAttempts=0 means failures immediately transition to StateInvalid.
@@ -138,7 +138,7 @@ func TestIsolation_HeartbeatRunsIndependently(t *testing.T) {
 	app := newTestAppWithDefaults(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app.setRuntimeContext(ctx)
+	setTestAppRuntimeReady(t, app, ctx)
 
 	// Track emitted events
 	emittedEvents := make(map[string][]map[string]any)
@@ -197,7 +197,7 @@ func TestIsolation_RecoveryOnlyAffectsOneCluster(t *testing.T) {
 	app := newTestAppWithDefaults(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app.setRuntimeContext(ctx)
+	setTestAppRuntimeReady(t, app, ctx)
 	app.refreshSubsystems = make(map[string]*system.Subsystem)
 
 	// Mock subsystems for two clusters
@@ -308,13 +308,13 @@ func TestIsolation_DrainStoreByCluster(t *testing.T) {
 // have been removed and all clients are per-cluster.
 // This is primarily a compile-time check, but we verify runtime structure.
 func TestIsolation_NoGlobalClientFields(t *testing.T) {
-	app := NewApp()
+	app := NewApp(nil)
 
 	// Verify that App struct uses per-cluster client map
 	require.NotNil(t, app.clusterClients, "clusterClients map should be initialized")
 
 	// Verify there are no global client fields by checking that after
-	// NewApp(), only per-cluster structures exist
+	// NewApp(nil), only per-cluster structures exist
 	// (The actual global fields have been removed from the struct)
 
 	// Create cluster clients for testing
@@ -345,7 +345,7 @@ func TestIsolation_MultiClusterAuthStateRetrieval(t *testing.T) {
 	app := newTestAppWithDefaults(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app.setRuntimeContext(ctx)
+	setTestAppRuntimeReady(t, app, ctx)
 
 	// Create auth managers with different states
 	authMgrValid := authstate.New(authstate.Config{MaxAttempts: 0})
@@ -400,7 +400,7 @@ func TestIsolation_RetryAuthPerCluster(t *testing.T) {
 	app := newTestAppWithDefaults(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app.setRuntimeContext(ctx)
+	setTestAppRuntimeReady(t, app, ctx)
 
 	// Create auth managers - both in invalid state with MaxAttempts=0
 	authMgrA := authstate.New(authstate.Config{MaxAttempts: 0})
@@ -446,7 +446,7 @@ func TestIsolation_HeartbeatSkipsInvalidAuthClusters(t *testing.T) {
 	app := newTestAppWithDefaults(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app.setRuntimeContext(ctx)
+	setTestAppRuntimeReady(t, app, ctx)
 
 	// Track emitted events
 	emittedEvents := make(map[string][]map[string]any)

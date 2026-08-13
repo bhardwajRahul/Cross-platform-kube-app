@@ -4,14 +4,12 @@
 go = "1.26.5"
 node = "26.7.0"
 npm = "12.0.2"
-# Built from source rather than downloaded: mage stamps the magefile's GOARCH
-# from its own process, so a prebuilt x64 mage on a Windows ARM64 runner would
-# name artifacts amd64. The go: backend compiles it with the toolchain above.
-"go:github.com/magefile/mage" = "1.17.2"
 "go:honnef.co/go/tools/cmd/staticcheck" = "0.7.0"
 trivy = "0.73.0"
-"go:github.com/wailsapp/wails/v2/cmd/wails" = "2.14.0"
+"go:github.com/wailsapp/wails/v3/cmd/wails3" = "3.0.0-beta.8"
 
 [vars]
+# The frontend runtime version paired with the pinned Wails release.
+wails_runtime_version = "3.0.0-beta.7"
 # NSIS is installed by the Windows-specific release action rather than Mise.
 nsis_version = "3.10"

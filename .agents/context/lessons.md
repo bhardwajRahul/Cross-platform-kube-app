@@ -10,10 +10,12 @@ sessions. Keep it short, durable, and tied to code contracts.
 - Start with `origin/main...HEAD` unless the user gives a different base.
 - For merge-readiness, report blockers first, then validation state, then a
   brief summary.
-- `mise exec -- mage qc:prerelease` is the final gate for non-documentation work. It runs
-  frontend lint fix, so inspect the worktree afterward.
-- Consider `mise exec -- mage qc:knip` for broad frontend/shared-surface changes even when
-  another targeted frontend check passed.
+- `mise exec -- wails3 task qc:prerelease` is the final gate for
+  non-documentation work. It runs frontend lint fix, so inspect the worktree
+  afterward.
+- Consider `mise exec -- wails3 task qc:knip` for broad
+  frontend/shared-surface changes even when another targeted frontend check
+  passed.
 
 ## Identity And Resource Contracts
 
@@ -111,11 +113,11 @@ sessions. Keep it short, durable, and tied to code contracts.
 
 - When Go DTOs change, generated frontend bindings may need refresh. If
   automated generation is unreliable in the local environment, manually verify
-  `frontend/wailsjs/go/models.ts` against the Go shape and run frontend
+  `frontend/bindings/github.com/luxury-yacht/app/backend/models.ts` against the Go shape and run frontend
   typecheck.
 
 ## Local Development
 
-- If the Wails development server is not running, start it with `mise exec -- mage dev`,
+- If the Wails development server is not running, start it with `mise exec -- wails3 task dev`,
   wait for the command to report its active URL, and use that URL for rendered
   UI diagnosis.

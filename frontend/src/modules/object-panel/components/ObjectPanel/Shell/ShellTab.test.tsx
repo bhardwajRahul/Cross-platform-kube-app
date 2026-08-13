@@ -141,7 +141,7 @@ const eventRegistry = vi.hoisted(() => ({
   handlers: {} as Record<string, (payload: unknown) => void>,
 }));
 
-vi.mock('@wailsjs/go/backend/App', () => wailsMocks);
+vi.mock('@core/backend-api', () => wailsMocks);
 
 vi.mock('@utils/errorHandler', () => ({
   errorHandler: {
@@ -149,17 +149,15 @@ vi.mock('@utils/errorHandler', () => ({
   },
 }));
 
-vi.mock('@wailsjs/runtime/runtime', () => ({
-  EventsOn: (name: string, handler: (payload: unknown) => void) => {
+vi.mock('@core/desktop-runtime', () => ({
+  desktopRuntimeAvailable: () => false,
+  onEvent: (name: string, handler: (payload: unknown) => void) => {
     eventRegistry.handlers[name] = handler;
     return () => {
       if (eventRegistry.handlers[name] === handler) {
         delete eventRegistry.handlers[name];
       }
     };
-  },
-  EventsOff: (name: string) => {
-    delete eventRegistry.handlers[name];
   },
 }));
 

@@ -4,10 +4,10 @@
  * Test suite for favorites persistence helpers.
  */
 
-import { backend } from '@wailsjs/go/models';
+import type { backend } from '@core/backend-api/models';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eventBus } from '@/core/events';
-import { installWindowProperty } from '@/test-utils/windowProperty';
+import { partialModelFixture } from '@/test-utils/partialModelFixture';
 import {
   addFavorite,
   deleteFavorite,
@@ -19,6 +19,26 @@ import {
   subscribeFavorites,
   updateFavorite,
 } from './favorites';
+
+const mockApp = vi.hoisted(() => ({
+  GetFavorites: vi.fn(),
+  AddFavorite: vi.fn(),
+  UpdateFavorite: vi.fn(),
+  DeleteFavorite: vi.fn(),
+  SetFavoriteOrder: vi.fn(),
+}));
+
+vi.mock('@core/backend-api', () => ({
+  GetFavorites: (...args: unknown[]) => mockApp.GetFavorites(...args),
+  AddFavorite: (...args: unknown[]) => mockApp.AddFavorite(...args),
+  UpdateFavorite: (...args: unknown[]) => mockApp.UpdateFavorite(...args),
+  DeleteFavorite: (...args: unknown[]) => mockApp.DeleteFavorite(...args),
+  SetFavoriteOrder: (...args: unknown[]) => mockApp.SetFavoriteOrder(...args),
+}));
+
+vi.mock('@core/desktop-runtime', () => ({
+  desktopRuntimeAvailable: () => true,
+}));
 
 const makeFavorite = (overrides: Partial<Favorite> = {}): Favorite => ({
   id: 'fav-1',
@@ -33,29 +53,14 @@ const makeFavorite = (overrides: Partial<Favorite> = {}): Favorite => ({
 });
 
 describe('favorites persistence', () => {
-  let mockApp: Record<string, ReturnType<typeof vi.fn>>;
-  let restoreGo: () => void;
-
   beforeEach(() => {
     resetFavoritesCacheForTesting();
-
-    mockApp = {
-      GetFavorites: vi.fn(),
-      AddFavorite: vi.fn(),
-      UpdateFavorite: vi.fn(),
-      DeleteFavorite: vi.fn(),
-      SetFavoriteOrder: vi.fn(),
-    };
-
-    restoreGo = installWindowProperty('go', {
-      backend: {
-        App: mockApp,
-      },
+    Object.values(mockApp).forEach((mock) => {
+      mock.mockReset();
     });
   });
 
   afterEach(() => {
-    restoreGo();
     eventBus.clear();
   });
 
@@ -192,7 +197,9 @@ describe('favorites persistence', () => {
 
     const result = await addFavorite(input);
 
-    expect(mockApp.AddFavorite).toHaveBeenCalledWith(new backend.Favorite({ ...input }));
+    expect(mockApp.AddFavorite).toHaveBeenCalledWith(
+      partialModelFixture<backend.Favorite>({ ...input })
+    );
     expect(result).toEqual(created);
     expect(getFavorites()).toEqual([created]);
   });
@@ -222,7 +229,9 @@ describe('favorites persistence', () => {
 
     await updateFavorite(updated);
 
-    expect(mockApp.UpdateFavorite).toHaveBeenCalledWith(new backend.Favorite({ ...updated }));
+    expect(mockApp.UpdateFavorite).toHaveBeenCalledWith(
+      partialModelFixture<backend.Favorite>({ ...updated })
+    );
     expect(getFavorites()[0].name).toBe('New Name');
   });
 
