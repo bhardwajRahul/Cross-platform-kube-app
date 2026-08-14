@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-const projectUsage = "usage: project <backend-coverage|binary-name|bindings|build-manifests|build-metadata|clean-all|clean-build|clean-frontend|config|fmt|go-mod-update|go-mod-update-check|install-unsigned|release-app|release-artifact-name|release-site|reset>"
+const projectUsage = "usage: project <backend-coverage|binary-name|bindings|build-manifests|build-metadata|clean-all|clean-build|clean-frontend|config|fmt|go-mod-update|go-mod-update-check|install-unsigned|release-app|release-artifact-name|release-site|reset|validate-release-tag>"
 
 var projectCommands = map[string]func() error{
 	"backend-coverage":      runBackendCoverage,
@@ -25,6 +25,7 @@ var projectCommands = map[string]func() error{
 	"release-artifact-name": writeConfiguredReleaseArtifactName,
 	"release-site":          publishConfiguredSiteVersion,
 	"reset":                 resetConfiguredAppState,
+	"validate-release-tag":  validateConfiguredReleaseTag,
 }
 
 func writeConfiguredReleaseArtifactName() error {
@@ -88,6 +89,9 @@ func generateConfiguredBuildMetadata() error {
 
 func publishConfiguredRelease() error {
 	if err := loadDotEnv(projectEnvPath); err != nil {
+		return err
+	}
+	if err := validateConfiguredReleaseTag(); err != nil {
 		return err
 	}
 	facts, err := loadProjectFacts()

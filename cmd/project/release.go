@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -43,6 +44,24 @@ func newReleaseConfig(facts projectFacts) releaseConfig {
 		releaseRepo:   projectReleaseRepo,
 		version:       facts.version,
 	}
+}
+
+func validateReleaseTag(configuredVersion, tag string) error {
+	if tag == "" {
+		return errors.New("release tag is required")
+	}
+	if tag != configuredVersion {
+		return fmt.Errorf("release tag %q does not exactly match configured version %q", tag, configuredVersion)
+	}
+	return nil
+}
+
+func validateConfiguredReleaseTag() error {
+	metadata, err := readProjectMetadata(projectConfigPath)
+	if err != nil {
+		return fmt.Errorf("read app version: %w", err)
+	}
+	return validateReleaseTag(metadata.Info.Version, os.Getenv("RELEASE_TAG"))
 }
 
 // Make sure the GitHub CLI is installed.
