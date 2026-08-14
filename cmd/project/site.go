@@ -20,6 +20,11 @@ const (
 
 // publishSiteVersion updates the version in the website's site.json.
 func publishSiteVersion(version string) error {
+	if isBetaVersion(version) {
+		fmt.Printf("\n⏭️ Skipping website version update for beta %s.\n", version)
+		return nil
+	}
+
 	fmt.Printf("\n⚙️ Updating website version to %s...\n", version)
 
 	// Clone the site repo.
