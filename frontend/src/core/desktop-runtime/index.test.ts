@@ -5,10 +5,15 @@ const runtimeMocks = vi.hoisted(() => ({
   clipboardText: vi.fn(),
   environment: vi.fn(),
   eventsOn: vi.fn<
-    (eventName: string, handler: (event: { name: string; data: unknown }) => void) => () => void
+    (
+      eventName: string,
+      handler: (event: { name: string; data: unknown; sender?: string }) => void
+    ) => () => void
   >(() => () => undefined),
+  closeWindow: vi.fn(),
   openDevTools: vi.fn(),
   toggleMaximise: vi.fn(),
+  windowName: vi.fn(),
 }));
 
 vi.mock('@wailsio/runtime', () => ({
@@ -17,6 +22,8 @@ vi.mock('@wailsio/runtime', () => ({
   Events: { On: runtimeMocks.eventsOn },
   System: { Environment: runtimeMocks.environment },
   Window: {
+    Close: runtimeMocks.closeWindow,
+    Name: runtimeMocks.windowName,
     OpenDevTools: runtimeMocks.openDevTools,
     ToggleMaximise: runtimeMocks.toggleMaximise,
   },
@@ -24,8 +31,11 @@ vi.mock('@wailsio/runtime', () => ({
 
 import * as desktopRuntime from './index';
 import {
+  closeWindow,
   desktopRuntimeAvailable,
   getEnvironment,
+  getWindowIdentity,
+  initializeWindowIdentity,
   onEvent,
   openDevTools,
   openURL,
@@ -57,17 +67,32 @@ describe('desktop runtime adapter', () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
+  it('filters events emitted by a different peer window', async () => {
+    runtimeMocks.windowName.mockResolvedValue('workspace-2');
+    await initializeWindowIdentity();
+    const handler = vi.fn();
+
+    onEvent('menu:copy', handler);
+    const runtimeHandler = runtimeMocks.eventsOn.mock.calls[0]?.[1];
+    runtimeHandler?.({ name: 'menu:copy', data: undefined, sender: 'workspace-1' });
+    runtimeHandler?.({ name: 'menu:copy', data: undefined, sender: getWindowIdentity() });
+
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
   it('delegates desktop capabilities to the v3 runtime', async () => {
     runtimeMocks.clipboardText.mockResolvedValue('clipboard');
     runtimeMocks.environment.mockResolvedValue({ OS: 'darwin' });
 
     await openURL('https://luxury-yacht.app');
+    await closeWindow();
     await openDevTools();
     await toggleMaximise();
 
     await expect(readClipboardText()).resolves.toBe('clipboard');
     await expect(getEnvironment()).resolves.toEqual({ OS: 'darwin' });
     expect(runtimeMocks.browserOpenURL).toHaveBeenCalledWith('https://luxury-yacht.app');
+    expect(runtimeMocks.closeWindow).toHaveBeenCalledOnce();
     expect(runtimeMocks.openDevTools).toHaveBeenCalledOnce();
     expect(runtimeMocks.toggleMaximise).toHaveBeenCalledOnce();
   });
