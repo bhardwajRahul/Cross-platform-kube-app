@@ -84,6 +84,6 @@ wails3 task qc:benchmark
 
 ```bash
 VERSION=$(sed -nE 's/^  version: "([^"]+)"/\1/p' build/config.yml)
-git tag "v${VERSION}"
+git tag "${VERSION}"
 git push origin main --tags
 ```
