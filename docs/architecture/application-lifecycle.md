@@ -32,8 +32,7 @@ Production registers one `backend.App` Wails service. Generated bindings are
 transport output, not a frontend permission surface: application code imports
 backend methods only through the explicit allowlist in
 `frontend/src/core/backend-api`. Adding a generated method does not make it an
-approved frontend dependency. Any service split belongs to the
-[deferred service-decomposition track](../plans/deferred/wails-v3-follow-up-tracks.md#service-decomposition).
+approved frontend dependency.
 
 Native browser, clipboard, event, environment, and window calls go through
 `frontend/src/core/desktop-runtime`. The refresh stream managers under

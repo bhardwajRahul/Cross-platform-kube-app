@@ -7,24 +7,20 @@ the GitHub Release in draft state until every upload succeeds. The application
 discovers releases through GitHub and loads that release's `updater.json` before
 accepting an update. Before Stage 1 rollout, the macOS beta smoke and recovery
 matrix must pass. The Phase 6 durable lifecycle, workflow, and release
-documentation is complete; follow-up-plan retirement remains gated on cross-
-platform acceptance. Windows Authenticode certificate procurement is in
-progress. It does not block the macOS stage, but it remains a Windows
-enablement and overall-
-completion dependency (`backend/app_update_provider.go`;
+documentation is complete. Cross-platform acceptance remains the overall
+completion gate. Windows Authenticode certificate procurement is in progress.
+It does not block the macOS stage, but it remains a Windows enablement and
+overall-completion dependency (`backend/app_update_provider.go`;
 `cmd/project/updater_release.go`; `cmd/project/release.go`;
 `.github/workflows/release.yml`).
 
 Local validation: `mise exec -- wails3 task qc:prerelease` passed on 2026-08-14.
 The live installed-app smoke matrix remains rollout evidence, not a local test.
 
-This plan supersedes the notification-only decision in
-`docs/plans/wails-v3-follow-up-tracks.md:3-23` for staged implementation. The
-running product remains notification-only on each distribution until its rollout
-stage passes. When implementation is complete, move durable lifecycle and
-distribution contracts into `docs/architecture` and
-`docs/workflows/application-updates.md`, then remove the completed updater
-section from the broader follow-up plan.
+The running product remains notification-only on each distribution until its
+rollout stage passes. Durable lifecycle and distribution contracts live in
+`docs/architecture/application-lifecycle.md` and
+`docs/workflows/application-updates.md`.
 
 ## Outcome
 
@@ -1096,10 +1092,7 @@ artifacts.
 - [x] create `docs/workflows/application-updates.md` for the durable publishing,
   platform eligibility, helper-failure recovery, rollback, and key-handling
   workflow;
-- [x] add the user-facing change to `docs/release/pending.md`; and
-- [ ] retire the completed updater checklist in
-  `docs/plans/wails-v3-follow-up-tracks.md` only after the macOS, Windows, and
-  portable Linux completion stages are all accepted.
+- [x] add the user-facing change to `docs/release/pending.md`.
 
 ## Validation and rollout
 
