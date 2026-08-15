@@ -200,8 +200,7 @@ jobs:
       - name: Setup toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          setup-node: "false"
-          install-wails: "false"
+          install-linux-deps: "true"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
@@ -223,7 +222,7 @@ jobs:
           UPDATER_TARGETS: darwin/arm64,darwin/amd64
           UPDATER_PRIVATE_KEY_PATH: ${{ runner.temp }}/updater.key
           UPDATER_PUBLIC_KEY: backend/updater_public_key.pem
-        run: go run ./cmd/project prepare-release-updater-manifest
+        run: wails3 task release:prepare-updater-manifest
 
       - name: Remove updater signing key
         if: ${{ always() }}
@@ -232,7 +231,7 @@ jobs:
       - name: Publish GitHub release
         run: |
           export GITHUB_RUN_NUMBER="${{ github.run_number }}"
-          go run ./cmd/project release-app
+          wails3 task release:app
 
   update-site:
     if: ${{ github.event.inputs.release == 'true' || github.event_name == 'push' }}
@@ -245,10 +244,9 @@ jobs:
       - name: Setup toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          setup-node: "false"
-          install-wails: "false"
+          install-linux-deps: "true"
 
       - name: Update version on website
         env:
           GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
-        run: go run ./cmd/project release-site
+        run: wails3 task release:site

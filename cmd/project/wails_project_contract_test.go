@@ -415,20 +415,33 @@ func TestReleaseWorkflowUsesConfiguredVVersionTags(t *testing.T) {
 	require.True(t, strings.HasPrefix(strings.ToLower(metadata.Info.Version), "v"))
 }
 
-func TestReleasePublishingJobsUseGoWithoutInstallingWails(t *testing.T) {
+func TestReleasePublishingJobsUseCanonicalMiseToolchain(t *testing.T) {
 	workflow := readTestFile(t, repositoryPath(".github", "workflows", "release.yml"))
-	require.Equal(t, 2, strings.Count(workflow, `install-wails: "false"`))
+	setupAction := readTestFile(t, repositoryPath(".github", "actions", "setup-toolchain", "action.yaml"))
+	releaseStart := strings.Index(workflow, "\n  release:\n")
+	updateSiteStart := strings.Index(workflow, "\n  update-site:\n")
+	require.GreaterOrEqual(t, releaseStart, 0)
+	require.Greater(t, updateSiteStart, releaseStart)
+	releaseJob := workflow[releaseStart:updateSiteStart]
+	updateSiteJob := workflow[updateSiteStart:]
+
+	require.Contains(t, releaseJob, `install-linux-deps: "true"`)
+	require.Contains(t, releaseJob, "wails3 task release:prepare-updater-manifest")
+	require.Contains(t, updateSiteJob, `install-linux-deps: "true"`)
+	require.Contains(t, updateSiteJob, "wails3 task release:site")
+	require.Contains(t, releaseJob, "wails3 task release:app")
+	require.NotContains(t, workflow, "setup-node:")
+	require.NotContains(t, workflow, "install-wails:")
+
+	require.Contains(t, setupAction, "uses: jdx/mise-action@v4")
+	require.NotContains(t, setupAction, "install_args:")
+	require.NotContains(t, setupAction, "setup-node:")
+	require.NotContains(t, setupAction, "install-wails:")
+
 	for _, command := range []string{
 		"go run ./cmd/project prepare-release-updater-manifest",
 		"go run ./cmd/project release-app",
 		"go run ./cmd/project release-site",
-	} {
-		require.Contains(t, workflow, command)
-	}
-	for _, command := range []string{
-		"wails3 task release:prepare-updater-manifest",
-		"wails3 task release:app",
-		"wails3 task release:site",
 	} {
 		require.NotContains(t, workflow, command)
 	}
@@ -516,8 +529,8 @@ func TestMacOSBundlesUseTheConfiguredProductName(t *testing.T) {
 func TestReleasePublishesSignedUpdaterManifestInsideTheGitHubRelease(t *testing.T) {
 	workflow := readTestFile(t, repositoryPath(".github", "workflows", "release.yml"))
 	materialize := strings.Index(workflow, "Materialize updater signing key")
-	prepare := strings.Index(workflow, "go run ./cmd/project prepare-release-updater-manifest")
-	publishRelease := strings.Index(workflow, "go run ./cmd/project release-app")
+	prepare := strings.Index(workflow, "wails3 task release:prepare-updater-manifest")
+	publishRelease := strings.Index(workflow, "wails3 task release:app")
 	cleanup := strings.Index(workflow, "Remove updater signing key")
 	require.GreaterOrEqual(t, materialize, 0)
 	require.Greater(t, prepare, materialize)

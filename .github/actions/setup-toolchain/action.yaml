@@ -1,14 +1,6 @@
 name: Setup toolchain
 description: Install the Mise-managed project toolchain.
 inputs:
-  setup-node:
-    description: Whether to install Node.
-    required: false
-    default: 'true'
-  install-wails:
-    description: Whether to install Wails.
-    required: false
-    default: 'true'
   install-linux-deps:
     description: Whether to install Linux build dependencies.
     required: false
@@ -30,10 +22,3 @@ runs:
 
     - name: Setup Mise toolchain
       uses: jdx/mise-action@v4
-      with:
-        install_args: >-
-          go
-          go:honnef.co/go/tools/cmd/staticcheck
-          ${{ inputs.setup-node == 'true' && 'node npm' || '' }}
-          ${{ inputs.install-wails == 'true' && 'go:github.com/wailsapp/wails/v3/cmd/wails3' || '' }}
-
