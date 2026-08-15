@@ -36,14 +36,17 @@ jobs:
 
       - name: Run tests
         run: |
-          echo "Run a build to ensure frontend/dist is generated"
+          echo "🟣 Run a build to ensure frontend/dist is generated"
           wails3 build
-          echo "Run backend tests"
+          echo "🟣 Run backend vet"
           wails3 task qc:vet
+          echo "🟣 Run backend tests"
           wails3 task test:backend
-          echo "Run frontend tests"
+          echo "🟣 Run frontend lint"
           wails3 task qc:lint
+          echo "🟣 Run frontend typecheck"
           wails3 task qc:typecheck
+          echo "🟣 Run frontend tests"
           wails3 task test:frontend
 
   build:
