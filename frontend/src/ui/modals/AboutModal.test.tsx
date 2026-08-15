@@ -17,6 +17,7 @@ const appInfoMock = vi.hoisted(() => ({
   DownloadApplicationUpdate: vi.fn(),
   RestartAndApplyApplicationUpdate: vi.fn(),
   SkipApplicationUpdate: vi.fn(),
+  RemoveApplicationUpdateSkip: vi.fn(),
 }));
 
 const runtimeMock = vi.hoisted(() => ({
@@ -36,6 +37,7 @@ vi.mock('@core/backend-api', () => ({
   DownloadApplicationUpdate: appInfoMock.DownloadApplicationUpdate,
   RestartAndApplyApplicationUpdate: appInfoMock.RestartAndApplyApplicationUpdate,
   SkipApplicationUpdate: appInfoMock.SkipApplicationUpdate,
+  RemoveApplicationUpdateSkip: appInfoMock.RemoveApplicationUpdateSkip,
 }));
 
 vi.mock('@core/desktop-runtime', () => ({
@@ -99,6 +101,7 @@ describe('AboutModal', () => {
     appInfoMock.DownloadApplicationUpdate.mockReset();
     appInfoMock.RestartAndApplyApplicationUpdate.mockReset();
     appInfoMock.SkipApplicationUpdate.mockReset();
+    appInfoMock.RemoveApplicationUpdateSkip.mockReset();
     errorMock.reportOperationalError.mockReset();
     document.body.style.overflow = '';
   });
@@ -184,7 +187,7 @@ describe('AboutModal', () => {
     await modal.unmount();
   });
 
-  it('persists the exact offered version before dismissing it', async () => {
+  it('shows the skipped version and lets the user remove its skip', async () => {
     appInfoMock.GetAppInfo.mockResolvedValue({
       version: '1.9.0',
       update: {
@@ -196,8 +199,16 @@ describe('AboutModal', () => {
       },
     });
     appInfoMock.SkipApplicationUpdate.mockResolvedValue({
-      status: 'current',
+      status: 'skipped',
       currentVersion: '1.9.0',
+      availableVersion: '2.0.0',
+      canCheck: true,
+      canInstall: true,
+    });
+    appInfoMock.RemoveApplicationUpdateSkip.mockResolvedValue({
+      status: 'available',
+      currentVersion: '1.9.0',
+      availableVersion: '2.0.0',
       canCheck: true,
       canInstall: true,
     });
@@ -212,7 +223,19 @@ describe('AboutModal', () => {
 
     expect(appInfoMock.SkipApplicationUpdate).toHaveBeenCalledWith('2.0.0');
     expect(appInfoMock.DownloadApplicationUpdate).not.toHaveBeenCalled();
-    expect(document.body.textContent).not.toContain('Luxury Yacht 2.0.0 is available.');
+    expect(document.querySelector('.about-version-note')?.textContent).toBe(
+      '2.0.0 is available, but has been skipped'
+    );
+    expect(document.body.textContent).not.toContain('no newer version is available');
+
+    const removeSkip = Array.from(document.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Undo Skip'
+    );
+    expect(removeSkip).toBeTruthy();
+    await act(async () => removeSkip?.click());
+
+    expect(appInfoMock.RemoveApplicationUpdateSkip).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain('Luxury Yacht 2.0.0 is available.');
 
     await modal.unmount();
   });
@@ -264,6 +287,173 @@ describe('AboutModal', () => {
     );
     expect(document.body.textContent).toContain('View macOS Download');
     expect(document.body.textContent).not.toContain('View Linux Packages');
+
+    await modal.unmount();
+  });
+
+  it('notes an up-to-date app beside the version and drops the update section', async () => {
+    appInfoMock.GetAppInfo.mockResolvedValue({
+      version: '2.0.0-beta.2',
+      update: {
+        status: 'current',
+        currentVersion: '2.0.0-beta.2',
+        canCheck: true,
+        canInstall: true,
+      },
+    });
+    const modal = await renderModal({ isOpen: true, onClose: vi.fn() });
+    await act(async () => Promise.resolve());
+
+    // The note owns its own line: the version stays bare, and the note is a
+    // sibling element rather than a parenthetical inside it.
+    expect(document.querySelector('.about-version')?.textContent).toBe('Version 2.0.0-beta.2');
+    expect(document.querySelector('.about-version-note')?.textContent).toBe(
+      'no newer version is available'
+    );
+    expect(document.querySelector('.about-update')).toBeNull();
+    expect(document.body.textContent).not.toContain('Luxury Yacht is up to date.');
+    expect(document.querySelector('.about-hero')?.textContent).not.toContain('(');
+
+    await modal.unmount();
+  });
+
+  it('keeps the version line bare while an update is pending', async () => {
+    appInfoMock.GetAppInfo.mockResolvedValue({
+      version: '1.10.0',
+      update: {
+        status: 'available',
+        currentVersion: '1.10.0',
+        availableVersion: '1.10.1',
+        canCheck: true,
+        canInstall: true,
+      },
+    });
+    const modal = await renderModal({ isOpen: true, onClose: vi.fn() });
+    await act(async () => Promise.resolve());
+
+    expect(document.querySelector('.about-version')?.textContent).toBe('Version 1.10.0');
+    expect(document.querySelector('.about-update')).not.toBeNull();
+
+    await modal.unmount();
+  });
+
+  it('presents the release detail that used to live in the header tooltip', async () => {
+    appInfoMock.GetAppInfo.mockResolvedValue({
+      version: '1.10.0',
+      update: {
+        status: 'available',
+        currentVersion: '1.10.0',
+        availableVersion: '1.10.1',
+        releaseName: 'Luxury Yacht 1.10.1',
+        publishedAt: '2026-07-05T12:00:00Z',
+        releaseNotes: '## Highlights\n\n- Fixed **metrics** permission notice',
+        canCheck: true,
+        canInstall: true,
+      },
+    });
+    const modal = await renderModal({ isOpen: true, onClose: vi.fn() });
+    await act(async () => Promise.resolve());
+
+    const notes = document.querySelector('[data-testid="about-release-notes"]');
+    expect(notes?.textContent).toContain('Highlights');
+    // The markdown stripper is applied: bullets render as • (not raw "- ").
+    expect(notes?.textContent).toContain('• Fixed metrics permission notice');
+    expect(document.body.textContent).toContain('Luxury Yacht 1.10.1');
+    expect(document.body.textContent).toContain('2026-07-05');
+
+    // The actions and the notes link outrank the notes preview, so they come
+    // first in the card — and therefore first in tab order too.
+    const cardBlocks = Array.from(document.querySelector('.about-update')?.children ?? []).map(
+      (child) => child.className
+    );
+    expect(cardBlocks).toContain('about-update-actions');
+    expect(cardBlocks).toContain('about-release');
+    expect(cardBlocks.indexOf('about-update-actions')).toBeLessThan(
+      cardBlocks.indexOf('about-release')
+    );
+
+    const notesLink = document.querySelector(
+      '[data-testid="about-release-notes-link"]'
+    ) as HTMLAnchorElement | null;
+    expect(notesLink).toBeTruthy();
+    await act(async () => notesLink?.click());
+    // Release tags carry the conventional `v` prefix; availableVersion does not.
+    expect(runtimeMock.openURL).toHaveBeenCalledWith(
+      'https://github.com/luxury-yacht/app/releases/tag/v1.10.1'
+    );
+
+    await modal.unmount();
+  });
+
+  it('styles update actions with the shared button vocabulary', async () => {
+    appInfoMock.GetAppInfo.mockResolvedValue({
+      version: '1.10.0',
+      update: {
+        status: 'available',
+        currentVersion: '1.10.0',
+        availableVersion: '1.10.1',
+        canCheck: true,
+        canInstall: true,
+      },
+    });
+    const modal = await renderModal({ isOpen: true, onClose: vi.fn() });
+    await act(async () => Promise.resolve());
+
+    const buttons = Array.from(document.querySelectorAll('.about-update-actions button'));
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      'Download Update',
+      'Skip This Version',
+    ]);
+    expect(buttons[0]?.className).toContain('button save');
+    expect(buttons[1]?.className).toContain('button generic');
+    // The undefined `p-btn` / `p-prim-col` classes are not part of this app's
+    // vocabulary and left the actions unstyled.
+    expect(document.querySelector('[class*="p-btn"]')).toBeNull();
+
+    await modal.unmount();
+  });
+
+  it('states the update status as a sentence, with no status pill', async () => {
+    appInfoMock.GetAppInfo.mockResolvedValue({
+      version: '1.10.0',
+      update: {
+        status: 'ready',
+        currentVersion: '1.10.0',
+        availableVersion: '1.10.1',
+        canCheck: true,
+        canInstall: true,
+      },
+    });
+    const modal = await renderModal({ isOpen: true, onClose: vi.fn() });
+    await act(async () => Promise.resolve());
+
+    // The message is the status; a pill above it only repeated the sentence.
+    expect(document.querySelector('.about-update-message')?.textContent).toBe(
+      'Luxury Yacht 1.10.1 is ready to install.'
+    );
+    expect(document.querySelector('.about-update .status-chip')).toBeNull();
+    expect(document.body.textContent).not.toContain('Restart to update');
+
+    await modal.unmount();
+  });
+
+  it('omits the release block when the check found no release', async () => {
+    appInfoMock.GetAppInfo.mockResolvedValue({
+      version: '1.10.0',
+      update: {
+        status: 'check-error',
+        currentVersion: '1.10.0',
+        canCheck: true,
+        canInstall: true,
+        error: 'network unavailable',
+      },
+    });
+    const modal = await renderModal({ isOpen: true, onClose: vi.fn() });
+    await act(async () => Promise.resolve());
+
+    expect(document.querySelector('[data-testid="about-release-notes"]')).toBeNull();
+    expect(document.querySelector('[data-testid="about-release-notes-link"]')).toBeNull();
+    expect(document.body.textContent).toContain('Couldn’t check for updates.');
 
     await modal.unmount();
   });
@@ -326,7 +516,7 @@ describe('AboutModal', () => {
       wailsLink?.click();
     });
 
-    expect(runtimeMock.openURL).toHaveBeenCalledWith('https://wails.io/');
+    expect(runtimeMock.openURL).toHaveBeenCalledWith('https://v3.wails.io');
 
     await unmount();
   });

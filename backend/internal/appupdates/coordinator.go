@@ -16,6 +16,7 @@ import (
 	"github.com/luxury-yacht/app/internal/updateidentity"
 	"github.com/luxury-yacht/app/internal/updatestate"
 	"github.com/wailsapp/wails/v3/pkg/updater"
+	"golang.org/x/mod/semver"
 )
 
 type Status string
@@ -25,6 +26,7 @@ const (
 	StatusIdle         Status = "idle"
 	StatusChecking     Status = "checking"
 	StatusCurrent      Status = "current"
+	StatusSkipped      Status = "skipped"
 	StatusAvailable    Status = "available"
 	StatusDownloading  Status = "downloading"
 	StatusVerifying    Status = "verifying"
@@ -88,24 +90,26 @@ type Snapshot struct {
 }
 
 type Coordinator struct {
-	mu               sync.Mutex
-	client           Client
-	eligibility      updateidentity.BuildEligibility
-	platform         string
-	architecture     string
-	updateState      UpdateState
-	runtimeReady     bool
-	started          bool
-	stopped          bool
-	inFlight         bool
-	restartRequested bool
-	preparedOwned    bool
-	pending          *updater.Release
-	snapshot         Snapshot
-	scheduler        Scheduler
-	onChange         func(Snapshot)
-	lifecycleDone    chan struct{}
-	stopOnce         sync.Once
+	mu                          sync.Mutex
+	client                      Client
+	eligibility                 updateidentity.BuildEligibility
+	platform                    string
+	architecture                string
+	updateState                 UpdateState
+	runtimeReady                bool
+	started                     bool
+	stopped                     bool
+	inFlight                    bool
+	checkIncludesSkippedVersion bool
+	restartRequested            bool
+	preparedOwned               bool
+	skippedVersion              string
+	pending                     *updater.Release
+	snapshot                    Snapshot
+	scheduler                   Scheduler
+	onChange                    func(Snapshot)
+	lifecycleDone               chan struct{}
+	stopOnce                    sync.Once
 }
 
 func New(dependencies Dependencies) *Coordinator {
@@ -114,15 +118,20 @@ func New(dependencies Dependencies) *Coordinator {
 		eligibility.CanInstall = false
 		eligibility.Installation.CanInstall = false
 	}
+	skippedVersion := availableSkippedVersion(
+		dependencies.SkippedVersion,
+		eligibility.Release.Version,
+	)
 	coordinator := &Coordinator{
-		client:        dependencies.Client,
-		eligibility:   eligibility,
-		platform:      dependencies.Platform,
-		architecture:  dependencies.Architecture,
-		updateState:   dependencies.UpdateState,
-		scheduler:     dependencies.Scheduler,
-		onChange:      dependencies.OnChange,
-		lifecycleDone: make(chan struct{}),
+		client:         dependencies.Client,
+		eligibility:    eligibility,
+		platform:       dependencies.Platform,
+		architecture:   dependencies.Architecture,
+		updateState:    dependencies.UpdateState,
+		skippedVersion: skippedVersion,
+		scheduler:      dependencies.Scheduler,
+		onChange:       dependencies.OnChange,
+		lifecycleDone:  make(chan struct{}),
 	}
 	coordinator.snapshot = coordinator.baseSnapshot(StatusDisabled)
 	coordinator.applyReconciliation(dependencies.Reconciled)
@@ -153,13 +162,22 @@ func New(dependencies Dependencies) *Coordinator {
 		coordinator.snapshot.Error = err.Error()
 		return coordinator
 	}
-	if dependencies.SkippedVersion != "" {
-		dependencies.Client.SkipVersion(dependencies.SkippedVersion)
+	if coordinator.skippedVersion != "" {
+		dependencies.Client.SkipVersion(coordinator.skippedVersion)
 	}
 	if coordinator.snapshot.Status != StatusApplyError {
 		coordinator.snapshot = coordinator.baseSnapshot(StatusIdle)
 	}
 	return coordinator
+}
+
+func availableSkippedVersion(skippedVersion, currentVersion string) string {
+	skipped := "v" + skippedVersion
+	current := "v" + currentVersion
+	if !semver.IsValid(skipped) || !semver.IsValid(current) || semver.Compare(skipped, current) <= 0 {
+		return ""
+	}
+	return skippedVersion
 }
 
 func (coordinator *Coordinator) applyReconciliation(result *updatestate.ReconcileResult) {
@@ -218,7 +236,7 @@ func (coordinator *Coordinator) RuntimeReady() {
 	scheduler := coordinator.scheduler
 	coordinator.mu.Unlock()
 	scheduler.Start(6*time.Hour, func(ctx context.Context) {
-		_, _ = coordinator.Check(ctx)
+		_, _ = coordinator.check(ctx, false)
 	})
 }
 
@@ -254,7 +272,11 @@ func (coordinator *Coordinator) HandleWailsEvent(name string, payload any) Snaps
 	case updater.EventNoUpdate:
 		coordinator.pending = nil
 		coordinator.preparedOwned = false
-		coordinator.snapshot = coordinator.baseSnapshot(StatusCurrent)
+		if coordinator.skippedVersion != "" && !coordinator.checkIncludesSkippedVersion {
+			coordinator.snapshot = coordinator.baseSnapshot(StatusSkipped)
+		} else {
+			coordinator.snapshot = coordinator.baseSnapshot(StatusCurrent)
+		}
 	case updater.EventUpdateAvailable:
 		coordinator.projectAvailableRelease(payload)
 	case updater.EventDownloadStarted:
@@ -403,7 +425,7 @@ func (coordinator *Coordinator) baseSnapshot(status Status) Snapshot {
 	if recovery == "" {
 		recovery = coordinator.eligibility.Installation.Recovery
 	}
-	return Snapshot{
+	snapshot := Snapshot{
 		Status:            status,
 		CurrentVersion:    coordinator.eligibility.Release.Version,
 		CanCheck:          coordinator.eligibility.CanCheck,
@@ -412,6 +434,10 @@ func (coordinator *Coordinator) baseSnapshot(status Status) Snapshot {
 		EligibilityReason: coordinator.eligibility.Installation.Reason,
 		RecoveryTarget:    recovery,
 	}
+	if status == StatusSkipped {
+		snapshot.AvailableVersion = coordinator.skippedVersion
+	}
+	return snapshot
 }
 
 func (coordinator *Coordinator) snapshotForRelease(status Status, release *updater.Release) Snapshot {
@@ -428,7 +454,13 @@ func (coordinator *Coordinator) snapshotForRelease(status Status, release *updat
 	return snapshot
 }
 
+// Check performs a user-requested check, including a release the user
+// previously skipped. Automatic checks continue to honor that skipped release.
 func (coordinator *Coordinator) Check(ctx context.Context) (Snapshot, error) {
+	return coordinator.check(ctx, true)
+}
+
+func (coordinator *Coordinator) check(ctx context.Context, includeSkippedVersion bool) (Snapshot, error) {
 	coordinator.mu.Lock()
 	if coordinator.stopped {
 		snapshot := cloneSnapshot(coordinator.snapshot)
@@ -456,17 +488,20 @@ func (coordinator *Coordinator) Check(ctx context.Context) (Snapshot, error) {
 		return snapshot, nil
 	}
 	coordinator.inFlight = true
+	coordinator.checkIncludesSkippedVersion = includeSkippedVersion
+	skippedVersion := coordinator.skippedVersion
 	previous := cloneSnapshot(coordinator.snapshot)
 	coordinator.snapshot = coordinator.baseSnapshot(StatusChecking)
 	checking := cloneSnapshot(coordinator.snapshot)
 	coordinator.mu.Unlock()
 	coordinator.publishIfChanged(previous, checking)
 
-	release, err := runCoordinatorOperation(coordinator, ctx, coordinator.client.Check)
+	release, err := coordinator.checkClient(ctx, includeSkippedVersion, skippedVersion)
 
 	coordinator.mu.Lock()
 	previous = cloneSnapshot(coordinator.snapshot)
 	coordinator.inFlight = false
+	coordinator.checkIncludesSkippedVersion = false
 	var result Snapshot
 	if err != nil {
 		coordinator.snapshot = coordinator.baseSnapshot(StatusCheckError)
@@ -474,7 +509,11 @@ func (coordinator *Coordinator) Check(ctx context.Context) (Snapshot, error) {
 		result = cloneSnapshot(coordinator.snapshot)
 	} else if release == nil {
 		coordinator.pending = nil
-		coordinator.snapshot = coordinator.baseSnapshot(StatusCurrent)
+		if !includeSkippedVersion && coordinator.skippedVersion != "" {
+			coordinator.snapshot = coordinator.baseSnapshot(StatusSkipped)
+		} else {
+			coordinator.snapshot = coordinator.baseSnapshot(StatusCurrent)
+		}
 		result = cloneSnapshot(coordinator.snapshot)
 	} else if validationErr := coordinator.validateRelease(release); validationErr != nil {
 		coordinator.pending = nil
@@ -491,6 +530,19 @@ func (coordinator *Coordinator) Check(ctx context.Context) (Snapshot, error) {
 	coordinator.mu.Unlock()
 	coordinator.publishIfChanged(previous, result)
 	return result, err
+}
+
+func (coordinator *Coordinator) checkClient(
+	ctx context.Context,
+	includeSkippedVersion bool,
+	skippedVersion string,
+) (*updater.Release, error) {
+	if !includeSkippedVersion || skippedVersion == "" {
+		return runCoordinatorOperation(coordinator, ctx, coordinator.client.Check)
+	}
+	coordinator.client.SkipVersion("")
+	defer coordinator.client.SkipVersion(skippedVersion)
+	return runCoordinatorOperation(coordinator, ctx, coordinator.client.Check)
 }
 
 func (coordinator *Coordinator) Download(ctx context.Context, version string) (Snapshot, error) {
@@ -611,27 +663,30 @@ func preservesPendingRelease(status Status) bool {
 	}
 }
 
-func (coordinator *Coordinator) Skip(_ context.Context, version string) (Snapshot, error) {
-	coordinator.mu.Lock()
+func (coordinator *Coordinator) rejectSkipMutationLocked(unavailableMessage, runtimeNotReadyMessage string) (Snapshot, error, bool) {
 	if coordinator.stopped {
-		snapshot := cloneSnapshot(coordinator.snapshot)
-		coordinator.mu.Unlock()
-		return snapshot, context.Canceled
+		return cloneSnapshot(coordinator.snapshot), context.Canceled, true
 	}
 	if coordinator.snapshot.Status == StatusDisabled || coordinator.snapshot.Status == StatusApplyError {
-		snapshot := cloneSnapshot(coordinator.snapshot)
-		coordinator.mu.Unlock()
-		return snapshot, fmt.Errorf("automatic update skipping is unavailable")
+		return cloneSnapshot(coordinator.snapshot), errors.New(unavailableMessage), true
 	}
 	if !coordinator.runtimeReady {
-		snapshot := cloneSnapshot(coordinator.snapshot)
-		coordinator.mu.Unlock()
-		return snapshot, fmt.Errorf("application update skip requires runtime readiness")
+		return cloneSnapshot(coordinator.snapshot), errors.New(runtimeNotReadyMessage), true
 	}
 	if coordinator.inFlight {
-		snapshot := cloneSnapshot(coordinator.snapshot)
+		return cloneSnapshot(coordinator.snapshot), nil, true
+	}
+	return Snapshot{}, nil, false
+}
+
+func (coordinator *Coordinator) Skip(_ context.Context, version string) (Snapshot, error) {
+	coordinator.mu.Lock()
+	if snapshot, err, rejected := coordinator.rejectSkipMutationLocked(
+		"automatic update skipping is unavailable",
+		"application update skip requires runtime readiness",
+	); rejected {
 		coordinator.mu.Unlock()
-		return snapshot, nil
+		return snapshot, err
 	}
 	if coordinator.updateState == nil || coordinator.pending == nil || coordinator.snapshot.Status != StatusAvailable {
 		snapshot := cloneSnapshot(coordinator.snapshot)
@@ -665,13 +720,61 @@ func (coordinator *Coordinator) Skip(_ context.Context, version string) (Snapsho
 	coordinator.mu.Lock()
 	previous := cloneSnapshot(coordinator.snapshot)
 	coordinator.inFlight = false
-	coordinator.pending = nil
+	coordinator.skippedVersion = version
 	coordinator.preparedOwned = false
-	coordinator.snapshot = coordinator.baseSnapshot(StatusCurrent)
+	coordinator.snapshot = coordinator.snapshotForRelease(StatusSkipped, coordinator.pending)
 	result := cloneSnapshot(coordinator.snapshot)
 	coordinator.mu.Unlock()
 	coordinator.publishIfChanged(previous, result)
 	return result, nil
+}
+
+func (coordinator *Coordinator) RemoveSkip(ctx context.Context) (Snapshot, error) {
+	coordinator.mu.Lock()
+	if snapshot, err, rejected := coordinator.rejectSkipMutationLocked(
+		"application update skip removal is unavailable",
+		"application update skip removal requires runtime readiness",
+	); rejected {
+		coordinator.mu.Unlock()
+		return snapshot, err
+	}
+	if coordinator.updateState == nil || coordinator.skippedVersion == "" {
+		snapshot := cloneSnapshot(coordinator.snapshot)
+		coordinator.mu.Unlock()
+		return snapshot, fmt.Errorf("application update skip removal requires a skipped version")
+	}
+	coordinator.inFlight = true
+	hasPendingRelease := coordinator.pending != nil
+	coordinator.mu.Unlock()
+
+	if err := coordinator.updateState.SetSkippedVersion(""); err != nil {
+		coordinator.mu.Lock()
+		previous := cloneSnapshot(coordinator.snapshot)
+		coordinator.inFlight = false
+		coordinator.snapshot.Error = err.Error()
+		result := cloneSnapshot(coordinator.snapshot)
+		coordinator.mu.Unlock()
+		coordinator.publishIfChanged(previous, result)
+		return result, err
+	}
+	coordinator.client.SkipVersion("")
+
+	coordinator.mu.Lock()
+	previous := cloneSnapshot(coordinator.snapshot)
+	coordinator.inFlight = false
+	coordinator.skippedVersion = ""
+	if hasPendingRelease {
+		coordinator.snapshot = coordinator.snapshotForRelease(StatusAvailable, coordinator.pending)
+	} else {
+		coordinator.snapshot = coordinator.baseSnapshot(StatusIdle)
+	}
+	result := cloneSnapshot(coordinator.snapshot)
+	coordinator.mu.Unlock()
+	coordinator.publishIfChanged(previous, result)
+	if hasPendingRelease {
+		return result, nil
+	}
+	return coordinator.Check(ctx)
 }
 
 func (coordinator *Coordinator) Restart(ctx context.Context) (Snapshot, error) {

@@ -1,6 +1,7 @@
 import type { backend } from '@core/backend-api/models';
+import { toPlainReleaseNotes } from './releaseNotesText';
 
-export type UpdateAction = 'check' | 'download' | 'restart' | 'skip' | 'recovery';
+export type UpdateAction = 'check' | 'download' | 'restart' | 'skip' | 'remove-skip' | 'recovery';
 
 export interface UpdatePresentationAction {
   kind: UpdateAction;
@@ -13,14 +14,88 @@ export interface UpdatePresentation {
   explanation?: string;
   primary?: UpdatePresentationAction;
   secondary?: UpdatePresentationAction;
+  /**
+   * Short label for the header chip and the About card's status pill. Present
+   * only for the states that need the user's attention — the quiet states
+   * (disabled, checking, up to date, skipped) still have a `message` for About
+   * but must not surface a chip in the header.
+   */
+  badge?: string;
+  /**
+   * Quiet line shown under the app version instead of a card. Used for the
+   * up-to-date state and for a skipped release's compact remove-skip action.
+   */
+  versionNote?: string;
+  /** Release identity, present only once a release has actually been discovered. */
+  releaseTitle?: string;
+  published?: string;
+  notes?: string;
+  releaseNotesURL?: string;
 }
 
 const DOWNLOADS_URL = 'https://luxury-yacht.app/#downloads';
 
+// Release tags carry the conventional `v` prefix; the backend normalizes it off
+// the version it reports (internal/updateidentity ParseReleaseVersion), so it is
+// re-added here rather than assumed present.
 const releaseURL = (update: backend.UpdateInfo): string =>
   update.availableVersion
     ? `https://github.com/luxury-yacht/app/releases/tag/v${encodeURIComponent(update.availableVersion)}`
     : DOWNLOADS_URL;
+
+const badgeForStatus = (status: backend.UpdateInfo['status']): { badge: string } | null => {
+  switch (status) {
+    case 'available':
+      return { badge: 'Update available' };
+    case 'downloading':
+      return { badge: 'Downloading update…' };
+    case 'verifying':
+      return { badge: 'Verifying update…' };
+    case 'preparing':
+      return { badge: 'Preparing update…' };
+    case 'ready':
+      return { badge: 'Restart to update' };
+    case 'check-error':
+    case 'prepare-error':
+    case 'restart-error':
+    case 'apply-error':
+      return { badge: 'Update needs attention' };
+    default:
+      return null;
+  }
+};
+
+// Render the ISO publish date as YYYY-MM-DD from its UTC components (matches
+// GitHub's UTC published_at and is timezone-stable); undefined when absent or
+// unparseable so the surface simply omits the date.
+const formatPublished = (iso?: string): string | undefined => {
+  if (!iso) {
+    return undefined;
+  }
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+// Release identity only exists once a release has been discovered; without a
+// version there is no tag page to link and no release to title.
+const releaseDetails = (update: backend.UpdateInfo): Partial<UpdatePresentation> => {
+  if (!update.availableVersion) {
+    return {};
+  }
+  const notes = toPlainReleaseNotes(update.releaseNotes ?? '');
+  return {
+    releaseTitle: update.releaseName || `Luxury Yacht ${update.availableVersion}`,
+    published: formatPublished(update.publishedAt),
+    notes: notes || undefined,
+    releaseNotesURL: releaseURL(update),
+  };
+};
 
 const recoveryActionForTarget = (
   update: backend.UpdateInfo
@@ -107,6 +182,14 @@ const recoveryPresentation = (
 };
 
 export const getUpdatePresentation = (update: backend.UpdateInfo): UpdatePresentation | null => {
+  const core = getUpdateCopy(update);
+  if (!core) {
+    return null;
+  }
+  return { ...core, ...badgeForStatus(update.status), ...releaseDetails(update) };
+};
+
+const getUpdateCopy = (update: backend.UpdateInfo): UpdatePresentation | null => {
   const version = update.availableVersion || 'the latest version';
   const recovery = recoveryPresentation(update);
 
@@ -118,7 +201,16 @@ export const getUpdatePresentation = (update: backend.UpdateInfo): UpdatePresent
     case 'checking':
       return { message: 'Checking for updates…' };
     case 'current':
-      return { message: 'Luxury Yacht is up to date.' };
+      return {
+        message: 'Luxury Yacht is up to date.',
+        versionNote: 'no newer version is available',
+      };
+    case 'skipped':
+      return {
+        message: `${version} is available, but has been skipped`,
+        versionNote: `${version} is available, but has been skipped`,
+        primary: { kind: 'remove-skip', label: 'Undo Skip' },
+      };
     case 'available':
       return update.canInstall
         ? {

@@ -16,6 +16,7 @@ describe('getUpdatePresentation', () => {
     [appupdates.Status.StatusDisabled, 'Automatic updates are unavailable in this build.'],
     [appupdates.Status.StatusChecking, 'Checking for updates…'],
     [appupdates.Status.StatusCurrent, 'Luxury Yacht is up to date.'],
+    [appupdates.Status.StatusSkipped, '2.0.0 is available, but has been skipped'],
     [appupdates.Status.StatusDownloading, 'Downloading update…'],
     [appupdates.Status.StatusVerifying, 'Verifying update…'],
     [appupdates.Status.StatusPreparing, 'Preparing update…'],
@@ -41,6 +42,13 @@ describe('getUpdatePresentation', () => {
       kind: 'restart',
       label: 'Restart & Apply',
     });
+  });
+
+  it('offers only skip removal for a skipped release', () => {
+    const skipped = getUpdatePresentation(update({ status: appupdates.Status.StatusSkipped }));
+
+    expect(skipped?.primary).toEqual({ kind: 'remove-skip', label: 'Undo Skip' });
+    expect(skipped?.secondary).toBeUndefined();
   });
 
   it.each([
@@ -103,5 +111,97 @@ describe('getUpdatePresentation', () => {
 
   it('renders no update surface for idle state', () => {
     expect(getUpdatePresentation(update({ status: appupdates.Status.StatusIdle }))).toBeNull();
+  });
+
+  it.each([
+    [appupdates.Status.StatusAvailable, 'Update available'],
+    [appupdates.Status.StatusDownloading, 'Downloading update…'],
+    [appupdates.Status.StatusVerifying, 'Verifying update…'],
+    [appupdates.Status.StatusPreparing, 'Preparing update…'],
+    [appupdates.Status.StatusReady, 'Restart to update'],
+    [appupdates.Status.StatusCheckError, 'Update needs attention'],
+    [appupdates.Status.StatusPrepareError, 'Update needs attention'],
+    [appupdates.Status.StatusRestartError, 'Update needs attention'],
+    [appupdates.Status.StatusApplyError, 'Update needs attention'],
+  ] as const)('badges %s for the header chip', (status, badge) => {
+    expect(getUpdatePresentation(update({ status }))?.badge).toBe(badge);
+  });
+
+  it.each([
+    appupdates.Status.StatusDisabled,
+    appupdates.Status.StatusChecking,
+    appupdates.Status.StatusCurrent,
+    appupdates.Status.StatusSkipped,
+  ] as const)('withholds a header badge for %s', (status) => {
+    const presentation = getUpdatePresentation(update({ status }));
+    expect(presentation).not.toBeNull();
+    expect(presentation?.badge).toBeUndefined();
+  });
+
+  it('surfaces the up-to-date state as a version note instead of a card', () => {
+    const presentation = getUpdatePresentation(update({ status: appupdates.Status.StatusCurrent }));
+    expect(presentation?.versionNote).toBe('no newer version is available');
+  });
+
+  it('surfaces a skipped release and its exact version as a version note', () => {
+    const presentation = getUpdatePresentation(
+      update({ status: appupdates.Status.StatusSkipped, availableVersion: '2.0.0' })
+    );
+
+    expect(presentation?.versionNote).toBe('2.0.0 is available, but has been skipped');
+  });
+
+  it.each([
+    appupdates.Status.StatusDisabled,
+    appupdates.Status.StatusChecking,
+    appupdates.Status.StatusAvailable,
+    appupdates.Status.StatusDownloading,
+    appupdates.Status.StatusReady,
+    appupdates.Status.StatusCheckError,
+  ] as const)('keeps %s on the card, not on the version line', (status) => {
+    expect(getUpdatePresentation(update({ status }))?.versionNote).toBeUndefined();
+  });
+
+  it('carries the release identity, plain-text notes, and tag URL', () => {
+    const presentation = getUpdatePresentation(
+      update({
+        status: appupdates.Status.StatusAvailable,
+        releaseName: 'Luxury Yacht 2.0.0',
+        publishedAt: '2026-07-05T12:00:00Z',
+        releaseNotes: '## Highlights\n\n- Fixed the **metrics** notice',
+      })
+    );
+
+    expect(presentation?.releaseTitle).toBe('Luxury Yacht 2.0.0');
+    expect(presentation?.published).toBe('2026-07-05');
+    expect(presentation?.notes).toBe('Highlights\n\n• Fixed the metrics notice');
+    // Release tags carry the conventional `v` prefix; availableVersion does not.
+    expect(presentation?.releaseNotesURL).toBe(
+      'https://github.com/luxury-yacht/app/releases/tag/v2.0.0'
+    );
+  });
+
+  it('falls back to the available version when the release is unnamed', () => {
+    const presentation = getUpdatePresentation(
+      update({ status: appupdates.Status.StatusAvailable, releaseNotes: 'notes' })
+    );
+    expect(presentation?.releaseTitle).toBe('Luxury Yacht 2.0.0');
+    expect(presentation?.published).toBeUndefined();
+  });
+
+  it('omits release identity when no version was discovered', () => {
+    const presentation = getUpdatePresentation(
+      update({
+        status: appupdates.Status.StatusCheckError,
+        availableVersion: undefined,
+        publishedAt: 'not-a-date',
+        releaseNotes: '',
+      })
+    );
+
+    expect(presentation?.releaseTitle).toBeUndefined();
+    expect(presentation?.releaseNotesURL).toBeUndefined();
+    expect(presentation?.published).toBeUndefined();
+    expect(presentation?.notes).toBeUndefined();
   });
 });
