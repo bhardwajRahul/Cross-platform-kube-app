@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/luxury-yacht/app/backend/capabilities"
+	"github.com/luxury-yacht/app/backend/internal/appupdates"
 	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/containerlogsstream"
 	"github.com/luxury-yacht/app/backend/refresh/system"
@@ -170,9 +171,11 @@ type App struct {
 	runtimeOperations   *runtimeOperationRegistry
 	runtimeOperationsMu sync.Mutex
 
-	updateCheckOnce sync.Once
-	updateCheckMu   sync.RWMutex
-	updateInfo      *UpdateInfo
+	applicationUpdates                  applicationUpdateCoordinator
+	applicationUpdateEventUnsubscribers []func()
+	showExpiredBetaPrompt               func(expiredBetaPrompt)
+	openApplicationURL                  func(string) error
+	quitApplication                     func()
 
 	// Per-cluster auth recovery scheduling.
 	// Tracks auth recovery scheduling per-cluster, allowing isolated
@@ -201,6 +204,16 @@ type App struct {
 	saveFileDialog        func(*application.SaveFileDialogOptions) (string, error)
 	windowGeometry        func() (WindowGeometry, error)
 	kubeClientInitializer func() error
+}
+
+type applicationUpdateCoordinator interface {
+	Snapshot() appupdates.Snapshot
+	RuntimeReady()
+	Stop()
+	Check(context.Context) (appupdates.Snapshot, error)
+	Download(context.Context, string) (appupdates.Snapshot, error)
+	Restart(context.Context) (appupdates.Snapshot, error)
+	Skip(context.Context, string) (appupdates.Snapshot, error)
 }
 
 // NewApp constructs a backend App with its Wails application and sane defaults.
@@ -237,6 +250,18 @@ func NewApp(wailsApplication *application.App, reporters ...sentryreporting.Repo
 	app.kubeClientInitializer = func() error {
 		return app.initKubernetesClient()
 	}
+	app.openApplicationURL = func(url string) error {
+		if wailsApplication == nil || wailsApplication.Browser == nil {
+			return nil
+		}
+		return wailsApplication.Browser.OpenURL(url)
+	}
+	app.quitApplication = func() {
+		if wailsApplication != nil {
+			wailsApplication.Quit()
+		}
+	}
+	app.showExpiredBetaPrompt = app.presentExpiredBetaPrompt
 	if wailsApplication != nil {
 		wailsApplication.HandleStream(refreshResourceStreamName, app.handleResourceStream)
 		wailsApplication.HandleStream(refreshContainerLogsStreamName, app.handleContainerLogsStream)
