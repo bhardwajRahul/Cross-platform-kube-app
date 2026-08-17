@@ -31,7 +31,7 @@ import (
 	"github.com/luxury-yacht/app/backend/resources/common"
 )
 
-func setupYAMLTestApp(t *testing.T) (*App, *dynamicfake.FakeDynamicClient, string) {
+func setupYAMLTestApp(t *testing.T) (*ResourceGateway, *dynamicfake.FakeDynamicClient, string) {
 	t.Helper()
 
 	scheme := runtime.NewScheme()
@@ -129,26 +129,22 @@ func setupYAMLTestApp(t *testing.T) (*App, *dynamicfake.FakeDynamicClient, strin
 		}
 		return true, patchedObj, nil
 	})
-	app := NewApp(nil)
-	setTestAppRuntimeReady(t, app, context.Background())
 	apiExtClient := apiextensionsfake.NewClientset()
 	clusterID := "config:ctx"
-	// Per-cluster clients are stored in clusterClients, not in global fields.
-	app.clusterClients = map[string]*clusterClients{
-		clusterID: {
-			meta:                ClusterMeta{ID: clusterID, Name: "ctx"},
-			kubeconfigPath:      "/path",
-			kubeconfigContext:   "ctx",
-			client:              client,
-			dynamicClient:       dynamicClient,
-			apiextensionsClient: apiExtClient,
-		},
-	}
+	fixture := newResourceGatewayFixture()
+	fixture.setCluster(clusterID, &clusterClients{
+		meta:                ClusterMeta{ID: clusterID, Name: "ctx"},
+		kubeconfigPath:      "/path",
+		kubeconfigContext:   "ctx",
+		client:              client,
+		dynamicClient:       dynamicClient,
+		apiextensionsClient: apiExtClient,
+	})
 
 	// discovery.Resources above advertises apps/v1 Deployment so the injected
 	// resource resolver can resolve the GVR without needing a GVR cache to seed.
 
-	return app, dynamicClient, clusterID
+	return fixture.gateway, dynamicClient, clusterID
 }
 
 func nextResourceVersion(current string) string {
@@ -934,7 +930,11 @@ func TestWrapKubernetesErrorUsesDefaultMessage(t *testing.T) {
 func TestGetGVRForGVKFallsBackToCache(t *testing.T) {
 	app, _, clusterID := setupYAMLTestApp(t)
 
-	gvr, namespaced, err := app.getGVRForGVK(context.Background(), clusterID, schema.GroupVersionKind{
+	dependencies, selectionKey, err := app.resolveClusterDependencies(clusterID)
+	if err != nil {
+		t.Fatalf("resolve cluster dependencies: %v", err)
+	}
+	gvr, namespaced, err := getGVRForGVKWithDependencies(context.Background(), dependencies, selectionKey, schema.GroupVersionKind{
 		Group:   "apps",
 		Version: "v1",
 		Kind:    "Deployment",
@@ -951,8 +951,11 @@ func TestGetGVRForGVKFallsBackToCache(t *testing.T) {
 }
 
 func TestGetGVRForGVKWithoutClientFails(t *testing.T) {
-	app := NewApp(nil)
-	_, _, err := app.getGVRForGVK(context.Background(), "missing", schema.GroupVersionKind{Kind: "Deployment"})
+	app := newResourceGatewayFixture().gateway
+	dependencies, selectionKey, err := app.resolveClusterDependencies("missing")
+	if err == nil {
+		_, _, err = getGVRForGVKWithDependencies(context.Background(), dependencies, selectionKey, schema.GroupVersionKind{Kind: "Deployment"})
+	}
 	if err == nil {
 		t.Fatalf("expected error for missing client")
 	}

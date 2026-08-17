@@ -8,10 +8,6 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import type { ClusterHealthStatus } from '@/core/cluster-workspace/clusterWorkspaceStore';
 import { useClusterWorkspaceSnapshot } from '@/core/cluster-workspace/useClusterWorkspace';
-import {
-  type ConnectionStatusEvent,
-  useConnectionStatusActions,
-} from '@/core/connection/connectionStatus';
 import { onEvent } from '@/core/desktop-runtime';
 
 /**
@@ -56,17 +52,15 @@ export function useWailsRuntimeEvents(handlers: WailsRuntimeEventHandlers): void
   } = handlers;
 
   useEffect(() => {
-    const eventHandlers: Array<[string, () => void]> = [
-      ['open-settings', onOpenSettings],
-      ['open-about', onOpenAbout],
-      ['open-cluster', onOpenCluster],
-      ['toggle-sidebar', onToggleSidebar],
-      ['toggle-app-logs-panel', onToggleAppLogsPanel],
-      ['toggle-diagnostics', onToggleDiagnostics],
-      ['toggle-object-diff', onToggleObjectDiff],
+    const disposers = [
+      onEvent('open-settings', onOpenSettings),
+      onEvent('open-about', onOpenAbout),
+      onEvent('open-cluster', onOpenCluster),
+      onEvent('toggle-sidebar', onToggleSidebar),
+      onEvent('toggle-app-logs-panel', onToggleAppLogsPanel),
+      onEvent('toggle-diagnostics', onToggleDiagnostics),
+      onEvent('toggle-object-diff', onToggleObjectDiff),
     ];
-
-    const disposers = eventHandlers.map(([event, handler]) => onEvent(event, handler));
 
     return () => {
       disposers.forEach((dispose) => {
@@ -82,25 +76,6 @@ export function useWailsRuntimeEvents(handlers: WailsRuntimeEventHandlers): void
     onToggleDiagnostics,
     onToggleObjectDiff,
   ]);
-}
-
-/**
- * Subscribes to connection status events from Wails runtime
- */
-export function useConnectionStatusListener(): void {
-  const { updateFromEvent } = useConnectionStatusActions();
-
-  useEffect(() => {
-    const handleConnectionStatus = (payload?: ConnectionStatusEvent) => {
-      updateFromEvent(payload);
-    };
-
-    const dispose = onEvent('connection-status', handleConnectionStatus);
-
-    return () => {
-      dispose();
-    };
-  }, [updateFromEvent]);
 }
 
 /**

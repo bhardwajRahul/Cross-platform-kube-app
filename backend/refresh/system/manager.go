@@ -31,6 +31,7 @@ import (
 	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/kind/kindregistry"
 	"github.com/luxury-yacht/app/backend/kind/streamrows"
+	"github.com/luxury-yacht/app/backend/nodemaintenance"
 	"github.com/luxury-yacht/app/backend/objectcatalog"
 	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/containerlogsstream"
@@ -74,12 +75,14 @@ type Config struct {
 	ObjectCatalogService         func() *objectcatalog.Service            // Function to get the object catalog service.
 	ObjectCatalogNamespaces      func() []snapshot.CatalogNamespaceGroup  // Function to get the object catalog namespaces.
 	ContainerLogsTargetLimiter   *containerlogsstream.GlobalTargetLimiter // Shared global limiter for container logs stream targets.
+	ContainerLogsPerScopeLimit   int                                      // Captured per-scope target cap for direct and streaming log selection.
+	NodeMaintenanceStore         *nodemaintenance.Store                   // Shared process-owned, cluster-keyed drain state.
 	ClusterID                    string                                   // stable identifier for cluster-scoped keys
 	ClusterName                  string                                   // display name for cluster in payloads
 	AttentionIgnoreRules         snapshot.AttentionIgnoreRules
 	AttentionIgnoredObjectPruner func(resourcemodel.ResourceRef)
 	// AllowedNamespaces is the cluster's namespace scope
-	// (docs/plans/namespace-scope.md). Empty means cluster-wide. Enforced by
+	// (docs/architecture/namespace-scope.md). Empty means cluster-wide. Enforced by
 	// the permission checker's scope fan-out, the scoped namespaces domain,
 	// and the ingest manager's per-namespace reflectors.
 	AllowedNamespaces []string
@@ -220,7 +223,7 @@ func (s *Subsystem) ColdPreparationAge(now time.Time) (time.Duration, bool) {
 }
 
 // scopedResourcePredicate reports which resources' permission checks fan out
-// over a configured namespace scope (docs/plans/namespace-scope.md): exactly
+// over a configured namespace scope (docs/architecture/namespace-scope.md): exactly
 // the namespaced, ingest-owned kinds, because only their data path runs
 // per-namespace. A check's scope must match its data source's scope — scoping
 // the check for a cluster-wide source (events, HPA, replicasets, gateway,

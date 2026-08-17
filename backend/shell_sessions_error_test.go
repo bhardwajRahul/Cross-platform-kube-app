@@ -10,11 +10,13 @@ import (
 const shellClusterID = "config:ctx"
 
 func TestStartShellSessionRequiresClient(t *testing.T) {
-	app := NewApp(nil)
-	app.logger = NewLogger(10)
+	fixture := newOperationsCoordinatorFixture(t)
+	app := fixture.runtime
+	operations := fixture.coordinator
+	app.AppLogs = NewAppLogService(NewLogger(10))
 	// Per-cluster clients are stored in clusterClients, not in global fields.
 	// Create a cluster entry WITHOUT a client to test the error path.
-	app.clusterClients = map[string]*clusterClients{
+	app.ClusterRuntime.clusterClients = map[string]*clusterClients{
 		shellClusterID: {
 			meta:              ClusterMeta{ID: shellClusterID, Name: "ctx"},
 			kubeconfigPath:    "/path",
@@ -23,18 +25,20 @@ func TestStartShellSessionRequiresClient(t *testing.T) {
 		},
 	}
 
-	_, err := app.StartShellSession(shellClusterID, ShellSessionRequest{Namespace: "default", PodName: "demo"})
+	_, err := operations.StartShellSession(shellClusterID, ShellSessionRequest{Namespace: "default", PodName: "demo"})
 	if err == nil {
 		t.Fatalf("expected error when client not initialized")
 	}
 }
 
 func TestStartShellSessionRequiresRestConfig(t *testing.T) {
-	app := NewApp(nil)
-	app.logger = NewLogger(10)
+	fixture := newOperationsCoordinatorFixture(t)
+	app := fixture.runtime
+	operations := fixture.coordinator
+	app.AppLogs = NewAppLogService(NewLogger(10))
 	// Per-cluster clients are stored in clusterClients, not in global fields.
 	fakeClient := fake.NewClientset()
-	app.clusterClients = map[string]*clusterClients{
+	app.ClusterRuntime.clusterClients = map[string]*clusterClients{
 		shellClusterID: {
 			meta:              ClusterMeta{ID: shellClusterID, Name: "ctx"},
 			kubeconfigPath:    "/path",
@@ -44,19 +48,21 @@ func TestStartShellSessionRequiresRestConfig(t *testing.T) {
 		},
 	}
 
-	_, err := app.StartShellSession(shellClusterID, ShellSessionRequest{Namespace: "default", PodName: "demo"})
+	_, err := operations.StartShellSession(shellClusterID, ShellSessionRequest{Namespace: "default", PodName: "demo"})
 	if err == nil {
 		t.Fatalf("expected rest config error when missing")
 	}
 }
 
 func TestStartShellSessionRequiresNamespace(t *testing.T) {
-	app := NewApp(nil)
-	app.logger = NewLogger(10)
+	fixture := newOperationsCoordinatorFixture(t)
+	app := fixture.runtime
+	operations := fixture.coordinator
+	app.AppLogs = NewAppLogService(NewLogger(10))
 	// Per-cluster clients are stored in clusterClients, not in global fields.
 	fakeClient := fake.NewClientset()
 	restConfig := &rest.Config{}
-	app.clusterClients = map[string]*clusterClients{
+	app.ClusterRuntime.clusterClients = map[string]*clusterClients{
 		shellClusterID: {
 			meta:              ClusterMeta{ID: shellClusterID, Name: "ctx"},
 			kubeconfigPath:    "/path",
@@ -66,19 +72,21 @@ func TestStartShellSessionRequiresNamespace(t *testing.T) {
 		},
 	}
 
-	_, err := app.StartShellSession(shellClusterID, ShellSessionRequest{PodName: "demo"})
+	_, err := operations.StartShellSession(shellClusterID, ShellSessionRequest{PodName: "demo"})
 	if err == nil {
 		t.Fatalf("expected namespace validation error")
 	}
 }
 
 func TestStartShellSessionRequiresPodName(t *testing.T) {
-	app := NewApp(nil)
-	app.logger = NewLogger(10)
+	fixture := newOperationsCoordinatorFixture(t)
+	app := fixture.runtime
+	operations := fixture.coordinator
+	app.AppLogs = NewAppLogService(NewLogger(10))
 	// Per-cluster clients are stored in clusterClients, not in global fields.
 	fakeClient := fake.NewClientset()
 	restConfig := &rest.Config{}
-	app.clusterClients = map[string]*clusterClients{
+	app.ClusterRuntime.clusterClients = map[string]*clusterClients{
 		shellClusterID: {
 			meta:              ClusterMeta{ID: shellClusterID, Name: "ctx"},
 			kubeconfigPath:    "/path",
@@ -88,7 +96,7 @@ func TestStartShellSessionRequiresPodName(t *testing.T) {
 		},
 	}
 
-	_, err := app.StartShellSession(shellClusterID, ShellSessionRequest{Namespace: "default"})
+	_, err := operations.StartShellSession(shellClusterID, ShellSessionRequest{Namespace: "default"})
 	if err == nil {
 		t.Fatalf("expected pod name validation error")
 	}

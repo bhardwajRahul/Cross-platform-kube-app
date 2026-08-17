@@ -48,14 +48,34 @@ var (
 	}
 )
 
-var fetchRetrySleep = time.Sleep
-
 // contextSleep allows tests to stub or override; defaults to a context-aware sleep.
 var contextSleep = timeutil.SleepWithContext
 
+type resourceFetchBoundary interface {
+	CtxOrBackground() context.Context
+	responseCacheLookup(string, string) (any, bool)
+	responseCacheStore(string, string, any)
+	responseCacheDelete(string, string)
+	emitEvent(string, ...interface{})
+	resourceRetryDependencies() resourceRetryDependencies
+	logResourceFetchError(error, string, string, string)
+}
+
+type resourceRetryLogger interface {
+	Warn(string, ...string)
+}
+
+type resourceRetryDependencies struct {
+	recordSuccess func(string)
+	recordFailure func(string, string, error)
+	telemetry     func() resourceRetryTelemetry
+	logger        resourceRetryLogger
+	clusterName   func(string) string
+}
+
 // FetchResourceWithSelection runs a fetch with a cache key scoped to the provided selection key.
 func FetchResourceWithSelection[T any](
-	a *App,
+	boundary resourceFetchBoundary,
 	selectionKey string,
 	cacheKey string,
 	resourceKind string,
@@ -63,50 +83,77 @@ func FetchResourceWithSelection[T any](
 	fetchFunc func(context.Context) (T, error),
 ) (T, error) {
 	var zero T
-	if a != nil {
-		if cached, ok := a.responseCacheLookup(selectionKey, cacheKey); ok {
-			if typed, ok := cached.(T); ok {
-				return typed, nil
-			}
-			// Cached value was the wrong type; evict and refetch.
-			a.responseCacheDelete(selectionKey, cacheKey)
-		}
+	if cached, ok := cachedResource[T](boundary, selectionKey, cacheKey); ok {
+		return cached, nil
 	}
-	ctx := a.CtxOrBackground()
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, config.ResourceFetchCallTimeout)
+	ctx, cancel := resourceFetchContext(boundary)
+	if cancel != nil {
 		defer cancel()
 	}
 
-	result, err := executeWithRetry(ctx, a, selectionKey, resourceKind, identifier, fetchFunc)
+	var retryDependencies resourceRetryDependencies
+	if boundary != nil {
+		retryDependencies = boundary.resourceRetryDependencies()
+	}
+	result, err := executeWithRetry(ctx, retryDependencies, selectionKey, resourceKind, identifier, fetchFunc)
 	if err != nil {
-		if !errorcapture.IsTelemetryHandled(err) {
-			a.logger.ErrorWithCause(err, fmt.Sprintf("Failed to fetch %s %s", resourceKind, identifier), logsources.ResourceLoader, selectionKey, a.clusterNameForID(selectionKey))
+		if boundary != nil && !errorcapture.IsTelemetryHandled(err) {
+			boundary.logResourceFetchError(err, fmt.Sprintf("Failed to fetch %s %s", resourceKind, identifier), selectionKey, "")
 		}
 		// Include clusterId in error payload so frontend can identify which cluster
 		// the error belongs to. selectionKey is the clusterID when set by callers
 		// like FetchNamespacedResource and FetchClusterResource.
-		a.emitEvent("backend-error", map[string]any{
-			"clusterId":    selectionKey,
-			"resourceKind": resourceKind,
-			"identifier":   identifier,
-			"message":      err.Error(),
-			"error":        fmt.Sprintf("%v", err),
-		})
+		if boundary != nil {
+			boundary.emitEvent(backendErrorEventName, BackendErrorEvent{
+				ClusterID:    selectionKey,
+				ResourceKind: resourceKind,
+				Identifier:   identifier,
+				Message:      err.Error(),
+				Error:        fmt.Sprintf("%v", err),
+			})
+		}
 		return zero, errorcapture.Enhance(err)
 	}
 
-	if a != nil {
-		a.responseCacheStore(selectionKey, cacheKey, result)
+	if boundary != nil {
+		boundary.responseCacheStore(selectionKey, cacheKey, result)
 	}
 	return result, nil
+}
+
+func cachedResource[T any](boundary resourceFetchBoundary, selectionKey, cacheKey string) (T, bool) {
+	var zero T
+	if boundary == nil {
+		return zero, false
+	}
+	cached, ok := boundary.responseCacheLookup(selectionKey, cacheKey)
+	if !ok {
+		return zero, false
+	}
+	typed, ok := cached.(T)
+	if !ok {
+		// Cached value was the wrong type; evict and refetch.
+		boundary.responseCacheDelete(selectionKey, cacheKey)
+		return zero, false
+	}
+	return typed, true
+}
+
+func resourceFetchContext(boundary resourceFetchBoundary) (context.Context, context.CancelFunc) {
+	ctx := context.Background()
+	if boundary != nil {
+		ctx = boundary.CtxOrBackground()
+	}
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return ctx, nil
+	}
+	return context.WithTimeout(ctx, config.ResourceFetchCallTimeout)
 }
 
 // FetchNamespacedResource handles the common pattern for namespace-scoped resources.
 // It wraps client initialization, cache key generation, and FetchResource into one call.
 func FetchNamespacedResource[T any](
-	a *App,
+	boundary resourceFetchBoundary,
 	deps common.Dependencies,
 	selectionKey string,
 	resourceKind string,
@@ -117,18 +164,18 @@ func FetchNamespacedResource[T any](
 	if err := requireNamespacedObject(namespace, name); err != nil {
 		return zero, err
 	}
-	if err := ensureDependenciesInitialized(a, deps, resourceKind); err != nil {
+	if err := ensureDependenciesInitialized(boundary, deps, resourceKind); err != nil {
 		return zero, err
 	}
 	cacheKey := cachekeys.Build(strings.ToLower(resourceKind)+"-detailed", namespace, name)
 	identifier := fmt.Sprintf("%s/%s", namespace, name)
-	return FetchResourceWithSelection(a, selectionKey, cacheKey, resourceKind, identifier, fetchFunc)
+	return FetchResourceWithSelection(boundary, selectionKey, cacheKey, resourceKind, identifier, fetchFunc)
 }
 
 // FetchClusterResource handles the common pattern for cluster-scoped resources.
 // It wraps client initialization, cache key generation, and FetchResource into one call.
 func FetchClusterResource[T any](
-	a *App,
+	boundary resourceFetchBoundary,
 	deps common.Dependencies,
 	selectionKey string,
 	resourceKind string,
@@ -139,27 +186,29 @@ func FetchClusterResource[T any](
 	if err := requireObjectName(name); err != nil {
 		return zero, err
 	}
-	if err := ensureDependenciesInitialized(a, deps, resourceKind); err != nil {
+	if err := ensureDependenciesInitialized(boundary, deps, resourceKind); err != nil {
 		return zero, err
 	}
 	cacheKey := cachekeys.Build(strings.ToLower(resourceKind)+"-detailed", "", name)
-	return FetchResourceWithSelection(a, selectionKey, cacheKey, resourceKind, name, fetchFunc)
+	return FetchResourceWithSelection(boundary, selectionKey, cacheKey, resourceKind, name, fetchFunc)
 }
 
 // ensureDependenciesInitialized checks the cluster-scoped dependencies before fetching.
-func ensureDependenciesInitialized(a *App, deps common.Dependencies, resourceKind string) error {
+func ensureDependenciesInitialized(boundary resourceFetchBoundary, deps common.Dependencies, resourceKind string) error {
 	if deps.KubernetesClient == nil {
+		err := fmt.Errorf("kubernetes client not initialized")
+		message := fmt.Sprintf("Kubernetes client not initialized for %s fetch", resourceKind)
 		if deps.Logger != nil {
-			deps.Logger.Error(fmt.Sprintf("Kubernetes client not initialized for %s fetch", resourceKind), logsources.ResourceLoader)
-		} else if a != nil && a.logger != nil {
-			a.logger.Error(fmt.Sprintf("Kubernetes client not initialized for %s fetch", resourceKind), logsources.ResourceLoader, deps.ClusterID, deps.ClusterName)
+			deps.Logger.Error(message, logsources.ResourceLoader)
+		} else if boundary != nil {
+			boundary.logResourceFetchError(err, message, deps.ClusterID, deps.ClusterName)
 		}
-		return fmt.Errorf("kubernetes client not initialized")
+		return err
 	}
 	return nil
 }
 
-func executeWithRetry[T any](ctx context.Context, a *App, clusterID, resourceKind, target string, fetchFunc func(context.Context) (T, error)) (T, error) {
+func executeWithRetry[T any](ctx context.Context, dependencies resourceRetryDependencies, clusterID, resourceKind, target string, fetchFunc func(context.Context) (T, error)) (T, error) {
 	var zero T
 	if ctx == nil {
 		ctx = context.Background()
@@ -171,13 +220,13 @@ func executeWithRetry[T any](ctx context.Context, a *App, clusterID, resourceKin
 		target = "cluster scope"
 	}
 	operation := fetchRetryOperation[T]{
-		app: a, clusterID: clusterID, resourceKind: resourceKind, target: target, fetch: fetchFunc,
+		dependencies: dependencies, clusterID: clusterID, resourceKind: resourceKind, target: target, fetch: fetchFunc,
 	}
 	return operation.run(ctx)
 }
 
 type fetchRetryOperation[T any] struct {
-	app          *App
+	dependencies resourceRetryDependencies
 	clusterID    string
 	resourceKind string
 	target       string
@@ -209,24 +258,17 @@ func (o fetchRetryOperation[T]) run(ctx context.Context) (T, error) {
 }
 
 func (o fetchRetryOperation[T]) recordSuccess(attempt int) {
-	if o.app == nil {
-		return
+	if o.clusterID != "" && o.dependencies.recordSuccess != nil {
+		o.dependencies.recordSuccess(o.clusterID)
 	}
-	if o.clusterID != "" {
-		o.app.recordClusterTransportSuccess(o.clusterID)
-	}
-	if attempt > 0 && o.app.telemetryRecorder != nil {
-		o.app.telemetryRecorder.RecordRetrySuccess()
+	if telemetry := o.retryTelemetry(); attempt > 0 && telemetry != nil {
+		telemetry.RecordRetrySuccess()
 	}
 }
 
 func (o fetchRetryOperation[T]) waitForRetry(ctx context.Context, attempt int, reason string, fetchErr error) error {
 	backoff := resourceFetchRetryBackoff(attempt)
-	if o.app == nil {
-		fetchRetrySleep(backoff)
-		return nil
-	}
-	o.logRetry(attempt, reason, fetchErr)
+	o.recordRetryAttempt(attempt, reason, fetchErr)
 	return contextSleep(ctx, backoff)
 }
 
@@ -238,39 +280,49 @@ func resourceFetchRetryBackoff(attempt int) time.Duration {
 	return backoff
 }
 
-func (o fetchRetryOperation[T]) logRetry(attempt int, reason string, fetchErr error) {
-	o.app.logger.Warn(
-		fmt.Sprintf(
-			"Retrying %s %s due to %s (attempt %d/%d)",
-			o.resourceKind, o.target, reason, attempt+1, config.ResourceFetchMaxAttempts-1,
-		),
-		logsources.ResourceLoader, o.clusterID, o.app.clusterNameForID(o.clusterID),
-	)
-	if o.app.telemetryRecorder != nil {
-		o.app.telemetryRecorder.RecordRetryAttempt(fetchErr)
+func (o fetchRetryOperation[T]) recordRetryAttempt(attempt int, reason string, fetchErr error) {
+	if o.dependencies.logger != nil {
+		clusterName := o.clusterID
+		if o.dependencies.clusterName != nil {
+			clusterName = o.dependencies.clusterName(o.clusterID)
+		}
+		o.dependencies.logger.Warn(
+			fmt.Sprintf(
+				"Retrying %s %s due to %s (attempt %d/%d)",
+				o.resourceKind, o.target, reason, attempt+1, config.ResourceFetchMaxAttempts-1,
+			),
+			logsources.ResourceLoader, o.clusterID, clusterName,
+		)
+	}
+	if telemetry := o.retryTelemetry(); telemetry != nil {
+		telemetry.RecordRetryAttempt(fetchErr)
 	}
 }
 
 func (o fetchRetryOperation[T]) recordTerminalError(retryable bool, reason string, fetchErr error) {
-	if o.app == nil {
-		return
-	}
 	if !retryable {
 		o.recordNonRetryableTransportSuccess()
 		return
 	}
-	if o.app.telemetryRecorder != nil {
-		o.app.telemetryRecorder.RecordRetryExhausted(fetchErr)
+	if telemetry := o.retryTelemetry(); telemetry != nil {
+		telemetry.RecordRetryExhausted(fetchErr)
 	}
-	if o.clusterID != "" {
-		o.app.recordClusterTransportFailure(o.clusterID, reason, fetchErr)
+	if o.clusterID != "" && o.dependencies.recordFailure != nil {
+		o.dependencies.recordFailure(o.clusterID, reason, fetchErr)
 	}
 }
 
 func (o fetchRetryOperation[T]) recordNonRetryableTransportSuccess() {
-	if o.clusterID != "" {
-		o.app.recordClusterTransportSuccess(o.clusterID)
+	if o.clusterID != "" && o.dependencies.recordSuccess != nil {
+		o.dependencies.recordSuccess(o.clusterID)
 	}
+}
+
+func (o fetchRetryOperation[T]) retryTelemetry() resourceRetryTelemetry {
+	if o.dependencies.telemetry == nil {
+		return nil
+	}
+	return o.dependencies.telemetry()
 }
 
 func isRetryableFetchError(err error) (bool, string) {

@@ -2,302 +2,193 @@ package backend
 
 import (
 	"context"
-	"sync"
-	"sync/atomic"
-	"time"
+	"fmt"
 
-	"github.com/luxury-yacht/app/backend/capabilities"
-	"github.com/luxury-yacht/app/backend/internal/appupdates"
-	"github.com/luxury-yacht/app/backend/refresh"
-	"github.com/luxury-yacht/app/backend/refresh/containerlogsstream"
-	"github.com/luxury-yacht/app/backend/refresh/system"
-	"github.com/luxury-yacht/app/backend/refresh/telemetry"
+	"github.com/luxury-yacht/app/backend/nodemaintenance"
+	"github.com/luxury-yacht/app/backend/resources/common"
 	"github.com/luxury-yacht/app/internal/sentry"
 	"github.com/wailsapp/wails/v3/pkg/application"
-	apiextinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
-	informers "k8s.io/client-go/informers"
 )
 
 const (
-	refreshResourceStreamName      = "refresh-resources"
-	refreshContainerLogsStreamName = "refresh-container-logs"
+	RefreshResourceStreamName      = "refresh-resources"
+	RefreshContainerLogsStreamName = "refresh-container-logs"
 )
 
-// App provides the backend façade exposed to Wails.
-type App struct {
-	appDone                  <-chan struct{}
-	runtimeReady             atomic.Bool
-	wailsApplication         *application.App
-	menu                     *application.Menu
-	createWorkspaceWindow    func()
-	selectedKubeconfigs      []string
-	availableKubeconfigs     []KubeconfigInfo
-	kubeconfigSearchPaths    []string
-	kubeconfigDiscoveryState KubeconfigDiscoveryState
-	windowSettings           *WindowSettings
-	appSettings              *AppSettings
-	logger                   *Logger
-	errorReporter            sentryreporting.Reporter
-	// responseCache stores short-lived detail/YAML/helm GET responses.
-	responseCache           *responseCache
-	sidebarVisible          bool
-	diagnosticsPanelVisible bool
-	appLogsPanelVisible     bool
-
-	refreshManager *refresh.Manager
-	refreshService atomic.Pointer[refreshServiceHandler]
-	// refreshRuntimeMu owns refreshDone and refreshCancel. Selection mutations and
-	// governor reconciliation use different lifecycle locks, so neither is a
-	// substitute for this process-runtime boundary.
-	refreshRuntimeMu sync.Mutex
-	refreshDone      <-chan struct{}
-	refreshCancel    context.CancelFunc
-	// refreshRuntimeStopped distinguishes a deliberate global teardown from the
-	// never-started state that auth recovery is allowed to initialise.
-	refreshRuntimeStopped bool
-	telemetryRecorder     *telemetry.Recorder
-	// containerLogsTargetLimiter is lazily built by sharedContainerLogsTargetLimiter;
-	// its mutex guards the check-then-set because subsystem builds run concurrently
-	// per cluster. Access the limiter only through the accessor. The mutex is a LEAF
-	// lock: never lock anything else (settingsMu especially) or load settings while
-	// holding it — the settings paths call the accessor, some under settingsMu.
-	containerLogsTargetLimiterMu sync.Mutex
-	containerLogsTargetLimiter   *containerlogsstream.GlobalTargetLimiter
-	sharedInformerFactory        informers.SharedInformerFactory
-	apiExtensionsInformerFactory apiextinformers.SharedInformerFactory
-	refreshSubsystemsMu          sync.RWMutex
-	refreshSubsystems            map[string]*system.Subsystem
-	refreshAggregates            atomic.Pointer[refreshAggregateHandlers]
-	refreshPermissionCancels     map[string]context.CancelFunc
-
-	// governor holds the process-wide resource governor state: which open
-	// clusters run Foreground/Background/Cold so RAM stays bounded when many
-	// clusters are open. All fields are guarded by governorMu.
-	// governorReconcileMu serializes slow tier applications without preventing
-	// callers from recording a newer visible cluster under governorMu. The next
-	// reconcile then observes that newer intent after the in-flight transition
-	// has reached a real, internally consistent subsystem state.
-	governorReconcileMu sync.Mutex
-	governorMu          sync.Mutex
-	governorPolicy      system.GovernorPolicy
-	governorMRU         []string                       // open cluster IDs, most-recently-visible first
-	governorVisible     string                         // compatibility demand used before a window identifies itself
-	governorWindows     map[string]string              // visible cluster by peer workspace window
-	governorPlanned     map[string]system.ResourceTier // latest tier plan published before lifecycle work starts
-	governorApplied     map[string]system.ResourceTier // last-applied tier per cluster
-	governorPressure    bool                           // memory-pressure signal (HeapInuse over budget)
-	governorHeapInuse   uint64                         // latest sampled HeapInuse, for pressure diagnostics
-	governorBudget      uint64                         // HeapInuse byte budget; 0 disables pressure demotion
-	governorNow         func() time.Time               // clock for bounded pressure fallback; time.Now in production
-	spillRoot           string                         // override for the maintained-store spill root; empty = user cache dir (tests set a temp dir)
-	spillFormat         string                         // override for the spill format version; empty = app Version (tests set a fixed value)
-
-	// cooledMmapClosers holds, per cooled cluster, the mmap closers returned by
-	// CoolMaintainedStoresToMmap. Each closer unmaps one domain's cooled column file and MUST
-	// outlive every Build that can read it; the re-warm/teardown paths take them (exactly once,
-	// under cooledMu) and call them only AFTER the cooled subsystem is unrouted, so no Build can
-	// still be reading the mapping. Guarded by cooledMu, independent of governorMu so closing
-	// never blocks the governor decision loop.
-	cooledMu          sync.Mutex
-	cooledMmapClosers map[string][]func() error
-
-	objectCatalogMu      sync.Mutex
-	objectCatalogEntries map[string]*objectCatalogEntry
-
-	// persistenceMu guards persistence.json read/write operations.
-	persistenceMu sync.Mutex
-
-	// kubeconfigsMu guards kubeconfig discovery data and selected kubeconfig reads/writes.
-	kubeconfigsMu sync.RWMutex
-	// selectionMutationMu serializes coordinated cluster runtime mutations.
-	// This preserves sequential behavior while allowing kubeconfigChangeMu to stay
-	// narrowly scoped to short state-transition sections.
-	selectionMutationMu sync.Mutex
-	// workspaceSelections is the complete tab selection owned by each peer
-	// window. It is guarded by selectionMutationMu; selectedKubeconfigs is the
-	// process-wide union that owns shared cluster clients and refresh lifecycles.
-	workspaceSelections map[string][]string
-	// selectionMutationDrain tracks queued and active selection mutations so app
-	// shutdown can wait for durable selection writes, not just active runtime work.
-	selectionMutationDrainMu   sync.Mutex
-	selectionMutationDrainCond *sync.Cond
-	selectionMutationPending   int
-	preQuitOnce                sync.Once
-	// kubeconfigChangeMu serializes runtime cluster/subsystem mutation paths.
-	// Lock ordering for runtime cluster mutation paths:
-	//   1) selectionMutationMu
-	//   2) kubeconfigChangeMu
-	//   3) clusterClientsMu
-	//   4) objectCatalogMu
-	// Keep this ordering consistent to avoid deadlocks.
-	kubeconfigChangeMu sync.Mutex
-	// selectionGeneration is a monotonic token incremented for each coordinated
-	// runtime mutation touching cluster selection/subsystem state.
-	selectionGeneration atomic.Uint64
-	selectionGenCtxMu   sync.Mutex
-	selectionGenCancel  context.CancelFunc
-	selectionDiag       selectionDiagnosticsState
-	// settingsMu guards appSettings access in runtime watcher/selection/settings flows.
-	settingsMu sync.Mutex
-	// installationTelemetryMu serializes the installation-registration metric and its durable
-	// acknowledgement so startup and a live preference change cannot send it concurrently.
-	// Factory Reset takes it before settingsMu and file deletion; keep that lock order.
-	installationTelemetryMu sync.Mutex
-	// attentionRulesMu serializes persisted Attention mutations with their live
-	// index updates so cluster-scoped and global rules cannot be applied out of
-	// order across multiple cluster runtimes.
-	attentionRulesMu sync.Mutex
-	// requestClusterScopeRebuildFn overrides the per-cluster rebuild request
-	// issued when a cluster's allowed-namespaces scope changes (tests inject a
-	// recorder). Nil selects the production teardown+rebuild path.
-	requestClusterScopeRebuildFn func(clusterID string)
-	// scopeRebuildQueued tracks clusters with a scope rebuild queued but not
-	// yet started, so rapid successive scope edits coalesce into one rebuild
-	// that reads the latest persisted scope.
-	scopeRebuildQueued sync.Map
-
-	clusterClientsMu sync.Mutex
-	clusterClients   map[string]*clusterClients
-	clusterOps       *clusterOperationCoordinator
-	clusterLifecycle *clusterLifecycle
-	kubeAPIMetrics   *kubernetesAPIMetricsRegistry
-
-	shellSessions   map[string]*shellSession
-	shellSessionsMu sync.Mutex
-
-	portForwardSessions   map[string]*portForwardSessionInternal
-	portForwardSessionsMu sync.Mutex
-
-	runtimeOperations   *runtimeOperationRegistry
-	runtimeOperationsMu sync.Mutex
-
-	applicationUpdates                  applicationUpdateCoordinator
-	applicationUpdateEventUnsubscribers []func()
-	showExpiredBetaPrompt               func(expiredBetaPrompt)
-	openApplicationURL                  func(string) error
-	quitApplication                     func()
-
-	// Per-cluster auth recovery scheduling.
-	// Tracks auth recovery scheduling per-cluster, allowing isolated
-	// recovery scheduling without affecting other clusters.
-
-	// ssrrCaches holds per-cluster SSRR rule caches for QueryPermissions.
-	ssrrCachesMu sync.Mutex
-	ssrrCaches   map[string]*capabilities.SSRRCache
-
-	// Per-cluster transport failure tracking.
-	// Tracks transport failures per-cluster, allowing isolated
-	// recovery without affecting other clusters.
-	transportStatesMu sync.RWMutex
-	transportStates   map[string]*transportFailureState
-
-	// clusterWorkspaceMu guards replayable health and namespace-scope state.
-	clusterWorkspaceMu       sync.RWMutex
-	clusterWorkspaceRevision atomic.Uint64
-	clusterHealth            map[string]ClusterHealthState
-	clusterScopeRevisions    map[string]uint64
-
-	kubeconfigWatcher *kubeconfigWatcher
-
-	eventEmitter          func(context.Context, string, ...interface{})
-	openFileDialog        func(*application.OpenFileDialogOptions) (string, error)
-	saveFileDialog        func(*application.SaveFileDialogOptions) (string, error)
-	windowGeometry        func() (WindowGeometry, error)
-	kubeClientInitializer func() error
+// ApplicationRuntime is the reference-only composition result. Behavior and
+// mutable domain state belong to the referenced owners.
+type ApplicationRuntime struct {
+	Lifecycle             *ApplicationLifecycle
+	ClusterRuntime        *ClusterRuntimeManager
+	ClusterWorkspace      *ClusterWorkspaceProjection
+	Refresh               *RefreshCoordinator
+	Workspace             *WorkspaceCoordinator
+	DesktopShell          *DesktopShell
+	AppLogs               *AppLogService
+	Favorites             *FavoritesService
+	UIState               *UIStateStore
+	Preferences           *PreferencesService
+	ErrorReporting        *ErrorReportingService
+	ContainerLogsPolicy   *ContainerLogsSelectionPolicy
+	PermissionFetchPolicy *PermissionFetchPolicy
+	NodeMaintenance       *nodemaintenance.Store
+	DataManagement        *DataManagementCoordinator
+	Attention             *ClusterAttentionService
+	Resources             *ResourceGateway
+	Operations            *OperationsCoordinator
+	Updates               *UpdateCoordinator
 }
 
-type applicationUpdateCoordinator interface {
-	Snapshot() appupdates.Snapshot
-	RuntimeReady()
-	Stop()
-	Check(context.Context) (appupdates.Snapshot, error)
-	Download(context.Context, string) (appupdates.Snapshot, error)
-	Restart(context.Context) (appupdates.Snapshot, error)
-	Skip(context.Context, string) (appupdates.Snapshot, error)
-	RemoveSkip(context.Context) (appupdates.Snapshot, error)
+// ApplicationRuntimeOptions contains composition-time dependencies that are
+// known only by the process entry point. Owners receive them before their
+// constructors return; the runtime is never configured afterward.
+type ApplicationRuntimeOptions struct {
+	Reporter              sentryreporting.Reporter
+	ApplicationUpdates    ApplicationUpdateOptions
+	CreateWorkspaceWindow func()
 }
 
-// NewApp constructs a backend App with its Wails application and sane defaults.
-func NewApp(wailsApplication *application.App, reporters ...sentryreporting.Reporter) *App {
-	var reporter sentryreporting.Reporter
-	if len(reporters) > 0 {
-		reporter = reporters[0]
+// NewApplicationRuntime composes focused backend owners around the concrete
+// Wails application without retaining behavior on the composition result.
+func NewApplicationRuntime(wailsApplication *application.App, configured ...ApplicationRuntimeOptions) *ApplicationRuntime {
+	if len(configured) > 1 {
+		panic("application runtime accepts at most one options value")
 	}
-	app := &App{
-		wailsApplication:         wailsApplication,
-		logger:                   NewLogger(1000, reporters...),
-		errorReporter:            reporter,
-		responseCache:            newDefaultResponseCache(),
-		sidebarVisible:           true,
-		appLogsPanelVisible:      false,
-		refreshSubsystems:        make(map[string]*system.Subsystem),
-		refreshPermissionCancels: make(map[string]context.CancelFunc),
-		clusterClients:           make(map[string]*clusterClients),
-		clusterOps:               newClusterOperationCoordinator(),
-		kubeAPIMetrics:           newKubernetesAPIMetricsRegistry(),
-		objectCatalogEntries:     make(map[string]*objectCatalogEntry),
-		shellSessions:            make(map[string]*shellSession),
-		portForwardSessions:      make(map[string]*portForwardSessionInternal),
-		runtimeOperations:        newRuntimeOperationRegistry(),
-		eventEmitter: func(_ context.Context, name string, data ...interface{}) {
+	var options ApplicationRuntimeOptions
+	if len(configured) == 1 {
+		options = configured[0]
+	}
+	var reporters []sentryreporting.Reporter
+	if options.Reporter != nil {
+		reporters = append(reporters, options.Reporter)
+	}
+	appLogs := NewAppLogService(NewLogger(1000, reporters...))
+	signals := newApplicationRuntimeSignals(
+		func(_ context.Context, name string, data ...interface{}) {
 			if wailsApplication != nil {
 				wailsApplication.Event.Emit(name, data...)
 			}
 		},
-		clusterHealth:         make(map[string]ClusterHealthState),
-		clusterScopeRevisions: make(map[string]uint64),
-		workspaceSelections:   make(map[string][]string),
-	}
-	app.kubeClientInitializer = func() error {
-		return app.initKubernetesClient()
-	}
-	app.openApplicationURL = func(url string) error {
-		if wailsApplication == nil || wailsApplication.Browser == nil {
-			return nil
-		}
-		return wailsApplication.Browser.OpenURL(url)
-	}
-	app.quitApplication = func() {
-		if wailsApplication != nil {
-			wailsApplication.Quit()
-		}
-	}
-	app.showExpiredBetaPrompt = app.presentExpiredBetaPrompt
-	if wailsApplication != nil {
-		wailsApplication.HandleStream(refreshResourceStreamName, app.handleResourceStream)
-		wailsApplication.HandleStream(refreshContainerLogsStreamName, app.handleContainerLogsStream)
-	}
-	app.setupEnvironment()
-	app.initAuthManager()
-	app.initGovernor()
-	return app
-}
+	)
+	clusterWorkspace := newClusterWorkspaceProjection()
+	containerLogsPolicy := NewContainerLogsSelectionPolicy(defaultObjPanelLogsTargetPerScopeLimit)
+	permissionFetchPolicy := NewPermissionFetchPolicy(defaultPermissionSSRRFetchConcurrency)
+	updateCheck := &updateCheckPort{}
+	kubeconfigSearchPaths := &kubeconfigSearchPathPort{}
+	desktopShell := NewDesktopShell(
+		wailsApplication, signals.runtimeAvailable, signals.emitEvent, appLogs.Logger(),
+		DesktopShellBindings{
+			UpdateCheck: updateCheck.check, KubeconfigSearchPaths: kubeconfigSearchPaths.read,
+			CreateWorkspaceWindow: options.CreateWorkspaceWindow,
+		},
+	)
+	updates := NewUpdateCoordinator(
+		desktopShell, signals.CtxOrBackground, signals.emitEvent, appLogs.Logger(),
+		options.ApplicationUpdates, updateCheck,
+	)
+	installationTelemetry := &installationTelemetryPort{}
+	errorReporting := NewErrorReportingService(options.Reporter, signals.CtxOrBackground, appLogs.Logger(), installationTelemetry)
+	refreshSettings := newRefreshSettingBridge(
+		defaultObjPanelLogsTargetGlobalLimit,
+		defaultMetricsIntervalMs(),
+	)
+	clusterRateLimits := newClusterRateLimitBridge(defaultKubernetesClientQPS, defaultKubernetesClientBurst)
+	preferences := NewPreferencesService(
+		desktopShell,
+		NewSettingsEffectDispatcher(errorReporting, clusterRateLimits, permissionFetchPolicy, containerLogsPolicy, refreshSettings, appLogs.Logger()),
+		appLogs.Logger(),
+		kubeconfigSearchPaths,
+		installationTelemetry,
+	)
+	clusterRuntime := newClusterRuntimeManager(ClusterRuntimeManagerDependencies{
+		DiscoveryRepository: preferences, Logger: appLogs.Logger(), ContainerLogsPolicy: containerLogsPolicy,
+		Projection: clusterWorkspace, EmitEvent: signals.emitEvent, Context: signals.CtxOrBackground,
+		RateLimitsBridge: clusterRateLimits,
+	})
+	attention := NewClusterAttentionService(preferences, appLogs.Logger())
+	resourceProjection := newRefreshResourceProjection()
+	nodeMaintenanceStore := nodemaintenance.NewStore(5)
+	operations := newApplicationOperationsCoordinator(
+		clusterRuntime, resourceProjection, nodeMaintenanceStore,
+		signals.CtxOrBackground, signals.emitEvent, appLogs.Logger(),
+	)
+	resources := newResourceGateway(resourceGatewayDependencies{
+		resolveClusterDependencies:       clusterRuntime.resolveClusterDependencies,
+		resourceDependenciesForClusterID: clusterRuntime.resourceDependenciesForClusterID,
+		context:                          signals.CtxOrBackground,
+		emitEvent:                        signals.emitEvent,
+		logger:                           appLogs.Logger(),
+		clusterName:                      clusterRuntime.clusterNameForID,
+		recordTransportSuccess:           clusterRuntime.recordClusterTransportSuccess,
+		recordTransportFailure:           clusterRuntime.recordClusterTransportFailure,
+		resourceResolverForCluster: func(clusterID string) common.ResourceResolver {
+			return clusterRuntimeResourceResolver{
+				runtime: clusterRuntime, clusterID: clusterID,
+				catalogService: resourceProjection.objectCatalogServiceForCluster,
+			}
+		},
+		refreshProjection:            resourceProjection,
+		permissionFetchPolicy:        permissionFetchPolicy,
+		containerLogsSelectionPolicy: containerLogsPolicy,
+		nodeMaintenanceStore:         nodeMaintenanceStore,
+		operations:                   operations,
+	})
+	refresh := newRefreshCoordinator(RefreshCoordinatorDependencies{
+		ClusterRuntime: clusterRuntime, ClusterWorkspace: clusterWorkspace,
+		Attention: attention, Logger: appLogs.Logger(),
+		AllowedNamespaces: func(clusterID string) []string {
+			namespaces, err := preferences.clusterAllowedNamespaces(clusterID)
+			if err != nil {
+				appLogs.Logger().Warn(fmt.Sprintf("Could not read allowed namespaces for cluster %s (running cluster-wide): %v", clusterID, err), "Settings", clusterID, clusterID)
+				return nil
+			}
+			return namespaces
+		},
+		Preferences: preferences, ContainerLogsPolicy: containerLogsPolicy,
+		PermissionFetchPolicy: permissionFetchPolicy, Resources: resources,
+		Context:          signals.CtxOrBackground,
+		RuntimeAvailable: signals.runtimeAvailable, EmitEvent: signals.emitEvent,
+		ResourceProjection:   resourceProjection,
+		NodeMaintenanceStore: nodeMaintenanceStore,
+		SettingsBridge:       refreshSettings,
+	})
+	workspace := newWorkspaceCoordinator(WorkspaceCoordinatorDependencies{
+		ClusterRuntime: clusterRuntime, ClusterWorkspace: clusterWorkspace, Refresh: refresh,
+		Preferences: preferences, Operations: operations, Logger: appLogs.Logger(),
+		Context: signals.CtxOrBackground, RuntimeAvailable: signals.runtimeAvailable, EmitEvent: signals.emitEvent,
+	})
+	favorites := NewFavoritesService()
+	uiState := NewUIStateStore()
+	dataManagement := NewDataManagementCoordinator(DataManagementDependencies{
+		Preferences: preferences, Favorites: favorites, UIState: uiState,
+		Updates: updates, Attention: attention, ErrorReporting: errorReporting,
+		AppLogs: appLogs, DesktopShell: desktopShell,
+		RuntimeAvailable: signals.runtimeAvailable, Context: signals.CtxOrBackground,
+		WorkspaceMutation: func(name string, action func() error) error {
+			return workspace.runSelectionMutation(name, func(_ *selectionMutation) error { return action() })
+		},
+		ResetRuntime: func() error {
+			if err := workspace.clearKubeconfigSelection(); err != nil {
+				return err
+			}
+			return refresh.ResetRuntimeState()
+		},
+		SearchPathsChanged: workspace.refreshKubeconfigDiscoveryAfterSearchPathChange,
+	})
+	lifecycle := newApplicationLifecycle(signals, ApplicationLifecycleDependencies{
+		DesktopShell: desktopShell, Logger: appLogs.Logger(), Preferences: preferences,
+		ErrorReporting: errorReporting, ClusterRuntime: clusterRuntime, Refresh: refresh,
+		Workspace: workspace, Operations: operations, Updates: updates,
+	})
+	refresh.initGovernor()
 
-func (a *App) emitEvent(name string, args ...interface{}) {
-	if a == nil || a.eventEmitter == nil || !a.runtimeAvailable() {
-		return
-	}
-	a.eventEmitter(a.CtxOrBackground(), name, args...)
-}
-
-// initAuthManager is kept for backwards compatibility but is now a no-op.
-// Auth state management is now per-cluster, handled by each cluster's authManager
-// in the clusterClients struct. See cluster_auth.go for details.
-func (a *App) initAuthManager() {
-	// Per-cluster auth managers are created in buildClusterClients().
-	// This function is kept for compatibility but does nothing.
-}
-
-// RetryAuth triggers a manual authentication recovery attempt for ALL clusters.
-// Called when user clicks "Retry" after re-authenticating externally.
-// For per-cluster retry, use RetryClusterAuth instead.
-func (a *App) RetryAuth() {
-	a.clusterClientsMu.Lock()
-	defer a.clusterClientsMu.Unlock()
-
-	for _, clients := range a.clusterClients {
-		if clients != nil && clients.authManager != nil {
-			clients.authManager.TriggerRetry()
-		}
+	return &ApplicationRuntime{
+		Lifecycle: lifecycle, ClusterRuntime: clusterRuntime, ClusterWorkspace: clusterWorkspace,
+		Refresh: refresh, Workspace: workspace, DesktopShell: desktopShell, AppLogs: appLogs,
+		Favorites: favorites, UIState: uiState, Preferences: preferences,
+		ErrorReporting: errorReporting, ContainerLogsPolicy: containerLogsPolicy,
+		PermissionFetchPolicy: permissionFetchPolicy, NodeMaintenance: nodeMaintenanceStore,
+		DataManagement: dataManagement,
+		Attention:      attention, Resources: resources, Operations: operations, Updates: updates,
 	}
 }

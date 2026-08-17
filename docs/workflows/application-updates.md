@@ -101,6 +101,22 @@ A helper relaunch failure can restore the previous application. A defect found
 after a successful launch is corrected with a higher signed version or a
 manual authenticated installer, never an updater-driven downgrade.
 
+## Factory Reset
+
+`backend.UpdateCoordinator` owns live and durable updater reset. It resolves the
+configured `StatePath` and private `TempRoot`; dynamic prepared, attempt,
+cleanup, staging, protected, and helper-log paths are validated by
+`internal/updatestate`/`internal/updatetemp` before deletion. They are not raw
+paths exposed to the generic static app-state manifest.
+
+Reset cancels and waits for an active check or download before clearing the
+pending/prepared/skipped projections and durable state. It rejects reset while
+restart/application handoff or another non-cancellable durable mutation is in
+flight, leaving recovery state intact. Cleanup attempts every validated owned
+artifact, preserves failed entries for retry, aggregates errors, and removes
+the state file only after validated cleanup. Missing state and a repeated reset
+are valid; merely resolving paths must not create their parent directories.
+
 ## Signing-key handling
 
 Commit only the public key. Keep the unencrypted CI private key PEM in the
@@ -115,8 +131,8 @@ publication; do not rely on an in-band transition signed only by that key.
 
 ## Starting points and validation
 
-- Runtime composition: `main.go`, `backend/app_updates_config.go`
-- Coordinator and GitHub adapter: `backend/internal/appupdates`, `backend/app_update_provider.go`
+- Runtime composition: `main.go`, `backend/update_coordinator_config.go`
+- Coordinator and GitHub adapter: `backend/internal/appupdates`, `backend/update_provider.go`
 - Eligibility and durable state: `internal/updateidentity`, `internal/updatestate`, `internal/updatetemp`
 - Shell surfaces: `frontend/src/ui/status`, `frontend/src/ui/modals/AboutModal.tsx`, `frontend/src/core/backend-api`
 - Release tooling: `cmd/project/updater_release.go`, `cmd/project/release.go`, `.github/workflows/release.yml`

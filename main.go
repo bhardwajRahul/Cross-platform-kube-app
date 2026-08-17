@@ -52,7 +52,11 @@ func newSentryReporter(enabled bool, defaultDSN, version string) (sentryreportin
 
 type applicationComposition struct {
 	application *application.App
-	backend     *backend.App
+	backend     *backend.ApplicationRuntime
+	service     *backend.DesktopService
+	operations  *backend.OperationsCoordinator
+	preferences *backend.PreferencesService
+	reporting   *backend.ErrorReportingService
 	windows     *appwindow.Registry
 	menu        *application.Menu
 }
@@ -64,7 +68,8 @@ type compositionOptions struct {
 }
 
 func newApplicationComposition(reporter sentryreporting.Reporter, options compositionOptions) *applicationComposition {
-	var backendApp *backend.App
+	var backendRuntime *backend.ApplicationRuntime
+	var desktopService *backend.DesktopService
 	var windows *appwindow.Registry
 	applicationOptions := application.Options{
 		Name:        "Luxury Yacht",
@@ -96,26 +101,56 @@ func newApplicationComposition(reporter sentryreporting.Reporter, options compos
 	}
 	wailsApp := application.New(applicationOptions)
 
-	backendApp = backend.NewApp(wailsApp, reporter)
-	backend.ConfigureApplicationUpdates(backendApp, backend.ApplicationUpdateOptions{
-		TempRoot:       options.UpdateTempRoot,
-		TempSetupError: options.UpdateTempSetupError,
+	backendRuntime = backend.NewApplicationRuntime(wailsApp, backend.ApplicationRuntimeOptions{
+		Reporter: reporter,
+		ApplicationUpdates: backend.ApplicationUpdateOptions{
+			TempRoot:       options.UpdateTempRoot,
+			TempSetupError: options.UpdateTempSetupError,
+		},
+		CreateWorkspaceWindow: func() {
+			if windows != nil {
+				windows.Create(false)
+			}
+		},
 	})
+	operationsCoordinator := backendRuntime.Operations
+	desktopShell := backendRuntime.DesktopShell
+	desktopService = backend.NewDesktopService(backend.DesktopServiceDependencies{
+		Favorites:      backendRuntime.Favorites,
+		UIState:        backendRuntime.UIState,
+		Preferences:    backendRuntime.Preferences,
+		DataManagement: backendRuntime.DataManagement,
+		Attention:      backendRuntime.Attention,
+		Workspace:      backendRuntime.Workspace,
+		ClusterRuntime: backendRuntime.ClusterRuntime,
+		Resources:      backendRuntime.Resources,
+		Operations:     operationsCoordinator,
+		Updates:        backendRuntime.Updates,
+		Logs:           backendRuntime.AppLogs,
+		DesktopShell:   desktopShell,
+		Lifecycle:      backendRuntime.Lifecycle,
+		HTTP:           backendRuntime.Refresh,
+	})
+	wailsApp.HandleStream(backend.RefreshResourceStreamName, backendRuntime.Refresh.HandleResourceStream)
+	wailsApp.HandleStream(backend.RefreshContainerLogsStreamName, backendRuntime.Refresh.HandleContainerLogsStream)
 	wailsApp.RegisterService(application.NewServiceWithOptions(
-		backendApp,
+		desktopService,
 		application.ServiceOptions{Route: "/api/v2"},
 	))
 
-	nativeMenu := backend.CreateMenu(backendApp)
+	nativeMenu := backend.CreateMenu(desktopShell)
 	wailsApp.Menu.SetApplicationMenu(nativeMenu)
 
-	windows = appwindow.NewRegistry(wailsApp, backendApp, nativeMenu)
-	backendApp.SetWorkspaceWindowCreator(func() { windows.Create(false) })
+	windows = appwindow.NewRegistry(wailsApp, backendRuntime.Lifecycle, nativeMenu)
 	windows.Create(true)
 
 	return &applicationComposition{
 		application: wailsApp,
-		backend:     backendApp,
+		backend:     backendRuntime,
+		service:     desktopService,
+		operations:  operationsCoordinator,
+		preferences: backendRuntime.Preferences,
+		reporting:   backendRuntime.ErrorReporting,
 		windows:     windows,
 		menu:        nativeMenu,
 	}
@@ -145,7 +180,7 @@ func main() {
 		UpdateTempRoot:       updateTempRoot,
 		UpdateTempSetupError: updateTempSetupError,
 	})
-	if err := backend.InitializeErrorReporting(composition.backend); err != nil {
+	if err := backend.InitializeErrorReporting(composition.preferences, composition.reporting); err != nil {
 		println("Sentry error reporting remains disabled:", err.Error())
 	}
 	if err := composition.application.Run(); err != nil {

@@ -17,7 +17,7 @@ import (
 )
 
 // resourceDependenciesForSelection returns dependencies scoped to a specific cluster selection.
-func (a *App) resourceDependenciesForSelection(selection kubeconfigSelection, clients *clusterClients, clusterID string) common.Dependencies {
+func (m *ClusterRuntimeManager) resourceDependenciesForSelection(selection kubeconfigSelection, clients *clusterClients, clusterID string) common.Dependencies {
 	// Ensure nil pointer metrics clients don't get wrapped in non-nil interfaces.
 	var metricsClient metricsclient.Interface
 	if clients != nil && clients.metricsClient != nil {
@@ -25,16 +25,17 @@ func (a *App) resourceDependenciesForSelection(selection kubeconfigSelection, cl
 	}
 
 	deps := common.Dependencies{
-		Logger:              a.logger,
-		KubernetesClient:    nil,
-		MetricsClient:       metricsClient,
-		DynamicClient:       nil,
-		APIExtensionsClient: nil,
-		RestConfig:          nil,
-		ResourceResolver:    appResourceResolver{app: a, clusterID: clusterID},
-		SelectedKubeconfig:  selection.Path,
-		SelectedContext:     selection.Context,
-		ClusterID:           clusterID,
+		Logger:                           m.logger,
+		KubernetesClient:                 nil,
+		MetricsClient:                    metricsClient,
+		DynamicClient:                    nil,
+		APIExtensionsClient:              nil,
+		RestConfig:                       nil,
+		ResourceResolver:                 clusterRuntimeResourceResolver{runtime: m, clusterID: clusterID},
+		SelectedKubeconfig:               selection.Path,
+		SelectedContext:                  selection.Context,
+		ClusterID:                        clusterID,
+		ContainerLogsPerScopeTargetLimit: m.containerLogsPolicy.Limit(),
 	}
 
 	if clients == nil {
@@ -74,9 +75,9 @@ func (a *App) resourceDependenciesForSelection(selection kubeconfigSelection, cl
 		if !ok {
 			return
 		}
-		a.clusterClientsMu.Lock()
-		defer a.clusterClientsMu.Unlock()
-		entry := a.clusterClients[clusterID]
+		m.clusterClientsMu.Lock()
+		defer m.clusterClientsMu.Unlock()
+		entry := m.clusterClients[clusterID]
 		if entry != nil {
 			entry.metricsClient = clientset
 		}

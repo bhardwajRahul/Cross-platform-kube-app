@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestDefaultExecutableSearchDirectoriesExcludesProviderPaths pins the Phase 2
-// contract: the app injects only generic desktop executable directories into
+// TestDefaultExecutableSearchDirectoriesExcludesProviderPaths pins the
+// contract that the app injects only generic desktop executable directories into
 // PATH and never cloud-provider install locations (Google Cloud SDK / Caskroom),
 // even when those directories exist under HOME.
 func TestDefaultExecutableSearchDirectoriesExcludesProviderPaths(t *testing.T) {
@@ -50,9 +50,9 @@ func TestMergePathListsDeduplicatesAndTrims(t *testing.T) {
 	}
 }
 
-func TestSetupEnvironmentHandlesNilApp(t *testing.T) {
-	var app *App
-	app.setupEnvironment()
+func TestSetupEnvironmentHandlesNilLifecycle(t *testing.T) {
+	var lifecycle *ApplicationLifecycle
+	lifecycle.setupEnvironment()
 }
 
 func TestResolveHomeDirUsesEnv(t *testing.T) {

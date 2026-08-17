@@ -23,13 +23,22 @@ add/remove behavior.
 
 ## Backend Entry Points
 
-- `backend/app_kubernetes_client.go`
-- `backend/kubeconfigs.go`
-- `backend/app_refresh_setup.go`
-- `backend/app_refresh_update.go`
-- `backend/app_refresh_subsystems.go`
-- `backend/app_refresh_recovery.go`
-- `backend/app_object_catalog.go`
+- `backend/cluster_runtime_manager.go`
+- `backend/cluster_workspace_projection.go`
+- `backend/refresh_coordinator.go`
+- `backend/workspace_coordinator.go`
+- `backend/cluster_runtime_intent.go`
+- `backend/cluster_runtime_clients.go`
+- `backend/cluster_runtime_auth.go`
+- `backend/workspace_auth.go`
+- `backend/workspace_cluster_clients.go`
+- `backend/workspace_kubeconfigs.go`
+- `backend/workspace_state.go`
+- `backend/refresh_setup.go`
+- `backend/refresh_update.go`
+- `backend/refresh_subsystems.go`
+- `backend/refresh_recovery.go`
+- `backend/refresh_object_catalog.go`
 - `backend/internal/authstate`
 
 ## Frontend Entry Points
@@ -51,6 +60,9 @@ add/remove behavior.
       for clusters they display; retained inactive tabs stay passive.
 - [ ] Cluster add/remove updates aggregate refresh handlers and object catalog
       services through the live update path, not only initial setup.
+- [ ] Watcher, auth, and transport callbacks publish non-blocking typed
+      `ClusterRuntimeIntent` values; Workspace is the single consumer and routes
+      accepted generations through the serialized selection mutation.
 - [ ] Auth-failed clusters do not block healthy clusters.
 - [ ] Retry/recovery rebuilds transport, refresh, object catalog, and frontend
       diagnostics consistently.

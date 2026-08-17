@@ -64,7 +64,80 @@ loading spinners.
 - App-state broker: `frontend/src/core/app-state-access`
 - Refresh HTTP client: `frontend/src/core/refresh/client.ts`
 - Settings metadata cache: `frontend/src/core/settings/appPreferences.ts`
-- Wails DTOs and generated bindings: `frontend/bindings`
+- Wails DTOs and generated bindings: `frontend/bindings`; the only callable
+  backend module is `github.com/luxury-yacht/app/backend/desktopservice`
+
+## Wails command boundary
+
+The complete backend owner map and permitted dependency directions are
+maintained in [backend-services.md](backend-services.md).
+
+`backend.DesktopService` is the sole registered backend service. It declares
+the stable frontend command signatures and delegates each command to exactly
+one owner-shaped interface: Favorites, UI state, Preferences, Data Management,
+Cluster Attention, Workspace, Cluster Runtime, Resources, Operations, Updates,
+App Logs, or Desktop Shell. Lifecycle and `/api/v2` HTTP handling are separate
+collaborators. Do not replace these seams with one interface containing every
+command, and do not give `DesktopService` a composition-root back-pointer.
+
+Frontend code imports generated commands only through
+`frontend/src/core/backend-api/index.ts`. Higher-level consumers must not import
+`desktopservice.ts` directly. `backend.ApplicationRuntime` is not a registered
+service and has no methods; only `DesktopService` supplies generated commands,
+so implementation owners need no `//wails:ignore` directives.
+
+The final command-to-owner map is:
+
+| Owner | Commands | Responsibility |
+| --- | ---: | --- |
+| `FavoritesService` | 5 | Favorites persistence |
+| `UIStateStore` | 7 | Grid and cluster-tab UI persistence |
+| `PreferencesService` | 13 | Settings, themes, zoom, and kubeconfig search-path reads |
+| `DataManagementCoordinator` | 5 | Import, export, and factory reset |
+| `ClusterAttentionService` | 6 | Attention ignore and restore rules |
+| `WorkspaceCoordinator` | 6 | Window selection, namespace scope, diagnostics, and search-path mutation |
+| `ClusterRuntimeManager` | 3 | Kubeconfig inventory, client diagnostics, and auth retry |
+| `ResourceGateway` | 17 | Resource reads, permissions, YAML, logs, and object actions |
+| `OperationsCoordinator` | 10 | Shell, port-forward, drain, and live-operation lifecycle |
+| `UpdateCoordinator` | 6 | Update checks, download, skip, and restart |
+| `AppLogService` | 5 | Process log reads, writes, and clear |
+| `DesktopShell` | 4 | Native dialogs, CSV save, and process UI visibility |
+
+Wails generates the callable module at
+`frontend/bindings/github.com/luxury-yacht/app/backend/desktopservice.ts` and
+shared backend DTOs at the adjacent `models.ts`. DTOs declared in nested Go
+packages remain in their corresponding generated subdirectories. Frontend
+application code consumes this layout only through the backend API allowlist.
+
+`ResourceGateway` owns request-shaped Kubernetes resource work: exact catalog
+resolution, capability queries, typed details, YAML, object actions, Helm and
+node-log operations, response caching, and permission-aware cache validation.
+It receives narrow cluster-client, context, transport-health, event, logging,
+catalog, and telemetry collaborators; it never stores the composition root. The current
+cluster-client, dependency-resolution, and transport-health collaborators point
+directly to `ClusterRuntimeManager`. Catalog and refresh-telemetry reads use a
+shared leaf `refreshResourceProjection` that Refresh publishes into, so resource
+requests never call `RefreshCoordinator`.
+
+The object catalog is the only production GVK-to-GVR and object-existence
+resolver used by `ResourceGateway`. The generated resource-kind registry remains
+the per-kind vocabulary. Resource requests do not fall back to kind-only
+discovery, infer a cluster, or read preferences.
+
+Response and SSRR caches live inside `ResourceGateway`. Refresh construction
+registers gateway-owned invalidation callbacks, so the dependency points from
+refresh to resources. Resource code does not acquire refresh/subsystem state or
+call back through the composition root or coordinator. `ResourceGateway` reads the shared
+`ContainerLogsSelectionPolicy` and `PermissionFetchPolicy`; successful settings
+operations push new values into those policies in the opposite direction.
+
+The generated internal `BindingModelAnchor` method belongs to
+`*DesktopService`. Its type-level `wails:inject` directive keeps every resource
+detail DTO reachable even though the implementation-only
+`ResourceGateway.Get<Kind>` wrappers are not commands. `genappbindings.Render`
+emits the anchor and those wrappers in package `backend`, so `DesktopService`,
+`ResourceGateway`, and the generated file must remain there. Moving either type
+requires first adding and testing a target-package option in that generator.
 
 ## Settings Rule
 
@@ -76,6 +149,35 @@ contract.
 Persisted preference mutations should batch through `UpdateAppPreferences` so
 validation, persistence, side effects, normalized return values, and optimistic
 rollback stay aligned.
+
+`PreferencesService` owns one coalesced lazy-load attempt. `EnsureLoaded`
+surfaces a load error without installing state or dispatching effects;
+`EnsureLoadedForStartup` joins that same attempt and may atomically install a
+snapshot marked `startup-default`. Callers receive copied snapshots and never
+hold the preferences mutex or invoke a raw settings loader.
+
+Runtime effects cross one stateless six-route dispatcher: error-reporting
+enablement, Kubernetes client QPS/burst, SSRR fetch concurrency, per-scope
+container-log target limit, global container-log target limit, and metrics
+refresh interval. A mutation captures its immutable snapshot and effect flags,
+persists under the preferences lock, releases the lock, then dispatches to
+owner-shaped write-only sinks. Persistence failure dispatches nothing. Sinks
+must not read preferences, call another effect owner, or acquire a refresh lock
+while holding a leaf-policy lock.
+
+| Setting effect | Target owner |
+| --- | --- |
+| Error-reporting enablement | `ErrorReportingService` |
+| Kubernetes client QPS/burst | `ClusterRuntimeManager` |
+| SSRR fetch concurrency | `PermissionFetchPolicy` |
+| Per-scope container-log target limit | `ContainerLogsSelectionPolicy` |
+| Global container-log target limit | `RefreshCoordinator` |
+| Metrics refresh interval | `RefreshCoordinator` |
+
+All six targets start with backend defaults. Successful load, startup-default
+fallback, applicable update, and import publish the relevant values after the
+Preferences lock is released. A target failure is reported without suppressing
+independent targets; no target may reach back into Preferences.
 
 ## Scope Rules
 
