@@ -674,7 +674,7 @@ func (store *Store) readHelperDiagnostic(processID int) string {
 	if err != nil {
 		return ""
 	}
-	text := strings.ToValidUTF8(string(data), "�")
+	text := strings.ToValidUTF8(string(data), string(utf8.RuneError))
 	text = terminalEscape.ReplaceAllString(text, "")
 	var sanitized strings.Builder
 	for _, character := range text {
