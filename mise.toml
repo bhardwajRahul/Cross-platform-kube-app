@@ -9,7 +9,5 @@ trivy = "0.74.0"
 "go:github.com/wailsapp/wails/v3/cmd/wails3" = "3.0.0-beta.9"
 
 [vars]
-# The frontend runtime version paired with the pinned Wails release.
-wails_runtime_version = "3.0.0-beta.9"
 # NSIS is installed by the Windows-specific release action rather than Mise.
 nsis_version = "3.10"

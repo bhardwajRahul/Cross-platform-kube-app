@@ -123,13 +123,11 @@ The Go directive and Wails requirement in `go.mod` and the Node/npm metadata in
 
 ### Wails Version and Binding Contract
 
-The Wails CLI version in `mise.toml` and backend module version in `go.mod`
-move together. The paired `@wailsio/runtime` version is recorded separately as
-`wails_runtime_version` in `mise.toml` and mirrored in
-`frontend/package.json`; its prerelease suffix does not have to match the Go
-module. Before changing Wails, review the selected release's migration notes
-and source-carried runtime manifest, then update all mirrors together. Do not
-resolve any of these dependencies through `latest`.
+The Wails CLI version in `mise.toml` is canonical. The backend module version in
+`go.mod` and `@wailsio/runtime` version in `frontend/package.json` must match it.
+Before changing Wails, review the selected release's migration notes, then
+update the canonical pin and both mirrors together. Do not resolve any of these
+dependencies through `latest`.
 
 Generate committed TypeScript bindings with:
 
