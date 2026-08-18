@@ -106,6 +106,30 @@ tasks:
       - task: generate:dotdesktop
       - task: generate:rpm
 
+  create:portable:
+    summary: Creates the user-owned portable installer and updater payload
+    platforms: [linux]
+    deps:
+      - task: build
+        vars:
+          ARCH: '{{.ARCH}}'
+    cmds:
+      - task: generate:portable
+        vars:
+          ARCH: '{{.ARCH}}'
+    vars:
+      ARCH: '{{.ARCH | default ARCH}}'
+
+  generate:portable:
+    summary: Packages the existing Linux binary for portable installation and updates
+    platforms: [linux]
+    cmds:
+      - go run ./cmd/project create-linux-portable-artifacts
+    vars:
+      ARCH: '{{.ARCH | default ARCH}}'
+    env:
+      GOARCH: '{{.ARCH}}'
+
   create:aur:
     summary: Creates a arch linux packager package
     deps:
@@ -131,6 +155,18 @@ tasks:
         vars:
           FORMAT: rpm
       - mv "{{.ROOT_DIR}}/bin/{{.APP_NAME}}.rpm" "{{.ROOT_DIR}}/bin/$(GOOS=linux GOARCH={{.ARCH}} RELEASE_FORMAT=rpm go run ./cmd/project release-artifact-name)"
+    vars:
+      ARCH: '{{.ARCH | default ARCH}}'
+
+  drill:packages:
+    summary: Installs and removes the generated DEB and RPM in an isolated Linux container
+    cmds:
+      - >-
+        sh "{{.ROOT_DIR}}/build/linux/package-manager-drill.sh" "{{.ARCH}}"
+        "{{.ROOT_DIR}}/bin/$(GOOS=linux GOARCH={{.ARCH}} RELEASE_FORMAT=deb go run ./cmd/project release-artifact-name)"
+        "{{.ROOT_DIR}}/bin/$(GOOS=linux GOARCH={{.ARCH}} RELEASE_FORMAT=rpm go run ./cmd/project release-artifact-name)"
+        "{{.ROOT_DIR}}/bin/build-manifests/linux/install-deb.json"
+        "{{.ROOT_DIR}}/bin/build-manifests/linux/install-rpm.json"
     vars:
       ARCH: '{{.ARCH | default ARCH}}'
 

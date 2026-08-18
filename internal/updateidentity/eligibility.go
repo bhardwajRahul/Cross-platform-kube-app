@@ -69,7 +69,6 @@ type InstallationProbe struct {
 	TargetPath           string
 	MacInstalledBundle   bool
 	VolumeReadOnly       bool
-	TargetWritable       bool
 	ParentWritable       bool
 	PackageManagedTarget bool
 	Marker               *MarkerCandidate
@@ -165,6 +164,11 @@ func resolveWindowsInstallation(probe InstallationProbe) InstallationEligibility
 }
 
 func resolveLinuxInstallation(probe InstallationProbe) InstallationEligibility {
+	if !probe.PackageManagedTarget {
+		if portable, ok := resolveLinuxPortableInstallation(probe); ok {
+			return portable
+		}
+	}
 	if probe.PackageMarker != nil {
 		marker, ok := parseMarker(probe.PackageMarker)
 		if !ok || filepath.Clean(probe.PackageMarker.Path) != filepath.Clean(defaultLinuxPackageMarkerPath) || marker.Scope != "system" {
@@ -183,25 +187,25 @@ func resolveLinuxInstallation(probe InstallationProbe) InstallationEligibility {
 			Recovery:     RecoveryLinuxPackages,
 		}
 	}
-	if probe.PackageManagedTarget {
-		return unsupportedInstallation()
-	}
+	return unsupportedInstallation()
+}
 
+func resolveLinuxPortableInstallation(probe InstallationProbe) (InstallationEligibility, bool) {
 	marker, ok := validAdjacentMarker(probe.Platform, probe.TargetPath, probe.Marker)
 	if !ok || marker.Distribution != "portable" || marker.Scope != "user" {
-		return unsupportedInstallation()
+		return InstallationEligibility{}, false
 	}
 	result := InstallationEligibility{
 		CanCheck:     true,
 		Distribution: DistributionLinuxPortable,
 	}
-	if !probe.TargetWritable || !probe.ParentWritable {
+	if !probe.ParentWritable {
 		result.Reason = ReasonLinuxPortableIneligible
 		result.Recovery = RecoveryLinuxPortableDownload
-		return result
+		return result, true
 	}
 	result.CanInstall = true
-	return result
+	return result, true
 }
 
 func validAdjacentMarker(platform Platform, targetPath string, candidate *MarkerCandidate) (installationMarker, bool) {

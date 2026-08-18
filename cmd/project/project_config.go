@@ -27,7 +27,7 @@ const (
 	projectReleaseRepo  = "luxury-yacht/app"
 )
 
-var projectReleaseAssets = []string{".deb", ".rpm", ".dmg", ".exe", ".zip"}
+var projectReleaseAssets = []string{".deb", ".rpm", ".dmg", ".exe", ".tar.gz", ".zip"}
 
 type projectMetadata struct {
 	Info struct {
@@ -200,6 +200,9 @@ func darwinReleaseArtifactName(name, version, goarch, format string) string {
 }
 
 func linuxReleaseArtifactName(name, version, goarch, format string) string {
+	if format == "portable" && isReleaseArchitecture(goarch) {
+		return fmt.Sprintf("%s-%s-linux-%s-portable.tar.gz", name, version, goarch)
+	}
 	if format == "deb" && isReleaseArchitecture(goarch) {
 		return fmt.Sprintf("%s_%s_linux_%s.deb", name, version, goarch)
 	}
@@ -242,7 +245,7 @@ func updaterArtifactName(metadata projectMetadata, goos, goarch string) (string,
 	case "windows":
 		return fmt.Sprintf("%s-%s-windows-%s.exe", name, version, goarch), nil
 	case "linux":
-		return fmt.Sprintf("%s-%s-linux-%s.tar.gz", name, version, goarch), nil
+		return fmt.Sprintf("%s-%s-linux-%s-updater.tar.gz", name, version, goarch), nil
 	default:
 		return "", fmt.Errorf("unsupported updater artifact target %s/%s", goos, goarch)
 	}

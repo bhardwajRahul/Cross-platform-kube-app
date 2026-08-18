@@ -37,13 +37,44 @@ Release discovery and in-place installation are separate capabilities:
 | macOS app bundle | Yes when installed as an app bundle | Yes when the volume and bundle parent are writable | Otherwise open the authenticated macOS download path. |
 | Windows NSIS, per-user | Yes | Yes | A valid adjacent `luxury-yacht.install.json` marker with product ID, `nsis`, and `user` scope. |
 | Windows NSIS, machine | Yes | No | Offer the per-user migration path; do not request elevation or stage an update. |
-| Linux portable, per-user | Yes | Yes when target and parent are writable | A valid adjacent marker with `portable` and `user` scope; otherwise offer the portable download. |
+| Linux portable, per-user | Yes | Yes when the target's parent supports create-and-rename | A valid adjacent marker with `portable` and `user` scope; otherwise offer the portable download. The running Linux executable itself cannot be opened for write (`ETXTBSY`), and Wails replaces it only after the parent process exits. |
 | Linux DEB/RPM | Yes with a valid system package marker | No | Explain package-manager ownership and open package choices. |
 | Development, invalid, or unknown distribution | No | No | Explain that automatic updates are unavailable and offer download choices. |
 
 Do not infer ownership from a path or filename alone. Marker schema, product
 identity, distribution, scope, and exact expected location are all part of the
 eligibility boundary in `internal/updateidentity`.
+
+### Linux distributions
+
+Each Linux architecture is built once. DEB, RPM, the portable installer, and
+the updater archive all consume that same production binary. DEB and RPM own
+`/usr/share/luxury-yacht/install.json`, with `deb` or `rpm` distribution and
+`system` scope. The marker is removed with the package and never makes the
+package-owned executable replaceable by Wails.
+
+The manual portable artifact ends in `-portable.tar.gz`. Its `install.sh`
+installs without elevation below
+`${XDG_DATA_HOME:-$HOME/.local/share}/luxury-yacht`, writes the adjacent
+`luxury-yacht.install.json` marker with `portable` distribution and `user`
+scope, and installs the desktop entry and icon below the same XDG data home.
+Portable upgrades validate the installed marker through the same
+schema/product/distribution/scope boundary as fresh installs rather than
+requiring byte-for-byte equality with the next archive's marker.
+The installed `manage-installation uninstall` command removes only that
+verified portable installation. It also removes the one UID-derived updater
+temp root only when the full ownership marker matches and every child has an
+updater-owned staging or helper-log shape; lookalike roots and roots containing
+unknown entries are preserved. The portable runtime requires GTK 4 and WebKitGTK
+6.0; the archive README lists Debian/Ubuntu and Fedora/RHEL package names.
+
+The similarly versioned Linux archive ending in `-updater.tar.gz` is a
+single-entry tar containing only the executable. The explicit suffix prevents
+users from mistaking this internal swap payload for the manual portable
+installer. It is the sole Linux artifact accepted into `updater.json`; the
+installer tar, DEB, RPM, and AppImage are manual artifacts only. Wails
+extraction conformance runs before release publication and must yield exactly
+one executable regular file with the configured binary name.
 
 ## Release and trust contract
 
@@ -80,7 +111,11 @@ branch, mutable channel manifest, or cache invalidation participates.
 
 `internal/updatetemp` creates and validates a private, user-specific root before
 any Wails or child-process dispatch and sets the platform temp environment to
-that root. Wails staging and helper logs therefore stay below a bounded parent.
+that root. Portable Linux installations place this root beside the installation
+directory under the same XDG data home so Wails' final rename does not cross
+from the system temporary filesystem into the portable target filesystem.
+Other distributions retain the system temporary base. Wails staging and helper
+logs therefore stay below a bounded parent.
 Startup cleanup may inspect only validated `wails-update-*` children there and
 must preserve paths recorded by `internal/updatestate`.
 
@@ -136,6 +171,7 @@ publication; do not rely on an in-band transition signed only by that key.
 - Eligibility and durable state: `internal/updateidentity`, `internal/updatestate`, `internal/updatetemp`
 - Shell surfaces: `frontend/src/ui/status`, `frontend/src/ui/modals/AboutModal.tsx`, `frontend/src/core/backend-api`
 - Release tooling: `cmd/project/updater_release.go`, `cmd/project/release.go`, `.github/workflows/release.yml`
+- Linux distribution: `build/linux/portable`, `build/linux/nfpm/nfpm.yaml`, `cmd/project/linux_portable.go`
 
 Changes must prove channel selection, fail-closed manifest validation, explicit
 consent boundaries, platform eligibility, shutdown/restart ordering, helper
