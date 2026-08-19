@@ -36,6 +36,15 @@ still handles its own readiness event and becomes visible independently. Only
 the initial window restores saved geometry. Keep native hooks registered before
 `application.Run`.
 
+Before installing the application context or starting any runtime owner,
+process startup asks the shared static-state cleaner to remove direct regular
+files in the app config root that match the atomic writer's `.tmp-<digits>`
+naming contract. At this boundary no app save can be active, and a subsequent
+single-instance launch does not start another backend lifecycle. Canonical state,
+nonmatching files, and directories are left untouched. Cleanup failures are
+logged and do not prevent startup because these files are abandoned write
+artifacts rather than recovery state.
+
 Application-update staging requires a process-owned temp root. Configure that
 root before exec-wrapper dispatch, Wails composition, or any child process so
 Wails staging, helper logs, and inherited children resolve the same root.
@@ -212,8 +221,9 @@ static config and cache roots, including settings, favorites, UI persistence,
 and update-state paths. Live reset first delegates deletion and in-memory
 cleanup to the corresponding owners, then removes both app-owned roots as a
 final sweep only after every owner succeeds. This also removes obsolete or
-unrecognized app state without discarding recovery data during a partial
-failure. Offline reset removes those same static roots.
+unrecognized app state, including abandoned atomic-write temp files, without
+discarding recovery data during a partial failure. Offline reset removes those
+same static roots.
 Updater staging, attempt, cleanup, protected, and helper-log paths are dynamic:
 only `UpdateCoordinator` resolves and validates them under the configured state
 path and temp root. Resolving a missing artifact must not create directories.

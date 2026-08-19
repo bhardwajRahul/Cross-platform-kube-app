@@ -27,6 +27,14 @@ import (
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
+type failingStartupStateCleaner struct {
+	err error
+}
+
+func (c failingStartupStateCleaner) CleanupStaleWrites() error {
+	return c.err
+}
+
 func TestSetupEnvironmentAddsHomeLocalBin(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin")
 	homeDir := t.TempDir()
@@ -365,6 +373,55 @@ func TestEveryPeerHandlesRuntimeReadyWhileProcessStartupRunsOnce(t *testing.T) {
 	require.True(t, app.Lifecycle.WindowRuntimeReady("workspace-1", true))
 	require.False(t, app.Lifecycle.WindowRuntimeReady("workspace-2", false))
 	require.True(t, app.Lifecycle.runtimeAvailable())
+}
+
+func TestServiceStartupRemovesOnlyStaleAppAtomicWriteFiles(t *testing.T) {
+	setTestConfigEnv(t)
+	configBase, err := os.UserConfigDir()
+	require.NoError(t, err)
+	configRoot := filepath.Join(configBase, "luxury-yacht")
+	require.NoError(t, os.MkdirAll(filepath.Join(configRoot, ".tmp-303"), 0o700))
+
+	staleFiles := []string{".tmp-101", ".tmp-202"}
+	for _, name := range staleFiles {
+		require.NoError(t, os.WriteFile(filepath.Join(configRoot, name), []byte("stale"), 0o600))
+	}
+	preservedFiles := []string{"settings.json", ".tmp-not-owned", ".tmp-404.backup"}
+	for _, name := range preservedFiles {
+		require.NoError(t, os.WriteFile(filepath.Join(configRoot, name), []byte("keep"), 0o600))
+	}
+
+	app := NewApplicationRuntime(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	require.NoError(t, app.Lifecycle.ServiceStartup(ctx, application.ServiceOptions{}))
+
+	for _, name := range staleFiles {
+		require.NoFileExists(t, filepath.Join(configRoot, name))
+	}
+	for _, name := range preservedFiles {
+		require.FileExists(t, filepath.Join(configRoot, name))
+	}
+	require.DirExists(t, filepath.Join(configRoot, ".tmp-303"))
+}
+
+func TestStartupTempCleanupFailureIsLoggedWithoutAbortingStartup(t *testing.T) {
+	setTestConfigEnv(t)
+	app := NewApplicationRuntime(nil)
+	app.Lifecycle.startupState = failingStartupStateCleaner{err: errors.New("permission denied")}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	require.NoError(t, app.Lifecycle.ServiceStartup(ctx, application.ServiceOptions{}))
+
+	var found bool
+	for _, entry := range app.AppLogs.logger.GetEntries() {
+		if strings.Contains(entry.Message, "Could not remove stale app state temporary files: permission denied") {
+			require.Equal(t, LogLevelWarn.String(), entry.Level)
+			found = true
+		}
+	}
+	require.True(t, found)
 }
 
 func TestBeforeClosePersistsWindowSettings(t *testing.T) {

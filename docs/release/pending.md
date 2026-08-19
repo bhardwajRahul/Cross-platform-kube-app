@@ -9,4 +9,4 @@ Luxury Yacht v2.0.0 has migrated to the latest version of the Wails framework! W
 
 ### Fixed
 
-- **Factory Reset now removes all app-owned state.** Preferences, favorites, UI persistence, updater state and staging, caches, browser storage, and obsolete files under the app state roots are cleared while external kubeconfig files are preserved.
+- **Factory Reset now removes all app-owned state.** Preferences, favorites, UI persistence, updater state and staging, caches, browser storage, abandoned atomic-write files, and obsolete files under the app state roots are cleared while external kubeconfig files are preserved. Interrupted-save temp files are also discarded before runtime owners start on the next launch.

@@ -322,6 +322,8 @@ func TestFactoryResetClearsEveryAppOwnedArtifactAndRestoresRuntimePolicyDefaults
 	legacyStatePath := filepath.Join(filepath.Dir(settingsPath), "legacy", "state.json")
 	require.NoError(t, os.MkdirAll(filepath.Dir(legacyStatePath), 0o700))
 	require.NoError(t, os.WriteFile(legacyStatePath, []byte("{}"), 0o600))
+	staleWritePath := filepath.Join(filepath.Dir(settingsPath), ".tmp-8675309")
+	require.NoError(t, os.WriteFile(staleWritePath, []byte("stale"), 0o600))
 	siblingStatePath := filepath.Join(filepath.Dir(filepath.Dir(settingsPath)), "another-app", "state.json")
 	require.NoError(t, os.MkdirAll(filepath.Dir(siblingStatePath), 0o700))
 	require.NoError(t, os.WriteFile(siblingStatePath, []byte("{}"), 0o600))
@@ -343,7 +345,7 @@ func TestFactoryResetClearsEveryAppOwnedArtifactAndRestoresRuntimePolicyDefaults
 	require.NoError(t, err)
 	uiStatePath, err := app.UIState.getPersistenceFilePath()
 	require.NoError(t, err)
-	for _, path := range []string{settingsPath, favoritesPath, uiStatePath, filepath.Dir(settingsPath), cachePath} {
+	for _, path := range []string{settingsPath, favoritesPath, uiStatePath, staleWritePath, filepath.Dir(settingsPath), cachePath} {
 		_, statErr := os.Lstat(path)
 		require.ErrorIs(t, statErr, os.ErrNotExist, path)
 	}

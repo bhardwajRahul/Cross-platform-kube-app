@@ -16,13 +16,24 @@ func TestStaticAppStateCleanerRejectsAnEmptyAppNameWithoutRemovingTheUserConfigR
 	require.NoError(t, os.MkdirAll(filepath.Dir(sentinel), 0o700))
 	require.NoError(t, os.WriteFile(sentinel, []byte("{}"), 0o600))
 
-	err = newStaticAppStateCleaner("").Reset()
+	cleaner := newStaticAppStateCleaner("")
+	err = cleaner.CleanupStaleWrites()
+	require.ErrorContains(t, err, "empty app name")
+
+	err = cleaner.Reset()
 
 	require.ErrorContains(t, err, "empty app name")
 	require.FileExists(t, sentinel)
 }
 
+func TestStaticAppStateCleanerAllowsAMissingConfigRoot(t *testing.T) {
+	setTestConfigEnv(t)
+
+	require.NoError(t, newStaticAppStateCleaner("luxury-yacht").CleanupStaleWrites())
+}
+
 func TestNilStaticAppStateCleanerResetIsSafe(t *testing.T) {
 	var cleaner *staticAppStateCleaner
+	require.NoError(t, cleaner.CleanupStaleWrites())
 	require.NoError(t, cleaner.Reset())
 }

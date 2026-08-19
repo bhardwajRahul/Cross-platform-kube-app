@@ -603,7 +603,7 @@ func writeFileAtomicWithReplace(
 	replaceFile func(string, string) error,
 ) error {
 	dir := filepath.Dir(path)
-	tempFile, err := os.CreateTemp(dir, ".tmp-*")
+	tempFile, err := os.CreateTemp(dir, appAtomicWriteTempPrefix+"*")
 	if err != nil {
 		return err
 	}

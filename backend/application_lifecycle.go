@@ -47,6 +47,7 @@ type ApplicationLifecycle struct {
 
 	desktopShell   lifecycleDesktopShell
 	logger         *Logger
+	startupState   startupStateCleaner
 	preferences    lifecyclePreferences
 	errorReporting installationMetricRegistrationScheduler
 	clusterRuntime lifecycleClusterRuntime
@@ -67,6 +68,10 @@ type lifecycleDesktopShell interface {
 type lifecyclePreferences interface {
 	LoadWindowSettings() (*WindowSettings, error)
 	SaveWindowSettingsForWindow(string) error
+}
+
+type startupStateCleaner interface {
+	CleanupStaleWrites() error
 }
 
 type installationMetricRegistrationScheduler interface {
@@ -108,6 +113,7 @@ type lifecycleUpdates interface {
 type ApplicationLifecycleDependencies struct {
 	DesktopShell   lifecycleDesktopShell
 	Logger         *Logger
+	StartupState   startupStateCleaner
 	Preferences    lifecyclePreferences
 	ErrorReporting installationMetricRegistrationScheduler
 	ClusterRuntime lifecycleClusterRuntime
@@ -132,6 +138,7 @@ func newApplicationLifecycle(
 		signals:        signals,
 		desktopShell:   dependencies.DesktopShell,
 		logger:         logger,
+		startupState:   dependencies.StartupState,
 		preferences:    dependencies.Preferences,
 		errorReporting: dependencies.ErrorReporting,
 		clusterRuntime: dependencies.ClusterRuntime,
@@ -149,6 +156,7 @@ func (a *ApplicationLifecycle) ServiceStartup(ctx context.Context, _ application
 	// start a client or informer. Both installers are idempotent.
 	errorcapture.Init()
 	errorcapture.InstallUnhandledErrorDedup()
+	a.cleanupStaleAppStateWrites()
 	a.setApplicationContext(ctx)
 	go a.clusterRuntime.consumeIntents(ctx, a.workspace.consumeClusterRuntimeIntent)
 	a.clusterRuntime.initializeClusterLifecycle()
@@ -159,6 +167,15 @@ func (a *ApplicationLifecycle) ServiceStartup(ctx context.Context, _ application
 	a.setupEnvironment()
 	a.logger.Debug("Environment setup completed", logsources.App)
 	return nil
+}
+
+func (a *ApplicationLifecycle) cleanupStaleAppStateWrites() {
+	if a.startupState == nil {
+		return
+	}
+	if err := a.startupState.CleanupStaleWrites(); err != nil {
+		a.logger.Warn(fmt.Sprintf("Could not remove stale app state temporary files: %v", err), logsources.App)
+	}
 }
 
 // WindowRuntimeReady runs interactive initialization once the webview runtime

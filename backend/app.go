@@ -159,9 +159,10 @@ func NewApplicationRuntime(wailsApplication *application.App, configured ...Appl
 	})
 	favorites := NewFavoritesService()
 	uiState := NewUIStateStore()
+	staticState := newStaticAppStateCleaner("luxury-yacht")
 	dataManagement := NewDataManagementCoordinator(DataManagementDependencies{
 		Preferences: preferences, Favorites: favorites, UIState: uiState,
-		Updates: updates, StaticState: newStaticAppStateCleaner("luxury-yacht"),
+		Updates: updates, StaticState: staticState,
 		Attention: attention, ErrorReporting: errorReporting,
 		AppLogs: appLogs, DesktopShell: desktopShell,
 		RuntimeAvailable: signals.runtimeAvailable, Context: signals.CtxOrBackground,
@@ -177,7 +178,7 @@ func NewApplicationRuntime(wailsApplication *application.App, configured ...Appl
 		SearchPathsChanged: workspace.refreshKubeconfigDiscoveryAfterSearchPathChange,
 	})
 	lifecycle := newApplicationLifecycle(signals, ApplicationLifecycleDependencies{
-		DesktopShell: desktopShell, Logger: appLogs.Logger(), Preferences: preferences,
+		DesktopShell: desktopShell, Logger: appLogs.Logger(), StartupState: staticState, Preferences: preferences,
 		ErrorReporting: errorReporting, ClusterRuntime: clusterRuntime, Refresh: refresh,
 		Workspace: workspace, Operations: operations, Updates: updates,
 	})

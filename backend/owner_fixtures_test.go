@@ -255,9 +255,10 @@ func newSettingsEffectsTestFixture(t testing.TB, reporters ...sentryreporting.Re
 	)
 	favorites := NewFavoritesService()
 	uiState := NewUIStateStore()
+	staticState := newStaticAppStateCleaner("luxury-yacht")
 	dataManagement := NewDataManagementCoordinator(DataManagementDependencies{
 		Preferences: fixture.Preferences, Favorites: favorites, UIState: uiState,
-		Updates: updates, StaticState: newStaticAppStateCleaner("luxury-yacht"),
+		Updates: updates, StaticState: staticState,
 		Attention: fixture.Attention, ErrorReporting: errorReporting,
 		AppLogs: fixture.AppLogs, DesktopShell: fixture.DesktopShell,
 		RuntimeAvailable: fixture.signals.runtimeAvailable, Context: fixture.signals.CtxOrBackground,
@@ -273,7 +274,7 @@ func newSettingsEffectsTestFixture(t testing.TB, reporters ...sentryreporting.Re
 		SearchPathsChanged: fixture.Workspace.refreshKubeconfigDiscoveryAfterSearchPathChange,
 	})
 	fixture.Lifecycle = newApplicationLifecycle(fixture.signals, ApplicationLifecycleDependencies{
-		DesktopShell: fixture.DesktopShell, Logger: fixture.AppLogs.Logger(), Preferences: fixture.Preferences,
+		DesktopShell: fixture.DesktopShell, Logger: fixture.AppLogs.Logger(), StartupState: staticState, Preferences: fixture.Preferences,
 		ErrorReporting: errorReporting, ClusterRuntime: fixture.ClusterRuntime, Refresh: fixture.Refresh,
 		Workspace: fixture.Workspace, Operations: fixture.Operations, Updates: updates,
 	})

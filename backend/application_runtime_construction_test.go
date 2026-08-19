@@ -128,6 +128,7 @@ func TestServiceStartupInstallsErrorCaptureBeforeRuntimeWork(t *testing.T) {
 	ordered := []string{
 		"errorcapture.Init()",
 		"errorcapture.InstallUnhandledErrorDedup()",
+		"a.cleanupStaleAppStateWrites()",
 		"a.setApplicationContext(ctx)",
 		"a.clusterRuntime.consumeIntents",
 		"a.clusterRuntime.initializeClusterLifecycle()",
