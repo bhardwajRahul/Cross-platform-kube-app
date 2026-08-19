@@ -161,7 +161,8 @@ func NewApplicationRuntime(wailsApplication *application.App, configured ...Appl
 	uiState := NewUIStateStore()
 	dataManagement := NewDataManagementCoordinator(DataManagementDependencies{
 		Preferences: preferences, Favorites: favorites, UIState: uiState,
-		Updates: updates, Attention: attention, ErrorReporting: errorReporting,
+		Updates: updates, StaticState: newStaticAppStateCleaner("luxury-yacht"),
+		Attention: attention, ErrorReporting: errorReporting,
 		AppLogs: appLogs, DesktopShell: desktopShell,
 		RuntimeAvailable: signals.runtimeAvailable, Context: signals.CtxOrBackground,
 		WorkspaceMutation: func(name string, action func() error) error {

@@ -305,7 +305,7 @@ func TestDataManagementRequiresAnInitializedAppContext(t *testing.T) {
 	require.ErrorContains(t, err, "application context is not available")
 }
 
-func TestFactoryResetClearsEveryLeafArtifactAndRestoresRuntimePolicyDefaults(t *testing.T) {
+func TestFactoryResetClearsEveryAppOwnedArtifactAndRestoresRuntimePolicyDefaults(t *testing.T) {
 	setTestConfigEnv(t)
 	app := newSettingsEffectsTestFixture(t)
 	setTestAppRuntimeReady(t, app.Lifecycle, context.Background())
@@ -317,6 +317,16 @@ func TestFactoryResetClearsEveryLeafArtifactAndRestoresRuntimePolicyDefaults(t *
 		Favorites: []Favorite{dataManagementFavorite("favorite", "Favorite")},
 	}))
 	require.NoError(t, app.UIState.SetClusterTabOrder([]string{"cluster-a"}))
+	settingsPath, err := app.Preferences.getSettingsFilePath()
+	require.NoError(t, err)
+	legacyStatePath := filepath.Join(filepath.Dir(settingsPath), "legacy", "state.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(legacyStatePath), 0o700))
+	require.NoError(t, os.WriteFile(legacyStatePath, []byte("{}"), 0o600))
+	siblingStatePath := filepath.Join(filepath.Dir(filepath.Dir(settingsPath)), "another-app", "state.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(siblingStatePath), 0o700))
+	require.NoError(t, os.WriteFile(siblingStatePath, []byte("{}"), 0o600))
+	externalKubeconfigPath := filepath.Join(t.TempDir(), "external-kubeconfig")
+	require.NoError(t, os.WriteFile(externalKubeconfigPath, []byte("external"), 0o600))
 	cachePath, err := app.Preferences.cacheDirPath()
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(cachePath, 0o700))
@@ -329,16 +339,16 @@ func TestFactoryResetClearsEveryLeafArtifactAndRestoresRuntimePolicyDefaults(t *
 	require.NoError(t, app.DataManagement.ClearAppState())
 	require.NoError(t, app.DataManagement.ClearAppState(), "Factory Reset must be repeatable")
 
-	settingsPath, err := app.Preferences.getSettingsFilePath()
-	require.NoError(t, err)
 	favoritesPath, err := app.Favorites.getFavoritesFilePath()
 	require.NoError(t, err)
 	uiStatePath, err := app.UIState.getPersistenceFilePath()
 	require.NoError(t, err)
-	for _, path := range []string{settingsPath, favoritesPath, uiStatePath, cachePath} {
+	for _, path := range []string{settingsPath, favoritesPath, uiStatePath, filepath.Dir(settingsPath), cachePath} {
 		_, statErr := os.Lstat(path)
 		require.ErrorIs(t, statErr, os.ErrNotExist, path)
 	}
+	require.FileExists(t, externalKubeconfigPath, "Factory Reset must preserve user-owned kubeconfig files")
+	require.FileExists(t, siblingStatePath, "Factory Reset must preserve other applications' state")
 	require.Nil(t, app.Preferences.appSettings)
 	require.Equal(t, defaultPermissionSSRRFetchConcurrency, app.PermissionFetchPolicy.Concurrency())
 	require.Equal(t, defaultObjPanelLogsTargetPerScopeLimit, app.ContainerLogsPolicy.Limit())
@@ -356,12 +366,15 @@ func TestFactoryResetAttemptsIndependentOwnersAndReturnsPartialFailure(t *testin
 	}))
 	favoritesPath, err := app.Favorites.getFavoritesFilePath()
 	require.NoError(t, err)
+	recoveryPath := filepath.Join(filepath.Dir(favoritesPath), "update-recovery.json")
+	require.NoError(t, os.WriteFile(recoveryPath, []byte("recovery"), 0o600))
 
 	err = app.DataManagement.ClearAppState()
 
 	require.ErrorContains(t, err, "updater busy")
 	_, statErr := os.Lstat(favoritesPath)
 	require.ErrorIs(t, statErr, os.ErrNotExist, "favorites reset must still run after updater failure")
+	require.FileExists(t, recoveryPath, "the root sweep must not discard recovery data after an owner failure")
 }
 
 func TestReadDataImportFileRejectsOversizedFiles(t *testing.T) {

@@ -52,6 +52,7 @@ type DataManagementDependencies struct {
 	Favorites          dataManagementFavorites
 	UIState            dataManagementResetter
 	Updates            contextResetter
+	StaticState        dataManagementResetter
 	Attention          projectionResetter
 	ErrorReporting     installationTelemetryQuiescer
 	AppLogs            appLogsClearer
@@ -71,6 +72,7 @@ type DataManagementCoordinator struct {
 	favorites          dataManagementFavorites
 	uiState            dataManagementResetter
 	updates            contextResetter
+	staticState        dataManagementResetter
 	attention          projectionResetter
 	errorReporting     installationTelemetryQuiescer
 	appLogs            appLogsClearer
@@ -86,7 +88,8 @@ func NewDataManagementCoordinator(dependencies DataManagementDependencies) *Data
 	return &DataManagementCoordinator{
 		preferences: dependencies.Preferences, favorites: dependencies.Favorites,
 		uiState: dependencies.UIState, updates: dependencies.Updates,
-		attention: dependencies.Attention, errorReporting: dependencies.ErrorReporting,
+		staticState: dependencies.StaticState,
+		attention:   dependencies.Attention, errorReporting: dependencies.ErrorReporting,
 		appLogs: dependencies.AppLogs, desktopShell: dependencies.DesktopShell,
 		runtimeAvailable: dependencies.RuntimeAvailable, context: dependencies.Context,
 		workspaceMutation: dependencies.WorkspaceMutation, resetRuntime: dependencies.ResetRuntime,
@@ -112,6 +115,9 @@ func (c *DataManagementCoordinator) clearAppState() error {
 		failures = append(failures, c.appLogs.ClearAppLogs())
 	}
 	failures = compactErrors(failures)
+	if len(failures) == 0 && c.staticState != nil {
+		failures = compactErrors(append(failures, c.staticState.Reset()))
+	}
 	if len(failures) > 0 {
 		return fmt.Errorf("clear app state: %w", errors.Join(failures...))
 	}

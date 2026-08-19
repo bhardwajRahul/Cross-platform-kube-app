@@ -209,8 +209,11 @@ clear browser storage and reload. A reset does not promise a native relaunch.
 
 `internal/appstate.Manifest` is the shared, side-effect-free inventory for the
 static config and cache roots, including settings, favorites, UI persistence,
-and update-state paths. Live reset delegates deletion and in-memory cleanup to
-the corresponding owners. Offline reset removes those same static roots.
+and update-state paths. Live reset first delegates deletion and in-memory
+cleanup to the corresponding owners, then removes both app-owned roots as a
+final sweep only after every owner succeeds. This also removes obsolete or
+unrecognized app state without discarding recovery data during a partial
+failure. Offline reset removes those same static roots.
 Updater staging, attempt, cleanup, protected, and helper-log paths are dynamic:
 only `UpdateCoordinator` resolves and validates them under the configured state
 path and temp root. Resolving a missing artifact must not create directories.

@@ -257,7 +257,8 @@ func newSettingsEffectsTestFixture(t testing.TB, reporters ...sentryreporting.Re
 	uiState := NewUIStateStore()
 	dataManagement := NewDataManagementCoordinator(DataManagementDependencies{
 		Preferences: fixture.Preferences, Favorites: favorites, UIState: uiState,
-		Updates: updates, Attention: fixture.Attention, ErrorReporting: errorReporting,
+		Updates: updates, StaticState: newStaticAppStateCleaner("luxury-yacht"),
+		Attention: fixture.Attention, ErrorReporting: errorReporting,
 		AppLogs: fixture.AppLogs, DesktopShell: fixture.DesktopShell,
 		RuntimeAvailable: fixture.signals.runtimeAvailable, Context: fixture.signals.CtxOrBackground,
 		WorkspaceMutation: func(name string, action func() error) error {
