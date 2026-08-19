@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"sync"
@@ -21,9 +22,16 @@ var (
 
 func sharedTestComposition() *applicationComposition {
 	testCompositionOnce.Do(func() {
-		testComposition = newApplicationComposition(&mainRecordingReporter{}, compositionOptions{SingleInstance: true})
+		testComposition = newApplicationComposition(&mainRecordingReporter{}, compositionOptions{
+			SingleInstance:         true,
+			SingleInstanceUniqueID: testSingleInstanceID(),
+		})
 	})
 	return testComposition
+}
+
+func testSingleInstanceID() string {
+	return fmt.Sprintf("%s.test.%d", applicationProductIdentifier, os.Getpid())
 }
 
 type mainRecordingReporter struct {
@@ -112,8 +120,14 @@ func TestApplicationCompositionOwnsPeerWindowRegistryMenuAndService(t *testing.T
 	require.NotNil(t, config.Assets.Handler)
 	require.NotNil(t, config.ShouldQuit)
 	require.NotNil(t, config.SingleInstance)
-	require.Equal(t, applicationProductIdentifier, config.SingleInstance.UniqueID)
+	require.Equal(t, testSingleInstanceID(), config.SingleInstance.UniqueID)
 	require.NotNil(t, config.SingleInstance.OnSecondInstanceLaunch)
+}
+
+func TestSingleInstanceUniqueIDDefaultsToProductIdentifier(t *testing.T) {
+	require.Equal(t, applicationProductIdentifier, singleInstanceUniqueID(""))
+	require.Equal(t, applicationProductIdentifier, singleInstanceUniqueID(" \t"))
+	require.Equal(t, "test-instance", singleInstanceUniqueID(" test-instance "))
 }
 
 type startupFailureProbeService struct {

@@ -927,7 +927,9 @@ Implementation progress:
   materialization, release-scoped `updater.json`, and draft-then-publish GitHub
   Release boundary are implemented. The live macOS rollout evidence remains
   pending.
-- [ ] Phase 6 — affected-path cleanup.
+- [x] Phase 6 — affected-path cleanup. Legacy paths, obsolete DTOs, durable
+  documentation, release notes, total Factory Reset, and abandoned-write
+  startup cleanup are complete.
 
 ### Phase 1: release identity and eligibility
 
@@ -1175,6 +1177,28 @@ exactly one process scheduler, download, helper, persistence flush, and relaunch
   recovery, then publish stable only after stable-to-stable, beta-to-stable,
   same-release manifest validation, the macOS smoke matrix, and the full gate
   are green.
+  - [x] macOS arm64 Beta 2 → Beta 3 happy path confirmed on 2026-08-18:
+    discovery, explicit download, ready state, restart/apply, Beta 3 relaunch,
+    no repeat offer, and post-update cleanup all passed. Live inspection found
+    only the expected ownership marker in the updater temp root, a schema-only
+    `application-update.json`, and no app-state `.tmp-*` files.
+  - [x] macOS amd64 Beta 2 → Beta 3 happy path confirmed on 2026-08-18 on an
+    Intel Mac, including discovery, download, ready state, restart/apply,
+    Beta 3 relaunch, no repeat offer, and post-update cleanup.
+  - [x] Automated failed-draft safety contract confirmed on 2026-08-18: release
+    tooling uploads into a draft before the final publish edit, a final-publish
+    failure leaves recovery to the operator, and an unsafe rerun is blocked.
+  - [x] Safe failed-draft fault-injection harness implemented on 2026-08-18:
+    `release:failed-draft-drill` refuses the production repository, injects the
+    failure before publication, verifies the remote draft state, and cleans up
+    the disposable release while reporting any cleanup failure.
+  - [x] Full prerelease gate passed on macOS arm64 on 2026-08-18: the complete
+    Go race suite, 4,288 frontend tests across 471 files, formatting, generated
+    bindings, vet, static analysis, frontend lint and typecheck, dependency
+    analysis, and high/critical vulnerability and secret scanning passed.
+  - [ ] Release operator: run one live failed-draft recovery drill in a
+    disposable release repository before stable-channel rollout. This is not a
+    manual application smoke test; follow `docs/workflows/application-updates.md`.
 - [ ] **Stage 2 — Windows:** provision Authenticode signing, move the supported
   installer to per-user identity, publish signed raw updater executables for
   arm64 and amd64, publish the migration page, enforce installer side-by-side

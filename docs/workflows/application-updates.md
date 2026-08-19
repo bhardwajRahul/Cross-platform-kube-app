@@ -107,6 +107,23 @@ leaves an operator-inspected draft; repair or delete it and rerun the complete
 sequence. GitHub Release publication is the only rollout pointer, so no site,
 branch, mutable channel manifest, or cache invalidation participates.
 
+Before a stable-channel rollout, exercise that recovery contract against a
+repository used only for release drills:
+
+```sh
+RELEASE_DRAFT_DRILL_REPOSITORY=owner/disposable-repository \
+RELEASE_DRAFT_DRILL_CONFIRM=create-and-delete-disposable-draft \
+mise exec -- wails3 task release:failed-draft-drill
+```
+
+The drill refuses `luxury-yacht/app`, creates a uniquely tagged draft with a
+disposable asset, injects a local failure before `gh release edit
+--draft=false`, confirms GitHub still reports the release as a draft, and
+deletes it before returning. If cleanup fails, the command reports the exact
+tag that must be removed manually. The disposable repository must already
+exist, and the active `gh` account must be allowed to create and delete its
+releases (`cmd/project/release_draft_drill.go`).
+
 ## Staging, restart, and recovery
 
 `internal/updatetemp` creates and validates a private, user-specific root before

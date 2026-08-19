@@ -201,6 +201,11 @@ tasks:
     cmds:
       - go run ./cmd/project release-app
 
+  release:failed-draft-drill:
+    desc: Proves an injected publish failure leaves and cleans up a disposable GitHub draft
+    cmds:
+      - go run ./cmd/project release-draft-drill
+
   release:prepare-updater-manifest:
     desc: Builds and verifies the signed updater.json GitHub Release asset
     cmds:

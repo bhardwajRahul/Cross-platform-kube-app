@@ -62,9 +62,17 @@ type applicationComposition struct {
 }
 
 type compositionOptions struct {
-	SingleInstance       bool
-	UpdateTempRoot       string
-	UpdateTempSetupError error
+	SingleInstance         bool
+	SingleInstanceUniqueID string
+	UpdateTempRoot         string
+	UpdateTempSetupError   error
+}
+
+func singleInstanceUniqueID(configured string) string {
+	if uniqueID := strings.TrimSpace(configured); uniqueID != "" {
+		return uniqueID
+	}
+	return applicationProductIdentifier
 }
 
 func newApplicationComposition(reporter sentryreporting.Reporter, options compositionOptions) *applicationComposition {
@@ -89,7 +97,7 @@ func newApplicationComposition(reporter sentryreporting.Reporter, options compos
 	}
 	if options.SingleInstance {
 		applicationOptions.SingleInstance = &application.SingleInstanceOptions{
-			UniqueID: applicationProductIdentifier,
+			UniqueID: singleInstanceUniqueID(options.SingleInstanceUniqueID),
 			ExitCode: 0,
 			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
 				if windows == nil {

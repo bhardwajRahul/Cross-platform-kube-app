@@ -6,7 +6,7 @@ import (
 	"os"
 )
 
-const projectUsage = "usage: project <backend-coverage|binary-name|bindings|build-manifests|build-metadata|clean-all|clean-build|clean-frontend|config|create-linux-portable-artifacts|fmt|go-mod-update|go-mod-update-check|install-unsigned|prepare-release-updater-manifest|product-name|release-app|release-artifact-name|release-site|reset|validate-linux-updater|validate-macos-updater|validate-release-tag>"
+const projectUsage = "usage: project <backend-coverage|binary-name|bindings|build-manifests|build-metadata|clean-all|clean-build|clean-frontend|config|create-linux-portable-artifacts|fmt|go-mod-update|go-mod-update-check|install-unsigned|prepare-release-updater-manifest|product-name|release-app|release-artifact-name|release-draft-drill|release-site|reset|validate-linux-updater|validate-macos-updater|validate-release-tag>"
 
 var projectCommands = map[string]func() error{
 	"backend-coverage":                 runBackendCoverage,
@@ -27,6 +27,7 @@ var projectCommands = map[string]func() error{
 	"product-name":                     func() error { return writeConfiguredProductName(os.Stdout) },
 	"release-app":                      publishConfiguredRelease,
 	"release-artifact-name":            writeConfiguredReleaseArtifactName,
+	"release-draft-drill":              runConfiguredReleaseDraftDrill,
 	"release-site":                     publishConfiguredSiteVersion,
 	"reset":                            resetConfiguredAppState,
 	"validate-linux-updater":           runLinuxUpdaterArchiveValidation,
