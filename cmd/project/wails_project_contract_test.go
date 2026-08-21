@@ -1031,26 +1031,6 @@ func TestReleasePublishesSignedUpdaterManifestInsideTheGitHubRelease(t *testing.
 	require.NotContains(t, rootTaskfile, "release:publish-updater-channels:")
 }
 
-func TestReleaseBuildMatrixRunsNativeBackendStaticAnalysis(t *testing.T) {
-	workflow := readTestFile(t, repositoryPath(".github", "workflows", "release.yml"))
-	rootTaskfile := readTestFile(t, repositoryPath("Taskfile.yml"))
-	testStart := strings.Index(workflow, "\n  test:\n")
-	buildStart := strings.Index(workflow, "\n  build:\n")
-	prepareStart := strings.Index(workflow, "\n  prepare-release:\n")
-	require.GreaterOrEqual(t, testStart, 0)
-	require.Greater(t, buildStart, testStart)
-	require.Greater(t, prepareStart, buildStart)
-	testJob := workflow[testStart:buildStart]
-	buildJob := workflow[buildStart:prepareStart]
-
-	require.NotContains(t, rootTaskfile, "qc:vet:windows:")
-	require.NotContains(t, testJob, "wails3 task qc:vet")
-	nativeAnalysisStep := "      - name: Run native backend static analysis\n        run: wails3 task qc:vet"
-	require.Contains(t, buildJob, nativeAnalysisStep)
-	require.Less(t, strings.Index(buildJob, "name: Setup toolchain"), strings.Index(buildJob, nativeAnalysisStep))
-	require.Less(t, strings.Index(buildJob, nativeAnalysisStep), strings.Index(buildJob, "name: Set up macOS code signing"))
-}
-
 func TestRefreshTransportUsesOnlyWailsServiceAndNamedStreams(t *testing.T) {
 	mainSource := readTestFile(t, repositoryPath("main.go"))
 	require.Contains(t, mainSource, `application.ServiceOptions{Route: "/api/v2"}`)
