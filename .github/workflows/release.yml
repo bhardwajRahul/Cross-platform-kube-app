@@ -38,6 +38,8 @@ jobs:
         run: |
           echo "🟣 Run a build to ensure frontend/dist is generated"
           wails3 build
+          echo "🟣 Run backend vet"
+          wails3 task qc:vet
           echo "🟣 Run backend tests"
           wails3 task test:backend
           echo "🟣 Run frontend lint"
@@ -111,9 +113,6 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           install-linux-deps: ${{ matrix.goos == 'linux' }}
-
-      - name: Run native backend static analysis
-        run: wails3 task qc:vet
 
       - name: Set up macOS code signing
         if: matrix.goos == 'darwin'
