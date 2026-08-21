@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/luxury-yacht/app/internal/windowsinstall"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,6 +23,9 @@ info:
   version: "v2.0.0-beta.3"
 luxuryYacht:
   betaExpiryDays: 45
+  updaterTargets:
+    - darwin/arm64
+    - linux/amd64
 `
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -43,6 +47,18 @@ luxuryYacht:
 	if metadata.LuxuryYacht.BetaExpiryDays != 45 {
 		t.Errorf("BetaExpiryDays = %d, want 45", metadata.LuxuryYacht.BetaExpiryDays)
 	}
+	require.Equal(t, []string{"darwin/arm64", "linux/amd64"}, metadata.LuxuryYacht.UpdaterTargets)
+}
+
+func TestWindowsRuntimeRegistryIdentityMatchesProjectMetadata(t *testing.T) {
+	metadata, err := readProjectMetadata(repositoryPath("build", "config.yml"))
+	require.NoError(t, err)
+
+	registryPath, err := windowsUninstallRegistryPath(metadata)
+
+	require.NoError(t, err)
+	require.Equal(t, windowsinstall.ProductName, metadata.Info.ProductName)
+	require.Equal(t, windowsinstall.UninstallRegistryPath, registryPath)
 }
 
 func TestLoadDotEnvLoadsValuesWithoutOverwritingEnvironment(t *testing.T) {
@@ -144,8 +160,10 @@ func TestReleaseArtifactNamePreservesVersionPlatformAndArchitecture(t *testing.T
 		{goos: "linux", arch: "arm64", format: "deb", want: "luxury-yacht_v2.0.0_linux_arm64.deb"},
 		{goos: "linux", arch: "amd64", format: "rpm", want: "luxury-yacht-v2.0.0-linux-x86_64.rpm"},
 		{goos: "linux", arch: "arm64", format: "rpm", want: "luxury-yacht-v2.0.0-linux-aarch64.rpm"},
-		{goos: "windows", arch: "amd64", format: "exe", want: "luxury-yacht-v2.0.0-windows-amd64-installer.exe"},
-		{goos: "windows", arch: "arm64", format: "exe", want: "luxury-yacht-v2.0.0-windows-arm64-installer.exe"},
+		{goos: "windows", arch: "amd64", format: "exe", want: "luxury-yacht-v2.0.0-windows-amd64-user-installer.exe"},
+		{goos: "windows", arch: "arm64", format: "exe", want: "luxury-yacht-v2.0.0-windows-arm64-user-installer.exe"},
+		{goos: "windows", arch: "amd64", format: "system-exe", want: "luxury-yacht-v2.0.0-windows-amd64-system-installer.exe"},
+		{goos: "windows", arch: "arm64", format: "system-exe", want: "luxury-yacht-v2.0.0-windows-arm64-system-installer.exe"},
 		{goos: "darwin", arch: "arm64", format: "updater", want: "luxury-yacht-v2.0.0-darwin-arm64.zip"},
 		{goos: "windows", arch: "amd64", format: "updater", want: "luxury-yacht-v2.0.0-windows-amd64.exe"},
 		{goos: "linux", arch: "amd64", format: "portable", want: "luxury-yacht-v2.0.0-linux-amd64-portable.tar.gz"},

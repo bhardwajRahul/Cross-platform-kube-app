@@ -134,6 +134,61 @@ func TestRenderedLinuxMarkersMatchRuntimeInstallationIdentity(t *testing.T) {
 	}
 }
 
+func TestRenderedWindowsMarkersMatchRuntimeInstallationIdentity(t *testing.T) {
+	configPath := repositoryPath("build", "config.yml")
+	root := t.TempDir()
+	specs := []platformManifestSpec{
+		{
+			sourcePath: repositoryPath("build", "windows", "nsis", "install-user.json"),
+			outputPath: filepath.Join(root, "install-user.json"),
+		},
+		{
+			sourcePath: repositoryPath("build", "windows", "nsis", "install-machine.json"),
+			outputPath: filepath.Join(root, "install-machine.json"),
+		},
+	}
+	require.NoError(t, renderProjectPlatformManifests(configPath, specs))
+
+	for _, test := range []struct {
+		name       string
+		markerPath string
+		scope      updateidentity.InstallationScope
+		canInstall bool
+	}{
+		{
+			name: "user", markerPath: specs[0].outputPath,
+			scope: updateidentity.InstallationScopeUser, canInstall: true,
+		},
+		{
+			name: "machine", markerPath: specs[1].outputPath,
+			scope: updateidentity.InstallationScopeMachine,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			executable := filepath.Join("C:", "Luxury Yacht", "luxury-yacht.exe")
+			eligibility := updateidentity.ResolveInstallation(updateidentity.InstallationProbe{
+				Platform: updateidentity.PlatformWindows, Architecture: "amd64", TargetPath: executable,
+				WindowsMachineRegistered: test.scope == updateidentity.InstallationScopeMachine,
+				Marker: &updateidentity.MarkerCandidate{
+					Path: filepath.Join(filepath.Dir(executable), updateidentity.InstallationMarkerName),
+					Data: readTestFileBytes(t, test.markerPath),
+				},
+			})
+			require.True(t, eligibility.CanCheck)
+			require.Equal(t, test.canInstall, eligibility.CanInstall)
+			require.Equal(t, updateidentity.DistributionWindowsNSIS, eligibility.Distribution)
+			require.Equal(t, test.scope, eligibility.Scope)
+			if test.canInstall {
+				require.Empty(t, eligibility.Reason)
+				require.Empty(t, eligibility.Recovery)
+			} else {
+				require.Equal(t, updateidentity.ReasonManagedInstallation, eligibility.Reason)
+				require.Equal(t, updateidentity.RecoveryWindowsDownload, eligibility.Recovery)
+			}
+		})
+	}
+}
+
 func TestRenderProjectPlatformManifestsRejectsTemplateWithoutMetadataPlaceholder(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "config.yml")

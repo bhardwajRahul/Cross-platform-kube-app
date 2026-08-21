@@ -68,12 +68,12 @@ describe('getUpdatePresentation', () => {
       'View macOS Download',
     ],
     [
-      updateidentity.EligibilityReason.ReasonWindowsMachineScope,
-      updateidentity.RecoveryTarget.RecoveryWindowsPerUserMigration,
-      'Switch to Per-User Installation',
+      updateidentity.EligibilityReason.ReasonWindowsUnverifiedInstall,
+      updateidentity.RecoveryTarget.RecoveryWindowsDownload,
+      'View Windows Download',
     ],
     [
-      updateidentity.EligibilityReason.ReasonWindowsUnverifiedInstall,
+      updateidentity.EligibilityReason.ReasonManagedInstallation,
       updateidentity.RecoveryTarget.RecoveryWindowsDownload,
       'View Windows Download',
     ],
@@ -108,6 +108,21 @@ describe('getUpdatePresentation', () => {
       expect(presentation?.secondary).toEqual({ kind: 'skip', label: 'Skip This Version' });
     }
   );
+
+  it('explains that managed installations update outside the app', () => {
+    const presentation = getUpdatePresentation(
+      update({
+        status: appupdates.Status.StatusAvailable,
+        canInstall: false,
+        eligibilityReason: updateidentity.EligibilityReason.ReasonManagedInstallation,
+        recoveryTarget: updateidentity.RecoveryTarget.RecoveryWindowsDownload,
+      })
+    );
+
+    expect(presentation?.explanation).toBe(
+      'This installation is managed outside the app. Use its installer or package manager to update it.'
+    );
+  });
 
   it('renders no update surface for idle state', () => {
     expect(getUpdatePresentation(update({ status: appupdates.Status.StatusIdle }))).toBeNull();

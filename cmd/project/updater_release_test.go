@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,6 +15,54 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func writeTestPE(t *testing.T, path, architecture string) {
+	t.Helper()
+	data := make([]byte, 0x86)
+	copy(data, "MZ")
+	binary.LittleEndian.PutUint32(data[0x3c:], 0x80)
+	copy(data[0x80:], "PE\x00\x00")
+	machine := uint16(windowsMachineAMD64)
+	if architecture == "arm64" {
+		machine = windowsMachineARM64
+	}
+	binary.LittleEndian.PutUint16(data[0x84:], machine)
+	require.NoError(t, os.WriteFile(path, data, 0o700))
+}
+
+func TestCreateAndValidateWindowsUpdaterExecutable(t *testing.T) {
+	metadata := testProjectMetadata("v2.0.0-beta.4")
+	root := t.TempDir()
+	binary := filepath.Join(root, "luxury-yacht.exe")
+	writeTestPE(t, binary, "amd64")
+
+	artifact, err := createWindowsUpdaterArtifact(metadata, binary, root, "AMD64")
+
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(root, "luxury-yacht-v2.0.0-beta.4-windows-amd64.exe"), artifact)
+	require.NoError(t, validateConfiguredWindowsUpdaterExecutable(metadata, artifact, "amd64"))
+	require.NoError(t, os.WriteFile(artifact, []byte("stale build output"), 0o600))
+	refreshed, err := createWindowsUpdaterArtifact(metadata, binary, root, "amd64")
+	require.NoError(t, err)
+	require.Equal(t, artifact, refreshed)
+	require.NoError(t, validateConfiguredWindowsUpdaterExecutable(metadata, refreshed, "amd64"))
+}
+
+func TestValidateWindowsUpdaterExecutableRejectsWrongNameArchitectureAndSymlink(t *testing.T) {
+	metadata := testProjectMetadata("v2.0.0")
+	root := t.TempDir()
+	wrongName := filepath.Join(root, "wrong.exe")
+	writeTestPE(t, wrongName, "amd64")
+	require.ErrorContains(t, validateConfiguredWindowsUpdaterExecutable(metadata, wrongName, "amd64"), "does not match expected")
+
+	arm64 := filepath.Join(root, "luxury-yacht-v2.0.0-windows-amd64.exe")
+	writeTestPE(t, arm64, "arm64")
+	require.ErrorContains(t, validateConfiguredWindowsUpdaterExecutable(metadata, arm64, "amd64"), "machine")
+
+	require.NoError(t, os.Remove(arm64))
+	require.NoError(t, os.Symlink(wrongName, arm64))
+	require.ErrorContains(t, validateConfiguredWindowsUpdaterExecutable(metadata, arm64, "amd64"), "regular non-symlink")
+}
 
 type closeErrorWriter struct {
 	err error
@@ -327,17 +376,17 @@ func TestValidateConfiguredLinuxUpdaterArchiveUsesExactWailsPayload(t *testing.T
 	require.ErrorContains(t, err, "unsupported updater artifact target")
 }
 
-func TestPrepareReleaseUpdaterManifestSignsOneImmutableAssetForStableRelease(t *testing.T) {
+func TestPrepareReleaseUpdaterManifestSignsEveryConfiguredTargetForStableRelease(t *testing.T) {
 	t.Chdir(repositoryPath())
 	directory := t.TempDir()
 	metadata := testProjectMetadata("v2.0.0")
-	for _, target := range []updaterTarget{
-		{Platform: "darwin", Architecture: "arm64"},
-		{Platform: "darwin", Architecture: "amd64"},
-	} {
+	metadata.LuxuryYacht.UpdaterTargets = updaterTargetNames(orderedUpdaterTargets)
+	var artifactNames []string
+	for _, target := range orderedUpdaterTargets {
 		name, err := updaterArtifactName(metadata, target.Platform, target.Architecture)
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(filepath.Join(directory, name), []byte("artifact"), 0o600))
+		artifactNames = append(artifactNames, name)
 	}
 	privateKey := filepath.Join(directory, "updater.key")
 	publicKey := filepath.Join(directory, "updater.key.pub")
@@ -345,14 +394,15 @@ func TestPrepareReleaseUpdaterManifestSignsOneImmutableAssetForStableRelease(t *
 	require.NoError(t, os.WriteFile(publicKey, []byte("public"), 0o600))
 	environment := map[string]string{
 		"UPDATER_ARTIFACTS_DIR":    directory,
-		"UPDATER_TARGETS":          "darwin/arm64,darwin/amd64",
 		"UPDATER_PRIVATE_KEY_PATH": privateKey,
 		"UPDATER_PUBLIC_KEY":       publicKey,
 		"GITHUB_RUN_NUMBER":        "42",
 	}
 	var channels []string
+	var manifestArgs []string
 	run := func(_ string, args ...string) error {
 		if slices.Contains(args, "manifest") {
+			manifestArgs = append([]string(nil), args...)
 			channel := args[slices.Index(args, "-channel")+1]
 			channels = append(channels, channel)
 			output := args[slices.Index(args, "-output")+1]
@@ -371,6 +421,9 @@ func TestPrepareReleaseUpdaterManifestSignsOneImmutableAssetForStableRelease(t *
 	require.NoError(t, err)
 	require.Equal(t, []string{"stable"}, channels)
 	require.FileExists(t, filepath.Join(directory, "updater.json"))
+	for _, name := range artifactNames {
+		require.Contains(t, manifestArgs, filepath.Join(directory, ".updater-manifest-stable", name))
+	}
 }
 
 func TestPrepareReleaseUpdaterManifestRejectsMismatchedOrIncompleteConfiguration(t *testing.T) {
@@ -383,24 +436,21 @@ func TestPrepareReleaseUpdaterManifestRejectsMismatchedOrIncompleteConfiguration
 	)
 	require.ErrorContains(t, err, "does not match metadata")
 
+	metadata.LuxuryYacht.UpdaterTargets = nil
 	err = prepareReleaseUpdaterManifest(
 		metadata,
 		projectFacts{version: "v2.0.0-beta.1"},
-		func(name string) string {
-			if name == "UPDATER_TARGETS" {
-				return "darwin/arm64"
-			}
-			return ""
-		},
+		func(string) string { return "" },
 		func(string, ...string) error { return nil },
 	)
-	require.ErrorContains(t, err, "artifact root")
+	require.ErrorContains(t, err, "updater targets")
 }
 
 func testProjectMetadata(version string) projectMetadata {
 	var metadata projectMetadata
 	metadata.Info.ProductName = "Luxury Yacht"
 	metadata.Info.Version = version
+	metadata.LuxuryYacht.UpdaterTargets = []string{"darwin/arm64", "darwin/amd64"}
 	return metadata
 }
 

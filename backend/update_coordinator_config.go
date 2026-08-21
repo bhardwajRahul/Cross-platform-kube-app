@@ -21,9 +21,10 @@ import (
 var applicationUpdatePublicKey []byte
 
 type ApplicationUpdateOptions struct {
-	TempRoot       string
-	TempSetupError error
-	StatePath      string
+	TempRoot                       string
+	TempSetupError                 error
+	StatePath                      string
+	ReconcileWindowsDisplayVersion func(string) error
 }
 
 type applicationUpdateRuntime struct {
@@ -36,6 +37,7 @@ type applicationUpdateRuntime struct {
 	ExecutablePath    string
 	HomeDirectory     string
 	PackageMarkerPath string
+	UpdaterTargets    []string
 }
 
 func (u *UpdateCoordinator) initializeApplicationUpdates(options ApplicationUpdateOptions) {
@@ -123,6 +125,12 @@ func (u *UpdateCoordinator) resolveApplicationUpdateState(
 		return nil, eligibility
 	}
 	u.logApplicationUpdateReconciliation(setup.Reconciled)
+	if setup.MetadataReconcileError != nil {
+		u.logger.Warn(
+			fmt.Sprintf("Automatic update applied, but Windows Installed Apps metadata was not updated: %v", setup.MetadataReconcileError),
+			logsources.UpdateCheck,
+		)
+	}
 	return &setup, eligibility
 }
 
@@ -158,9 +166,10 @@ func (u *UpdateCoordinator) resolveApplicationUpdateProvider(
 }
 
 type applicationUpdateStateSetup struct {
-	Store          *updatestate.Store
-	Reconciled     updatestate.ReconcileResult
-	SkippedVersion string
+	Store                  *updatestate.Store
+	Reconciled             updatestate.ReconcileResult
+	SkippedVersion         string
+	MetadataReconcileError error
 }
 
 func prepareApplicationUpdateState(
@@ -175,6 +184,15 @@ func prepareApplicationUpdateState(
 	if err != nil {
 		return applicationUpdateStateSetup{}, fmt.Errorf("reconcile application update state: %w", err)
 	}
+	var metadataReconcileError error
+	if reconciled.Outcome == updatestate.OutcomeSucceeded &&
+		reconciled.Distribution == updateidentity.DistributionWindowsNSIS {
+		reconcileDisplayVersion := options.ReconcileWindowsDisplayVersion
+		if reconcileDisplayVersion == nil {
+			reconcileDisplayVersion = reconcileWindowsDisplayVersion
+		}
+		metadataReconcileError = reconcileDisplayVersion(reconciled.TargetVersion)
+	}
 	document, err := store.Load()
 	if err != nil {
 		return applicationUpdateStateSetup{}, fmt.Errorf("load reconciled application update state: %w", err)
@@ -184,6 +202,7 @@ func prepareApplicationUpdateState(
 	}
 	return applicationUpdateStateSetup{
 		Store: store, Reconciled: reconciled, SkippedVersion: document.SkippedVersion,
+		MetadataReconcileError: metadataReconcileError,
 	}, nil
 }
 
@@ -246,12 +265,14 @@ func currentApplicationUpdateEligibility(now time.Time) (updateidentity.BuildEli
 		Version: Version, BetaExpiry: BetaExpiry, Now: now,
 		Server: updateidentity.CurrentBuildIsServer, Platform: runtime.GOOS, Architecture: runtime.GOARCH,
 		ExecutablePath: executablePath, HomeDirectory: homeDirectory,
+		UpdaterTargets: UpdaterTargets,
 	})
 }
 
 func resolveApplicationUpdateEligibility(runtimeInfo applicationUpdateRuntime) (updateidentity.BuildEligibility, error) {
 	preliminary := updateidentity.ResolveBuild(updateidentity.BuildProbe{
 		Version: runtimeInfo.Version, Server: runtimeInfo.Server, Now: runtimeInfo.Now,
+		PayloadAvailable: true,
 	})
 	switch preliminary.Status {
 	case updateidentity.BuildDisabledDevelopment,
@@ -280,6 +301,9 @@ func resolveApplicationUpdateEligibility(runtimeInfo applicationUpdateRuntime) (
 	return updateidentity.ResolveBuild(updateidentity.BuildProbe{
 		Version: runtimeInfo.Version, Server: runtimeInfo.Server, BetaExpiry: betaExpiry,
 		Now: runtimeInfo.Now, Installation: installation,
+		PayloadAvailable: updateidentity.HasUpdaterTarget(
+			runtimeInfo.UpdaterTargets, probe.Platform, probe.Architecture,
+		),
 	}), nil
 }
 

@@ -325,7 +325,7 @@ func TestResolveApplicationUpdateEligibilityUsesReleaseAndInstallIdentity(t *tes
 
 	eligibility, err := resolveApplicationUpdateEligibility(applicationUpdateRuntime{
 		Version: "v2.0.0", Now: now, Platform: "darwin", Architecture: "arm64",
-		ExecutablePath: executable, HomeDirectory: home,
+		ExecutablePath: executable, HomeDirectory: home, UpdaterTargets: []string{"darwin/arm64"},
 	})
 
 	require.NoError(t, err)
@@ -333,6 +333,25 @@ func TestResolveApplicationUpdateEligibilityUsesReleaseAndInstallIdentity(t *tes
 	require.True(t, eligibility.CanInitialize)
 	require.True(t, eligibility.CanInstall)
 	require.Equal(t, updateidentity.DistributionMacBundle, eligibility.Installation.Distribution)
+
+	windowsRoot := t.TempDir()
+	windowsExecutable := filepath.Join(windowsRoot, "luxury-yacht.exe")
+	require.NoError(t, os.WriteFile(windowsExecutable, []byte("binary"), 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(windowsRoot, updateidentity.InstallationMarkerName),
+		[]byte(`{"schemaVersion":1,"productIdentifier":"app.luxury-yacht.desktop","distribution":"nsis","scope":"user"}`),
+		0o600,
+	))
+	windows, err := resolveApplicationUpdateEligibility(applicationUpdateRuntime{
+		Version: "v2.0.0", Now: now, Platform: "windows", Architecture: "amd64",
+		ExecutablePath: windowsExecutable, UpdaterTargets: []string{"darwin/arm64", "linux/amd64"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, updateidentity.BuildDisabledPayload, windows.Status)
+	require.False(t, windows.CanInitialize)
+	require.False(t, windows.CanCheck)
+	require.False(t, windows.CanInstall)
+	require.Equal(t, updateidentity.DistributionWindowsNSIS, windows.Installation.Distribution)
 
 	development, err := resolveApplicationUpdateEligibility(applicationUpdateRuntime{
 		Version: "dev", Now: now, Platform: "darwin", Architecture: "arm64",
@@ -407,6 +426,47 @@ func TestPrepareApplicationUpdateStateReconcilesBeforeSweepingOrphans(t *testing
 	document, err := setup.Store.Load()
 	require.NoError(t, err)
 	require.Empty(t, document.ProtectedPaths())
+}
+
+func TestPrepareApplicationUpdateStateReconcilesWindowsDisplayVersionAfterSuccessfulSwap(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "owned-temp")
+	statePath := filepath.Join(base, "config", "application-update.json")
+	require.NoError(t, os.Mkdir(root, 0o700))
+	store, err := updatestate.New(updatestate.Config{
+		StatePath: statePath, TempRoot: root, PID: func() int { return 4242 },
+	})
+	require.NoError(t, err)
+	staging := filepath.Join(root, "wails-update-success")
+	require.NoError(t, os.Mkdir(staging, 0o700))
+	require.NoError(t, store.RecordPrepared(updatestate.PreparedUpdate{
+		TargetVersion: "2.0.0-beta.3", StagingDir: staging,
+		RecoveryTarget: updateidentity.RecoveryWindowsDownload,
+	}))
+	_, err = store.BeginAttempt(updatestate.AttemptMetadata{
+		SourceVersion: "2.0.0-beta.2", Platform: "windows", Architecture: "amd64",
+		Distribution: updateidentity.DistributionWindowsNSIS,
+	})
+	require.NoError(t, err)
+	wantWarning := errors.New("registry unavailable")
+	var reconciledVersions []string
+
+	setup, err := prepareApplicationUpdateState(ApplicationUpdateOptions{
+		TempRoot: root, StatePath: statePath,
+		ReconcileWindowsDisplayVersion: func(version string) error {
+			reconciledVersions = append(reconciledVersions, version)
+			return wantWarning
+		},
+	}, enabledApplicationUpdateBuild())
+
+	require.NoError(t, err)
+	require.Equal(t, updatestate.OutcomeSucceeded, setup.Reconciled.Outcome)
+	require.Equal(t, []string{"2.0.0-beta.3"}, reconciledVersions)
+	require.ErrorIs(t, setup.MetadataReconcileError, wantWarning)
+	document, err := setup.Store.Load()
+	require.NoError(t, err)
+	require.Nil(t, document.Attempt)
+	require.NoDirExists(t, staging)
 }
 
 func TestNewUpdateCoordinatorProjectsAndLogsFailedApply(t *testing.T) {

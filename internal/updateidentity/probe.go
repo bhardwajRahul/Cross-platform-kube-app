@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/luxury-yacht/app/internal/windowsinstall"
 )
 
 const defaultLinuxPackageMarkerPath = "/usr/share/luxury-yacht/install.json"
@@ -36,6 +38,7 @@ func CollectInstallationProbe(options ProbeOptions) (InstallationProbe, error) {
 			return InstallationProbe{}, err
 		}
 		probe.Marker = marker
+		probe.WindowsMachineRegistered = windowsinstall.LegacyMachineInstall(probe.TargetPath)
 		return probe, nil
 	case PlatformLinux:
 		return collectLinuxProbe(probe, options.PackageMarkerPath)
