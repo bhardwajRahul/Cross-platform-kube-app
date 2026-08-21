@@ -91,20 +91,7 @@ tasks:
     desc: Runs go vet and staticcheck
     cmds:
       - go vet ./...
-      - for: [amd64, arm64]
-        task: qc:vet:windows
-        vars:
-          ARCH: '{{.ITEM}}'
       - staticcheck ./...
-
-  qc:vet:windows:
-    internal: true
-    env:
-      GOOS: windows
-      GOARCH: '{{.ARCH}}'
-      CGO_ENABLED: '0'
-    cmds:
-      - go vet ./...
 
   qc:lint:
     desc: Runs the frontend linter

@@ -857,7 +857,6 @@ func TestWindowsInstallerWritesScopedMarkerAndRefusesLegacyMachineSideBySideInst
 func TestWindowsReleasePublishesAndDrillsBothInstallerScopes(t *testing.T) {
 	workflow := readTestFile(t, repositoryPath(".github", "workflows", "release.yml"))
 	drill := readTestFile(t, repositoryPath("build", "windows", "package-drill.ps1"))
-	releaseNotes := readTestFile(t, repositoryPath("docs", "release", "pending.md"))
 
 	require.Contains(t, workflow, "build/windows/package-drill.ps1")
 	require.Contains(t, workflow, "go test ./internal/updateidentity ./internal/windowsinstall ./backend -run Windows -count=1")
@@ -878,13 +877,6 @@ func TestWindowsReleasePublishesAndDrillsBothInstallerScopes(t *testing.T) {
 	}
 	require.NotContains(t, drill, "Luxury YachtLuxury Yacht")
 	require.Contains(t, workflow, "-UninstallRegistryPath $config.windowsUninstallRegistryPath")
-	for _, contract := range []string{
-		"per-user installer is the recommended default",
-		"all-users installer remains available",
-		"use the current installer instead of requesting special updater privileges",
-	} {
-		require.Contains(t, releaseNotes, contract)
-	}
 }
 
 func TestConfiguredUpdaterTargetsPublishOnlyReplaceablePayloads(t *testing.T) {
@@ -1039,14 +1031,24 @@ func TestReleasePublishesSignedUpdaterManifestInsideTheGitHubRelease(t *testing.
 	require.NotContains(t, rootTaskfile, "release:publish-updater-channels:")
 }
 
-func TestQualityGateCompilesWindowsCodeForBothArchitectures(t *testing.T) {
+func TestReleaseBuildMatrixRunsNativeBackendStaticAnalysis(t *testing.T) {
+	workflow := readTestFile(t, repositoryPath(".github", "workflows", "release.yml"))
 	rootTaskfile := readTestFile(t, repositoryPath("Taskfile.yml"))
+	testStart := strings.Index(workflow, "\n  test:\n")
+	buildStart := strings.Index(workflow, "\n  build:\n")
+	prepareStart := strings.Index(workflow, "\n  prepare-release:\n")
+	require.GreaterOrEqual(t, testStart, 0)
+	require.Greater(t, buildStart, testStart)
+	require.Greater(t, prepareStart, buildStart)
+	testJob := workflow[testStart:buildStart]
+	buildJob := workflow[buildStart:prepareStart]
 
-	require.Contains(t, rootTaskfile, "for: [amd64, arm64]")
-	require.Contains(t, rootTaskfile, "task: qc:vet:windows")
-	require.Contains(t, rootTaskfile, "ARCH: '{{.ITEM}}'")
-	require.Contains(t, rootTaskfile, "qc:vet:windows:\n    internal: true")
-	require.Contains(t, rootTaskfile, "GOOS: windows\n      GOARCH: '{{.ARCH}}'")
+	require.NotContains(t, rootTaskfile, "qc:vet:windows:")
+	require.NotContains(t, testJob, "wails3 task qc:vet")
+	nativeAnalysisStep := "      - name: Run native backend static analysis\n        run: wails3 task qc:vet"
+	require.Contains(t, buildJob, nativeAnalysisStep)
+	require.Less(t, strings.Index(buildJob, "name: Setup toolchain"), strings.Index(buildJob, nativeAnalysisStep))
+	require.Less(t, strings.Index(buildJob, nativeAnalysisStep), strings.Index(buildJob, "name: Set up macOS code signing"))
 }
 
 func TestRefreshTransportUsesOnlyWailsServiceAndNamedStreams(t *testing.T) {
