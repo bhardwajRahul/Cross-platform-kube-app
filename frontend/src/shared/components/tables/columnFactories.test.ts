@@ -6,13 +6,15 @@
  */
 
 import {
-  applyColumnSizing,
   type ColumnSizingMap,
   createAgeColumn,
   createKindColumn,
   createResourceBarColumn,
+  createResourceNameColumn,
   createTextColumn,
-  upsertNamespaceColumn,
+  withAutoWidthColumns,
+  withColumnSizing,
+  withNamespaceColumn,
 } from '@shared/components/tables/columnFactories';
 import type { GridColumnDefinition } from '@shared/components/tables/GridTable';
 import { getTextContent } from '@shared/components/tables/GridTable.utils';
@@ -79,7 +81,7 @@ describe('columnFactories', () => {
       const column = createAgeColumn<{ age?: string; ageTimestamp?: number }>();
 
       expect(column.render({ age: '5m' })).toBe('5m');
-      expect(column.sortValue?.({ age: '5m' })).toBe('5m');
+      expect(column.sortValue?.({ age: '5m' })).toBe(300);
     });
   });
 
@@ -147,22 +149,40 @@ describe('columnFactories', () => {
     });
   });
 
-  describe('upsertNamespaceColumn', () => {
-    it('inserts namespace column immediately after name and removes duplicates', () => {
+  describe('createResourceNameColumn', () => {
+    it('declares resource identity as required and gives it a useful default width', () => {
+      const column = createResourceNameColumn<RowSample>((row) => row.name);
+
+      expect(column.key).toBe('name');
+      expect(column.hideable).toBe(false);
+      expect(column.width).toBe(250);
+      expect(column.resizable).not.toBe(false);
+    });
+  });
+
+  describe('withNamespaceColumn', () => {
+    it('immutably inserts namespace after the declared anchor and removes duplicates', () => {
       const columns: GridColumnDefinition<RowSample>[] = [
         { key: 'kind', header: 'Kind', render: () => null },
         { key: 'name', header: 'Name', render: () => null },
         { key: 'status', header: 'Status', render: () => null },
       ];
 
-      upsertNamespaceColumn(columns, {
+      const firstInsert = withNamespaceColumn(columns, {
+        afterColumnKey: 'name',
         onClick: vi.fn(),
       });
 
-      expect(columns.map((column) => column.key)).toEqual(['kind', 'name', 'namespace', 'status']);
+      expect(columns.map((column) => column.key)).toEqual(['kind', 'name', 'status']);
+      expect(firstInsert.map((column) => column.key)).toEqual([
+        'kind',
+        'name',
+        'namespace',
+        'status',
+      ]);
 
-      const secondInsert = [...columns];
-      upsertNamespaceColumn(secondInsert, {
+      const secondInsert = withNamespaceColumn(firstInsert, {
+        afterColumnKey: 'name',
         onClick: vi.fn(),
       });
       expect(secondInsert.map((column) => column.key)).toEqual([
@@ -172,9 +192,35 @@ describe('columnFactories', () => {
         'status',
       ]);
     });
+
+    it('rejects a missing anchor instead of silently changing the layout', () => {
+      const columns: GridColumnDefinition<RowSample>[] = [
+        { key: 'kind', header: 'Kind', render: () => null },
+      ];
+
+      expect(() =>
+        withNamespaceColumn(columns, {
+          afterColumnKey: 'name',
+          onClick: vi.fn(),
+        })
+      ).toThrow('GridTable namespace column anchor not found: "name"');
+    });
   });
 
   describe('createKindColumn', () => {
+    it('owns badge rendering and ordinary column capabilities', () => {
+      const column = createKindColumn<RowSample>({ getKind: (row) => row.kind ?? '' });
+      const badge = column.render({ id: 'deployment', kind: 'Deployment' }) as React.ReactElement<{
+        className?: string;
+      }>;
+
+      expect(badge.props.className?.split(' ')).toEqual(
+        expect.arrayContaining(['kind-badge', 'hash-color-11'])
+      );
+      expect(column.hideable).not.toBe(false);
+      expect(column.resizable).not.toBe(false);
+    });
+
     it('preserves independent header and data alignment', () => {
       const column = createKindColumn<RowSample>({
         getKind: (row) => row.kind ?? '',
@@ -200,6 +246,7 @@ describe('columnFactories', () => {
       expect(React.isValidElement(element)).toBe(true);
       expect((element as React.ReactElement).type).toBe('button');
       const badge = element as React.ReactElement<{
+        className?: string;
         'data-kind-value': string;
         children: React.ReactNode;
         onClick?: (event: unknown) => void;
@@ -209,6 +256,7 @@ describe('columnFactories', () => {
       }>;
       expect(badge.props['data-kind-value']).toBe('Pod');
       expect(badge.props.children).toBe('P');
+      expect(badge.props.className?.split(' ')).not.toContain('gridtable-cell-button');
       expect(badge.props['data-gridtable-shortcut-optout']).toBe('true');
       expect(badge.props['data-gridtable-rowclick']).toBe('allow');
 
@@ -321,8 +369,8 @@ describe('columnFactories', () => {
     });
   });
 
-  describe('applyColumnSizing', () => {
-    it('applies width hints onto columns', () => {
+  describe('withColumnSizing', () => {
+    it('immutably applies width hints onto columns', () => {
       const columns: GridColumnDefinition<RowSample>[] = [
         { key: 'name', header: 'Name', render: () => null },
         { key: 'age', header: 'Age', render: () => null },
@@ -330,14 +378,31 @@ describe('columnFactories', () => {
       const sizing: ColumnSizingMap = {
         name: { width: 120, minWidth: 100, maxWidth: 180, autoWidth: true },
       };
-      applyColumnSizing(columns, sizing);
-      expect(columns[0]).toMatchObject({
+      const sized = withColumnSizing(columns, sizing);
+      expect(columns[0].width).toBeUndefined();
+      expect(sized[0]).toMatchObject({
         width: 120,
         minWidth: 100,
         maxWidth: 180,
         autoWidth: true,
       });
-      expect(columns[1].width).toBeUndefined();
+      expect(sized[1].width).toBeUndefined();
+    });
+
+    it('enables automatic sizing without replacing existing column defaults', () => {
+      const columns: GridColumnDefinition<RowSample>[] = [
+        { key: 'name', header: 'Name', width: 250, render: () => null },
+        { key: 'kind', header: 'Kind', width: 100, autoWidth: true, render: () => null },
+      ];
+
+      const sized = withAutoWidthColumns(columns);
+
+      expect(sized).toMatchObject([
+        { key: 'name', width: 250, autoWidth: true },
+        { key: 'kind', width: 100, autoWidth: true },
+      ]);
+      expect(columns[0].autoWidth).toBeUndefined();
+      expect(sized[1]).toBe(columns[1]);
     });
   });
 });

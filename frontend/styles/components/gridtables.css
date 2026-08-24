@@ -474,25 +474,67 @@ body.gridtable-disable-hover .gridtable-hover-overlay {
   text-align: right;
 }
 
-/* Type column - no ellipsis for badge display */
-.grid-cell[data-column="kind"],
-.grid-cell[data-column="type"] {
+.gridtable-column-drag-handle {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: grab;
+  font: inherit;
+  line-height: 1;
+  /* The row is the drag target now, so the grip no longer needs a generous hit
+     area of its own — it is an affordance and a keyboard entry point. */
+  padding: 4px 3px;
+  user-select: none;
+  opacity: 0.45;
+  transition: opacity 0.1s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gridtable-column-drag-handle {
+    transition: none;
+  }
+}
+
+.gridtable-column-drag-handle:hover,
+.gridtable-column-drag-handle:focus-visible {
+  color: var(--color-text-secondary);
+}
+
+/* The row is the drag target; the grip is the affordance that announces it. */
+.dropdown-option-row[data-column-key] {
+  cursor: grab;
+}
+
+.dropdown-option-row[data-dragging="true"] {
+  cursor: grabbing;
+  opacity: 0.4;
+}
+
+.dropdown-option-row[data-column-key]:hover .gridtable-column-drag-handle,
+.dropdown-option-row.highlighted .gridtable-column-drag-handle,
+.gridtable-column-drag-handle:focus-visible {
+  opacity: 1;
+}
+
+.dropdown-option-row[data-drop-position="before"] {
+  box-shadow: inset 0 2px 0 0 var(--color-accent);
+}
+
+.dropdown-option-row[data-drop-position="after"] {
+  box-shadow: inset 0 -2px 0 0 var(--color-accent);
+}
+
+/* Badge columns own their presentation through a declarative class. */
+.gridtable-kind-column,
+.gridtable-badge-column {
   padding-top: var(--grid-spacing-badge-cell-y);
   padding-bottom: var(--grid-spacing-badge-cell-y);
 }
 
-.grid-cell[data-column="type"] {
+.gridtable-badge-column {
   overflow: visible;
   text-overflow: clip;
   white-space: normal; /* Allow badges to wrap if needed */
-}
-
-/* Event column - full text should always be visible */
-.grid-cell[data-column="event"] {
-  overflow: visible;
-  text-overflow: clip;
-  white-space: normal; /* Allow event text to wrap */
-  line-height: var(--grid-cell-line-height);
 }
 
 /* --- Table Variants ------------------------------------------------------ */
@@ -765,10 +807,6 @@ body.dockable-panel-resizing .content-body .gridtable-pagination {
 
 .dropdown-filter-option--action {
   padding-left: 0;
-}
-
-.dropdown-filter-option--action .dropdown-filter-check {
-  display: none;
 }
 
 .gridtable-filter-actions {

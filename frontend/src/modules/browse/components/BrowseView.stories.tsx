@@ -7,10 +7,23 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import '@styles/components/gridtables.css';
 import './BrowseView.css';
+import CatalogPaginationFooter, {
+  catalogPaginationPageKeyProps,
+} from '@modules/browse/components/CatalogPaginationFooter';
+import type { BrowseCatalogPagination } from '@modules/browse/hooks/useBrowseCatalog';
 import type { IconBarItem } from '@shared/components/IconBar/IconBar';
 import { FavoriteFilledIcon, FavoriteOutlineIcon } from '@shared/components/icons/FavoriteIcons';
-import { createAgeColumn } from '@shared/components/tables/columnFactories';
-import GridTable, { type GridColumnDefinition } from '@shared/components/tables/GridTable';
+import {
+  createAgeColumn,
+  createKindColumn,
+  createResourceNameColumn,
+  withAutoWidthColumns,
+} from '@shared/components/tables/columnFactories';
+import GridTable, {
+  type ColumnWidthState,
+  type GridColumnDefinition,
+} from '@shared/components/tables/GridTable';
+import { useState } from 'react';
 import { KeyboardProviderDecorator } from '../../../../.storybook/decorators/KeyboardProviderDecorator';
 
 const noOp = () => undefined;
@@ -52,11 +65,50 @@ const ROWS: BrowseStoryRow[] = [
 ];
 
 const COLUMNS: GridColumnDefinition<BrowseStoryRow>[] = [
-  { key: 'kind', header: 'Kind', render: (row) => row.kind, sortable: true, width: 160 },
-  { key: 'name', header: 'Name', render: (row) => row.name, sortable: true, width: 320 },
+  {
+    ...createKindColumn<BrowseStoryRow>({ getKind: (row) => row.kind }),
+    width: 160,
+  },
+  {
+    ...createResourceNameColumn<BrowseStoryRow>((row) => row.name),
+    width: 320,
+  },
   { key: 'namespace', header: 'Namespace', render: (row) => row.ns, sortable: true, width: 220 },
   { ...createAgeColumn<BrowseStoryRow>(), width: 120 },
 ];
+
+const LARGE_AUTO_WIDTH_ROWS: BrowseStoryRow[] = Array.from({ length: 609 }, (_value, index) => ({
+  kind:
+    index === 500
+      ? 'PriorityLevelConfiguration'
+      : index === 0
+        ? 'ClusterRoleBinding'
+        : index === 1
+          ? 'ValidatingWebhook'
+          : 'StorageClass',
+  name:
+    index === 1
+      ? 'cert-manager-controller-certificatesigningrequests'
+      : `resource-${String(index).padStart(3, '0')}`,
+  ns: 'default',
+  age: index === 1 ? '2mo' : '10mo',
+}));
+
+const AUTO_WIDTH_COLUMNS: GridColumnDefinition<BrowseStoryRow>[] = withAutoWidthColumns([
+  createKindColumn<BrowseStoryRow>({ getKind: (row) => row.kind, onClick: noOp }),
+  createResourceNameColumn<BrowseStoryRow>((row) => row.name),
+  createAgeColumn<BrowseStoryRow>(),
+]);
+
+const persistedColumnWidth = (width: number): ColumnWidthState => ({
+  width,
+  unit: 'px',
+  raw: width,
+  rawValue: width,
+  autoWidth: false,
+  source: 'column',
+  updatedAt: 0,
+});
 
 function MockBrowseView({ isFavorited = false }: { isFavorited?: boolean }) {
   const favoriteAction: IconBarItem = {
@@ -71,7 +123,7 @@ function MockBrowseView({ isFavorited = false }: { isFavorited?: boolean }) {
     <GridTable
       data={ROWS}
       columns={COLUMNS}
-      keyExtractor={(row) => `${row.kind}:${row.ns}:${row.name}`}
+      keyExtractor={(row) => `story|${row.kind}:${row.ns}:${row.name}`}
       className="gridtable-browse"
       tableClassName="gridtable-browse"
       onSort={noOp}
@@ -89,6 +141,52 @@ function MockBrowseView({ isFavorited = false }: { isFavorited?: boolean }) {
           preActions: [favoriteAction],
         },
       }}
+    />
+  );
+}
+
+function PersistedAutoWidthView() {
+  const [pageIndex, setPageIndex] = useState(1);
+  const [columnWidths, setColumnWidths] = useState<Record<string, ColumnWidthState>>({
+    kind: persistedColumnWidth(160),
+    name: persistedColumnWidth(320),
+  });
+  const pageSize = 500;
+  const pageRows = LARGE_AUTO_WIDTH_ROWS.slice((pageIndex - 1) * pageSize, pageIndex * pageSize);
+  const pagination: BrowseCatalogPagination = {
+    pageIndex,
+    pageLimit: pageSize,
+    pageLimitOptions: [pageSize],
+    setPageLimit: noOp,
+    totalCount: LARGE_AUTO_WIDTH_ROWS.length,
+    totalIsExact: true,
+    previousToken: pageIndex > 1 ? 'page-1' : null,
+    continueToken: pageIndex < 2 ? 'page-2' : null,
+    queryPending: false,
+    hasMore: pageIndex < 2,
+    hasPrevious: pageIndex > 1,
+    isRequestingMore: false,
+    onRequestMore: () => setPageIndex(2),
+    onRequestPrevious: () => setPageIndex(1),
+    onJumpToPage: (page) => setPageIndex(Math.max(1, Math.min(2, page))),
+  };
+  return (
+    <GridTable
+      data={pageRows}
+      columns={AUTO_WIDTH_COLUMNS}
+      keyExtractor={(row) => `story|${row.kind}:${row.name}`}
+      columnWidths={columnWidths}
+      onColumnWidthsChange={setColumnWidths}
+      className="gridtable-browse"
+      tableClassName="gridtable-browse"
+      paginationControls={
+        <CatalogPaginationFooter
+          idPrefix="persisted-auto-width-story"
+          visibleItemCount={pageRows.length}
+          pagination={pagination}
+        />
+      }
+      {...catalogPaginationPageKeyProps(pagination)}
     />
   );
 }
@@ -112,4 +210,9 @@ export const Default: Story = {
 /** Browse view — favorited (filled heart, active state). */
 export const Favorited: Story = {
   render: () => <MockBrowseView isFavorited />,
+};
+
+/** Cached widths are remeasured after each backend-style page transition. */
+export const PersistedAutomaticWidth: Story = {
+  render: () => <PersistedAutoWidthView />,
 };

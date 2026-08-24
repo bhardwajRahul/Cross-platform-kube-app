@@ -154,12 +154,7 @@ function useAggregatedGridCore<D extends AggregatedRowBase>(
       fallbackClusterName: selectedClusterName,
       useShortResourceNames,
     });
-    const sizing: cf.ColumnSizingMap = {};
-    for (const column of built) {
-      sizing[column.key] = { autoWidth: true };
-    }
-    cf.applyColumnSizing(built, sizing);
-    return built;
+    return cf.withAutoWidthColumns(built);
   }, [
     buildColumns,
     identity,
@@ -273,13 +268,12 @@ export function NamespaceAggregatedResourceGridView<
     if (!showNamespaceColumn) {
       return core.columns;
     }
-    const withNamespace = [...core.columns];
-    cf.upsertNamespaceColumn(withNamespace, {
+    return cf.withNamespaceColumn(core.columns, {
+      afterColumnKey: 'name',
       accessor: (row: D) => row.ref.namespace ?? '',
       sortValue: (row: D) => (row.ref.namespace || '').toLowerCase(),
       ...namespaceColumnLink,
     });
-    return withNamespace;
   }, [core.columns, namespaceColumnLink, showNamespaceColumn]);
 
   const { gridTableProps, favModal, source } = useQueryBackedNamespaceResourceGridTable<P, D>({

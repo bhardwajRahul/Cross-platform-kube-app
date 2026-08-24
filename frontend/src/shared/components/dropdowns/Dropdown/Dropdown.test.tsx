@@ -79,12 +79,16 @@ describe('Dropdown', () => {
     });
   };
 
-  const pressKey = async (element: Element | null, key: string) => {
+  const pressKey = async (
+    element: Element | null,
+    key: string,
+    init: Omit<KeyboardEventInit, 'key' | 'bubbles'> = {}
+  ) => {
     if (!element) {
       throw new Error('Element not found');
     }
     await act(async () => {
-      element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+      element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...init }));
       await Promise.resolve();
     });
   };
@@ -553,6 +557,117 @@ describe('Dropdown', () => {
     expect(handleChange).toHaveBeenCalledWith('beta');
   });
 
+  it('uses action-row semantics and exposes the first trailing action from the trigger', async () => {
+    await mount(
+      <Dropdown
+        options={OPTIONS.map((option) =>
+          option.value === 'beta' ? { ...option, disabled: true } : option
+        )}
+        value={[]}
+        multiple
+        onChange={vi.fn()}
+        renderOptionActions={(option) => (
+          <button type="button" data-testid={`action-${option.value}`}>
+            Reorder
+          </button>
+        )}
+      />
+    );
+
+    const trigger = container.querySelector('.dropdown-trigger');
+    click(trigger);
+    expect(trigger?.getAttribute('role')).toBeNull();
+    expect(trigger?.getAttribute('aria-haspopup')).toBe('dialog');
+    const dialog = document.body.querySelector('dialog.dropdown-menu');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.hasAttribute('open')).toBe(true);
+    expect(dialog?.getAttribute('role')).toBeNull();
+    expect(document.body.querySelector('.dropdown-option')?.getAttribute('role')).toBeNull();
+    expect(document.body.querySelector('.dropdown-option')?.getAttribute('aria-pressed')).toBe(
+      'false'
+    );
+
+    await act(async () => {
+      (trigger as HTMLElement).focus();
+      await Promise.resolve();
+    });
+    await pressKey(trigger, 'Tab');
+    expect(document.activeElement).toBe(
+      document.body.querySelector('[data-testid="action-alpha"]')
+    );
+
+    const firstRow = document.body
+      .querySelector('[data-testid="action-alpha"]')
+      ?.closest('.dropdown-option-row');
+    expect(firstRow?.classList.contains('highlighted')).toBe(true);
+
+    const secondAction = document.body.querySelector('[data-testid="action-beta"]');
+    await act(async () => {
+      secondAction?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const secondRow = secondAction?.closest('.dropdown-option-row');
+    expect(secondRow?.classList.contains('highlighted')).toBe(true);
+    expect(firstRow?.classList.contains('highlighted')).toBe(false);
+
+    const thirdAction = document.body.querySelector<HTMLElement>('[data-testid="action-gamma"]');
+    await act(async () => {
+      thirdAction?.focus();
+      await Promise.resolve();
+    });
+
+    const thirdRow = thirdAction?.closest('.dropdown-option-row');
+    expect(thirdRow?.classList.contains('highlighted')).toBe(true);
+    expect(secondRow?.classList.contains('highlighted')).toBe(false);
+  });
+
+  it('returns focus to the trigger when Tab leaves an action-row dialog', async () => {
+    await mount(
+      <Dropdown
+        options={OPTIONS}
+        value={[]}
+        multiple
+        onChange={vi.fn()}
+        renderOptionActions={(option) => (
+          <button type="button" data-testid={`action-${option.value}`}>
+            Reorder
+          </button>
+        )}
+      />
+    );
+
+    const trigger = container.querySelector<HTMLElement>('.dropdown-trigger');
+    click(trigger);
+    const focusableSelector =
+      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const forwardFocusables = Array.from(
+      document.body.querySelectorAll<HTMLElement>(`dialog ${focusableSelector}`)
+    );
+    const lastFocusable = forwardFocusables[forwardFocusables.length - 1] ?? null;
+    await act(async () => {
+      lastFocusable?.focus();
+      await Promise.resolve();
+    });
+
+    await pressKey(lastFocusable, 'Tab');
+
+    expect(document.body.querySelector('dialog')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+
+    click(trigger);
+    const firstFocusable = document.body.querySelector<HTMLElement>(`dialog ${focusableSelector}`);
+    await act(async () => {
+      firstFocusable?.focus();
+      await Promise.resolve();
+    });
+
+    await pressKey(firstFocusable, 'Tab', { shiftKey: true });
+
+    expect(document.body.querySelector('dialog')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it('supports keyboard navigation while the search input has focus', async () => {
     await mount(
       <Dropdown options={OPTIONS} value="" onChange={vi.fn()} searchable placeholder="Searchable" />
@@ -782,17 +897,195 @@ describe('Dropdown', () => {
     expect(document.body.querySelector('.search-input')).toBeNull();
   });
 
-  it('renders bulk-action icons at the dropdown-specific size', async () => {
+  it('renders an additional action beside All and None', async () => {
+    const onReset = vi.fn();
+    await mount(
+      <Dropdown
+        options={OPTIONS}
+        value={[]}
+        onChange={vi.fn()}
+        multiple
+        showBulkActions
+        additionalBulkActions={
+          <button type="button" aria-label="Extra action" onClick={onReset}>
+            Extra
+          </button>
+        }
+      />
+    );
+
+    click(container.querySelector('.dropdown-trigger'));
+    const reset = document.body.querySelector<HTMLButtonElement>(
+      'button[aria-label="Extra action"]'
+    );
+    expect(reset?.textContent).toBe('Extra');
+    click(reset);
+    expect(onReset).toHaveBeenCalledTimes(1);
+
+    // The added action is a different kind of verb from All/None, so it is
+    // separated by a real divider. Not the icon-bar spacer, which is
+    // deliberately `visibility: hidden` and would render nothing.
+    const actions = document.body.querySelector('.dropdown-bulk-actions');
+    const divider = actions?.querySelector('.dropdown-bulk-actions-divider');
+    expect(divider).not.toBeNull();
+    expect(divider?.classList.contains('icon-bar-separator')).toBe(false);
+  });
+
+  it('omits the bulk-action separator when there is nothing to separate', async () => {
+    await mount(
+      <Dropdown options={OPTIONS} value={[]} onChange={vi.fn()} multiple showBulkActions />
+    );
+
+    click(container.querySelector('.dropdown-trigger'));
+    const actions = document.body.querySelector('.dropdown-bulk-actions');
+    expect(actions).not.toBeNull();
+    expect(actions?.querySelector('.dropdown-bulk-actions-divider')).toBeNull();
+  });
+
+  describe('only action', () => {
+    const onlyIn = (label: string) =>
+      Array.from(document.body.querySelectorAll<HTMLElement>('.dropdown-option'))
+        .find((option) => option.textContent?.startsWith(label))
+        ?.querySelector<HTMLElement>('.dropdown-only-action') ?? null;
+
+    it('collapses the selection to the hovered option', async () => {
+      const onChange = vi.fn();
+      await mount(
+        <Dropdown
+          options={OPTIONS}
+          value={['alpha', 'beta', 'gamma']}
+          onChange={onChange}
+          multiple
+        />
+      );
+
+      click(container.querySelector('.dropdown-trigger'));
+      click(onlyIn('Beta'));
+
+      expect(onChange).toHaveBeenCalledWith(['beta']);
+    });
+
+    it('leaves the ordinary toggle alone', async () => {
+      const onChange = vi.fn();
+      await mount(
+        <Dropdown options={OPTIONS} value={['alpha', 'beta']} onChange={onChange} multiple />
+      );
+
+      click(container.querySelector('.dropdown-trigger'));
+      const beta =
+        Array.from(document.body.querySelectorAll<HTMLElement>('.dropdown-option')).find((option) =>
+          option.textContent?.startsWith('Beta')
+        ) ?? null;
+      click(beta);
+
+      // Clicking the row body still toggles rather than isolating.
+      expect(onChange).toHaveBeenCalledWith(['alpha']);
+    });
+
+    it('is inert when the option is already the sole selection', async () => {
+      const onChange = vi.fn();
+      await mount(<Dropdown options={OPTIONS} value={['beta']} onChange={onChange} multiple />);
+
+      click(container.querySelector('.dropdown-trigger'));
+      const only = requireValue(onlyIn('Beta'), 'expected an only action');
+      expect(only.dataset.disabled).toBe('true');
+
+      click(only);
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it('is absent on a disabled option', async () => {
+      await mount(
+        <Dropdown
+          options={OPTIONS.map((option) =>
+            option.value === 'beta' ? { ...option, disabled: true } : option
+          )}
+          value={['alpha']}
+          onChange={vi.fn()}
+          multiple
+        />
+      );
+
+      click(container.querySelector('.dropdown-trigger'));
+      expect(onlyIn('Beta')).toBeNull();
+      expect(onlyIn('Alpha')).not.toBeNull();
+    });
+
+    it('is absent for single-select dropdowns', async () => {
+      await mount(<Dropdown options={OPTIONS} value="alpha" onChange={vi.fn()} />);
+
+      click(container.querySelector('.dropdown-trigger'));
+      expect(document.body.querySelector('.dropdown-only-action')).toBeNull();
+    });
+
+    it('can be opted out of', async () => {
+      await mount(
+        <Dropdown
+          options={OPTIONS}
+          value={['alpha']}
+          onChange={vi.fn()}
+          multiple
+          enableOnlyAction={false}
+        />
+      );
+
+      click(container.querySelector('.dropdown-trigger'));
+      expect(document.body.querySelector('.dropdown-only-action')).toBeNull();
+    });
+
+    it('isolates the highlighted option from the keyboard', async () => {
+      const onChange = vi.fn();
+      await mount(
+        <Dropdown
+          options={OPTIONS}
+          value={['alpha', 'beta', 'gamma']}
+          onChange={onChange}
+          multiple
+        />
+      );
+
+      const trigger = container.querySelector('.dropdown-trigger');
+      click(trigger);
+      await pressKey(trigger, 'ArrowDown');
+      await pressKey(trigger, 'Enter', { altKey: true });
+
+      expect(onChange).toHaveBeenCalledWith(['alpha']);
+    });
+  });
+
+  it('renders labeled bulk-action icons at the compact size', async () => {
     await mount(
       <Dropdown options={OPTIONS} value={[]} onChange={vi.fn()} multiple showBulkActions />
     );
 
     click(container.querySelector('.dropdown-trigger'));
 
+    // A labeled action pairs the glyph with text, so it takes the smaller size.
     const icon = document.body.querySelector<SVGElement>('.dropdown-bulk-action svg');
     expect(icon).not.toBeNull();
-    expect(requireValue(icon, 'expected bulk-action icon').getAttribute('width')).toBe('20');
-    expect(requireValue(icon, 'expected bulk-action icon').getAttribute('height')).toBe('20');
+    expect(requireValue(icon, 'expected bulk-action icon').getAttribute('width')).toBe('14');
+    expect(requireValue(icon, 'expected bulk-action icon').getAttribute('height')).toBe('14');
+  });
+
+  it('gives icon-only bulk actions a slightly larger glyph in the same compact row', async () => {
+    await mount(
+      <Dropdown
+        options={OPTIONS}
+        value={[]}
+        onChange={vi.fn()}
+        multiple
+        showBulkActions
+        searchable
+      />
+    );
+
+    click(container.querySelector('.dropdown-trigger'));
+
+    // Nothing but the glyph carries meaning here, so it takes a little more room
+    // than a labeled action — but the controls row itself is the same one.
+    const icon = document.body.querySelector<SVGElement>('.dropdown-bulk-action svg');
+    expect(requireValue(icon, 'expected bulk-action icon').getAttribute('width')).toBe('16');
+    expect(document.body.querySelectorAll('.dropdown-menu-controls')).toHaveLength(1);
   });
 
   it('preserves menu scroll position across multi-select updates', async () => {

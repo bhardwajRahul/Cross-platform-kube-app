@@ -56,6 +56,49 @@ inside the owning modal must reference that ID with `aria-controls`. The shared
 modal focus trap uses that explicit relationship to keep the popup interactive
 without admitting unrelated body content into the modal focus boundary.
 
+## Multi-select dropdown options
+
+Every multi-select `Dropdown` renders its option content through the shared
+`DropdownFilterOption` (`shared/components/dropdowns/Dropdown/DropdownFilterOption.tsx`).
+Selection is a real checkbox, not a text glyph, and it is decided in one place.
+
+- Do not hand-roll `.dropdown-filter-option` / `.dropdown-filter-box` markup in a
+  feature renderer. Before this component existed the same markup was duplicated
+  seven times across five files and drifted apart.
+- A custom `renderOption` should still delegate to `DropdownFilterOption` and pass
+  a rich `label` node, rather than rebuilding the control alongside its own label.
+- States are `on`, `off`, and `required`. `required` means on-and-not-changeable
+  and is a state of the control; never explain it with an extra word in the row.
+- `plain` drops the control for action rows (`Select all`) so they do not carry a
+  permanently empty checkbox.
+- `dimWhenOff` is opt-in and belongs only to menus where "off" means the item is
+  absent from a view — the GridTable Columns menu today. Filter menus must not
+  set it: most of their options are off by default, so dimming would flag the
+  normal case as an anomaly.
+
+Every multi-select also gets a per-row `only` shortcut that collapses the
+selection to that option. It is on by default (`enableOnlyAction`), revealed on
+hover or keyboard highlight, and reachable without a pointer via `Alt+Enter` on
+the highlighted option.
+
+- It is a click *region* inside the option button, not a nested `<button>`. A
+  real button per row would be an invalid `role="listbox"` child and would force
+  every multi-select menu to `role="dialog"`; the region keeps listbox semantics
+  intact for the menus that do not need the dialog treatment.
+- It never renders on a disabled option or a group header, and it is inert when
+  the option is already the sole selection — disabled rather than hidden, so rows
+  do not change shape as the pointer moves down the list.
+- In the Columns menu it sits immediately left of the drag grip, which stays
+  anchored. Do not swap the grip out for it: hiding the drag affordance exactly
+  when the pointer is on the row is the wrong trade.
+- `only` selects the option alone. Values that cannot be deselected — a required
+  column — necessarily remain, so it means "only this, plus what cannot be turned
+  off".
+
+Row-level behavior (drag-to-reorder, per-row affordances) goes through
+`Dropdown`'s `getOptionRowProps`; `renderOptionActions` only owns the trailing
+slot and cannot reach the row element.
+
 ## Object-panel Overview rendering (descriptor-driven)
 
 The object panel's Details → Overview is rendered from per-kind **descriptors**, not bespoke

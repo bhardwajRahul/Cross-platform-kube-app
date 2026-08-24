@@ -6,6 +6,10 @@
  */
 
 import type { DropdownOption } from '@shared/components/dropdowns/Dropdown';
+import {
+  DropdownFilterOption,
+  dropdownFilterOptionState,
+} from '@shared/components/dropdowns/Dropdown/DropdownFilterOption';
 import { normalizeDropdownValue } from '@shared/components/dropdowns/dropdownValue';
 import type { IconBarItem } from '@shared/components/IconBar/IconBar';
 import type {
@@ -33,6 +37,10 @@ type ColumnsDropdownConfig = {
   value: string[];
   onChange: (value: string | string[]) => void;
   renderValue?: (value: string | string[], options: DropdownOption[]) => ReactNode;
+  onMoveColumn?: (key: string, offset: -1 | 1) => void;
+  onReorderColumn?: (key: string, targetIndex: number) => void;
+  canResetColumns?: boolean;
+  onResetColumns?: () => void;
 };
 
 type SearchShortcutConfig = {
@@ -163,16 +171,11 @@ export function useGridTableFiltersWiring<T>({
 
   const renderFilterOption = useCallback(
     (option: DropdownOption, isSelected: boolean): ReactNode => (
-      <span
-        className={`dropdown-filter-option${
-          isActionOption(option) ? ' dropdown-filter-option--action' : ''
-        }`}
-      >
-        <span className="dropdown-filter-check">
-          {!isActionOption(option) && isSelected ? '✓' : ''}
-        </span>
-        <span className="dropdown-filter-label">{option.label}</span>
-      </span>
+      <DropdownFilterOption
+        label={option.label}
+        state={dropdownFilterOptionState(isSelected)}
+        plain={isActionOption(option)}
+      />
     ),
     []
   );
@@ -334,6 +337,10 @@ export function useGridTableFiltersWiring<T>({
       columnOptions: columnsDropdown?.options,
       columnValue: columnsDropdown?.value,
       onColumnsChange: columnsDropdown?.onChange,
+      onMoveColumn: columnsDropdown?.onMoveColumn,
+      onReorderColumn: columnsDropdown?.onReorderColumn,
+      canResetColumns: columnsDropdown?.canResetColumns,
+      onResetColumns: columnsDropdown?.onResetColumns,
       showColumnsDropdown,
       searchShortcutActive,
       searchShortcutPriority,

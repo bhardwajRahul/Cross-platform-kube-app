@@ -119,10 +119,8 @@ type RenderOptions = Partial<{
   getCustomContextMenuItems: (item: SimpleRow, columnKey: string) => unknown[];
   columnVisibility: Record<string, boolean>;
   onColumnVisibilityChange: (visibility: Record<string, boolean>) => void;
-  nonHideableColumns: string[];
   onColumnWidthsChange: (widths: Record<string, unknown>) => void;
   columnWidths: Record<string, unknown>;
-  allowHorizontalOverflow: boolean;
   keyExtractor: (item: SimpleRow, index: number) => string;
   paginationControls: React.ReactNode;
   localPagination: {
@@ -487,7 +485,7 @@ describe('GridTable virtualization', () => {
     expect(renderedRows.length).toBeLessThan(500);
   });
 
-  it('expands the virtual body width to match the total column width when overflow is allowed', () => {
+  it('expands the virtual body width to match the total column width', () => {
     const wideColumns: GridColumnDefinition<SimpleRow>[] = [
       {
         key: 'label',
@@ -507,7 +505,6 @@ describe('GridTable virtualization', () => {
       data: createRows(150).map((row, index) => ({ ...row, name: `Name ${index}` })),
       columns: wideColumns,
       virtualization: { enabled: true, threshold: 1, overscan: 1, estimateRowHeight: 40 },
-      allowHorizontalOverflow: true,
     });
     cleanupRoot = cleanup;
 
@@ -539,7 +536,6 @@ describe('GridTable virtualization', () => {
       data: createRows(150).map((row, index) => ({ ...row, name: `Name ${index}` })),
       columns: wideColumns,
       virtualization: { enabled: true, threshold: 1, overscan: 1, estimateRowHeight: 40 },
-      allowHorizontalOverflow: true,
     });
     cleanupRoot = cleanup;
 
@@ -1274,10 +1270,8 @@ function renderGridTable(options: RenderOptions = {}) {
     getCustomContextMenuItems: options.getCustomContextMenuItems,
     columnVisibility: options.columnVisibility,
     onColumnVisibilityChange: options.onColumnVisibilityChange,
-    nonHideableColumns: options.nonHideableColumns ?? [],
     onColumnWidthsChange: options.onColumnWidthsChange,
     columnWidths: options.columnWidths ?? {},
-    allowHorizontalOverflow: options.allowHorizontalOverflow ?? false,
     paginationControls: options.paginationControls,
     localPagination: options.localPagination,
   };
@@ -1906,7 +1900,13 @@ it('does not hide locked columns through visibility menu', async () => {
   const onColumnVisibilityChange = vi.fn();
   const columns: GridColumnDefinition<SimpleRow>[] = [
     { key: 'name', header: 'Name', render: (row) => row.name ?? row.id },
-    { key: 'extra', header: 'Extra', sortable: false, render: (row) => row.id },
+    {
+      key: 'extra',
+      header: 'Extra',
+      sortable: false,
+      hideable: false,
+      render: (row) => row.id,
+    },
   ];
 
   const { container, cleanup } = renderGridTable({
@@ -1915,7 +1915,6 @@ it('does not hide locked columns through visibility menu', async () => {
     virtualization: { enabled: false },
     enableContextMenu: true,
     enableColumnVisibilityMenu: true,
-    nonHideableColumns: ['extra'],
     onSort: vi.fn(),
     onColumnVisibilityChange,
   });
@@ -2463,4 +2462,75 @@ it('defers external column width notifications until drag end', () => {
 
   requestAnimationFrameSpy.mockRestore();
   cancelAnimationFrameSpy.mockRestore();
+});
+
+it('returns auto-width columns to automatic sizing from the Columns reset action', async () => {
+  const columns: GridColumnDefinition<SimpleRow>[] = [
+    {
+      key: 'label',
+      header: 'Label',
+      autoWidth: true,
+      render: (row) => row.label,
+    },
+    {
+      key: 'name',
+      header: 'Name',
+      render: (row) => row.name ?? '',
+    },
+  ];
+  const onColumnWidthsChange = vi.fn();
+  const { container, cleanup } = renderGridTable({
+    data: createRows(3),
+    columns,
+    filters: { enabled: true },
+    enableColumnVisibilityMenu: true,
+    enableColumnResizing: true,
+    virtualization: { enabled: false },
+    columnWidths: {
+      label: {
+        width: 300,
+        unit: 'px',
+        autoWidth: false,
+        source: 'user',
+        updatedAt: 1,
+      },
+      name: {
+        width: 220,
+        unit: 'px',
+        autoWidth: false,
+        source: 'user',
+        updatedAt: 1,
+      },
+    },
+    onColumnWidthsChange,
+  });
+  cleanupRoot = cleanup;
+  await flushAsync();
+
+  const columnsTrigger = container.querySelector<HTMLButtonElement>(
+    '[data-gridtable-filter-role="columns"] .dropdown-trigger'
+  );
+  expect(columnsTrigger).not.toBeNull();
+  await act(async () => {
+    requireValue(columnsTrigger, 'expected Columns trigger in GridTable.test.tsx').click();
+    await Promise.resolve();
+  });
+
+  const reset = document.body.querySelector<HTMLButtonElement>(
+    'button[aria-label="Reset columns"]'
+  );
+  expect(reset).not.toBeNull();
+  expect(reset?.disabled).toBe(false);
+  onColumnWidthsChange.mockClear();
+  await act(async () => {
+    requireValue(reset, 'expected Columns reset in GridTable.test.tsx').click();
+    await Promise.resolve();
+  });
+
+  expect(onColumnWidthsChange).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      label: expect.objectContaining({ autoWidth: true, source: 'auto' }),
+      name: expect.objectContaining({ autoWidth: false, source: 'user' }),
+    })
+  );
 });

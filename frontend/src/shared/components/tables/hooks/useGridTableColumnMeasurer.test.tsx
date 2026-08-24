@@ -5,9 +5,11 @@
  * Covers key behaviors and edge cases for useGridTableColumnMeasurer.
  */
 
+import { createKindColumn } from '@shared/components/tables/columnFactories';
 import type { GridColumnDefinition } from '@shared/components/tables/GridTable.types';
 import { useGridTableColumnMeasurer } from '@shared/components/tables/hooks/useGridTableColumnMeasurer';
-import React, { act } from 'react';
+import type React from 'react';
+import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
@@ -37,6 +39,7 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(HTMLElement.prototype, 'scrollWidth');
   }
+  document.documentElement.style.removeProperty('--app-zoom-factor');
   document.body.innerHTML = '';
   vi.restoreAllMocks();
 });
@@ -44,17 +47,12 @@ afterEach(() => {
 const renderHarness = async (tableData: SampleRow[]) => {
   const container = document.createElement('div');
   document.body.appendChild(container);
-  let tableHost = document.createElement('div');
-  document.body.appendChild(tableHost);
   const root = ReactDOM.createRoot(container);
 
   let measureColumnWidth: ((column: GridColumnDefinition<SampleRow>) => number) | null = null;
 
   const Harness: React.FC = () => {
-    const tableRef = React.useRef<HTMLElement | null>(tableHost);
-    tableRef.current = tableHost;
     const { measureColumnWidth: measure } = useGridTableColumnMeasurer<SampleRow>({
-      tableRef,
       tableData,
       parseWidthInputToNumber: (input) => {
         if (typeof input === 'number') {
@@ -67,23 +65,6 @@ const renderHarness = async (tableData: SampleRow[]) => {
         return Number.isFinite(numeric) ? numeric : null;
       },
       defaultColumnWidth: 150,
-      isKindColumnKey: (key) => key === 'kind',
-      getTextContent: (node) => {
-        if (typeof node === 'string') {
-          return node;
-        }
-        if (Array.isArray(node)) {
-          return node.map((item) => (typeof item === 'string' ? item : '')).join('');
-        }
-        if (React.isValidElement(node)) {
-          const props = node.props as { children?: React.ReactNode };
-          if (typeof props.children === 'string') {
-            return props.children;
-          }
-        }
-        return '';
-      },
-      normalizeKindClass: (value) => value.toLowerCase(),
       getColumnMinWidth: () => 72,
       getColumnMaxWidth: () => Number.POSITIVE_INFINITY,
     });
@@ -117,18 +98,7 @@ const renderHarness = async (tableData: SampleRow[]) => {
         root.unmount();
       });
       container.remove();
-      tableHost.remove();
     },
-    swapHost: async () => {
-      const nextHost = document.createElement('div');
-      document.body.appendChild(nextHost);
-      tableHost = nextHost;
-      await act(async () => {
-        root.render(<Harness />);
-      });
-      return nextHost;
-    },
-    getHost: () => tableHost,
   };
 };
 
@@ -142,7 +112,7 @@ describe('useGridTableColumnMeasurer', () => {
     await harness.cleanup();
   });
 
-  it('uses DOM measurements and normalises kind badge content', async () => {
+  it('uses DOM measurements for rendered column content', async () => {
     const headerWidths = [180];
     const cellWidths = [210, 240];
     Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
@@ -189,7 +159,71 @@ describe('useGridTableColumnMeasurer', () => {
     await harness.cleanup();
   });
 
-  it('measures distinct kind badges instead of missing rare long kinds in large datasets', async () => {
+  it('converts zoomed visual measurements back to CSS width with paint clearance', async () => {
+    document.documentElement.style.setProperty('--app-zoom-factor', '0.8');
+    Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
+      configurable: true,
+      get() {
+        return 120;
+      },
+    });
+    HTMLElement.prototype.getBoundingClientRect = () =>
+      ({
+        width: 204.125,
+        height: 0,
+        top: 0,
+        left: 0,
+        bottom: 0,
+        right: 204.125,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+
+    const harness = await renderHarness([{ name: 'PriorityLevelConfiguration' }]);
+
+    expect(harness.measure(columns[0])).toBe(257);
+    await harness.cleanup();
+  });
+
+  it('measures each distinct declared sample only once', async () => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
+      configurable: true,
+      get() {
+        return 120;
+      },
+    });
+    const getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          width: 180,
+          height: 0,
+          top: 0,
+          left: 0,
+          bottom: 0,
+          right: 180,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect
+    );
+    HTMLElement.prototype.getBoundingClientRect = getBoundingClientRect;
+    const kindColumn = createKindColumn<SampleRow>({
+      getKind: (row) => row.kind ?? '',
+    });
+    const harness = await renderHarness([
+      { name: 'alpha', kind: 'Pod' },
+      { name: 'beta', kind: 'Pod' },
+      { name: 'gamma', kind: 'Job' },
+    ]);
+
+    harness.measure(kindColumn);
+
+    expect(getBoundingClientRect).toHaveBeenCalledTimes(2);
+    await harness.cleanup();
+  });
+
+  it('includes the final row when measuring large datasets', async () => {
     Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
       configurable: true,
       get() {
@@ -216,7 +250,7 @@ describe('useGridTableColumnMeasurer', () => {
 
     const tableData: SampleRow[] = Array.from({ length: 401 }, (_value, index) => ({
       name: `row-${index}`,
-      kind: index === 201 ? 'ExtremelyVerboseCustomResourceKind' : 'Pod',
+      kind: index === 400 ? 'ExtremelyVerboseCustomResourceKind' : 'Pod',
     }));
 
     const harness = await renderHarness(tableData);
@@ -227,18 +261,47 @@ describe('useGridTableColumnMeasurer', () => {
     await harness.cleanup();
   });
 
-  it('does not throw when the previous measurer host was detached before reuse', async () => {
+  it('includes the widest row anywhere in a 500-row page', async () => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
+      configurable: true,
+      get() {
+        return 120;
+      },
+    });
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      const width = (this.textContent ?? '').length * 10;
+      return {
+        width,
+        height: 0,
+        top: 0,
+        left: 0,
+        bottom: 0,
+        right: width,
+        x: 0,
+        y: 0,
+        toJSON() {
+          return {};
+        },
+      } as DOMRect;
+    };
+
+    const widestName = 'cert-manager-controller-certificatesigningrequests';
+    const tableData: SampleRow[] = Array.from({ length: 500 }, (_value, index) => ({
+      name: index === 1 ? widestName : `row-${index}`,
+    }));
+    const harness = await renderHarness(tableData);
+
+    const measurement = harness.measure(columns[0]);
+
+    expect(measurement).toBeGreaterThanOrEqual(widestName.length * 10);
+    await harness.cleanup();
+  });
+
+  it('removes temporary measurement nodes after use', async () => {
     const harness = await renderHarness([{ name: 'alpha', kind: 'Deployment' }]);
 
     harness.measure(columns[1]);
-    const originalHost = harness.getHost();
-    const measurerNode = originalHost.querySelector('.grid-cell') as HTMLElement | null;
-    measurerNode?.remove();
-    originalHost.remove();
-
-    await harness.swapHost();
-
-    expect(() => harness.measure(columns[1])).not.toThrow();
+    expect(document.body.querySelector('.grid-cell')).toBeNull();
 
     await harness.cleanup();
   });

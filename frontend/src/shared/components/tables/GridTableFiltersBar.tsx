@@ -8,12 +8,17 @@
 import ActiveFilterChips, { type ActiveFilterChip } from '@shared/components/ActiveFilterChips';
 import type { DropdownOption } from '@shared/components/dropdowns/Dropdown';
 import { Dropdown } from '@shared/components/dropdowns/Dropdown';
+import { DROPDOWN_BULK_ACTION_ICON_SIZE } from '@shared/components/dropdowns/Dropdown/Dropdown';
+import {
+  DropdownFilterOption,
+  dropdownFilterOptionState,
+} from '@shared/components/dropdowns/Dropdown/DropdownFilterOption';
 import {
   ALL_MULTISELECT_FILTER,
   filterSelectionToDropdownValues,
 } from '@shared/components/dropdowns/multiSelectFilterSelection';
 import IconBar, { type IconBarItem } from '@shared/components/IconBar/IconBar';
-import { CaseSensitiveIcon } from '@shared/components/icons/SharedIcons';
+import { CaseSensitiveIcon, ResetFiltersIcon } from '@shared/components/icons/SharedIcons';
 import SearchInput from '@shared/components/inputs/SearchInput';
 import Tooltip from '@shared/components/Tooltip';
 import type {
@@ -24,7 +29,7 @@ import type {
 import { hasNarrowingGridTableFilters } from '@shared/components/tables/gridTableFilterState';
 import { useSearchShortcutTarget } from '@ui/shortcuts';
 import type React from 'react';
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 interface GridTableFiltersBarProps {
   activeFilters: GridTableFilterState;
@@ -52,6 +57,10 @@ interface GridTableFiltersBarProps {
   columnOptions?: DropdownOption[];
   columnValue?: string[];
   onColumnsChange?: (value: string | string[]) => void;
+  onMoveColumn?: (key: string, offset: -1 | 1) => void;
+  onReorderColumn?: (key: string, targetIndex: number) => void;
+  canResetColumns?: boolean;
+  onResetColumns?: () => void;
   showKindDropdown?: boolean;
   showNamespaceDropdown?: boolean;
   showClusterDropdown?: boolean;
@@ -76,6 +85,11 @@ interface GridTableFiltersBarProps {
     capped?: boolean;
   };
 }
+
+type ColumnDropTarget = {
+  key: string;
+  position: 'before' | 'after';
+};
 
 function formatResultCountLabel(
   resultCount: NonNullable<GridTableFiltersBarProps['resultCount']>
@@ -136,6 +150,10 @@ const GridTableFiltersBar: React.FC<GridTableFiltersBarProps> = ({
   columnOptions,
   columnValue,
   onColumnsChange,
+  onMoveColumn,
+  onReorderColumn,
+  canResetColumns = false,
+  onResetColumns,
   showKindDropdown = false,
   showNamespaceDropdown = false,
   showClusterDropdown = false,
@@ -155,6 +173,121 @@ const GridTableFiltersBar: React.FC<GridTableFiltersBarProps> = ({
   const hasNarrowingFilters = hasNarrowingGridTableFilters(activeFilters);
   const showCaseSensitiveToggle = resolvedFilterOptions.searchBehavior !== 'query';
   const queryFacets = resolvedFilterOptions.queryFacets ?? [];
+  const [draggingColumnKey, setDraggingColumnKey] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<ColumnDropTarget | null>(null);
+
+  useEffect(() => {
+    if (!draggingColumnKey || !onReorderColumn || !columnOptions) {
+      return;
+    }
+
+    const getDropTarget = (event: DragEvent) => {
+      const eventTarget = event.target;
+      if (!(eventTarget instanceof Element)) {
+        return null;
+      }
+      const row = eventTarget.closest<HTMLElement>('.dropdown-option-row');
+      const key = row?.dataset.columnKey;
+      if (!key || key === draggingColumnKey) {
+        return null;
+      }
+      const index = columnOptions.findIndex((option) => option.value === key);
+      const draggingIndex = columnOptions.findIndex((option) => option.value === draggingColumnKey);
+      return index >= 0 && draggingIndex >= 0
+        ? { key, index, position: draggingIndex < index ? ('after' as const) : ('before' as const) }
+        : null;
+    };
+
+    const handleDragOver = (event: DragEvent) => {
+      const target = getDropTarget(event);
+      setDropTarget(target ? { key: target.key, position: target.position } : null);
+      if (target) {
+        event.preventDefault();
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = 'move';
+        }
+      }
+    };
+
+    const handleDrop = (event: DragEvent) => {
+      const target = getDropTarget(event);
+      if (target) {
+        event.preventDefault();
+        onReorderColumn(draggingColumnKey, target.index);
+      }
+      setDraggingColumnKey(null);
+      setDropTarget(null);
+    };
+
+    document.addEventListener('dragover', handleDragOver);
+    document.addEventListener('drop', handleDrop);
+    return () => {
+      document.removeEventListener('dragover', handleDragOver);
+      document.removeEventListener('drop', handleDrop);
+    };
+  }, [columnOptions, draggingColumnKey, onReorderColumn]);
+
+  // A hidden column is absent from the table, so the Columns menu is the one
+  // place where dimming an unselected label reports something real.
+  const renderColumnOption = (option: DropdownOption, isSelected: boolean) => {
+    const required = Boolean(option.disabled);
+    return (
+      <DropdownFilterOption
+        label={option.label}
+        state={dropdownFilterOptionState(isSelected, required)}
+        dimWhenOff
+        title={required ? 'Always shown' : undefined}
+      />
+    );
+  };
+
+  // The whole row is the drag target — a 14x18px handle is too small to aim at.
+  // The grip stays as the affordance that says so, and as the keyboard entry point.
+  const getColumnRowProps = (option: DropdownOption) => {
+    if (!onMoveColumn || !onReorderColumn || !columnOptions) {
+      return {};
+    }
+    return {
+      draggable: true,
+      'data-column-key': option.value,
+      'data-dragging': draggingColumnKey === option.value || undefined,
+      'data-drop-position': dropTarget?.key === option.value ? dropTarget.position : undefined,
+      onDragStart: (event: React.DragEvent<HTMLDivElement>) => {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', option.value);
+        setDraggingColumnKey(option.value);
+      },
+      onDragEnd: () => {
+        setDraggingColumnKey(null);
+        setDropTarget(null);
+      },
+    };
+  };
+
+  const renderColumnOrderActions = (option: DropdownOption) => {
+    if (!onMoveColumn || !onReorderColumn || !columnOptions) {
+      return null;
+    }
+    return (
+      <button
+        type="button"
+        className="gridtable-column-drag-handle"
+        data-column-key={option.value}
+        onKeyDown={(event) => {
+          if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          onMoveColumn(option.value, event.key === 'ArrowUp' ? -1 : 1);
+        }}
+        aria-label={`Reorder ${option.label}. Drag the row, or use Up and Down Arrow keys.`}
+        title="Drag the row, or use Up and Down Arrow keys to reorder"
+      >
+        ⠿
+      </button>
+    );
+  };
   const leadingQueryFacets = queryFacets.filter((facet) => facet.placement === 'before-kinds');
   const trailingQueryFacets = queryFacets.filter((facet) => facet.placement !== 'before-kinds');
   const activeFilterChips = useMemo<ActiveFilterChip[]>(() => {
@@ -498,8 +631,31 @@ const GridTableFiltersBar: React.FC<GridTableFiltersBarProps> = ({
                 options={columnOptions}
                 disabled={!columnOptions.length}
                 onChange={onColumnsChange}
-                dropdownClassName="dropdown-filter-menu"
-                renderOption={renderOption}
+                dropdownClassName="dropdown-filter-menu dropdown-columns-menu"
+                renderOption={renderColumnOption}
+                renderOptionActions={renderColumnOrderActions}
+                getOptionRowProps={getColumnRowProps}
+                additionalBulkActions={
+                  onResetColumns ? (
+                    <button
+                      type="button"
+                      className="dropdown-bulk-action dropdown-bulk-action--labeled icon-bar-button"
+                      disabled={!canResetColumns}
+                      title="Restore the default column order, show every column, and reset automatic widths"
+                      aria-label="Reset columns"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onResetColumns();
+                      }}
+                    >
+                      <ResetFiltersIcon
+                        width={DROPDOWN_BULK_ACTION_ICON_SIZE}
+                        height={DROPDOWN_BULK_ACTION_ICON_SIZE}
+                      />
+                      <span className="dropdown-bulk-action-label">Reset</span>
+                    </button>
+                  ) : null
+                }
                 renderValue={renderColumnsValue}
               />
             </div>

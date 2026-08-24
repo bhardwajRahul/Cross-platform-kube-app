@@ -12,9 +12,11 @@ import type {
   GridColumnAlignmentOptions,
   GridColumnDefinition,
 } from '@shared/components/tables/GridTable';
+import { getKindBadgeClassName } from '@shared/utils/kindBadgeColors';
 import { formatResourceValue, parseResourceValue } from '@shared/utils/resourceCalculations';
 import type React from 'react';
 import { getUseShortResourceNames } from '@/core/settings/appPreferences';
+import { parseCompactAgeToSeconds } from '@/utils/ageFormatter';
 
 /**
  * Column factory functions for GridTable
@@ -52,7 +54,7 @@ export const createAgeColumn = <T extends AgeColumnRow>(
   sortValue: (item) =>
     typeof item.ageTimestamp === 'number' && Number.isFinite(item.ageTimestamp)
       ? -item.ageTimestamp
-      : getValue(item),
+      : parseCompactAgeToSeconds(getValue(item)),
 });
 
 export interface CreateResourceBarColumnOptions<T> extends GridColumnAlignmentOptions {
@@ -169,37 +171,37 @@ export interface ColumnSizingHint {
 
 export type ColumnSizingMap = Record<string, ColumnSizingHint>;
 
-export const applyColumnSizing = <T,>(
+export const withColumnSizing = <T,>(
   columns: GridColumnDefinition<T>[],
   sizing: ColumnSizingMap
-): void => {
-  columns.forEach((column) => {
+): GridColumnDefinition<T>[] =>
+  columns.map((column) => {
     const hint = sizing[column.key];
     if (!hint) {
-      return;
+      return column;
     }
-    if (hint.width !== undefined) {
-      column.width = hint.width;
-    }
-    if (hint.minWidth !== undefined) {
-      column.minWidth = hint.minWidth;
-    } else if (hint.width !== undefined) {
-      column.minWidth = hint.width;
-    }
-    if (hint.maxWidth !== undefined) {
-      column.maxWidth = hint.maxWidth;
-    }
-    if (hint.autoWidth !== undefined) {
-      column.autoWidth = hint.autoWidth;
-    }
+    const minimumWidth = hint.minWidth ?? hint.width;
+    return {
+      ...column,
+      ...(hint.width !== undefined ? { width: hint.width } : {}),
+      ...(minimumWidth !== undefined ? { minWidth: minimumWidth } : {}),
+      ...(hint.maxWidth !== undefined ? { maxWidth: hint.maxWidth } : {}),
+      ...(hint.autoWidth !== undefined ? { autoWidth: hint.autoWidth } : {}),
+    };
   });
-};
+
+export const withAutoWidthColumns = <T,>(
+  columns: GridColumnDefinition<T>[]
+): GridColumnDefinition<T>[] =>
+  columns.map((column) => (column.autoWidth ? column : { ...column, autoWidth: true }));
 
 /**
  * Creates a simple text column (optionally interactive)
  */
-export interface CreateTextColumnOptions<T> extends GridColumnAlignmentOptions {
+export interface CreateTextColumnOptions<T> extends GridColumnAlignmentOptions, ColumnSizingHint {
   className?: string;
+  hideable?: boolean;
+  resizable?: boolean;
   sortable?: boolean;
   sortValue?: (item: T) => string | number | undefined;
   onClick?: (item: T) => void;
@@ -264,6 +266,12 @@ export function createTextColumn<T>(
     className: options?.className,
     alignHeader: options?.alignHeader,
     alignData: options?.alignData,
+    hideable: options?.hideable,
+    resizable: options?.resizable,
+    width: options?.width,
+    minWidth: options?.minWidth,
+    maxWidth: options?.maxWidth,
+    autoWidth: options?.autoWidth,
     sortable: options?.sortable ?? true,
     sortValue: options?.sortValue ?? accessor,
     disableShortcuts: options?.disableShortcuts,
@@ -313,18 +321,56 @@ export function createTextColumn<T>(
   };
 }
 
+type CreateResourceNameColumnOptions<T> = Omit<CreateTextColumnOptions<T>, 'hideable'>;
+
+export function createResourceNameColumn<T extends { name?: string }>(
+  options?: CreateResourceNameColumnOptions<T>
+): GridColumnDefinition<T>;
+
+export function createResourceNameColumn<T>(
+  accessor: (item: T) => string | number | undefined,
+  options?: CreateResourceNameColumnOptions<T>
+): GridColumnDefinition<T>;
+
+export function createResourceNameColumn<T>(
+  accessorOrOptions?:
+    | ((item: T) => string | number | undefined)
+    | CreateResourceNameColumnOptions<T>,
+  maybeOptions?: CreateResourceNameColumnOptions<T>
+): GridColumnDefinition<T> {
+  const options = typeof accessorOrOptions === 'function' ? maybeOptions : accessorOrOptions;
+  const requiredOptions = {
+    ...options,
+    hideable: false,
+    width: options?.width ?? 250,
+  };
+  return typeof accessorOrOptions === 'function'
+    ? createTextColumn('name', 'Name', accessorOrOptions, requiredOptions)
+    : createTextColumn(
+        'name',
+        'Name',
+        (item: T) => {
+          const named = item as { name?: string; title?: string };
+          return named.name || named.title;
+        },
+        requiredOptions
+      );
+}
+
 interface NamespaceColumnOptions<T> extends CreateTextColumnOptions<T> {
+  afterColumnKey: string;
   accessor?: (item: T) => string | undefined;
   sortValue?: (item: T) => string | number | undefined;
 }
 
-export function upsertNamespaceColumn<T>(
+export function withNamespaceColumn<T>(
   columns: GridColumnDefinition<T>[],
   options: NamespaceColumnOptions<T>
-): void {
-  const nameIndex = columns.findIndex((column) => column.key === 'name');
-  if (nameIndex === -1) {
-    return;
+): GridColumnDefinition<T>[] {
+  const withoutNamespace = columns.filter((column) => column.key !== 'namespace');
+  const anchorIndex = withoutNamespace.findIndex((column) => column.key === options.afterColumnKey);
+  if (anchorIndex === -1) {
+    throw new Error(`GridTable namespace column anchor not found: "${options.afterColumnKey}"`);
   }
 
   const namespaceAccessor =
@@ -339,13 +385,11 @@ export function upsertNamespaceColumn<T>(
   if (options.sortValue) {
     namespaceColumn.sortValue = options.sortValue;
   }
-  const existingIndex = columns.findIndex((column) => column.key === 'namespace');
-
-  if (existingIndex >= 0) {
-    columns.splice(existingIndex, 1);
-  }
-
-  columns.splice(nameIndex + 1, 0, namespaceColumn);
+  return [
+    ...withoutNamespace.slice(0, anchorIndex + 1),
+    namespaceColumn,
+    ...withoutNamespace.slice(anchorIndex + 1),
+  ];
 }
 
 /**
@@ -403,11 +447,20 @@ export const createKindColumn = <T,>(
   return {
     key,
     header,
+    width: 100,
+    autoWidth: true,
     sortable,
-    className,
+    className: ['gridtable-kind-column', className].filter(Boolean).join(' '),
     alignHeader,
     alignData,
     disableShortcuts,
+    measurementSampleKey: (item: T) => {
+      const displayText = resolveDisplayText(item);
+      const interactive = Boolean(
+        onClick && (isInteractive ? isInteractive(item) : true) && displayText.trim().length > 0
+      );
+      return JSON.stringify([getKind(item), displayText, interactive]);
+    },
     sortValue:
       sortValue ??
       ((item: T) => {
@@ -421,7 +474,11 @@ export const createKindColumn = <T,>(
         onClick && (isInteractive ? isInteractive(item) : true) && displayText.trim().length > 0;
 
       if (!interactive) {
-        return <span data-kind-value={kindValue}>{displayText}</span>;
+        return (
+          <span className={getKindBadgeClassName(kindValue)} data-kind-value={kindValue}>
+            {displayText}
+          </span>
+        );
       }
 
       const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -437,7 +494,7 @@ export const createKindColumn = <T,>(
       return (
         <button
           type="button"
-          className="gridtable-cell-button"
+          className={`${getKindBadgeClassName(kindValue)} clickable`}
           data-kind-value={kindValue}
           data-kind-interactive="true"
           data-gridtable-shortcut-optout="true"

@@ -91,7 +91,7 @@ export function useBrowseColumns({
         onClick: onRowClick,
         onAltClick: (row) => navigateToView(buildRequiredObjectReference(row.ref)),
       }),
-      cf.createTextColumn<BrowseTableRow>('name', 'Name', (row) => row.ref.name, {
+      cf.createResourceNameColumn<BrowseTableRow>((row) => row.ref.name, {
         sortable: true,
         onClick: (row) => onRowClick(row),
         onAltClick: (row) => navigateToView(buildRequiredObjectReference(row.ref)),
@@ -124,16 +124,6 @@ export function useBrowseColumns({
 
     baseColumns.push(ageColumn);
 
-    // Apply fixed column sizing to avoid measurement loops
-    const sizing: cf.ColumnSizingMap = {
-      kind: { width: 160, autoWidth: false },
-      name: { width: 320, autoWidth: false },
-      api: { width: 180, autoWidth: false },
-      ...(showNamespaceColumn ? { namespace: { width: 220, autoWidth: false } } : {}),
-      age: { width: 120, autoWidth: false },
-    };
-    cf.applyColumnSizing(baseColumns, sizing);
-
-    return baseColumns;
+    return cf.withAutoWidthColumns(baseColumns);
   }, [showNamespaceColumn, onRowClick, onNamespaceClick, navigateToView]);
 }

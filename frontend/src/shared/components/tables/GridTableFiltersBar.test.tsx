@@ -25,6 +25,8 @@ vi.mock('@core/backend-api', () => ({
   SetZoomLevel: vi.fn().mockResolvedValue(undefined),
 }));
 
+type MockDropdownOption = { label: string; value: string; disabled?: boolean };
+
 vi.mock('@shared/components/dropdowns/Dropdown', () => ({
   Dropdown: ({
     id,
@@ -33,27 +35,51 @@ vi.mock('@shared/components/dropdowns/Dropdown', () => ({
     onChange,
     searchable,
     showBulkActions,
+    dropdownClassName,
+    renderOption,
+    renderOptionActions,
+    getOptionRowProps,
+    additionalBulkActions,
   }: {
     id: string;
     value: string[];
-    options: Array<{ label: string; value: string }>;
+    options: MockDropdownOption[];
     onChange: (value: string[]) => void;
     searchable?: boolean;
     showBulkActions?: boolean;
+    dropdownClassName?: string;
+    renderOption?: (option: MockDropdownOption, isSelected: boolean) => React.ReactNode;
+    renderOptionActions?: (option: MockDropdownOption) => React.ReactNode;
+    getOptionRowProps?: (option: MockDropdownOption) => Record<string, unknown>;
+    additionalBulkActions?: React.ReactNode;
   }) => (
-    <select
-      data-testid={id}
-      data-searchable={searchable ? 'true' : 'false'}
-      data-bulk-actions={showBulkActions ? 'true' : 'false'}
-      value={value[0] ?? ''}
-      onChange={(event) => onChange([event.target.value])}
-    >
+    <div className={dropdownClassName}>
+      <select
+        data-testid={id}
+        data-searchable={searchable ? 'true' : 'false'}
+        data-bulk-actions={showBulkActions ? 'true' : 'false'}
+        value={value[0] ?? ''}
+        onChange={(event) => onChange([event.target.value])}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
       {options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
+        <div
+          {...getOptionRowProps?.(option)}
+          className="dropdown-option-row"
+          data-option-value={option.value}
+          key={option.value}
+        >
+          {renderOption ? renderOption(option, value.includes(option.value)) : option.label}
+          {renderOptionActions?.(option)}
+        </div>
       ))}
-    </select>
+      {additionalBulkActions}
+    </div>
   ),
 }));
 
@@ -849,6 +875,9 @@ describe('GridTableFiltersBar', () => {
 
   it('renders the columns dropdown when enabled', async () => {
     const onColumnsChange = vi.fn();
+    const onMoveColumn = vi.fn();
+    const onReorderColumn = vi.fn();
+    const onResetColumns = vi.fn();
     await renderFilters({
       showColumnsDropdown: true,
       columnOptions: [
@@ -857,6 +886,10 @@ describe('GridTableFiltersBar', () => {
       ],
       columnValue: ['name'],
       onColumnsChange,
+      onMoveColumn,
+      onReorderColumn,
+      canResetColumns: true,
+      onResetColumns,
       columnsDropdownId: 'columns',
       renderColumnsValue: () => 'Columns',
     });
@@ -871,5 +904,142 @@ describe('GridTableFiltersBar', () => {
     });
 
     expect(onColumnsChange).toHaveBeenCalledWith(['age']);
+
+    const nameHandle = container.querySelector(
+      'button[aria-label="Reorder Name. Drag the row, or use Up and Down Arrow keys."]'
+    ) as HTMLButtonElement;
+    const ageHandle = container.querySelector(
+      'button[aria-label="Reorder Age. Drag the row, or use Up and Down Arrow keys."]'
+    ) as HTMLButtonElement;
+    const ageRow = container.querySelector(
+      '.dropdown-option-row[data-option-value="age"]'
+    ) as HTMLDivElement;
+    const nameRow = container.querySelector(
+      '.dropdown-option-row[data-option-value="name"]'
+    ) as HTMLDivElement;
+
+    // The row owns the drag; the grip is the affordance and the keyboard entry point.
+    expect(nameHandle.draggable).toBe(false);
+    expect(ageHandle.draggable).toBe(false);
+    expect(nameRow.draggable).toBe(true);
+    expect(ageRow.draggable).toBe(true);
+    expect(nameHandle.textContent).toBe('⠿');
+    expect(container.querySelectorAll('.gridtable-column-drag-handle')).toHaveLength(2);
+
+    await act(async () => {
+      nameHandle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    });
+    expect(onMoveColumn).toHaveBeenCalledWith('name', 1);
+
+    const dataTransfer = {
+      effectAllowed: 'none',
+      dropEffect: 'none',
+      setData: vi.fn(),
+    };
+    const dragStart = new Event('dragstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(dragStart, 'dataTransfer', { value: dataTransfer });
+    await act(async () => nameRow.dispatchEvent(dragStart));
+
+    const dragOver = new Event('dragover', { bubbles: true, cancelable: true });
+    Object.defineProperty(dragOver, 'dataTransfer', { value: dataTransfer });
+    await act(async () => ageRow.dispatchEvent(dragOver));
+    expect(ageRow.dataset.dropPosition).toBe('after');
+
+    const drop = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, 'dataTransfer', { value: dataTransfer });
+    await act(async () => ageRow.dispatchEvent(drop));
+
+    expect(onReorderColumn).toHaveBeenCalledWith('name', 1);
+
+    const upwardDragStart = new Event('dragstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(upwardDragStart, 'dataTransfer', { value: dataTransfer });
+    await act(async () => ageRow.dispatchEvent(upwardDragStart));
+    const upwardDragOver = new Event('dragover', { bubbles: true, cancelable: true });
+    Object.defineProperty(upwardDragOver, 'dataTransfer', { value: dataTransfer });
+    await act(async () => nameRow.dispatchEvent(upwardDragOver));
+    expect(nameRow.dataset.dropPosition).toBe('before');
+
+    await act(async () => ageRow.dispatchEvent(new Event('dragend', { bubbles: true })));
+
+    const reset = container.querySelector(
+      'button[aria-label="Reset columns"]'
+    ) as HTMLButtonElement;
+    expect(reset.textContent).toContain('Reset');
+    expect(reset.disabled).toBe(false);
+    await act(async () => reset.click());
+    expect(onResetColumns).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables reset until order or visibility differs from the defaults', async () => {
+    await renderFilters({
+      showColumnsDropdown: true,
+      columnOptions: [{ label: 'Name', value: 'name' }],
+      columnValue: ['name'],
+      onColumnsChange: vi.fn(),
+      onMoveColumn: vi.fn(),
+      onReorderColumn: vi.fn(),
+      canResetColumns: false,
+      onResetColumns: vi.fn(),
+      columnsDropdownId: 'columns',
+      renderColumnsValue: () => 'Columns',
+    });
+
+    const reset = container.querySelector(
+      'button[aria-label="Reset columns"]'
+    ) as HTMLButtonElement;
+    expect(reset.disabled).toBe(true);
+  });
+
+  it('presents required columns as required rather than disabled', async () => {
+    await renderFilters({
+      showColumnsDropdown: true,
+      columnOptions: [
+        { label: 'Name', value: 'name', disabled: true },
+        { label: 'Age', value: 'age' },
+      ],
+      columnValue: ['name', 'age'],
+      onColumnsChange: vi.fn(),
+      onMoveColumn: vi.fn(),
+      onReorderColumn: vi.fn(),
+      canResetColumns: false,
+      onResetColumns: vi.fn(),
+      columnsDropdownId: 'columns',
+      renderColumnsValue: () => 'Columns',
+    });
+
+    // The menu is scoped so required rows can opt out of the shared disabled styling.
+    expect(container.querySelector('.dropdown-columns-menu')).not.toBeNull();
+
+    const requiredRow = requireValue(
+      container.querySelector('.dropdown-option-row[data-option-value="name"]'),
+      'expected the Name option row'
+    );
+    const requiredOption = requireValue(
+      requiredRow.querySelector('.dropdown-filter-option'),
+      'expected the Name option content'
+    );
+    expect(requiredOption.getAttribute('title')).toBe('Always shown');
+    expect(
+      requiredRow
+        .querySelector('.dropdown-filter-box')
+        ?.classList.contains('dropdown-filter-box--required')
+    ).toBe(true);
+    // Required is a state of the control, never an extra word in the row.
+    expect(requiredOption.textContent).toBe('Name');
+
+    const optionalRow = requireValue(
+      container.querySelector('.dropdown-option-row[data-option-value="age"]'),
+      'expected the Age option row'
+    );
+    const optionalOption = requireValue(
+      optionalRow.querySelector('.dropdown-filter-option'),
+      'expected the Age option content'
+    );
+    expect(optionalOption.getAttribute('title')).toBeNull();
+    expect(
+      optionalRow
+        .querySelector('.dropdown-filter-box')
+        ?.classList.contains('dropdown-filter-box--required')
+    ).toBe(false);
   });
 });

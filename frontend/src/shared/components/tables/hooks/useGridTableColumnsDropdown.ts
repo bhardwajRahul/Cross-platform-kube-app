@@ -14,12 +14,24 @@ type UseGridTableColumnsDropdownOptions<T> = {
   isColumnVisible: (key: string) => boolean;
   applyVisibilityChanges: (updater: (next: Record<string, boolean | undefined>) => boolean) => void;
   enableColumnVisibilityMenu: boolean;
+  moveColumn: (key: string, offset: -1 | 1) => void;
+  reorderColumn: (key: string, targetIndex: number) => void;
+  canResetColumnOrder: boolean;
+  resetColumnOrder: () => void;
+  canResetAutoWidthColumns: boolean;
+  resetAutoWidthColumns: () => void;
 };
 
 type ColumnsDropdownConfig = {
-  options: Array<{ label: string; value: string }>;
+  options: Array<{ label: string; value: string; disabled?: boolean }>;
   value: string[];
   onChange: (value: string | string[]) => void;
+  /** Trigger label. Names the hidden count, and only while something is hidden. */
+  renderValue: () => string;
+  onMoveColumn: (key: string, offset: -1 | 1) => void;
+  onReorderColumn: (key: string, targetIndex: number) => void;
+  canResetColumns: boolean;
+  onResetColumns: () => void;
 };
 
 // Builds the column visibility options and handler so GridTable does not have to
@@ -30,13 +42,20 @@ export function useGridTableColumnsDropdown<T>({
   isColumnVisible,
   applyVisibilityChanges,
   enableColumnVisibilityMenu,
+  moveColumn,
+  reorderColumn,
+  canResetColumnOrder,
+  resetColumnOrder,
+  canResetAutoWidthColumns,
+  resetAutoWidthColumns,
 }: UseGridTableColumnsDropdownOptions<T>): ColumnsDropdownConfig | null {
   const hideableColumns = useMemo(
     () => columns.filter((column) => !lockedColumns.has(column.key)),
     [columns, lockedColumns]
   );
 
-  const showColumnsDropdown = enableColumnVisibilityMenu && hideableColumns.length > 0;
+  const showColumnsDropdown =
+    enableColumnVisibilityMenu && (hideableColumns.length > 0 || columns.length > 1);
 
   const handleColumnsDropdownChange = useCallback(
     (nextValue: string | string[]) => {
@@ -68,18 +87,48 @@ export function useGridTableColumnsDropdown<T>({
     [applyVisibilityChanges, hideableColumns, isColumnVisible]
   );
 
+  // One reset restores every column preference owned by this menu.
+  const handleResetColumns = useCallback(() => {
+    applyVisibilityChanges((next) => {
+      let changed = false;
+      hideableColumns.forEach((column) => {
+        if (column.key in next) {
+          delete next[column.key];
+          changed = true;
+        }
+      });
+      return changed;
+    });
+    resetColumnOrder();
+    resetAutoWidthColumns();
+  }, [applyVisibilityChanges, hideableColumns, resetAutoWidthColumns, resetColumnOrder]);
+
   if (!showColumnsDropdown) {
     return null;
   }
 
-  const options: ColumnsDropdownConfig['options'] = hideableColumns.map((column) => ({
+  const options: ColumnsDropdownConfig['options'] = columns.map((column) => ({
     label: column.header,
     value: column.key,
+    disabled: lockedColumns.has(column.key),
   }));
 
-  const value = hideableColumns
-    .filter((column) => isColumnVisible(column.key))
-    .map((column) => column.key);
+  const value = columns.filter((column) => isColumnVisible(column.key)).map((column) => column.key);
 
-  return { options, value, onChange: handleColumnsDropdownChange };
+  // Required columns are always visible, so `value` covers them too: the counts
+  // differ exactly when the user has hidden something. The label names that
+  // count rather than reporting shown-of-total, which would make the reader
+  // subtract to learn the one thing they want to know.
+  const hiddenCount = options.length - value.length;
+
+  return {
+    options,
+    value,
+    onChange: handleColumnsDropdownChange,
+    renderValue: () => (hiddenCount > 0 ? `Columns (${hiddenCount} hidden)` : 'Columns'),
+    onMoveColumn: moveColumn,
+    onReorderColumn: reorderColumn,
+    canResetColumns: canResetColumnOrder || canResetAutoWidthColumns || hiddenCount > 0,
+    onResetColumns: handleResetColumns,
+  };
 }

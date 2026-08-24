@@ -170,6 +170,7 @@ export function useEventsGridParts({ defaultNamespace }: { defaultNamespace?: st
             getClassName: () => 'object-panel-link',
             isInteractive: canOpenInvolvedObject,
             allowRowClick: false,
+            hideable: false,
           }
         ),
         cf.createTextColumn('reason', EVENT_LABELS.reason, (event) => event.reason || '-'),
@@ -188,9 +189,7 @@ export function useEventsGridParts({ defaultNamespace }: { defaultNamespace?: st
         message: { width: 250 },
         age: { autoWidth: true },
       };
-      cf.applyColumnSizing(baseColumns, sizing);
-
-      return baseColumns;
+      return cf.withColumnSizing(baseColumns, sizing);
     },
     [
       canOpenInvolvedObject,
