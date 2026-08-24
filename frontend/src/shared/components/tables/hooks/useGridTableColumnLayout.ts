@@ -3,13 +3,7 @@ import type {
   GridColumnDefinition,
   GridTableVirtualizationOptions,
 } from '@shared/components/tables/GridTable.types';
-import {
-  DEFAULT_COLUMN_MIN_WIDTH,
-  DEFAULT_COLUMN_WIDTH,
-  parseWidthInputToNumber,
-} from '@shared/components/tables/GridTable.utils';
 import { useColumnResizeController } from '@shared/components/tables/hooks/useColumnResizeController';
-import { useContainerWidthObserver } from '@shared/components/tables/hooks/useContainerWidthObserver';
 import { useGridTableColumnMeasurer } from '@shared/components/tables/hooks/useGridTableColumnMeasurer';
 import {
   type ColumnRenderModel,
@@ -19,32 +13,14 @@ import { useGridTableColumnWidths } from '@shared/components/tables/hooks/useGri
 
 import type React from 'react';
 import type { RefObject } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-
-const getColumnMinWidth = <T>(column: GridColumnDefinition<T>) => {
-  const parsed = parseWidthInputToNumber(column.minWidth);
-  if (parsed !== null && parsed !== undefined) {
-    return parsed;
-  }
-  return DEFAULT_COLUMN_MIN_WIDTH;
-};
-
-const getColumnMaxWidth = <T>(column: GridColumnDefinition<T>) => {
-  const parsed = parseWidthInputToNumber(column.maxWidth);
-  if (parsed !== null && parsed !== undefined) {
-    return parsed;
-  }
-  return Number.POSITIVE_INFINITY;
-};
+import { useCallback, useEffect, useMemo } from 'react';
 
 export const getVisibleAutoColumnKeys = <T>({
-  renderedColumns,
-  columnRenderModelsWithOffsets,
+  columnRenderModels,
   columnVirtualizationConfig,
   columnWindowRange,
 }: {
-  renderedColumns: GridColumnDefinition<T>[];
-  columnRenderModelsWithOffsets: Array<ColumnRenderModel<T>>;
+  columnRenderModels: Array<ColumnRenderModel<T>>;
   columnVirtualizationConfig: {
     enabled: boolean;
     stickyStart: number;
@@ -52,13 +28,13 @@ export const getVisibleAutoColumnKeys = <T>({
   };
   columnWindowRange: { startIndex: number; endIndex: number };
 }): string[] => {
-  if (renderedColumns.length === 0) {
+  if (columnRenderModels.length === 0) {
     return [];
   }
   if (!columnVirtualizationConfig.enabled) {
-    return renderedColumns.filter((column) => column.autoWidth).map((column) => column.key);
+    return columnRenderModels.filter((model) => model.column.autoWidth).map((model) => model.key);
   }
-  const total = columnRenderModelsWithOffsets.length;
+  const total = columnRenderModels.length;
   if (total === 0) {
     return [];
   }
@@ -68,9 +44,8 @@ export const getVisibleAutoColumnKeys = <T>({
     Math.max(0, total - stickyStart)
   );
   const visibleKeys = new Set<string>();
-  columnRenderModelsWithOffsets.forEach((model, index) => {
-    const column = renderedColumns[index];
-    if (!column?.autoWidth) {
+  columnRenderModels.forEach((model, index) => {
+    if (!model.column.autoWidth) {
       return;
     }
     const isSticky = index < stickyStart || index >= total - stickyEnd;
@@ -99,22 +74,18 @@ interface UseGridTableColumnLayoutOptions<T> {
 }
 
 interface GridTableColumnLayout<T> {
-  columnWidths: Record<string, number>;
   columnVirtualizationConfig: {
     enabled: boolean;
     overscanColumns: number;
     stickyStart: number;
     stickyEnd: number;
   };
-  columnRenderModelsWithOffsets: Array<ColumnRenderModel<T>>;
+  columnRenderModels: Array<ColumnRenderModel<T>>;
   columnWindowRange: { startIndex: number; endIndex: number };
   updateColumnWindowRange: () => void;
   tableContentWidth: number;
-  tableViewportWidth: number;
   handleResizeStart: (event: React.MouseEvent, leftKey: string, rightKey: string) => void;
   handleResizeKeyDown: (event: React.KeyboardEvent, columnKey: string) => void;
-  getColumnMinWidth: (column: GridColumnDefinition<T>) => number;
-  getColumnMaxWidth: (column: GridColumnDefinition<T>) => number;
   autoSizeColumn: (columnKey: string) => void;
   markVisibleAutoColumnsDirty: () => void;
   canResetAutoWidthColumns: boolean;
@@ -134,15 +105,10 @@ export function useGridTableColumnLayout<T>({
   useShortNames,
   virtualization,
 }: UseGridTableColumnLayoutOptions<T>): GridTableColumnLayout<T> {
-  const [tableViewportWidth, setTableViewportWidth] = useState(0);
   const tableRefMutable = tableRef as RefObject<HTMLElement | null>;
 
   const { measureColumnWidth } = useGridTableColumnMeasurer<T>({
     tableData,
-    parseWidthInputToNumber,
-    defaultColumnWidth: DEFAULT_COLUMN_WIDTH,
-    getColumnMinWidth,
-    getColumnMaxWidth,
   });
 
   const {
@@ -169,7 +135,7 @@ export function useGridTableColumnLayout<T>({
 
   const {
     columnVirtualizationConfig,
-    columnRenderModelsWithOffsets,
+    columnRenderModels,
     columnWindowRange,
     updateColumnWindowRange,
   } = useGridTableColumnVirtualization({
@@ -180,12 +146,12 @@ export function useGridTableColumnLayout<T>({
   });
 
   const tableContentWidth = useMemo(() => {
-    if (columnRenderModelsWithOffsets.length === 0) {
+    if (columnRenderModels.length === 0) {
       return 0;
     }
-    const lastModel = columnRenderModelsWithOffsets[columnRenderModelsWithOffsets.length - 1];
+    const lastModel = columnRenderModels[columnRenderModels.length - 1];
     return Number.isFinite(lastModel.end) ? lastModel.end : 0;
-  }, [columnRenderModelsWithOffsets]);
+  }, [columnRenderModels]);
 
   useEffect(() => {
     void columnVirtualizationConfig.enabled;
@@ -195,12 +161,11 @@ export function useGridTableColumnLayout<T>({
   const visibleAutoColumnKeys = useMemo(
     () =>
       getVisibleAutoColumnKeys({
-        renderedColumns,
-        columnRenderModelsWithOffsets,
+        columnRenderModels,
         columnVirtualizationConfig,
         columnWindowRange,
       }),
-    [columnRenderModelsWithOffsets, columnVirtualizationConfig, columnWindowRange, renderedColumns]
+    [columnRenderModels, columnVirtualizationConfig, columnWindowRange]
   );
 
   const markVisibleAutoColumnsDirty = useCallback(() => {
@@ -210,19 +175,6 @@ export function useGridTableColumnLayout<T>({
     markColumnsDirty(visibleAutoColumnKeys);
   }, [markColumnsDirty, visibleAutoColumnKeys]);
 
-  const recalculateForContainerWidth = useCallback((incomingWidth: number) => {
-    if (!incomingWidth || incomingWidth <= 0) {
-      return;
-    }
-    setTableViewportWidth((prev) => (Math.abs(prev - incomingWidth) < 0.5 ? prev : incomingWidth));
-  }, []);
-
-  useContainerWidthObserver({
-    tableRef: tableRefMutable,
-    onContainerWidth: recalculateForContainerWidth,
-    tableDataLength: tableData.length,
-  });
-
   const { handleResizeStart, handleResizeKeyDown, autoSizeColumn, resetManualResizes } =
     useColumnResizeController<T>({
       columns,
@@ -230,8 +182,6 @@ export function useGridTableColumnLayout<T>({
       columnWidths,
       setColumnWidths,
       manuallyResizedColumnsRef,
-      getColumnMinWidth,
-      getColumnMaxWidth,
       measureColumnWidth,
       enableColumnResizing,
       onManualResize: handleManualResizeEvent,
@@ -244,17 +194,13 @@ export function useGridTableColumnLayout<T>({
   }, [enableColumnResizing, resetManualResizes]);
 
   return {
-    columnWidths,
     columnVirtualizationConfig,
-    columnRenderModelsWithOffsets,
+    columnRenderModels,
     columnWindowRange,
     updateColumnWindowRange,
     tableContentWidth,
-    tableViewportWidth,
     handleResizeStart,
     handleResizeKeyDown,
-    getColumnMinWidth,
-    getColumnMaxWidth,
     autoSizeColumn,
     markVisibleAutoColumnsDirty,
     canResetAutoWidthColumns,
