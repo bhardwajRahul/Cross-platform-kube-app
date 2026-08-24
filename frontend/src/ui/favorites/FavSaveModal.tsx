@@ -27,6 +27,7 @@ import { useModalFocusTrap } from '@shared/components/modals/useModalFocusTrap';
 import Tooltip from '@shared/components/Tooltip';
 import type { GridTableFilterOptions } from '@shared/components/tables/GridTable.types';
 import { areGridTableFilterStatesEqual } from '@shared/components/tables/gridTableFilterState';
+import { useGridTableColumnOptionRows } from '@shared/components/tables/hooks/useGridTableColumnOptionRows';
 import { errorHandler } from '@utils/errorHandler';
 import type React from 'react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
@@ -253,6 +254,197 @@ const FavoritePaneFilters: React.FC<FavoritePaneFiltersProps> = ({
   );
 };
 
+export interface FavoriteModalColumn {
+  key: string;
+  label: string;
+  hideable: boolean;
+  sortable: boolean;
+}
+
+const reconcileFavoriteColumnOrder = (
+  columns: readonly FavoriteModalColumn[],
+  requestedOrder: readonly string[] | undefined
+): FavoriteModalColumn[] => {
+  const byKey = new Map(columns.map((column) => [column.key, column] as const));
+  const seen = new Set<string>();
+  const ordered: FavoriteModalColumn[] = [];
+  for (const key of requestedOrder ?? []) {
+    const column = byKey.get(key);
+    if (column && !seen.has(key)) {
+      seen.add(key);
+      ordered.push(column);
+    }
+  }
+  for (const column of columns) {
+    if (!seen.has(column.key)) {
+      ordered.push(column);
+    }
+  }
+  return ordered;
+};
+
+interface FavoritePaneTableStateProps {
+  elementIdPrefix: string;
+  pane: FavoriteModalPane;
+  state: FavoritePaneState;
+  showPaneLabel: boolean;
+  onChange: (tableState: FavoriteTableState) => void;
+}
+
+const FavoritePaneTableState: React.FC<FavoritePaneTableStateProps> = ({
+  elementIdPrefix,
+  pane,
+  state,
+  showPaneLabel,
+  onChange,
+}) => {
+  const columns = pane.columns ?? [];
+  const orderedColumns = reconcileFavoriteColumnOrder(columns, state.tableState.columnOrder);
+  const isColumnVisible = (column: FavoriteModalColumn) =>
+    !column.hideable || state.tableState.columnVisibility[column.key] !== false;
+  const columnOptions = orderedColumns.map((column) => ({
+    value: column.key,
+    label: column.label,
+    disabled: !column.hideable,
+  }));
+  const columnValue = orderedColumns
+    .filter((column) => isColumnVisible(column))
+    .map((column) => column.key);
+  const sortOptions = [
+    { value: '', label: 'None' },
+    ...orderedColumns
+      .filter((column) => column.sortable && isColumnVisible(column))
+      .map((column) => ({ value: column.key, label: column.label })),
+  ];
+  if (
+    state.tableState.sortColumn &&
+    !sortOptions.some((option) => option.value === state.tableState.sortColumn)
+  ) {
+    sortOptions.push({ value: state.tableState.sortColumn, label: state.tableState.sortColumn });
+  }
+
+  const moveColumn = (key: string, offset: -1 | 1) => {
+    const currentIndex = orderedColumns.findIndex((column) => column.key === key);
+    const targetIndex = currentIndex + offset;
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= orderedColumns.length) {
+      return;
+    }
+    const nextOrder = orderedColumns.map((column) => column.key);
+    [nextOrder[currentIndex], nextOrder[targetIndex]] = [
+      nextOrder[targetIndex],
+      nextOrder[currentIndex],
+    ];
+    onChange({ ...state.tableState, columnOrder: nextOrder });
+  };
+
+  const reorderColumn = (key: string, targetIndex: number) => {
+    const currentIndex = orderedColumns.findIndex((column) => column.key === key);
+    if (
+      currentIndex < 0 ||
+      targetIndex < 0 ||
+      targetIndex >= orderedColumns.length ||
+      currentIndex === targetIndex
+    ) {
+      return;
+    }
+    const nextOrder = orderedColumns.map((column) => column.key);
+    const [movedKey] = nextOrder.splice(currentIndex, 1);
+    nextOrder.splice(targetIndex, 0, movedKey);
+    onChange({ ...state.tableState, columnOrder: nextOrder });
+  };
+
+  const handleColumnsChange = (value: string | string[]) => {
+    if (!Array.isArray(value)) {
+      return;
+    }
+    const visibleColumns = new Set(value);
+    const columnVisibility = { ...state.tableState.columnVisibility };
+    for (const column of orderedColumns) {
+      if (!column.hideable) {
+        delete columnVisibility[column.key];
+      } else if (visibleColumns.has(column.key)) {
+        delete columnVisibility[column.key];
+      } else {
+        columnVisibility[column.key] = false;
+      }
+    }
+    onChange({
+      ...state.tableState,
+      sortColumn:
+        state.tableState.sortColumn && !visibleColumns.has(state.tableState.sortColumn)
+          ? ''
+          : state.tableState.sortColumn,
+      columnVisibility,
+    });
+  };
+
+  const { renderColumnOption, renderColumnOrderActions, getColumnRowProps } =
+    useGridTableColumnOptionRows({
+      columnOptions,
+      onMoveColumn: moveColumn,
+      onReorderColumn: reorderColumn,
+    });
+
+  if (!columns.length) {
+    return null;
+  }
+
+  return (
+    <div className="modal-form-section">
+      <h3>{showPaneLabel ? `${pane.label} Columns & Sort` : 'Columns & Sort'}</h3>
+      <div className="modal-form-items">
+        <div className="modal-form-field modal-form-field-inline fav-save-inline-row">
+          <label htmlFor={`${elementIdPrefix}-${pane.id}-columns`}>Columns</label>
+          <Dropdown
+            id={`${elementIdPrefix}-${pane.id}-columns`}
+            name="favorite-table-columns"
+            multiple
+            showBulkActions
+            placeholder="Columns"
+            value={columnValue}
+            options={columnOptions}
+            onChange={handleColumnsChange}
+            dropdownClassName="dropdown-filter-menu dropdown-columns-menu"
+            renderOption={renderColumnOption}
+            renderOptionActions={renderColumnOrderActions}
+            getOptionRowProps={getColumnRowProps}
+            renderValue={() => {
+              const hiddenCount = columnOptions.length - columnValue.length;
+              return hiddenCount > 0 ? `Columns (${hiddenCount} hidden)` : 'Columns';
+            }}
+          />
+        </div>
+        <div className="modal-form-field modal-form-field-inline fav-save-inline-row">
+          <label htmlFor={`${elementIdPrefix}-${pane.id}-sort-column`}>Sort by</label>
+          <Dropdown
+            id={`${elementIdPrefix}-${pane.id}-sort-column`}
+            dropdownClassName="fav-save-dropdown-menu"
+            options={sortOptions}
+            value={state.tableState.sortColumn}
+            onChange={(value) => onChange({ ...state.tableState, sortColumn: value as string })}
+            placeholder="Sort column"
+          />
+        </div>
+        <div className="modal-form-field modal-form-field-inline fav-save-inline-row">
+          <label htmlFor={`${elementIdPrefix}-${pane.id}-sort-direction`}>Direction</label>
+          <Dropdown
+            id={`${elementIdPrefix}-${pane.id}-sort-direction`}
+            dropdownClassName="fav-save-dropdown-menu"
+            options={[
+              { value: 'asc', label: 'Ascending' },
+              { value: 'desc', label: 'Descending' },
+            ]}
+            value={state.tableState.sortDirection}
+            onChange={(value) => onChange({ ...state.tableState, sortDirection: value as string })}
+            placeholder="Sort direction"
+            disabled={!state.tableState.sortColumn}
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
@@ -284,6 +476,8 @@ export interface FavSaveModalProps {
   availableFilterNamespaces?: string[];
   /** Named table panes. Multi-table views supply every pane in route order. */
   panes?: FavoriteModalPane[];
+  /** Favorite names already owned by other saved Favorites. */
+  unavailableNames?: readonly string[];
   /** Called to save (add or update) the favorite. */
   onSave: (fav: Favorite) => void | Promise<void>;
   /** Called to delete the favorite (only when editing an existing one). */
@@ -294,6 +488,7 @@ export interface FavoriteModalPane extends FavoritePaneState {
   id: string;
   label: string;
   filterOptions: GridTableFilterOptions;
+  columns?: FavoriteModalColumn[];
 }
 
 // ---------------------------------------------------------------------------
@@ -350,7 +545,9 @@ const favoritePaneMapsEqual = (
           Object.entries(rightPane.tableState.columnVisibility).sort(([leftKey], [rightKey]) =>
             compareUtf16Strings(leftKey, rightKey)
           )
-        )
+        ) &&
+      JSON.stringify(leftPane.tableState.columnOrder ?? []) ===
+        JSON.stringify(rightPane.tableState.columnOrder ?? [])
     );
   });
 };
@@ -405,6 +602,7 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
   availableKinds,
   availableFilterNamespaces,
   panes,
+  unavailableNames = [],
   onSave,
   onDelete,
 }) => {
@@ -623,18 +821,23 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
           panes: paneStates,
         })
       : true;
+  const resolvedName = name.trim() || defaultName.trim();
+  const nameCollision = unavailableNames.some(
+    (unavailableName) => unavailableName.trim() === resolvedName
+  );
+  const nameError = nameCollision ? `A Favorite named "${resolvedName}" already exists.` : '';
 
   // ----- Handlers -----
 
   const handleSave = async () => {
-    if (saving) {
+    if (saving || nameCollision) {
       return;
     }
     const bindsCluster = !isGlobalScope && clusterSpecific;
     const selectedClusterMeta = bindsCluster ? getClusterMeta(clusterSelection) : null;
     const fav: Favorite = {
       id: existingFavorite?.id ?? '',
-      name: name.trim() || defaultName,
+      name: resolvedName,
       clusterSelection: bindsCluster ? clusterSelection : '',
       clusterId: bindsCluster ? (selectedClusterMeta?.id ?? '') : '',
       clusterName: bindsCluster ? (selectedClusterMeta?.name ?? '') : '',
@@ -701,8 +904,10 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
                 <input
                   id={`${elementIdPrefix}-fav-name`}
                   type="text"
-                  className="modal-input"
                   value={name}
+                  aria-invalid={nameError ? 'true' : undefined}
+                  aria-describedby={nameError ? `${elementIdPrefix}-fav-name-error` : undefined}
+                  className={`modal-input${nameError ? ' modal-input-error' : ''}`}
                   onChange={(e) => setName(e.target.value)}
                   onKeyDown={(e) => {
                     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
@@ -712,6 +917,15 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
                   }}
                   data-modal-initial-focus
                 />
+                {nameError ? (
+                  <div
+                    id={`${elementIdPrefix}-fav-name-error`}
+                    className="modal-field-message modal-field-error"
+                    role="alert"
+                  >
+                    <ErrorSurface kind="validation" message={nameError} />
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -806,18 +1020,35 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
             </div>
           </div>
 
-          {modalPanes.map((pane) => {
+          {modalPanes.flatMap((pane) => {
             const paneState = paneStates[pane.id];
-            return paneState ? (
-              <FavoritePaneFilters
-                key={pane.id}
-                elementIdPrefix={elementIdPrefix}
-                pane={pane}
-                state={paneState}
-                showPaneLabel={modalPanes.length > 1}
-                onChange={(next) => updatePaneFilters(pane.id, () => next)}
-              />
-            ) : null;
+            return paneState
+              ? [
+                  <FavoritePaneFilters
+                    key={`${pane.id}-filters`}
+                    elementIdPrefix={elementIdPrefix}
+                    pane={pane}
+                    state={paneState}
+                    showPaneLabel={modalPanes.length > 1}
+                    onChange={(next) => updatePaneFilters(pane.id, () => next)}
+                  />,
+                  <FavoritePaneTableState
+                    key={`${pane.id}-table-state`}
+                    elementIdPrefix={elementIdPrefix}
+                    pane={pane}
+                    state={paneState}
+                    showPaneLabel={modalPanes.length > 1}
+                    onChange={(next) =>
+                      setPaneStates((current) => {
+                        const currentPane = current[pane.id];
+                        return currentPane
+                          ? { ...current, [pane.id]: { ...currentPane, tableState: next } }
+                          : current;
+                      })
+                    }
+                  />,
+                ]
+              : [];
           })}
         </div>
 
@@ -840,7 +1071,7 @@ const FavSaveModal: React.FC<FavSaveModalProps> = ({
             type="button"
             className="button save"
             onClick={handleSave}
-            disabled={saving || (isEditing && !changesDetected)}
+            disabled={saving || nameCollision || (isEditing && !changesDetected)}
           >
             {saving ? 'Saving…' : 'Save'}
           </button>

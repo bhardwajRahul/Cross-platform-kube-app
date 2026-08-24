@@ -139,8 +139,15 @@ vi.mock('@shared/components/dropdowns/Dropdown', () => ({
     searchable,
     showBulkActions,
     displayValue,
+    multiple,
+    dropdownClassName,
+    renderOption,
+    renderOptionActions,
+    getOptionRowProps,
+    renderValue,
   }: DropdownProps) => {
     const opts = options.filter((option) => !option.group);
+    const selected = new Set(Array.isArray(value) ? value : [value]);
     return (
       <>
         <select
@@ -168,6 +175,50 @@ vi.mock('@shared/components/dropdowns/Dropdown', () => ({
           >
             Select all
           </button>
+        ) : null}
+        {renderOptionActions ? (
+          <div className={dropdownClassName}>
+            {opts.map((option) => {
+              const rowProps = getOptionRowProps?.(option) ?? {};
+              return (
+                <div
+                  {...rowProps}
+                  className="dropdown-option-row"
+                  data-option-value={option.value}
+                  key={option.value}
+                >
+                  <button
+                    type="button"
+                    className="dropdown-option"
+                    data-option-value={option.value}
+                    disabled={option.disabled}
+                    aria-pressed={selected.has(option.value)}
+                    onClick={() => {
+                      if (!multiple) {
+                        onChange(option.value);
+                        return;
+                      }
+                      const next = new Set(selected);
+                      if (next.has(option.value)) {
+                        next.delete(option.value);
+                      } else {
+                        next.add(option.value);
+                      }
+                      onChange(Array.from(next));
+                    }}
+                  >
+                    {renderOption?.(option, selected.has(option.value)) ?? option.label}
+                  </button>
+                  <div className="dropdown-option-actions">{renderOptionActions(option)}</div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+        {renderValue ? (
+          <div data-testid={`dropdown-value-${placeholder ?? 'select'}`}>
+            {renderValue(value, options)}
+          </div>
         ) : null}
       </>
     );
@@ -526,6 +577,33 @@ describe('FavSaveModal', () => {
     );
   });
 
+  it('blocks a Favorite name already used by another saved Favorite', async () => {
+    const onSave = vi.fn();
+    await renderComponent(
+      makeProps({
+        defaultName: 'My Pods',
+        unavailableNames: ['My Pods'],
+        onSave,
+      })
+    );
+
+    const nameInput = requireValue(
+      container.querySelector<HTMLInputElement>('[id$="-fav-name"]'),
+      'expected favorite name input in FavSaveModal.test.tsx'
+    );
+    expect(nameInput.getAttribute('aria-invalid')).toBe('true');
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'A Favorite named "My Pods" already exists.'
+    );
+    expect(container.querySelector<HTMLButtonElement>('button.save')?.disabled).toBe(true);
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button.save')?.click();
+      await Promise.resolve();
+    });
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it('preserves an edited name when live pane props refresh while open', async () => {
     const pane = {
       id: 'main',
@@ -746,6 +824,109 @@ describe('FavSaveModal', () => {
     expect(requireValue(saveBtn, 'expected test value in FavSaveModal.test.tsx').disabled).toBe(
       true
     );
+  });
+
+  it('edits column visibility, ordering, and sort for a saved pane', async () => {
+    const onSave = vi.fn();
+    const existingFavorite = makeFavorite({
+      panes: {
+        main: {
+          filters: defaultFilters,
+          tableState: {
+            sortColumn: 'name',
+            sortDirection: 'asc',
+            columnVisibility: { status: false },
+            columnOrder: ['name', 'status', 'age'],
+          },
+        },
+      },
+    });
+    const pane = {
+      id: 'main',
+      label: 'Pods',
+      ...existingFavorite.panes.main,
+      filterOptions: {},
+      columns: [
+        { key: 'name', label: 'Name', hideable: false, sortable: true },
+        { key: 'status', label: 'Status', hideable: true, sortable: true },
+        { key: 'age', label: 'Age', hideable: true, sortable: true },
+      ],
+    };
+    await renderComponent(
+      makeProps({
+        existingFavorite,
+        panes: [pane],
+        onSave,
+      })
+    );
+
+    const columnsMenu = requireValue(
+      container.querySelector<HTMLElement>('.dropdown-columns-menu'),
+      'expected shared Columns menu in FavSaveModal.test.tsx'
+    );
+    const nameRow = requireValue(
+      columnsMenu.querySelector<HTMLElement>('[data-column-key="name"]'),
+      'expected Name column row in FavSaveModal.test.tsx'
+    );
+    const statusRow = requireValue(
+      columnsMenu.querySelector<HTMLElement>('[data-column-key="status"]'),
+      'expected Status column row in FavSaveModal.test.tsx'
+    );
+    const nameHandle = requireValue(
+      nameRow.querySelector<HTMLButtonElement>(
+        '[aria-label="Reorder Name. Drag the row, or use Up and Down Arrow keys."]'
+      ),
+      'expected shared Name drag handle in FavSaveModal.test.tsx'
+    );
+    expect(nameRow.draggable).toBe(true);
+    expect(statusRow.draggable).toBe(true);
+    expect(nameRow.querySelector('.dropdown-filter-box--required')).toBeTruthy();
+    expect(statusRow.querySelector('.dropdown-filter-label--muted')).toBeTruthy();
+    expect(nameHandle.textContent).toBe('⠿');
+    expect(container.querySelector('[data-testid="dropdown-value-Columns"]')?.textContent).toBe(
+      'Columns (1 hidden)'
+    );
+
+    await act(async () => {
+      statusRow.querySelector<HTMLButtonElement>('.dropdown-option')?.click();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      nameHandle.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })
+      );
+      await Promise.resolve();
+    });
+    await act(async () => {
+      const sortColumn = requireValue(
+        container.querySelector<HTMLSelectElement>('[data-testid="dropdown-Sort column"]'),
+        'expected sort column control in FavSaveModal.test.tsx'
+      );
+      sortColumn.value = 'age';
+      sortColumn.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      const sortDirection = requireValue(
+        container.querySelector<HTMLSelectElement>('[data-testid="dropdown-Sort direction"]'),
+        'expected sort direction control in FavSaveModal.test.tsx'
+      );
+      sortDirection.value = 'desc';
+      sortDirection.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button.save')?.click();
+      await Promise.resolve();
+    });
+
+    const saved = onSave.mock.calls[0]?.[0] as Favorite;
+    expect(saved.panes.main.tableState).toEqual({
+      sortColumn: 'age',
+      sortDirection: 'desc',
+      columnVisibility: {},
+      columnOrder: ['status', 'name', 'age'],
+    });
   });
 
   // -----------------------------------------------------------------------

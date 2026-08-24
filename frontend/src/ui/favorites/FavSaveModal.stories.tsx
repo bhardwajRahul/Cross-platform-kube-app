@@ -153,6 +153,26 @@ export const EditExisting: Story = {
     existingFavorite: mockExistingFavorite,
     defaultName: mockExistingFavorite.name,
     filters: mockExistingFavorite.panes.main.filters,
+    panes: [
+      {
+        id: 'main',
+        label: 'Pods',
+        ...mockExistingFavorite.panes.main,
+        filterOptions: {
+          showKindDropdown: true,
+          kinds: ['Pod'],
+          showNamespaceDropdown: true,
+          namespaces: ['default', 'kube-system'],
+        },
+        columns: [
+          { key: 'name', label: 'Name', hideable: false, sortable: true },
+          { key: 'namespace', label: 'Namespace', hideable: true, sortable: true },
+          { key: 'status', label: 'Status', hideable: true, sortable: true },
+          { key: 'restarts', label: 'Restarts', hideable: true, sortable: true },
+          { key: 'age', label: 'Age', hideable: true, sortable: true },
+        ],
+      },
+    ],
   },
   decorators: [
     (Story) => {
@@ -172,6 +192,20 @@ export const EditGenericFavorite: Story = {
       clusterSelection: '',
     },
     defaultName: 'Any Cluster Pods',
+  },
+  decorators: [
+    (Story) => {
+      installMockKubeconfigs();
+      return <Story />;
+    },
+  ],
+};
+
+/** New favorite whose generated name is already in use. */
+export const NameCollision: Story = {
+  args: {
+    defaultName: 'Production Pods',
+    unavailableNames: ['Production Pods'],
   },
   decorators: [
     (Story) => {

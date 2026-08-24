@@ -1,7 +1,7 @@
 /* Favorite Save Modal */
 
 .fav-save-modal {
-  max-width: 480px;
+  max-width: calc(var(--modal-width-md) + var(--spacing-xxl));
 }
 
 /* Limit dropdown menu height inside the modal so it doesn't overflow

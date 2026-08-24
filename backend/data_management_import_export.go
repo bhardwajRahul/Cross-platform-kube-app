@@ -271,6 +271,7 @@ func decodeFavoritesDataFile(data []byte) (*favoritesDataFile, error) {
 		return nil, fmt.Errorf("unsupported favorites export schema version %d", document.SchemaVersion)
 	}
 	seen := make(map[string]struct{}, len(document.Favorites))
+	seenNames := make(map[string]struct{}, len(document.Favorites))
 	for index := range document.Favorites {
 		favorite := &document.Favorites[index]
 		favorite.ID = strings.TrimSpace(favorite.ID)
@@ -285,6 +286,10 @@ func decodeFavoritesDataFile(data []byte) (*favoritesDataFile, error) {
 			return nil, fmt.Errorf("duplicate favorite ID %q", favorite.ID)
 		}
 		seen[favorite.ID] = struct{}{}
+		if _, exists := seenNames[favorite.Name]; exists {
+			return nil, fmt.Errorf("duplicate favorite name %q", favorite.Name)
+		}
+		seenNames[favorite.Name] = struct{}{}
 		if err := validateFavoritePanes(favorite.Panes); err != nil {
 			return nil, fmt.Errorf("favorite %q: %w", favorite.ID, err)
 		}

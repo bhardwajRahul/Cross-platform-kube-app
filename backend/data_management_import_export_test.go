@@ -524,6 +524,18 @@ func TestDecodeFavoritesDataFileRejectsInvalidFavorites(t *testing.T) {
 			},
 			message: "at least one named pane",
 		},
+		{
+			name: "duplicate name",
+			document: favoritesDataFile{
+				Format:        favoritesDataFormat,
+				SchemaVersion: favoritesDataSchemaVersion,
+				Favorites: []Favorite{
+					dataManagementFavorite("first", "Favorite"),
+					dataManagementFavorite("second", " Favorite "),
+				},
+			},
+			message: `duplicate favorite name "Favorite"`,
+		},
 	}
 
 	for _, test := range tests {

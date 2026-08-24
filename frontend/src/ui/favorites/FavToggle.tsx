@@ -40,7 +40,7 @@ import { resolveFavoriteRoute } from '@/core/navigation/favoriteRoute';
 import { getViewDescriptor, type ViewScope } from '@/core/navigation/viewRegistry';
 import type { Favorite, FavoritePaneState } from '@/core/persistence/favorites';
 import { compareUtf16Strings } from '@/shared/utils/sort';
-import FavSaveModal from './FavSaveModal';
+import FavSaveModal, { type FavoriteModalColumn } from './FavSaveModal';
 
 type ActiveViewType = ReturnType<typeof useViewState>['viewType'];
 
@@ -57,6 +57,8 @@ export interface FavToggleState {
   columnVisibility: Record<string, boolean>;
   /** Current column order. */
   columnOrder?: string[];
+  /** Current table column capabilities and user-facing labels. */
+  columns?: FavoriteModalColumn[];
   /** Available kind values for the favorites modal kind filter dropdown. */
   availableKinds?: string[];
   /** Available namespace values for the favorites modal namespace filter dropdown. */
@@ -195,6 +197,9 @@ const favoriteFilterOptionsSignature = (options: GridTableFilterOptions): string
       options: facet.options.map((option) => [option.value, String(option.label)]),
     })),
   });
+
+const favoriteColumnsSignature = (columns: FavoriteModalColumn[] | undefined): string =>
+  JSON.stringify(columns ?? []);
 
 const getActiveViewTab = (
   viewType: ActiveViewType,
@@ -375,8 +380,11 @@ export function useFavToggle(state: FavToggleState): {
   );
   const currentPane = useMemo(() => snapshotFavoritePane(state), [state]);
   const paneSignature = useMemo(
-    () => JSON.stringify(currentPane) + favoriteFilterOptionsSignature(filterOptions),
-    [currentPane, filterOptions]
+    () =>
+      JSON.stringify(currentPane) +
+      favoriteFilterOptionsSignature(filterOptions) +
+      favoriteColumnsSignature(state.columns),
+    [currentPane, filterOptions, state.columns]
   );
   const updateGroupedPane = paneGroup?.updatePane;
   const removeGroupedPane = paneGroup?.removePane;
@@ -547,6 +555,7 @@ export function useFavToggle(state: FavToggleState): {
               label: pane.label,
               ...pane.snapshot,
               filterOptions: pane.filterOptions,
+              columns: pane.state.columns,
             }))
         : [
             {
@@ -554,9 +563,10 @@ export function useFavToggle(state: FavToggleState): {
               label: paneLabel,
               ...currentPane,
               filterOptions,
+              columns: state.columns,
             },
           ],
-    [currentPane, filterOptions, paneGroup, paneId, paneLabel]
+    [currentPane, filterOptions, paneGroup, paneId, paneLabel, state.columns]
   );
 
   const handleSave = useCallback(
@@ -615,6 +625,9 @@ export function useFavToggle(state: FavToggleState): {
         availableKinds={state.availableKinds}
         availableFilterNamespaces={state.availableFilterNamespaces}
         panes={modalPanes}
+        unavailableNames={favorites
+          .filter((favorite) => favorite.id !== currentFavoriteMatch?.id)
+          .map((favorite) => favorite.name)}
         onSave={handleSave}
         onDelete={handleDelete}
       />

@@ -107,6 +107,53 @@ func TestAppAddFavoriteRequiresNamedPane(t *testing.T) {
 	require.EqualError(t, err, "favorite must contain at least one named pane")
 }
 
+func TestAppAddFavoriteRejectsDuplicateName(t *testing.T) {
+	setTestConfigEnv(t)
+	app := newPersistenceTestFixture()
+	pane := map[string]FavoritePaneState{"main": {}}
+
+	_, err := app.Favorites.AddFavorite(Favorite{Name: "My Favorite", ViewType: "cluster", View: "nodes", Panes: pane})
+	require.NoError(t, err)
+	_, err = app.Favorites.AddFavorite(Favorite{Name: "  My Favorite  ", ViewType: "cluster", View: "events", Panes: pane})
+
+	require.EqualError(t, err, `favorite name "My Favorite" already exists`)
+	favorites, getErr := app.Favorites.GetFavorites()
+	require.NoError(t, getErr)
+	require.Len(t, favorites, 1)
+}
+
+func TestAppAddFavoriteRejectsEmptyName(t *testing.T) {
+	setTestConfigEnv(t)
+	app := newPersistenceTestFixture()
+
+	_, err := app.Favorites.AddFavorite(Favorite{
+		Name:     "   ",
+		ViewType: "cluster",
+		View:     "nodes",
+		Panes:    map[string]FavoritePaneState{"main": {}},
+	})
+
+	require.EqualError(t, err, "favorite name must not be empty")
+}
+
+func TestAppUpdateFavoriteRejectsAnotherFavoritesName(t *testing.T) {
+	setTestConfigEnv(t)
+	app := newPersistenceTestFixture()
+	pane := map[string]FavoritePaneState{"main": {}}
+	first, err := app.Favorites.AddFavorite(Favorite{Name: "First", ViewType: "cluster", View: "nodes", Panes: pane})
+	require.NoError(t, err)
+	second, err := app.Favorites.AddFavorite(Favorite{Name: "Second", ViewType: "cluster", View: "events", Panes: pane})
+	require.NoError(t, err)
+	second.Name = first.Name
+
+	err = app.Favorites.UpdateFavorite(second)
+
+	require.EqualError(t, err, `favorite name "First" already exists`)
+	favorites, getErr := app.Favorites.GetFavorites()
+	require.NoError(t, getErr)
+	require.Equal(t, []string{"First", "Second"}, []string{favorites[0].Name, favorites[1].Name})
+}
+
 func TestLoadFavoritesFileMigratesV2FavoritesIndividually(t *testing.T) {
 	setTestConfigEnv(t)
 	app := newPersistenceTestFixture()

@@ -205,6 +205,10 @@ const HookWrapper: React.FC<{
     sortColumn: null,
     sortDirection: 'asc',
     columnVisibility: {},
+    columns: [
+      { key: 'name', label: 'Name', hideable: false, sortable: true },
+      { key: 'age', label: 'Age', hideable: true, sortable: true },
+    ],
   });
 
   if (item?.type === 'toggle') {
@@ -425,6 +429,19 @@ describe('useFavToggle', () => {
 
     const modal = document.querySelector('[data-testid="fav-save-modal"]');
     expect(modal).toBeTruthy();
+    expect(favSaveModalPropsRef.current?.panes?.[0]?.columns).toEqual([
+      { key: 'name', label: 'Name', hideable: false, sortable: true },
+      { key: 'age', label: 'Age', hideable: true, sortable: true },
+    ]);
+  });
+
+  it('reserves names owned by other Favorites while allowing the edited Favorite name', async () => {
+    mockFavorites = [makeFavorite(), makeFavorite({ id: 'fav-2', name: 'Other Favorite' })];
+
+    await renderHook();
+    await clickToggle();
+
+    expect(favSaveModalPropsRef.current?.unavailableNames).toEqual(['Other Favorite']);
   });
 
   // -------------------------------------------------------------------------

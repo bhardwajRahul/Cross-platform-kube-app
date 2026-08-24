@@ -10,10 +10,6 @@ import type { DropdownOption, DropdownProps } from '@shared/components/dropdowns
 import { Dropdown } from '@shared/components/dropdowns/Dropdown';
 import { DROPDOWN_BULK_ACTION_ICON_SIZE } from '@shared/components/dropdowns/Dropdown/Dropdown';
 import {
-  DropdownFilterOption,
-  dropdownFilterOptionState,
-} from '@shared/components/dropdowns/Dropdown/DropdownFilterOption';
-import {
   ALL_MULTISELECT_FILTER,
   filterSelectionToDropdownValues,
   type MultiSelectFilterSelection,
@@ -28,9 +24,10 @@ import type {
   InternalFilterOptions,
 } from '@shared/components/tables/GridTable.types';
 import { hasNarrowingGridTableFilters } from '@shared/components/tables/gridTableFilterState';
+import { useGridTableColumnOptionRows } from '@shared/components/tables/hooks/useGridTableColumnOptionRows';
 import { useSearchShortcutTarget } from '@ui/shortcuts';
 import type React from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef } from 'react';
 
 interface GridTableFiltersBarProps {
   activeFilters: GridTableFilterState;
@@ -86,11 +83,6 @@ interface GridTableFiltersBarProps {
     capped?: boolean;
   };
 }
-
-type ColumnDropTarget = {
-  key: string;
-  position: 'before' | 'after';
-};
 
 type FilterControlPlacement = 'before-kinds' | 'kind' | 'namespace' | 'cluster' | 'after-clusters';
 
@@ -372,121 +364,8 @@ const GridTableFiltersBar: React.FC<GridTableFiltersBarProps> = ({
   const hasNarrowingFilters = hasNarrowingGridTableFilters(activeFilters);
   const showCaseSensitiveToggle = resolvedFilterOptions.searchBehavior !== 'query';
   const queryFacets = resolvedFilterOptions.queryFacets ?? [];
-  const [draggingColumnKey, setDraggingColumnKey] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<ColumnDropTarget | null>(null);
-
-  useEffect(() => {
-    if (!draggingColumnKey || !onReorderColumn || !columnOptions) {
-      return;
-    }
-
-    const getDropTarget = (event: DragEvent) => {
-      const eventTarget = event.target;
-      if (!(eventTarget instanceof Element)) {
-        return null;
-      }
-      const row = eventTarget.closest<HTMLElement>('.dropdown-option-row');
-      const key = row?.dataset.columnKey;
-      if (!key || key === draggingColumnKey) {
-        return null;
-      }
-      const index = columnOptions.findIndex((option) => option.value === key);
-      const draggingIndex = columnOptions.findIndex((option) => option.value === draggingColumnKey);
-      return index >= 0 && draggingIndex >= 0
-        ? { key, index, position: draggingIndex < index ? ('after' as const) : ('before' as const) }
-        : null;
-    };
-
-    const handleDragOver = (event: DragEvent) => {
-      const target = getDropTarget(event);
-      setDropTarget(target ? { key: target.key, position: target.position } : null);
-      if (target) {
-        event.preventDefault();
-        if (event.dataTransfer) {
-          event.dataTransfer.dropEffect = 'move';
-        }
-      }
-    };
-
-    const handleDrop = (event: DragEvent) => {
-      const target = getDropTarget(event);
-      if (target) {
-        event.preventDefault();
-        onReorderColumn(draggingColumnKey, target.index);
-      }
-      setDraggingColumnKey(null);
-      setDropTarget(null);
-    };
-
-    document.addEventListener('dragover', handleDragOver);
-    document.addEventListener('drop', handleDrop);
-    return () => {
-      document.removeEventListener('dragover', handleDragOver);
-      document.removeEventListener('drop', handleDrop);
-    };
-  }, [columnOptions, draggingColumnKey, onReorderColumn]);
-
-  // A hidden column is absent from the table, so the Columns menu is the one
-  // place where dimming an unselected label reports something real.
-  const renderColumnOption = (option: DropdownOption, isSelected: boolean) => {
-    const required = Boolean(option.disabled);
-    return (
-      <DropdownFilterOption
-        label={option.label}
-        state={dropdownFilterOptionState(isSelected, required)}
-        dimWhenOff
-        title={required ? 'Always shown' : undefined}
-      />
-    );
-  };
-
-  // The whole row is the drag target — a 14x18px handle is too small to aim at.
-  // The grip stays as the affordance that says so, and as the keyboard entry point.
-  const getColumnRowProps = (option: DropdownOption) => {
-    if (!onMoveColumn || !onReorderColumn || !columnOptions) {
-      return {};
-    }
-    return {
-      draggable: true,
-      'data-column-key': option.value,
-      'data-dragging': draggingColumnKey === option.value || undefined,
-      'data-drop-position': dropTarget?.key === option.value ? dropTarget.position : undefined,
-      onDragStart: (event: React.DragEvent<HTMLDivElement>) => {
-        event.dataTransfer.effectAllowed = 'move';
-        event.dataTransfer.setData('text/plain', option.value);
-        setDraggingColumnKey(option.value);
-      },
-      onDragEnd: () => {
-        setDraggingColumnKey(null);
-        setDropTarget(null);
-      },
-    };
-  };
-
-  const renderColumnOrderActions = (option: DropdownOption) => {
-    if (!onMoveColumn || !onReorderColumn || !columnOptions) {
-      return null;
-    }
-    return (
-      <button
-        type="button"
-        className="gridtable-column-drag-handle"
-        data-column-key={option.value}
-        onKeyDown={(event) => {
-          if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') {
-            return;
-          }
-          event.preventDefault();
-          event.stopPropagation();
-          onMoveColumn(option.value, event.key === 'ArrowUp' ? -1 : 1);
-        }}
-        aria-label={`Reorder ${option.label}. Drag the row, or use Up and Down Arrow keys.`}
-        title="Drag the row, or use Up and Down Arrow keys to reorder"
-      >
-        ⠿
-      </button>
-    );
-  };
+  const { renderColumnOption, renderColumnOrderActions, getColumnRowProps } =
+    useGridTableColumnOptionRows({ columnOptions, onMoveColumn, onReorderColumn });
   const filterControls: ResolvedMultiselectFilterControl[] = [
     {
       key: 'kinds',

@@ -295,6 +295,23 @@ func validateFavoritePanes(panes map[string]FavoritePaneState) error {
 	return nil
 }
 
+func normalizeFavoriteName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("favorite name must not be empty")
+	}
+	return name, nil
+}
+
+func validateUniqueFavoriteName(favorites []Favorite, name string, excludedID string) error {
+	for _, existing := range favorites {
+		if existing.ID != excludedID && strings.TrimSpace(existing.Name) == name {
+			return fmt.Errorf("favorite name %q already exists", name)
+		}
+	}
+	return nil
+}
+
 func (s *FavoritesService) getFavoritesFilePath() (string, error) {
 	manifest, err := appstate.Resolve("luxury-yacht")
 	if err != nil {
@@ -391,6 +408,11 @@ func (s *FavoritesService) AddFavorite(fav Favorite) (Favorite, error) {
 	if err := validateFavoritePanes(fav.Panes); err != nil {
 		return Favorite{}, err
 	}
+	name, err := normalizeFavoriteName(fav.Name)
+	if err != nil {
+		return Favorite{}, err
+	}
+	fav.Name = name
 	fav.ID = uuid.New().String()
 	normalizeFavoritePanes(fav.Panes)
 
@@ -399,6 +421,9 @@ func (s *FavoritesService) AddFavorite(fav Favorite) (Favorite, error) {
 
 	state, err := s.loadFavoritesFile()
 	if err != nil {
+		return Favorite{}, err
+	}
+	if err := validateUniqueFavoriteName(state.Favorites, fav.Name, ""); err != nil {
 		return Favorite{}, err
 	}
 	fav.Order = len(state.Favorites)
@@ -414,6 +439,11 @@ func (s *FavoritesService) UpdateFavorite(fav Favorite) error {
 	if err := validateFavoritePanes(fav.Panes); err != nil {
 		return err
 	}
+	name, err := normalizeFavoriteName(fav.Name)
+	if err != nil {
+		return err
+	}
+	fav.Name = name
 	normalizeFavoritePanes(fav.Panes)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -424,6 +454,9 @@ func (s *FavoritesService) UpdateFavorite(fav Favorite) error {
 	}
 	for i, existing := range state.Favorites {
 		if existing.ID == fav.ID {
+			if err := validateUniqueFavoriteName(state.Favorites, fav.Name, fav.ID); err != nil {
+				return err
+			}
 			fav.Order = existing.Order
 			state.Favorites[i] = fav
 			return s.saveFavoritesFile(state)
