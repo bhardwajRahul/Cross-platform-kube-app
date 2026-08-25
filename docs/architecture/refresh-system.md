@@ -96,6 +96,36 @@ Both modes share one source subscription, readiness, permission, stream health,
 source clocks, and polling fallback. Their reference counts are independent;
 releasing one mode cannot stop the other mode's work.
 
+## Frontend runtime state
+
+`ClusterRefreshRuntime` owns one record for each `(clusterId, domain, scope)`.
+That record is the source of truth for:
+
+- activation plus independent query and snapshot demand counts;
+- deferred cluster-readiness intent and the scoped permission epoch;
+- snapshot request ownership and its coalesced trailing stream signal;
+- stream policy, scheduled initialization, connection ownership, cancellation,
+  and health.
+
+Do not add parallel maps or sets for those fields. Add an event to the relevant
+discriminated state and keep network, timer, store, and cleanup work in the
+orchestrator. Async start, settle, cancel, cleanup, and health events carry the
+request or task identity they belong to; an event from a replaced owner is a
+no-op.
+
+Cluster auth availability belongs to its `ClusterRefreshRuntime`. Auth recovery
+resets only that runtime's scoped permission epoch before enabled scopes are
+reconciled. A namespace-scope rebuild is a new permission epoch for every
+runtime. Store `permissionDenied` remains a presentation projection, not the
+retry gate.
+
+`RefreshManager` separately reduces scheduler intent (`enabled`, `paused`, or
+`disabled`), timing (`idle` or `cooldown` with its owned handles), and execution
+(`idle` or an ID-owned run). Its public `RefresherState` is derived from those
+states plus refresh metadata. Global metrics demand is independently reduced as
+`idle`, `requesting`, or `waiting-retry`; only the matching demand key may
+complete or schedule a retry.
+
 ## Behavior classes
 
 - Snapshot domains replace one scoped payload.

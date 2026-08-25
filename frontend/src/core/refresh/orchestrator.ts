@@ -25,6 +25,11 @@ import { clusterReadiness } from './clusterReadiness';
 import { buildClusterScope, parseClusterScope, parseClusterScopeList } from './clusterScope';
 import { registerDefaultRefreshDomains } from './domainRegistrations';
 import { METRIC_DEMAND_DOMAINS } from './domainRegistry';
+import {
+  initialMetricsDemandState,
+  type MetricsDemandState,
+  transitionMetricsDemandState,
+} from './metricsDemandState';
 import { type RefreshContext, refreshManager } from './RefreshManager';
 import { RefreshErrorNotifier } from './refreshErrorNotifier';
 import { type RefresherTiming, refresherConfig } from './refresherConfig';
@@ -72,14 +77,6 @@ type DomainFetchOptions = {
   streamSignal?: boolean;
 };
 
-type PendingClusterReadinessRequest = {
-  domain: RefreshDomain;
-  scope: string;
-  isManual: boolean;
-  streamSignal: boolean;
-  queryReconcile: boolean;
-};
-
 type ScopedFetchExecution<K extends RefreshDomain> = {
   runtime: ClusterRefreshRuntime;
   scope: string;
@@ -87,6 +84,18 @@ type ScopedFetchExecution<K extends RefreshDomain> = {
   controller: AbortController;
   requestId: number;
   contextVersion: number;
+};
+
+type ScopedDomainStateChange = {
+  config: DomainRegistration<RefreshDomain>;
+  domain: RefreshDomain;
+  scope: string;
+  enabled: boolean;
+  preserveState: boolean;
+  runtime: ClusterRefreshRuntime;
+  wasActive: boolean;
+  changed: boolean;
+  staleScopes: string[];
 };
 
 // Refreshers are disabled at registration by default. Most domains rely on
@@ -114,20 +123,10 @@ class RefreshOrchestrator {
   private readonly registeredRefreshers = new Set<RefresherName>();
   private readonly coordinatorRuntime = new ClusterRefreshRuntime('__coordinator__');
   private readonly clusterRuntimes = new Map<string, ClusterRefreshRuntime>();
-  // Scoped fetches held because the scope's cluster backend is still
-  // initializing; keyed by clusterId and then by domain + scope. Repeated
-  // demand coalesces without losing manual or stream-signal intent.
-  private readonly pendingClusterReadiness = new Map<
-    string,
-    Map<string, PendingClusterReadinessRequest>
-  >();
-
   private requestCounter = 0;
-  private metricsDemandClusterKey = '';
-  private metricsDemandRequestKey: string | null = null;
-  private metricsDemandRetryKey: string | null = null;
-  private metricsDemandRetryTimer: ReturnType<typeof setTimeout> | null = null;
-  private metricsDemandRetryDelayMs = METRICS_DEMAND_RETRY_INITIAL_MS;
+  private metricsDemandState: MetricsDemandState = initialMetricsDemandState(
+    METRICS_DEMAND_RETRY_INITIAL_MS
+  );
 
   private readonly suspendedDomains = new Map<RefreshDomain, boolean>();
   private contextVersion = 0;
@@ -136,9 +135,6 @@ class RefreshOrchestrator {
     objectPanel: { isOpen: false },
   };
   private readonly errorNotifier = new RefreshErrorNotifier();
-
-  // Tracks clusters with auth failures so duplicate events do not repeat teardown.
-  private readonly authFailedClusters = new Set<string>();
 
   constructor() {
     eventBus.on('view:reset', this.handleResetViews);
@@ -168,7 +164,10 @@ class RefreshOrchestrator {
   /** Every requested cluster's backend subsystem can serve (or is unknown). */
   private isScopeClusterServiceable(scope: string): boolean {
     return parseClusterScopeList(scope).clusterIds.every((clusterId) =>
-      Boolean(!this.authFailedClusters.has(clusterId) && clusterReadiness.isServiceable(clusterId))
+      Boolean(
+        (this.clusterRuntimes.get(clusterId)?.isAuthAvailable() ?? true) &&
+          clusterReadiness.isServiceable(clusterId)
+      )
     );
   }
 
@@ -179,19 +178,12 @@ class RefreshOrchestrator {
     options?: Pick<DomainFetchOptions, 'isManual' | 'streamSignal' | 'queryReconcile'>
   ): void {
     for (const clusterId of parseClusterScopeList(scope).clusterIds) {
-      let pending = this.pendingClusterReadiness.get(clusterId);
-      if (!pending) {
-        pending = new Map<string, PendingClusterReadinessRequest>();
-        this.pendingClusterReadiness.set(clusterId, pending);
-      }
-      const key = `${domain}\u0000${scope}`;
-      const existing = pending.get(key);
-      pending.set(key, {
+      this.getClusterRuntime(clusterId).deferUntilClusterReady({
         domain,
         scope,
-        isManual: Boolean(existing?.isManual || options?.isManual),
-        streamSignal: Boolean(existing?.streamSignal || options?.streamSignal),
-        queryReconcile: Boolean(existing?.queryReconcile || options?.queryReconcile),
+        isManual: Boolean(options?.isManual),
+        streamSignal: Boolean(options?.streamSignal),
+        queryReconcile: Boolean(options?.queryReconcile),
       });
     }
   }
@@ -214,10 +206,9 @@ class RefreshOrchestrator {
   }
 
   private handleClusterBecameServiceable(clusterId: string): void {
-    const pending = this.pendingClusterReadiness.get(clusterId);
-    this.pendingClusterReadiness.delete(clusterId);
-    if (pending) {
-      for (const request of pending.values()) {
+    const pending = this.clusterRuntimes.get(clusterId)?.takeDeferredReadinessRequests() ?? [];
+    if (pending.length > 0) {
+      for (const request of pending) {
         const { domain, scope } = request;
         if (!this.configs.has(domain)) {
           continue;
@@ -383,7 +374,8 @@ class RefreshOrchestrator {
       scope: normalizedScope,
     }));
 
-    const readyTask = Promise.resolve()
+    let readyTask: Promise<void>;
+    readyTask = Promise.resolve()
       .then(() => {
         if (!this.isScopedDomainEnabledInternal(domain, normalizedScope)) {
           return;
@@ -403,7 +395,7 @@ class RefreshOrchestrator {
         this.notifyRefreshError(domain, notificationScope, message, error);
       })
       .finally(() => {
-        runtime.clearStreamingReady(domain, normalizedScope);
+        runtime.clearStreamingReady(domain, normalizedScope, readyTask);
       });
 
     runtime.setStreamingReady(domain, normalizedScope, readyTask);
@@ -508,6 +500,48 @@ class RefreshOrchestrator {
     }
   }
 
+  private reconcileScopedDomainStateChange(change: ScopedDomainStateChange): void {
+    const {
+      config,
+      domain,
+      scope,
+      enabled,
+      preserveState,
+      runtime,
+      wasActive,
+      changed,
+      staleScopes,
+    } = change;
+    this.clearStaleScopes(domain, staleScopes, config.streaming);
+    if (!changed) {
+      this.updateMetricsDemand();
+      return;
+    }
+
+    this.reconcileRefresherActivity(config, wasActive, this.hasEnabledScopedSources(domain));
+
+    if (config.streaming) {
+      this.reconcileStreamingScopeEnabled(
+        domain,
+        scope,
+        enabled,
+        preserveState,
+        runtime,
+        config.streaming
+      );
+      this.updateMetricsDemand();
+      return;
+    }
+
+    if (!enabled) {
+      this.cancelInFlightForScopedDomain(domain, scope);
+      if (!preserveState) {
+        resetScopedDomainState(domain, scope);
+      }
+    }
+    this.updateMetricsDemand();
+  }
+
   setScopedDomainEnabled(
     domain: RefreshDomain,
     scope: string,
@@ -538,40 +572,21 @@ class RefreshOrchestrator {
       normalizedScope,
       enabled
     );
-    this.clearStaleScopes(domain, staleScopes, config.streaming);
-    if (!changed) {
-      this.updateMetricsDemand();
-      return;
-    }
-
-    const isActive = this.hasEnabledScopedSources(domain);
-    this.reconcileRefresherActivity(config, wasActive, isActive);
-
     // When preserveState is true, toggling the domain stops/restarts activity
     // without clearing the last scoped snapshot from the store. This is useful
     // for event streams where reconnects should not blank the visible table.
     const preserveState = Boolean(options?.preserveState);
-
-    if (config.streaming) {
-      this.reconcileStreamingScopeEnabled(
-        domain,
-        normalizedScope,
-        enabled,
-        preserveState,
-        runtime,
-        config.streaming
-      );
-      this.updateMetricsDemand();
-      return;
-    }
-
-    if (!enabled) {
-      this.cancelInFlightForScopedDomain(domain, normalizedScope);
-      if (!preserveState) {
-        resetScopedDomainState(domain, normalizedScope);
-      }
-    }
-    this.updateMetricsDemand();
+    this.reconcileScopedDomainStateChange({
+      config,
+      domain,
+      scope: normalizedScope,
+      enabled,
+      preserveState,
+      runtime,
+      wasActive,
+      changed,
+      staleScopes,
+    });
   }
 
   // Acquire a reference-counted lease that keeps (domain, scope) enabled while
@@ -589,9 +604,26 @@ class RefreshOrchestrator {
     const runtime = this.getRuntimeForScope(domain, normalizedScope);
     const demand = options?.demand ?? 'snapshot';
     const hadSnapshotDemand = runtime.hasScopedDemand(domain, normalizedScope, 'snapshot');
-    const { firstLease } = runtime.acquireScopedLease(domain, normalizedScope, demand);
+    const wasActive = this.hasEnabledScopedSources(domain);
+    const { firstLease, activationChanged } = runtime.acquireScopedLease(
+      domain,
+      normalizedScope,
+      demand
+    );
     if (firstLease) {
-      this.setScopedDomainEnabled(domain, normalizedScope, true, options);
+      const config = this.getConfig(domain);
+      const { staleScopes } = runtime.applyScopedDomainEnabled(domain, normalizedScope, true);
+      this.reconcileScopedDomainStateChange({
+        config,
+        domain,
+        scope: normalizedScope,
+        enabled: true,
+        preserveState: Boolean(options?.preserveState),
+        runtime,
+        wasActive,
+        changed: activationChanged,
+        staleScopes,
+      });
       return;
     }
     if (demand === 'snapshot' && !hadSnapshotDemand) {
@@ -865,8 +897,10 @@ class RefreshOrchestrator {
     runtime.beginStreamingStart(domain, scope, startPromise);
 
     startPromise
-      .then((cleanup) => this.completeStreamingStart(domain, scope, streaming, runtime, cleanup))
-      .catch((error) => this.failStreamingStart(domain, scope, runtime, error));
+      .then((cleanup) =>
+        this.completeStreamingStart(domain, scope, streaming, runtime, startPromise, cleanup)
+      )
+      .catch((error) => this.failStreamingStart(domain, scope, runtime, startPromise, error));
 
     return startPromise.then(() => undefined).catch(() => undefined);
   }
@@ -876,11 +910,12 @@ class RefreshOrchestrator {
     scope: string,
     streaming: StreamingRegistration,
     runtime: ClusterRefreshRuntime,
+    startPromise: Promise<(() => void) | undefined>,
     cleanup: (() => void) | undefined
   ): void {
     const enabledNow = this.isScopedDomainEnabledInternal(domain, scope);
     if (!enabledNow || runtime.isStreamingCancelled(domain, scope)) {
-      runtime.failStreamingStart(domain, scope);
+      runtime.failStreamingStart(domain, scope, startPromise);
       runtime.clearStreamingCancelled(domain, scope);
       this.runStreamingCleanup(cleanup, domain, scope);
       if (enabledNow) {
@@ -891,7 +926,12 @@ class RefreshOrchestrator {
       return;
     }
 
-    runtime.finishStreamingStart(domain, scope, cleanup ?? noopStreamingCleanup);
+    if (
+      !runtime.finishStreamingStart(domain, scope, startPromise, cleanup ?? noopStreamingCleanup)
+    ) {
+      this.runStreamingCleanup(cleanup, domain, scope);
+      return;
+    }
     // A newly subscribed notify-only stream needs one bounded snapshot so a
     // quiet or permission-denied scope can settle without waiting for polling.
     this.reconcileInitialStreamingSnapshot(domain, scope, streaming);
@@ -921,9 +961,10 @@ class RefreshOrchestrator {
     domain: RefreshDomain,
     scope: string,
     runtime: ClusterRefreshRuntime,
+    startPromise: Promise<(() => void) | undefined>,
     error: unknown
   ): void {
-    runtime.failStreamingStart(domain, scope);
+    runtime.failStreamingStart(domain, scope, startPromise);
     const message = error instanceof Error ? error.message : String(error);
     setScopedDomainState(domain, scope, (previous) => ({
       ...previous,
@@ -980,7 +1021,7 @@ class RefreshOrchestrator {
           if (!runtime.isStreamingCancelled(domain, scope)) {
             return;
           }
-          runtime.failStreamingStart(domain, scope);
+          runtime.failStreamingStart(domain, scope, pending);
           runtime.clearStreamingCancelled(domain, scope);
           if (typeof streamingCleanup === 'function') {
             try {
@@ -996,7 +1037,7 @@ class RefreshOrchestrator {
           }
         })
         .catch(() => {
-          runtime.failStreamingStart(domain, scope);
+          runtime.failStreamingStart(domain, scope, pending);
           runtime.clearStreamingCancelled(domain, scope);
         });
     }
@@ -1125,6 +1166,19 @@ class RefreshOrchestrator {
     this.forEachRuntime((runtime) => runtime.clearAllStreamHealth());
   }
 
+  private resetRuntimePermissionEpoch(runtime: ClusterRefreshRuntime): void {
+    runtime.resetPermissionEpoch().forEach(({ domain, scope }) => {
+      setScopedDomainState(domain, scope, (previous) => ({
+        ...previous,
+        permissionDenied: false,
+      }));
+    });
+  }
+
+  private resetAllRuntimePermissionEpochs(): void {
+    this.forEachRuntime((runtime) => this.resetRuntimePermissionEpoch(runtime));
+  }
+
   private pruneRemovedClusterRuntimes(connectedClusterIds: string[]): void {
     const connected = new Set(
       connectedClusterIds.map((clusterId) => clusterId.trim()).filter(Boolean)
@@ -1136,12 +1190,6 @@ class RefreshOrchestrator {
     // cluster-events, polling disabled — are cleaned up too. forEachScopedDomain only sees
     // enabled leases, so it would leave those orphaned for a closed cluster.
     this.resetScopedStatesForRemovedClusters(connected);
-    Array.from(this.pendingClusterReadiness.keys()).forEach((clusterId) => {
-      if (!connected.has(clusterId)) {
-        this.pendingClusterReadiness.delete(clusterId);
-      }
-    });
-
     Array.from(this.clusterRuntimes.entries()).forEach(([clusterId, runtime]) => {
       if (connected.has(clusterId)) {
         return;
@@ -1464,6 +1512,7 @@ class RefreshOrchestrator {
       ) {
         return;
       }
+      execution.runtime.markPermissionAllowed(domain, scope);
       setScopedDomainState(domain, scope, (previous) => ({
         ...previous,
         status: previous.data ? 'ready' : 'idle',
@@ -1498,6 +1547,7 @@ class RefreshOrchestrator {
     if (isSnapshotPermissionDenied(error)) {
       // A typed 403 is a settled answer and bypasses startup network-error
       // suppression so automatic retries stop for this scope.
+      execution.runtime.markPermissionDenied(domain, execution.scope);
       setScopedDomainState(domain, execution.scope, (previous) => ({
         ...previous,
         status: 'error',
@@ -1572,7 +1622,7 @@ class RefreshOrchestrator {
     // (the no-data fetch clause) and flicked the state through 'loading' —
     // observed live as a spinner flashing over the permission message. Manual
     // refresh remains a deliberate re-ask.
-    if (!options.isManual && previousState.permissionDenied) {
+    if (!options.isManual && runtime.isPermissionDenied(domain, normalizedScope)) {
       return;
     }
     const execution = this.beginFetch(
@@ -1627,6 +1677,7 @@ class RefreshOrchestrator {
       ) {
         return;
       }
+      this.getRuntimeForScope(domain, resolvedScope).markPermissionAllowed(domain, resolvedScope);
       setScopedDomainState(domain, resolvedScope, (prev) => ({
         ...prev,
         status: 'ready',
@@ -1662,61 +1713,73 @@ class RefreshOrchestrator {
   private updateMetricsDemand(): void {
     const clusterIds = this.metricsDemandClusterIds();
     const clusterKey = clusterIds.join('\0');
-    if (clusterKey === this.metricsDemandClusterKey) {
+    if (clusterKey === this.metricsDemandState.appliedKey) {
       this.clearMetricsDemandRetry();
       return;
     }
-    if (this.metricsDemandRequestKey !== null) {
+    if (this.metricsDemandState.status === 'requesting') {
       return;
     }
-    if (this.metricsDemandRetryTimer !== null) {
-      if (this.metricsDemandRetryKey === clusterKey) {
+    if (this.metricsDemandState.status === 'waiting-retry') {
+      if (this.metricsDemandState.retryKey === clusterKey) {
         return;
       }
       this.clearMetricsDemandRetry();
     }
 
-    this.metricsDemandRequestKey = clusterKey;
+    this.metricsDemandState = transitionMetricsDemandState(this.metricsDemandState, {
+      type: 'request-started',
+      key: clusterKey,
+    });
     void setMetricsActive(clusterIds).then(
       () => {
-        this.metricsDemandRequestKey = null;
-        this.metricsDemandClusterKey = clusterKey;
-        this.metricsDemandRetryDelayMs = METRICS_DEMAND_RETRY_INITIAL_MS;
+        this.metricsDemandState = transitionMetricsDemandState(this.metricsDemandState, {
+          type: 'request-succeeded',
+          key: clusterKey,
+          initialDelayMs: METRICS_DEMAND_RETRY_INITIAL_MS,
+        });
         this.updateMetricsDemand();
       },
       (error) => {
-        this.metricsDemandRequestKey = null;
         const message = error instanceof Error ? error.message : String(error);
         logWarning(`[refresh] metrics demand update failed: ${message}`);
 
         const currentKey = this.metricsDemandClusterIds().join('\0');
         if (currentKey !== clusterKey) {
-          this.metricsDemandRetryDelayMs = METRICS_DEMAND_RETRY_INITIAL_MS;
+          this.metricsDemandState = transitionMetricsDemandState(this.metricsDemandState, {
+            type: 'request-abandoned',
+            key: clusterKey,
+            initialDelayMs: METRICS_DEMAND_RETRY_INITIAL_MS,
+          });
           this.updateMetricsDemand();
           return;
         }
 
-        const delay = this.metricsDemandRetryDelayMs;
-        this.metricsDemandRetryDelayMs = Math.min(
-          this.metricsDemandRetryDelayMs * 2,
-          METRICS_DEMAND_RETRY_MAX_MS
-        );
-        this.metricsDemandRetryKey = clusterKey;
-        this.metricsDemandRetryTimer = setTimeout(() => {
-          this.metricsDemandRetryTimer = null;
-          this.metricsDemandRetryKey = null;
+        const delay = this.metricsDemandState.retryDelayMs;
+        const retryTimer = setTimeout(() => {
+          this.metricsDemandState = transitionMetricsDemandState(this.metricsDemandState, {
+            type: 'retry-fired',
+            key: clusterKey,
+          });
           this.updateMetricsDemand();
         }, delay);
+        this.metricsDemandState = transitionMetricsDemandState(this.metricsDemandState, {
+          type: 'retry-scheduled',
+          key: clusterKey,
+          timer: retryTimer,
+          maxDelayMs: METRICS_DEMAND_RETRY_MAX_MS,
+        });
       }
     );
   }
 
   private clearMetricsDemandRetry(): void {
-    if (this.metricsDemandRetryTimer !== null) {
-      clearTimeout(this.metricsDemandRetryTimer);
-      this.metricsDemandRetryTimer = null;
+    if (this.metricsDemandState.status === 'waiting-retry') {
+      clearTimeout(this.metricsDemandState.retryTimer);
+      this.metricsDemandState = transitionMetricsDemandState(this.metricsDemandState, {
+        type: 'retry-cancelled',
+      });
     }
-    this.metricsDemandRetryKey = null;
   }
 
   private isScopedDomainEnabledInternal(domain: RefreshDomain, scope: string): boolean {
@@ -1819,16 +1882,15 @@ class RefreshOrchestrator {
 
   private readonly handleClusterAuthFailed = (payload: { clusterId: string }) => {
     const clusterId = payload.clusterId.trim();
-    if (!clusterId || this.authFailedClusters.has(clusterId)) {
+    if (!clusterId) {
       return;
     }
-    this.authFailedClusters.add(clusterId);
+    const runtime = this.getClusterRuntime(clusterId);
+    if (!runtime.markAuthFailed()) {
+      return;
+    }
     logInfo('[refresh] pausing cluster — auth failed', { clusterId });
 
-    const runtime = this.clusterRuntimes.get(clusterId);
-    if (!runtime) {
-      return;
-    }
     this.stopRuntimeStreaming(runtime, false);
     runtime.forEachInFlight((details, key) => {
       this.teardownInFlight(runtime, key, details);
@@ -1840,19 +1902,21 @@ class RefreshOrchestrator {
 
   private readonly handleClusterAuthRecovered = (payload: { clusterId: string }) => {
     const clusterId = payload.clusterId.trim();
-    if (!clusterId || !this.authFailedClusters.delete(clusterId)) {
+    if (!clusterId) {
+      return;
+    }
+    const runtime = this.clusterRuntimes.get(clusterId);
+    if (!runtime?.markAuthRecovered()) {
       return;
     }
 
     logInfo('[refresh] resuming cluster — auth recovered', { clusterId });
-    const runtime = this.clusterRuntimes.get(clusterId);
-    if (runtime) {
-      runtime.clearBlockedStreaming();
-      runtime.clearAllStreamHealth();
-      runtime.forEachScopedDomain((domain, scope) => {
-        this.errorNotifier.clear(domain, scope);
-      });
-    }
+    runtime.clearBlockedStreaming();
+    runtime.clearAllStreamHealth();
+    this.resetRuntimePermissionEpoch(runtime);
+    runtime.forEachScopedDomain((domain, scope) => {
+      this.errorNotifier.clear(domain, scope);
+    });
     // Re-evaluate enabled scopes. The affected cluster remains behind its
     // lifecycle serviceability gate until the backend rebuild is ready.
     this.handleStreamingScopeChanges();
@@ -1872,6 +1936,7 @@ class RefreshOrchestrator {
     // cluster-wide may now be served per-namespace. Clear the latches so the
     // affected scopes re-ask (they hold no data, so nothing blanks).
     resetPermissionDeniedScopedDomainStates();
+    this.resetAllRuntimePermissionEpochs();
     this.incrementContextVersion();
     // Suppress transient errors while the rebuilt subsystem starts serving.
     this.errorNotifier.suppressNetworkErrors(6000);
@@ -1894,7 +1959,7 @@ class RefreshOrchestrator {
 
   private readonly handleKubeconfigChanging = () => {
     // A kubeconfig change supersedes tracked auth-failure state.
-    this.authFailedClusters.clear();
+    this.forEachRuntime((runtime) => runtime.markAuthRecovered());
     this.incrementContextVersion();
     this.stopAllStreaming(true);
     this.abortAllInFlight();

@@ -3,8 +3,145 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   ClusterRefreshRuntime,
   makeInFlightKey,
+  transitionClusterAuthState,
+  transitionScopedActivationState,
   transitionScopedFetchState,
+  transitionScopedPermissionState,
+  transitionScopedReadinessState,
+  transitionScopedStreamState,
 } from './refreshRuntime';
+
+describe('transitionScopedStreamState', () => {
+  it('keeps one start owner and rejects a stale completion', () => {
+    const firstTask = Promise.resolve<(() => void) | undefined>(undefined);
+    const replacementTask = Promise.resolve<(() => void) | undefined>(undefined);
+    const cleanup = vi.fn();
+    let state = transitionScopedStreamState(
+      {
+        policy: 'allowed',
+        initialization: { status: 'idle' },
+        connection: { status: 'inactive' },
+        health: { status: 'unknown' },
+      },
+      { type: 'start-began', task: firstTask }
+    );
+    state = transitionScopedStreamState(state, { type: 'start-cancelled' });
+    state = transitionScopedStreamState(state, {
+      type: 'start-began',
+      task: replacementTask,
+    });
+
+    expect(
+      transitionScopedStreamState(state, {
+        type: 'start-finished',
+        task: firstTask,
+        cleanup,
+      })
+    ).toBe(state);
+    expect(
+      transitionScopedStreamState(state, {
+        type: 'start-finished',
+        task: replacementTask,
+        cleanup,
+      })
+    ).toEqual({
+      policy: 'allowed',
+      initialization: { status: 'idle' },
+      connection: { status: 'active', cleanup, cancellationRequested: false },
+      health: { status: 'unknown' },
+    });
+  });
+});
+
+describe('scoped readiness, permission, and cluster auth transitions', () => {
+  it('coalesces deferred intent and resets permission only at a new epoch', () => {
+    const first = {
+      domain: 'cluster-config' as const,
+      scope: 'cluster-a|',
+      isManual: false,
+      streamSignal: true,
+      queryReconcile: false,
+    };
+    let readiness = transitionScopedReadinessState(
+      { status: 'ready' },
+      { type: 'request-deferred', request: first }
+    );
+    readiness = transitionScopedReadinessState(readiness, {
+      type: 'request-deferred',
+      request: { ...first, isManual: true, streamSignal: false, queryReconcile: true },
+    });
+
+    expect(readiness).toEqual({
+      status: 'waiting',
+      request: { ...first, isManual: true, streamSignal: true, queryReconcile: true },
+    });
+    expect(transitionScopedReadinessState(readiness, { type: 'cluster-ready' })).toEqual({
+      status: 'ready',
+    });
+
+    const denied = transitionScopedPermissionState(
+      { status: 'unknown' },
+      { type: 'permission-denied' }
+    );
+    expect(denied).toEqual({ status: 'denied' });
+    expect(transitionScopedPermissionState(denied, { type: 'permission-allowed' })).toEqual({
+      status: 'allowed',
+    });
+    expect(transitionScopedPermissionState(denied, { type: 'permission-epoch-reset' })).toEqual({
+      status: 'unknown',
+    });
+  });
+
+  it('makes duplicate auth lifecycle events no-ops', () => {
+    const failed = transitionClusterAuthState({ status: 'available' }, { type: 'auth-failed' });
+    expect(failed).toEqual({ status: 'failed' });
+    expect(transitionClusterAuthState(failed, { type: 'auth-failed' })).toBe(failed);
+    expect(transitionClusterAuthState(failed, { type: 'auth-recovered' })).toEqual({
+      status: 'available',
+    });
+  });
+});
+
+describe('transitionScopedActivationState', () => {
+  it('keeps enablement and query/snapshot demand in one valid state', () => {
+    let state = transitionScopedActivationState(
+      { status: 'untracked' },
+      { type: 'lease-acquired', demand: 'query' }
+    );
+
+    expect(state).toEqual({
+      status: 'enabled',
+      demands: { query: 1, snapshot: 0 },
+    });
+    expect(transitionScopedActivationState(state, { type: 'disabled' })).toBe(state);
+
+    state = transitionScopedActivationState(state, {
+      type: 'lease-acquired',
+      demand: 'snapshot',
+    });
+    state = transitionScopedActivationState(state, {
+      type: 'lease-released',
+      demand: 'query',
+    });
+
+    expect(state).toEqual({
+      status: 'enabled',
+      demands: { query: 0, snapshot: 1 },
+    });
+
+    state = transitionScopedActivationState(state, {
+      type: 'lease-released',
+      demand: 'snapshot',
+    });
+    expect(state).toEqual({
+      status: 'enabled',
+      demands: { query: 0, snapshot: 0 },
+    });
+    expect(transitionScopedActivationState(state, { type: 'disabled' })).toEqual({
+      status: 'disabled',
+    });
+  });
+});
 
 describe('transitionScopedFetchState', () => {
   it('keeps replacement ownership and coalesces repeated stream signals', () => {
@@ -167,7 +304,7 @@ describe('ClusterRefreshRuntime', () => {
       makeInFlightKey('cluster-config', 'cluster-a|'),
     ]);
 
-    runtime.finishStreamingStart('cluster-config', 'cluster-a|', await startPromise);
+    runtime.finishStreamingStart('cluster-config', 'cluster-a|', startPromise, await startPromise);
 
     expect(runtime.hasPendingStreaming('cluster-config', 'cluster-a|')).toBe(false);
     expect(runtime.isStreamingActive('cluster-config', 'cluster-a|')).toBe(true);
@@ -266,11 +403,13 @@ describe('ClusterRefreshRuntime', () => {
     expect(runtime.acquireScopedLease('nodes', 'cluster-a|')).toEqual({
       count: 1,
       firstLease: true,
+      activationChanged: true,
     });
     // New instance mounts before the old one unmounts: shares the lease.
     expect(runtime.acquireScopedLease('nodes', 'cluster-a|')).toEqual({
       count: 2,
       firstLease: false,
+      activationChanged: false,
     });
     expect(runtime.hasScopedLease('nodes', 'cluster-a|')).toBe(true);
 
@@ -306,6 +445,7 @@ describe('ClusterRefreshRuntime', () => {
     expect(runtime.acquireScopedLease('nodes', scope, 'query')).toEqual({
       count: 1,
       firstLease: true,
+      activationChanged: true,
     });
     expect(runtime.getScopedLeaseCount('nodes', scope, 'query')).toBe(1);
     expect(runtime.getScopedLeaseCount('nodes', scope, 'snapshot')).toBe(0);
@@ -313,6 +453,7 @@ describe('ClusterRefreshRuntime', () => {
     expect(runtime.acquireScopedLease('nodes', scope, 'snapshot')).toEqual({
       count: 2,
       firstLease: false,
+      activationChanged: false,
     });
     expect(runtime.getScopedLeaseCount('nodes', scope)).toBe(2);
     expect(runtime.hasScopedDemand('nodes', scope, 'snapshot')).toBe(true);
@@ -341,7 +482,7 @@ describe('ClusterRefreshRuntime', () => {
     const scope = 'cluster-a|namespace:default';
     const startPromise = Promise.resolve(vi.fn());
     runtime.beginStreamingStart('pods', scope, startPromise);
-    runtime.finishStreamingStart('pods', scope, await startPromise);
+    runtime.finishStreamingStart('pods', scope, startPromise, await startPromise);
 
     const base = {
       domain: 'pods' as const,
@@ -364,7 +505,7 @@ describe('ClusterRefreshRuntime', () => {
     const scope = 'cluster-a|';
     const startPromise = Promise.resolve(vi.fn());
     runtime.beginStreamingStart('namespaces', scope, startPromise);
-    runtime.finishStreamingStart('namespaces', scope, await startPromise);
+    runtime.finishStreamingStart('namespaces', scope, startPromise, await startPromise);
 
     expect(
       runtime.resolveStreamingFetchMode({

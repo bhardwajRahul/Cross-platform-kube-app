@@ -7,8 +7,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eventBus } from '@/core/events';
-import type { RefreshCallback, RefreshContext, Refresher, RefresherState } from '@/core/refresh';
+import type { RefreshCallback, RefreshContext, Refresher } from '@/core/refresh';
 import { refreshManager } from '@/core/refresh';
+import {
+  initialRefresherRuntimeState,
+  type RefresherRuntimeState,
+  refresherIntervalTimer,
+} from '@/core/refresh/refresherRuntimeState';
 import type { RefresherName } from '@/core/refresh/refresherTypes';
 import { requireValue } from '@/test-utils/requireValue';
 
@@ -16,13 +21,11 @@ const TEST_REFRESHER = 'object-test' as RefresherName;
 
 type TestRefresherInstance = {
   config: Refresher;
-  state: RefresherState;
-  intervalTimer?: number;
-  cooldownTimer?: number;
-  timeoutTimer?: number;
-  refreshPromise?: Promise<unknown>;
-  abortController?: AbortController;
-  isEnabled: boolean;
+  runtime: RefresherRuntimeState;
+  lastRefreshTime: Date | null;
+  nextRefreshTime: Date | null;
+  error: Error | null;
+  consecutiveErrors: number;
 };
 
 type UnsafeRefreshManager = {
@@ -86,6 +89,17 @@ describe('RefreshManager manual refresh flow', () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
 
+    expect(refreshManager.getState(TEST_REFRESHER)?.status).toBe('disabled');
+  });
+
+  it('cancels a manual cooldown when an already-disabled refresher is disabled again', async () => {
+    await refreshManager.triggerManualRefresh(TEST_REFRESHER);
+    expect(refreshManager.getState(TEST_REFRESHER)?.status).toBe('cooldown');
+
+    refreshManager.disable(TEST_REFRESHER);
+
+    expect(refreshManager.getState(TEST_REFRESHER)?.status).toBe('disabled');
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(refreshManager.getState(TEST_REFRESHER)?.status).toBe('disabled');
   });
 });
@@ -218,8 +232,7 @@ describe('RefreshManager scheduling and state handling', () => {
       unsafeRefreshManager.refreshers.get(AUTO_NAME),
       'expected test value in RefreshManager.test.ts'
     );
-    instance.isEnabled = true;
-    instance.state.status = 'idle';
+    instance.runtime = initialRefresherRuntimeState(true);
 
     await unsafeRefreshManager.refreshSingle(AUTO_NAME, 'automatic').catch(() => undefined);
     expect(callback).toHaveBeenCalledTimes(1);
@@ -647,13 +660,13 @@ describe('RefreshManager global controls', () => {
       unsafeRefreshManager.refreshers.get(intervalName),
       'expected test value in RefreshManager.test.ts'
     );
-    const previousTimer = instance.intervalTimer;
+    const previousTimer = refresherIntervalTimer(instance.runtime);
 
     refreshManager.updateInterval(intervalName, 1600);
 
     expect(refreshManager.getRefresherInterval(intervalName)).toBe(1600);
-    expect(instance.intervalTimer).not.toBe(previousTimer);
-    expect(instance.state.nextRefreshTime).not.toBeNull();
+    expect(refresherIntervalTimer(instance.runtime)).not.toBe(previousTimer);
+    expect(instance.nextRefreshTime).not.toBeNull();
 
     refreshManager.unregister(intervalName);
   });
@@ -792,8 +805,8 @@ describe('RefreshManager guard paths and helpers', () => {
 
     unsafeRefreshManager.startRefresher(name);
 
-    expect(instance.state.status).toBe('disabled');
-    expect(instance.intervalTimer).toBeUndefined();
+    expect(refreshManager.getState(name)?.status).toBe('disabled');
+    expect(refresherIntervalTimer(instance.runtime)).toBeUndefined();
   });
 
   it('startRefresher respects the global pause flag', () => {
@@ -803,12 +816,12 @@ describe('RefreshManager guard paths and helpers', () => {
       unsafeRefreshManager.refreshers.get(name),
       'expected test value in RefreshManager.test.ts'
     );
-    instance.intervalTimer = undefined;
+    instance.runtime = { ...instance.runtime, timing: { status: 'idle' } };
     const intervalSpy = vi.spyOn(globalThis, 'setInterval');
 
     unsafeRefreshManager.startRefresher(name);
 
-    expect(instance.state.status).toBe('paused');
+    expect(refreshManager.getState(name)?.status).toBe('paused');
     expect(intervalSpy).not.toHaveBeenCalled();
     refreshManager.resume();
   });
@@ -821,7 +834,7 @@ describe('RefreshManager guard paths and helpers', () => {
       'expected test value in RefreshManager.test.ts'
     );
     const previousInterval = requireValue(
-      instance.intervalTimer,
+      refresherIntervalTimer(instance.runtime),
       'expected test value in RefreshManager.test.ts'
     );
     const clearSpy = vi.spyOn(globalThis, 'clearInterval');
@@ -829,7 +842,7 @@ describe('RefreshManager guard paths and helpers', () => {
     unsafeRefreshManager.startRefresher(name);
 
     expect(clearSpy).toHaveBeenCalledWith(previousInterval);
-    expect(instance.intervalTimer).not.toBe(previousInterval);
+    expect(refresherIntervalTimer(instance.runtime)).not.toBe(previousInterval);
   });
 
   it('enable no-ops when the refresher is unknown', () => {
@@ -846,9 +859,12 @@ describe('RefreshManager guard paths and helpers', () => {
     );
     const startSpy = vi.spyOn(unsafeRefreshManager, 'startRefresher');
     window.clearInterval(
-      requireValue(instance.intervalTimer, 'expected test value in RefreshManager.test.ts')
+      requireValue(
+        refresherIntervalTimer(instance.runtime),
+        'expected test value in RefreshManager.test.ts'
+      )
     );
-    instance.intervalTimer = undefined;
+    instance.runtime = { ...instance.runtime, timing: { status: 'idle' } };
 
     refreshManager.enable(name);
 
@@ -881,13 +897,11 @@ describe('RefreshManager guard paths and helpers', () => {
       unsafeRefreshManager.refreshers.get(name),
       'expected test value in RefreshManager.test.ts'
     );
-    instance.isEnabled = false;
-    instance.state.status = 'disabled';
+    instance.runtime = initialRefresherRuntimeState(false);
     const clearSpy = vi.spyOn(unsafeRefreshManager, 'clearTimers');
 
-    expect(instance.isEnabled).toBe(false);
-    expect(instance.state.status).toBe('disabled');
-    expect(!instance.isEnabled && instance.state.status === 'disabled').toBe(true);
+    expect(instance.runtime.intent.status).toBe('disabled');
+    expect(refreshManager.getState(name)?.status).toBe('disabled');
 
     refreshManager.disable(name);
 
@@ -898,20 +912,11 @@ describe('RefreshManager guard paths and helpers', () => {
     const name = nextName('synthetic-disable');
     const syntheticInstance = {
       config: { name, interval: 100, cooldown: 50, timeout: 1 },
-      state: {
-        status: 'disabled' as const,
-        lastRefreshTime: null,
-        nextRefreshTime: null,
-        error: null,
-        consecutiveErrors: 0,
-      },
-      intervalTimer: undefined,
-      cooldownTimer: undefined,
-      timeoutTimer: undefined,
-      refreshPromise: undefined,
-      abortController: undefined,
-      isManualRefresh: false,
-      isEnabled: false,
+      runtime: initialRefresherRuntimeState(false),
+      lastRefreshTime: null,
+      nextRefreshTime: null,
+      error: null,
+      consecutiveErrors: 0,
     };
     unsafeRefreshManager.refreshers.set(name, syntheticInstance);
     expect(unsafeRefreshManager.refreshers.has(name)).toBe(true);
@@ -1239,7 +1244,7 @@ describe('RefreshManager guard paths and helpers', () => {
       unsafeRefreshManager.refreshers.get(name),
       'expected test value in RefreshManager.test.ts'
     );
-    instance.state.status = 'idle';
+    instance.runtime = initialRefresherRuntimeState(true);
     const resumeSpy = vi.spyOn(unsafeRefreshManager, 'resumeRefresher');
 
     refreshManager.resume(name);
@@ -1258,15 +1263,28 @@ describe('RefreshManager guard paths and helpers', () => {
     expect(refreshManager.getState(name)?.status).toBe('idle');
   });
 
+  it('enable clears an individual pause before restarting its schedule', () => {
+    const name = register('enable-paused', { enabled: false });
+    const instance = requireValue(
+      unsafeRefreshManager.refreshers.get(name),
+      'expected test value in RefreshManager.test.ts'
+    );
+    instance.runtime = initialRefresherRuntimeState(true);
+    refreshManager.pause(name);
+
+    refreshManager.enable(name);
+
+    expect(instance.runtime.intent.status).toBe('enabled');
+    expect(refresherIntervalTimer(instance.runtime)).toBeDefined();
+  });
+
   it('resume() starts idle refreshers that lack intervals', () => {
     const name = register('resume-all', { enabled: false });
     const instance = requireValue(
       unsafeRefreshManager.refreshers.get(name),
       'expected test value in RefreshManager.test.ts'
     );
-    instance.isEnabled = true;
-    instance.state.status = 'idle';
-    instance.intervalTimer = undefined;
+    instance.runtime = initialRefresherRuntimeState(true);
     const startSpy = vi.spyOn(unsafeRefreshManager, 'startRefresher');
 
     refreshManager.resume();
@@ -1280,11 +1298,11 @@ describe('RefreshManager guard paths and helpers', () => {
       unsafeRefreshManager.refreshers.get(name),
       'expected test value in RefreshManager.test.ts'
     );
-    instance.isEnabled = false;
+    instance.runtime = initialRefresherRuntimeState(false);
 
     unsafeRefreshManager.resumeRefresher(name, instance);
 
-    expect(instance.state.status).toBe('disabled');
+    expect(refreshManager.getState(name)?.status).toBe('disabled');
   });
 
   it('abortRefresher returns when attempting to abort unknown refreshers', () => {
@@ -1303,11 +1321,11 @@ describe('RefreshManager guard paths and helpers', () => {
       unsafeRefreshManager.refreshers.get(name),
       'expected test value in RefreshManager.test.ts'
     );
-    instance.state.status = 'idle';
+    instance.runtime = initialRefresherRuntimeState(false);
 
     await unsafeRefreshManager.refreshSingle(name, 'automatic');
 
-    expect(instance.state.status).toBe('idle');
+    expect(refreshManager.getState(name)?.status).toBe('disabled');
   });
 
   it('refreshSingle skips auto refreshes during global pause', async () => {
@@ -1317,12 +1335,14 @@ describe('RefreshManager guard paths and helpers', () => {
       unsafeRefreshManager.refreshers.get(name),
       'expected test value in RefreshManager.test.ts'
     );
-    instance.isEnabled = true;
-    instance.state.status = 'paused';
+    instance.runtime = {
+      ...initialRefresherRuntimeState(true),
+      intent: { status: 'paused' },
+    };
 
     await unsafeRefreshManager.refreshSingle(name, 'automatic');
 
-    expect(instance.state.status).toBe('paused');
+    expect(refreshManager.getState(name)?.status).toBe('paused');
     refreshManager.resume();
   });
 
@@ -1332,12 +1352,14 @@ describe('RefreshManager guard paths and helpers', () => {
       unsafeRefreshManager.refreshers.get(name),
       'expected test value in RefreshManager.test.ts'
     );
-    instance.isEnabled = true;
-    instance.state.status = 'paused';
+    instance.runtime = {
+      ...initialRefresherRuntimeState(true),
+      intent: { status: 'paused' },
+    };
 
     await unsafeRefreshManager.refreshSingle(name, 'automatic');
 
-    expect(instance.state.status).toBe('paused');
+    expect(refreshManager.getState(name)?.status).toBe('paused');
   });
 
   it('refreshSingle returns when an auto refresh collides with an in-flight refresh', async () => {
@@ -1346,13 +1368,20 @@ describe('RefreshManager guard paths and helpers', () => {
       unsafeRefreshManager.refreshers.get(name),
       'expected test value in RefreshManager.test.ts'
     );
-    instance.isEnabled = true;
-    instance.state.status = 'refreshing';
-    instance.refreshPromise = Promise.resolve({ successCount: 0, failures: [] });
+    instance.runtime = {
+      ...initialRefresherRuntimeState(true),
+      execution: {
+        status: 'running',
+        id: 10_001,
+        controller: new AbortController(),
+        promise: Promise.resolve({ successCount: 0, failures: [] }),
+        invocation: 'automatic',
+      },
+    };
 
     await unsafeRefreshManager.refreshSingle(name, 'automatic');
 
-    expect(instance.state.status).toBe('refreshing');
+    expect(refreshManager.getState(name)?.status).toBe('refreshing');
   });
 
   it('refreshSingle interrupts in-flight refreshes for manual triggers', async () => {
@@ -1362,9 +1391,16 @@ describe('RefreshManager guard paths and helpers', () => {
       unsafeRefreshManager.refreshers.get(name),
       'expected test value in RefreshManager.test.ts'
     );
-    instance.state.status = 'refreshing';
-    instance.abortController = new AbortController();
-    instance.refreshPromise = Promise.resolve({ successCount: 0, failures: [] });
+    instance.runtime = {
+      ...initialRefresherRuntimeState(true),
+      execution: {
+        status: 'running',
+        id: 10_002,
+        controller: new AbortController(),
+        promise: Promise.resolve({ successCount: 0, failures: [] }),
+        invocation: 'automatic',
+      },
+    };
     const subscriber = vi.fn();
     refreshManager.subscribe(name, subscriber);
 
@@ -1383,10 +1419,13 @@ describe('RefreshManager guard paths and helpers', () => {
       unsafeRefreshManager.refreshers.get(name),
       'expected test value in RefreshManager.test.ts'
     );
-    instance.state.status = 'cooldown';
+    instance.runtime = {
+      ...initialRefresherRuntimeState(true),
+      timing: { status: 'cooldown', cooldownTimer: 10_003 },
+    };
 
     await unsafeRefreshManager.refreshSingle(name, 'automatic');
 
-    expect(instance.state.status).toBe('cooldown');
+    expect(refreshManager.getState(name)?.status).toBe('cooldown');
   });
 });

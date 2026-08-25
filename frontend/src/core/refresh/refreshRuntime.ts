@@ -63,6 +63,322 @@ export type RefreshDemand = 'query' | 'snapshot';
 
 type ScopedDemandCounts = Record<RefreshDemand, number>;
 
+export type ScopedActivationState =
+  | { status: 'untracked' }
+  | { status: 'disabled' }
+  | { status: 'enabled'; demands: ScopedDemandCounts }
+  | { status: 'superseded'; demands: ScopedDemandCounts };
+
+export type ScopedActivationEvent =
+  | { type: 'enabled' }
+  | { type: 'disabled' }
+  | { type: 'superseded' }
+  | { type: 'lease-acquired'; demand: RefreshDemand }
+  | { type: 'lease-released'; demand: RefreshDemand };
+
+const NO_SCOPED_DEMAND: ScopedDemandCounts = { query: 0, snapshot: 0 };
+
+const totalDemand = (demands: ScopedDemandCounts): number => demands.query + demands.snapshot;
+
+const demandsFor = (state: ScopedActivationState): ScopedDemandCounts =>
+  state.status === 'enabled' || state.status === 'superseded' ? state.demands : NO_SCOPED_DEMAND;
+
+export const transitionScopedActivationState = (
+  state: ScopedActivationState,
+  event: ScopedActivationEvent
+): ScopedActivationState => {
+  switch (event.type) {
+    case 'enabled':
+      if (state.status === 'enabled') {
+        return state;
+      }
+      return { status: 'enabled', demands: { ...demandsFor(state) } };
+    case 'disabled':
+      if (state.status === 'disabled') {
+        return state;
+      }
+      if (state.status === 'enabled' && totalDemand(state.demands) > 0) {
+        return state;
+      }
+      return { status: 'disabled' };
+    case 'superseded': {
+      if (state.status !== 'enabled') {
+        return state;
+      }
+      return totalDemand(state.demands) > 0
+        ? { status: 'superseded', demands: state.demands }
+        : { status: 'disabled' };
+    }
+    case 'lease-acquired': {
+      const demands = demandsFor(state);
+      const nextDemands = {
+        ...demands,
+        [event.demand]: demands[event.demand] + 1,
+      };
+      return state.status === 'superseded'
+        ? { status: 'superseded', demands: nextDemands }
+        : { status: 'enabled', demands: nextDemands };
+    }
+    case 'lease-released': {
+      if (
+        (state.status !== 'enabled' && state.status !== 'superseded') ||
+        state.demands[event.demand] === 0
+      ) {
+        return state;
+      }
+      const nextDemands = {
+        ...state.demands,
+        [event.demand]: state.demands[event.demand] - 1,
+      };
+      if (state.status === 'superseded' && totalDemand(nextDemands) === 0) {
+        return { status: 'disabled' };
+      }
+      return { ...state, demands: nextDemands };
+    }
+  }
+};
+
+export type PendingClusterReadinessRequest = {
+  domain: RefreshDomain;
+  scope: string;
+  isManual: boolean;
+  streamSignal: boolean;
+  queryReconcile: boolean;
+};
+
+export type ScopedReadinessState =
+  | { status: 'ready' }
+  | { status: 'waiting'; request: PendingClusterReadinessRequest };
+
+export type ScopedReadinessEvent =
+  | { type: 'request-deferred'; request: PendingClusterReadinessRequest }
+  | { type: 'cluster-ready' };
+
+export const transitionScopedReadinessState = (
+  state: ScopedReadinessState,
+  event: ScopedReadinessEvent
+): ScopedReadinessState => {
+  switch (event.type) {
+    case 'request-deferred':
+      if (state.status === 'ready') {
+        return { status: 'waiting', request: event.request };
+      }
+      return {
+        status: 'waiting',
+        request: {
+          ...state.request,
+          isManual: state.request.isManual || event.request.isManual,
+          streamSignal: state.request.streamSignal || event.request.streamSignal,
+          queryReconcile: state.request.queryReconcile || event.request.queryReconcile,
+        },
+      };
+    case 'cluster-ready':
+      return state.status === 'ready' ? state : { status: 'ready' };
+  }
+};
+
+export type ScopedPermissionState =
+  | { status: 'unknown' }
+  | { status: 'allowed' }
+  | { status: 'denied' };
+
+export type ScopedPermissionEvent =
+  | { type: 'permission-allowed' }
+  | { type: 'permission-denied' }
+  | { type: 'permission-epoch-reset' };
+
+export const transitionScopedPermissionState = (
+  state: ScopedPermissionState,
+  event: ScopedPermissionEvent
+): ScopedPermissionState => {
+  const status =
+    event.type === 'permission-allowed'
+      ? 'allowed'
+      : event.type === 'permission-denied'
+        ? 'denied'
+        : 'unknown';
+  return state.status === status ? state : { status };
+};
+
+export type ClusterAuthState = { status: 'available' } | { status: 'failed' };
+export type ClusterAuthEvent = { type: 'auth-failed' } | { type: 'auth-recovered' };
+
+export const transitionClusterAuthState = (
+  state: ClusterAuthState,
+  event: ClusterAuthEvent
+): ClusterAuthState => {
+  const status = event.type === 'auth-failed' ? 'failed' : 'available';
+  return state.status === status ? state : { status };
+};
+
+type StreamStartTask = Promise<(() => void) | undefined>;
+type StreamInitializationState = { status: 'idle' } | { status: 'scheduled'; task: Promise<void> };
+type StreamConnectionState =
+  | { status: 'inactive' }
+  | { status: 'starting'; task: StreamStartTask; cancellationRequested: boolean }
+  | { status: 'active'; cleanup: () => void; cancellationRequested: boolean };
+type StreamHealthState =
+  | { status: 'unknown' }
+  | { status: 'known'; payload: AppEvents['refresh:resource-stream-health'] };
+
+export type ScopedStreamState = {
+  policy: 'allowed' | 'blocked';
+  initialization: StreamInitializationState;
+  connection: StreamConnectionState;
+  health: StreamHealthState;
+};
+
+export type ScopedStreamEvent =
+  | { type: 'stream-blocked' }
+  | { type: 'stream-block-cleared' }
+  | { type: 'initialization-scheduled'; task: Promise<void> }
+  | { type: 'initialization-cleared'; task?: Promise<void> }
+  | { type: 'start-began'; task: StreamStartTask }
+  | { type: 'start-cancelled' }
+  | { type: 'start-cancellation-cleared' }
+  | { type: 'start-finished'; task: StreamStartTask; cleanup: () => void }
+  | { type: 'start-failed'; task: StreamStartTask }
+  | { type: 'cleanup-removed' }
+  | { type: 'health-received'; payload: AppEvents['refresh:resource-stream-health'] }
+  | { type: 'health-cleared' }
+  | { type: 'async-cleared' }
+  | { type: 'all-cleared'; reset: boolean }
+  | { type: 'transient-reset' };
+
+const inactiveStreamState = (): ScopedStreamState => ({
+  policy: 'allowed',
+  initialization: { status: 'idle' },
+  connection: { status: 'inactive' },
+  health: { status: 'unknown' },
+});
+
+export const transitionScopedStreamState = (
+  state: ScopedStreamState,
+  event: ScopedStreamEvent
+): ScopedStreamState => {
+  switch (event.type) {
+    case 'stream-blocked':
+      return state.policy === 'blocked' && state.initialization.status === 'idle'
+        ? state
+        : {
+            ...state,
+            policy: 'blocked',
+            initialization: { status: 'idle' },
+          };
+    case 'stream-block-cleared':
+      return state.policy === 'allowed' ? state : { ...state, policy: 'allowed' };
+    case 'initialization-scheduled':
+      return {
+        ...state,
+        initialization: { status: 'scheduled', task: event.task },
+      };
+    case 'initialization-cleared':
+      if (
+        state.initialization.status === 'idle' ||
+        (event.task !== undefined && state.initialization.task !== event.task)
+      ) {
+        return state;
+      }
+      return { ...state, initialization: { status: 'idle' } };
+    case 'start-began':
+      if (state.policy === 'blocked') {
+        return state;
+      }
+      return {
+        ...state,
+        connection: {
+          status: 'starting',
+          task: event.task,
+          cancellationRequested: false,
+        },
+      };
+    case 'start-cancelled':
+      if (state.connection.status === 'inactive' || state.connection.cancellationRequested) {
+        return state;
+      }
+      return {
+        ...state,
+        connection: { ...state.connection, cancellationRequested: true },
+      };
+    case 'start-cancellation-cleared':
+      if (state.connection.status === 'inactive' || !state.connection.cancellationRequested) {
+        return state;
+      }
+      return {
+        ...state,
+        connection: { ...state.connection, cancellationRequested: false },
+      };
+    case 'start-finished':
+      if (
+        state.connection.status !== 'starting' ||
+        state.connection.task !== event.task ||
+        state.connection.cancellationRequested
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        connection: {
+          status: 'active',
+          cleanup: event.cleanup,
+          cancellationRequested: false,
+        },
+      };
+    case 'start-failed':
+      if (state.connection.status !== 'starting' || state.connection.task !== event.task) {
+        return state;
+      }
+      return { ...state, connection: { status: 'inactive' } };
+    case 'cleanup-removed':
+      return state.connection.status === 'active'
+        ? { ...state, connection: { status: 'inactive' } }
+        : state;
+    case 'health-received':
+      return { ...state, health: { status: 'known', payload: event.payload } };
+    case 'health-cleared':
+      return state.health.status === 'unknown'
+        ? state
+        : { ...state, health: { status: 'unknown' } };
+    case 'async-cleared':
+      return {
+        ...state,
+        initialization: { status: 'idle' },
+        connection:
+          state.connection.status === 'starting'
+            ? { status: 'inactive' }
+            : state.connection.status === 'active'
+              ? { ...state.connection, cancellationRequested: false }
+              : state.connection,
+      };
+    case 'all-cleared':
+      return {
+        ...state,
+        initialization: event.reset ? { status: 'idle' } : state.initialization,
+        connection: { status: 'inactive' },
+      };
+    case 'transient-reset':
+      return {
+        policy: 'allowed',
+        initialization: { status: 'idle' },
+        connection:
+          state.connection.status === 'active'
+            ? { ...state.connection, cancellationRequested: false }
+            : { status: 'inactive' },
+        health: { status: 'unknown' },
+      };
+  }
+};
+
+type ScopedRefreshState = {
+  domain: RefreshDomain;
+  scope?: string;
+  activation: ScopedActivationState;
+  fetch: ScopedFetchState;
+  readiness: ScopedReadinessState;
+  permission: ScopedPermissionState;
+  stream: ScopedStreamState;
+};
+
 type StreamingFetchMode = 'snapshot' | 'skip';
 
 type StreamingFetchDecisionInput = {
@@ -131,76 +447,102 @@ const MULTI_ACTIVE_SCOPE_DOMAINS = new Set<RefreshDomain>([
 
 export class ClusterRefreshRuntime {
   readonly clusterId: string;
-  private readonly inFlight = new Map<string, ScopedFetchState>();
-  private readonly streamingCleanup = new Map<string, () => void>();
-  private readonly pendingStreaming = new Map<string, Promise<(() => void) | undefined>>();
-  private readonly streamingReady = new Map<string, Promise<void>>();
-  private readonly cancelledStreaming = new Set<string>();
-  private readonly streamHealth = new Map<string, AppEvents['refresh:resource-stream-health']>();
-  private readonly blockedStreaming = new Set<string>();
-  private readonly scopedEnabledState = new Map<RefreshDomain, Map<string, boolean>>();
-  // Reference counts of mounted lifecycle consumers that need a (domain, scope)
-  // enabled. Leases let a newer consumer keep a scope alive across an old
-  // consumer's unmount so a late cleanup cannot disable a scope a newer owner
-  // still needs (the remount race behind transient false-empty tables).
-  private readonly scopedLeases = new Map<RefreshDomain, Map<string, ScopedDemandCounts>>();
-
+  private readonly scopedStates = new Map<string, ScopedRefreshState>();
+  private readonly knownDomains = new Set<RefreshDomain>();
+  private authState: ClusterAuthState = { status: 'available' };
   constructor(clusterId: string) {
     this.clusterId = clusterId;
   }
 
-  markDomainKnown(domain: RefreshDomain): void {
-    if (!this.scopedEnabledState.has(domain)) {
-      this.scopedEnabledState.set(domain, new Map<string, boolean>());
+  private getScopeState(domain: RefreshDomain, scope?: string): ScopedRefreshState {
+    return (
+      this.scopedStates.get(makeInFlightKey(domain, scope)) ?? {
+        domain,
+        scope,
+        activation: { status: 'untracked' },
+        fetch: { status: 'idle' },
+        readiness: { status: 'ready' },
+        permission: { status: 'unknown' },
+        stream: inactiveStreamState(),
+      }
+    );
+  }
+
+  private storeScopeState(state: ScopedRefreshState): void {
+    const key = makeInFlightKey(state.domain, state.scope);
+    if (
+      state.activation.status === 'untracked' &&
+      state.fetch.status === 'idle' &&
+      state.readiness.status === 'ready' &&
+      state.permission.status === 'unknown' &&
+      state.stream.policy === 'allowed' &&
+      state.stream.initialization.status === 'idle' &&
+      state.stream.connection.status === 'inactive' &&
+      state.stream.health.status === 'unknown'
+    ) {
+      this.scopedStates.delete(key);
+      return;
     }
+    this.scopedStates.set(key, state);
+  }
+
+  private applyActivationEvent(
+    domain: RefreshDomain,
+    scope: string,
+    event: ScopedActivationEvent
+  ): { previous: ScopedActivationState; next: ScopedActivationState } {
+    const state = this.getScopeState(domain, scope);
+    const next = transitionScopedActivationState(state.activation, event);
+    if (next !== state.activation) {
+      this.storeScopeState({ ...state, activation: next });
+    }
+    return { previous: state.activation, next };
+  }
+
+  markDomainKnown(domain: RefreshDomain): void {
+    this.knownDomains.add(domain);
   }
 
   deleteDomain(domain: RefreshDomain): void {
-    this.scopedEnabledState.delete(domain);
-    this.scopedLeases.delete(domain);
+    this.knownDomains.delete(domain);
+    Array.from(this.scopedStates.entries()).forEach(([key, state]) => {
+      if (state.domain === domain) {
+        this.scopedStates.delete(key);
+      }
+    });
   }
 
   getKnownScopes(domain: RefreshDomain): string[] {
-    const scopedMap = this.scopedEnabledState.get(domain);
-    if (!scopedMap) {
-      return [];
-    }
-    return Array.from(scopedMap.keys());
+    return Array.from(this.scopedStates.values())
+      .filter(
+        (state) =>
+          state.domain === domain &&
+          state.scope !== undefined &&
+          state.activation.status !== 'untracked'
+      )
+      .map((state) => state.scope as string);
   }
 
   getEnabledScopes(domain: RefreshDomain): string[] {
-    const scopedMap = this.scopedEnabledState.get(domain);
-    if (!scopedMap) {
-      return [];
-    }
-    const scopes: string[] = [];
-    scopedMap.forEach((enabled, scope) => {
-      if (enabled) {
-        scopes.push(scope);
-      }
-    });
-    return scopes;
+    return Array.from(this.scopedStates.values())
+      .filter(
+        (state) =>
+          state.domain === domain &&
+          state.scope !== undefined &&
+          state.activation.status === 'enabled'
+      )
+      .map((state) => state.scope as string);
   }
 
   hasEnabledScopedSources(domain: RefreshDomain): boolean {
-    const scopedMap = this.scopedEnabledState.get(domain);
-    if (!scopedMap) {
-      return false;
-    }
-    for (const enabled of scopedMap.values()) {
-      if (enabled) {
-        return true;
-      }
-    }
-    return false;
+    return Array.from(this.scopedStates.values()).some(
+      (state) => state.domain === domain && state.activation.status === 'enabled'
+    );
   }
 
   isScopedDomainEnabled(domain: RefreshDomain, scope: string): boolean {
-    const scopedMap = this.scopedEnabledState.get(domain);
-    if (!scopedMap) {
-      return true;
-    }
-    return scopedMap.get(scope) ?? true;
+    const status = this.getScopeState(domain, scope).activation.status;
+    return status === 'untracked' || status === 'enabled';
   }
 
   setScopedDomainEnabled(
@@ -208,14 +550,14 @@ export class ClusterRefreshRuntime {
     scope: string,
     enabled: boolean
   ): RuntimeScopeStateChange {
-    const scopedMap = this.scopedEnabledState.get(domain) ?? new Map<string, boolean>();
-    this.scopedEnabledState.set(domain, scopedMap);
-    const previous = scopedMap.get(scope);
-    if (previous === enabled) {
-      return { previous, changed: false };
-    }
-    scopedMap.set(scope, enabled);
-    return { previous, changed: true };
+    this.knownDomains.add(domain);
+    const { previous, next } = this.applyActivationEvent(domain, scope, {
+      type: enabled ? 'enabled' : 'disabled',
+    });
+    const previousEnabled =
+      previous.status === 'untracked' ? undefined : previous.status === 'enabled';
+    const nextEnabled = next.status === 'enabled';
+    return { previous: previousEnabled, changed: previousEnabled !== nextEnabled };
   }
 
   applyScopedDomainEnabled(
@@ -232,27 +574,25 @@ export class ClusterRefreshRuntime {
   }
 
   private disableOtherEnabledScopes(domain: RefreshDomain, activeScope: string): string[] {
-    const scopedMap = this.scopedEnabledState.get(domain);
-    if (!scopedMap) {
-      return [];
-    }
     const staleScopes: string[] = [];
-    scopedMap.forEach((enabled, scope) => {
-      if (enabled && scope !== activeScope) {
-        staleScopes.push(scope);
+    this.scopedStates.forEach((state) => {
+      if (
+        state.domain === domain &&
+        state.scope !== undefined &&
+        state.scope !== activeScope &&
+        state.activation.status === 'enabled'
+      ) {
+        staleScopes.push(state.scope);
       }
     });
     staleScopes.forEach((scope) => {
-      scopedMap.set(scope, false);
+      this.applyActivationEvent(domain, scope, { type: 'superseded' });
     });
     return staleScopes;
   }
 
   getScopedLeaseCount(domain: RefreshDomain, scope: string, demand?: RefreshDemand): number {
-    const counts = this.scopedLeases.get(domain)?.get(scope);
-    if (!counts) {
-      return 0;
-    }
+    const counts = demandsFor(this.getScopeState(domain, scope).activation);
     return demand ? counts[demand] : counts.query + counts.snapshot;
   }
 
@@ -270,15 +610,20 @@ export class ClusterRefreshRuntime {
     domain: RefreshDomain,
     scope: string,
     demand: RefreshDemand = 'snapshot'
-  ): { count: number; firstLease: boolean } {
-    const leaseMap = this.scopedLeases.get(domain) ?? new Map<string, ScopedDemandCounts>();
-    this.scopedLeases.set(domain, leaseMap);
-    const counts = leaseMap.get(scope) ?? { query: 0, snapshot: 0 };
-    const previousTotal = counts.query + counts.snapshot;
-    const nextCounts = { ...counts, [demand]: counts[demand] + 1 };
-    leaseMap.set(scope, nextCounts);
-    const nextTotal = nextCounts.query + nextCounts.snapshot;
-    return { count: nextTotal, firstLease: previousTotal === 0 };
+  ): { count: number; firstLease: boolean; activationChanged: boolean } {
+    this.knownDomains.add(domain);
+    const before = this.getScopeState(domain, scope).activation;
+    const previousTotal = totalDemand(demandsFor(before));
+    const { next } = this.applyActivationEvent(domain, scope, {
+      type: 'lease-acquired',
+      demand,
+    });
+    const nextTotal = totalDemand(demandsFor(next));
+    return {
+      count: nextTotal,
+      firstLease: previousTotal === 0,
+      activationChanged: before.status !== 'enabled' && next.status === 'enabled',
+    };
   }
 
   // Remove one lease holder for (domain, scope). `lastLease` is true when the
@@ -288,21 +633,20 @@ export class ClusterRefreshRuntime {
     scope: string,
     demand: RefreshDemand = 'snapshot'
   ): { count: number; lastLease: boolean; hadLease: boolean } {
-    const leaseMap = this.scopedLeases.get(domain);
-    const counts = leaseMap?.get(scope);
-    if (!leaseMap || !counts || counts[demand] <= 0) {
+    const before = this.getScopeState(domain, scope).activation;
+    const counts = demandsFor(before);
+    if (counts[demand] <= 0) {
       return { count: 0, lastLease: false, hadLease: false };
     }
-    const nextCounts = { ...counts, [demand]: counts[demand] - 1 };
-    const nextTotal = nextCounts.query + nextCounts.snapshot;
+    const previousTotal = totalDemand(counts);
+    const { next } = this.applyActivationEvent(domain, scope, {
+      type: 'lease-released',
+      demand,
+    });
+    const nextTotal = totalDemand(demandsFor(next));
     if (nextTotal === 0) {
-      leaseMap.delete(scope);
-      if (leaseMap.size === 0) {
-        this.scopedLeases.delete(domain);
-      }
-      return { count: 0, lastLease: true, hadLease: true };
+      return { count: 0, lastLease: previousTotal === 1, hadLease: true };
     }
-    leaseMap.set(scope, nextCounts);
     return { count: nextTotal, lastLease: false, hadLease: true };
   }
 
@@ -311,23 +655,118 @@ export class ClusterRefreshRuntime {
   }
 
   forEachScopedDomain(callback: (domain: RefreshDomain, scope: string) => void): void {
-    this.scopedEnabledState.forEach((scopedMap, domain) => {
-      scopedMap.forEach((_enabled, scope) => {
-        callback(domain, scope);
-      });
+    this.scopedStates.forEach((state) => {
+      if (state.scope !== undefined && state.activation.status !== 'untracked') {
+        callback(state.domain, state.scope);
+      }
     });
   }
 
-  private getFetchState(key: string): ScopedFetchState {
-    return this.inFlight.get(key) ?? { status: 'idle' };
+  deferUntilClusterReady(request: PendingClusterReadinessRequest): void {
+    const state = this.getScopeState(request.domain, request.scope);
+    const readiness = transitionScopedReadinessState(state.readiness, {
+      type: 'request-deferred',
+      request,
+    });
+    this.storeScopeState({ ...state, readiness });
   }
 
-  private applyFetchEvent(key: string, event: ScopedFetchEvent): ScopedFetchState {
-    const next = transitionScopedFetchState(this.getFetchState(key), event);
-    if (next.status === 'idle') {
-      this.inFlight.delete(key);
-    } else {
-      this.inFlight.set(key, next);
+  takeDeferredReadinessRequests(): PendingClusterReadinessRequest[] {
+    const requests: PendingClusterReadinessRequest[] = [];
+    Array.from(this.scopedStates.values()).forEach((state) => {
+      if (state.readiness.status !== 'waiting') {
+        return;
+      }
+      requests.push(state.readiness.request);
+      this.storeScopeState({
+        ...state,
+        readiness: transitionScopedReadinessState(state.readiness, { type: 'cluster-ready' }),
+      });
+    });
+    return requests;
+  }
+
+  getDeferredReadinessRequests(): PendingClusterReadinessRequest[] {
+    return Array.from(this.scopedStates.values()).flatMap((state) =>
+      state.readiness.status === 'waiting' ? [state.readiness.request] : []
+    );
+  }
+
+  isPermissionDenied(domain: RefreshDomain, scope: string): boolean {
+    return this.getScopeState(domain, scope).permission.status === 'denied';
+  }
+
+  markPermissionDenied(domain: RefreshDomain, scope: string): void {
+    this.applyPermissionEvent(domain, scope, { type: 'permission-denied' });
+  }
+
+  markPermissionAllowed(domain: RefreshDomain, scope: string): void {
+    this.applyPermissionEvent(domain, scope, { type: 'permission-allowed' });
+  }
+
+  resetPermissionEpoch(): Array<{ domain: RefreshDomain; scope: string }> {
+    const reset: Array<{ domain: RefreshDomain; scope: string }> = [];
+    Array.from(this.scopedStates.values()).forEach((state) => {
+      if (state.scope === undefined || state.permission.status === 'unknown') {
+        return;
+      }
+      reset.push({ domain: state.domain, scope: state.scope });
+      this.storeScopeState({
+        ...state,
+        permission: transitionScopedPermissionState(state.permission, {
+          type: 'permission-epoch-reset',
+        }),
+      });
+    });
+    return reset;
+  }
+
+  private applyPermissionEvent(
+    domain: RefreshDomain,
+    scope: string,
+    event: ScopedPermissionEvent
+  ): void {
+    const state = this.getScopeState(domain, scope);
+    const permission = transitionScopedPermissionState(state.permission, event);
+    if (permission !== state.permission) {
+      this.storeScopeState({ ...state, permission });
+    }
+  }
+
+  isAuthAvailable(): boolean {
+    return this.authState.status === 'available';
+  }
+
+  markAuthFailed(): boolean {
+    return this.applyAuthEvent({ type: 'auth-failed' });
+  }
+
+  markAuthRecovered(): boolean {
+    return this.applyAuthEvent({ type: 'auth-recovered' });
+  }
+
+  private applyAuthEvent(event: ClusterAuthEvent): boolean {
+    const next = transitionClusterAuthState(this.authState, event);
+    if (next === this.authState) {
+      return false;
+    }
+    this.authState = next;
+    return true;
+  }
+
+  private getFetchState(domain: RefreshDomain, scope?: string): ScopedFetchState {
+    return this.getScopeState(domain, scope).fetch;
+  }
+
+  private applyFetchEvent(
+    domain: RefreshDomain,
+    scope: string | undefined,
+    event: ScopedFetchEvent
+  ): ScopedFetchState {
+    const state = this.getScopeState(domain, scope);
+    const next = transitionScopedFetchState(state.fetch, event);
+    if (next !== state.fetch) {
+      this.storeScopeState({ ...state, fetch: next });
     }
     return next;
   }
@@ -343,18 +782,17 @@ export class ClusterRefreshRuntime {
   }
 
   getInFlight(domain: RefreshDomain, scope?: string): TrackedInFlightRequest | undefined {
-    return this.trackedRequest(this.getFetchState(makeInFlightKey(domain, scope)));
+    return this.trackedRequest(this.getFetchState(domain, scope));
   }
 
   setInFlight(request: InFlightRequest): string {
     const key = makeInFlightKey(request.domain, request.scope);
-    this.applyFetchEvent(key, { type: 'fetch-started', request });
+    this.applyFetchEvent(request.domain, request.scope, { type: 'fetch-started', request });
     return key;
   }
 
   latchTrailingStreamSignal(domain: RefreshDomain, scope?: string): void {
-    const key = makeInFlightKey(domain, scope);
-    this.applyFetchEvent(key, { type: 'stream-signal-received' });
+    this.applyFetchEvent(domain, scope, { type: 'stream-signal-received' });
   }
 
   settleInFlight(
@@ -362,10 +800,9 @@ export class ClusterRefreshRuntime {
     scope: string | undefined,
     requestId: number
   ): TrackedInFlightRequest | undefined {
-    const key = makeInFlightKey(domain, scope);
-    const previous = this.getFetchState(key);
+    const previous = this.getFetchState(domain, scope);
     const tracked = this.trackedRequest(previous);
-    const next = this.applyFetchEvent(key, { type: 'fetch-settled', requestId });
+    const next = this.applyFetchEvent(domain, scope, { type: 'fetch-settled', requestId });
     return next === previous ? undefined : tracked;
   }
 
@@ -373,9 +810,13 @@ export class ClusterRefreshRuntime {
     key: string,
     request: Pick<InFlightRequest, 'requestId'>
   ): TrackedInFlightRequest | undefined {
-    const previous = this.getFetchState(key);
+    const state = this.scopedStates.get(key);
+    if (!state) {
+      return undefined;
+    }
+    const previous = state.fetch;
     const tracked = this.trackedRequest(previous);
-    const next = this.applyFetchEvent(key, {
+    const next = this.applyFetchEvent(state.domain, state.scope, {
       type: 'fetch-cancelled',
       requestId: request.requestId,
     });
@@ -388,8 +829,8 @@ export class ClusterRefreshRuntime {
   }
 
   forEachInFlight(callback: (request: TrackedInFlightRequest, key: string) => void): void {
-    Array.from(this.inFlight.entries()).forEach(([key, state]) => {
-      const request = this.trackedRequest(state);
+    Array.from(this.scopedStates.entries()).forEach(([key, state]) => {
+      const request = this.trackedRequest(state.fetch);
       if (request) {
         callback(request, key);
       }
@@ -397,67 +838,60 @@ export class ClusterRefreshRuntime {
   }
 
   isStreamingBlocked(domain: RefreshDomain, scope: string): boolean {
-    return this.blockedStreaming.has(makeInFlightKey(domain, scope));
+    return this.getScopeState(domain, scope).stream.policy === 'blocked';
   }
 
   blockStreaming(domain: RefreshDomain, scope: string): boolean {
-    const key = makeInFlightKey(domain, scope);
-    if (this.blockedStreaming.has(key)) {
+    const state = this.getScopeState(domain, scope);
+    if (state.stream.policy === 'blocked') {
       return false;
     }
-    this.blockedStreaming.add(key);
-    this.clearStreamingReady(domain, scope);
-    this.pendingStreaming.delete(key);
+    this.storeScopeState({
+      ...state,
+      stream: transitionScopedStreamState(state.stream, { type: 'stream-blocked' }),
+    });
     return true;
   }
 
   clearBlockedStreaming(): void {
-    this.blockedStreaming.clear();
+    this.forEachStreamState((state) => {
+      this.applyStreamEvent(state.domain, state.scope, { type: 'stream-block-cleared' });
+    });
   }
 
   isStreamingActive(domain: RefreshDomain, scope: string): boolean {
-    return this.streamingCleanup.has(makeInFlightKey(domain, scope));
+    return this.getScopeState(domain, scope).stream.connection.status === 'active';
   }
 
   hasPendingStreaming(domain: RefreshDomain, scope: string): boolean {
-    return this.pendingStreaming.has(makeInFlightKey(domain, scope));
+    return this.getScopeState(domain, scope).stream.connection.status === 'starting';
   }
 
   isStreamingStartingOrActive(domain: RefreshDomain, scope: string): boolean {
-    const key = makeInFlightKey(domain, scope);
-    return this.streamingCleanup.has(key) || this.pendingStreaming.has(key);
+    return this.getScopeState(domain, scope).stream.connection.status !== 'inactive';
   }
 
   getStreamingLifecycleKeys(): string[] {
-    const keys = new Set<string>();
-    this.streamingCleanup.forEach((_cleanup, key) => {
-      keys.add(key);
-    });
-    this.pendingStreaming.forEach((_promise, key) => {
-      keys.add(key);
-    });
-    return Array.from(keys);
-  }
-
-  hasStreamingBookkeeping(domain: RefreshDomain, scope: string): boolean {
-    const key = makeInFlightKey(domain, scope);
-    return (
-      this.streamingCleanup.has(key) ||
-      this.pendingStreaming.has(key) ||
-      this.streamingReady.has(key)
+    return Array.from(this.scopedStates.entries()).flatMap(([key, state]) =>
+      state.stream.connection.status === 'inactive' ? [] : [key]
     );
   }
 
+  hasStreamingBookkeeping(domain: RefreshDomain, scope: string): boolean {
+    const stream = this.getScopeState(domain, scope).stream;
+    return stream.connection.status !== 'inactive' || stream.initialization.status === 'scheduled';
+  }
+
   hasStreamingReady(domain: RefreshDomain, scope: string): boolean {
-    return this.streamingReady.has(makeInFlightKey(domain, scope));
+    return this.getScopeState(domain, scope).stream.initialization.status === 'scheduled';
   }
 
   setStreamingReady(domain: RefreshDomain, scope: string, task: Promise<void>): void {
-    this.streamingReady.set(makeInFlightKey(domain, scope), task);
+    this.applyStreamEvent(domain, scope, { type: 'initialization-scheduled', task });
   }
 
-  clearStreamingReady(domain: RefreshDomain, scope: string): void {
-    this.streamingReady.delete(makeInFlightKey(domain, scope));
+  clearStreamingReady(domain: RefreshDomain, scope: string, task?: Promise<void>): void {
+    this.applyStreamEvent(domain, scope, { type: 'initialization-cleared', task });
   }
 
   beginStreamingStart(
@@ -465,57 +899,60 @@ export class ClusterRefreshRuntime {
     scope: string,
     startPromise: Promise<(() => void) | undefined>
   ): void {
-    const key = makeInFlightKey(domain, scope);
-    this.cancelledStreaming.delete(key);
-    this.pendingStreaming.set(key, startPromise);
+    this.applyStreamEvent(domain, scope, { type: 'start-began', task: startPromise });
   }
 
   finishStreamingStart(
     domain: RefreshDomain,
     scope: string,
+    startPromise: StreamStartTask,
     cleanup: (() => void) | undefined
-  ): void {
-    const key = makeInFlightKey(domain, scope);
-    this.pendingStreaming.delete(key);
-    if (typeof cleanup === 'function') {
-      this.streamingCleanup.set(key, cleanup);
-      return;
-    }
-    this.streamingCleanup.set(key, () => undefined);
+  ): boolean {
+    const previous = this.getScopeState(domain, scope).stream;
+    const next = this.applyStreamEvent(domain, scope, {
+      type: 'start-finished',
+      task: startPromise,
+      cleanup: cleanup ?? (() => undefined),
+    });
+    return next !== previous;
   }
 
-  failStreamingStart(domain: RefreshDomain, scope: string): void {
-    this.pendingStreaming.delete(makeInFlightKey(domain, scope));
+  failStreamingStart(domain: RefreshDomain, scope: string, startPromise: StreamStartTask): void {
+    this.applyStreamEvent(domain, scope, { type: 'start-failed', task: startPromise });
   }
 
   cancelStreamingStart(
     domain: RefreshDomain,
     scope: string
   ): Promise<(() => void) | undefined> | null {
-    const key = makeInFlightKey(domain, scope);
-    this.cancelledStreaming.add(key);
+    const state = this.getScopeState(domain, scope);
+    const pending =
+      state.stream.connection.status === 'starting' ? state.stream.connection.task : null;
+    this.applyStreamEvent(domain, scope, { type: 'start-cancelled' });
     this.clearStreamingReady(domain, scope);
-    return this.pendingStreaming.get(key) ?? null;
+    return pending;
   }
 
   isStreamingCancelled(domain: RefreshDomain, scope: string): boolean {
-    return this.cancelledStreaming.has(makeInFlightKey(domain, scope));
+    const connection = this.getScopeState(domain, scope).stream.connection;
+    return connection.status !== 'inactive' && connection.cancellationRequested;
   }
 
   clearStreamingCancelled(domain: RefreshDomain, scope: string): void {
-    this.cancelledStreaming.delete(makeInFlightKey(domain, scope));
+    this.applyStreamEvent(domain, scope, { type: 'start-cancellation-cleared' });
   }
 
   getStreamingCleanup(domain: RefreshDomain, scope: string): (() => void) | undefined {
-    return this.streamingCleanup.get(makeInFlightKey(domain, scope));
+    const connection = this.getScopeState(domain, scope).stream.connection;
+    return connection.status === 'active' ? connection.cleanup : undefined;
   }
 
   deleteStreamingCleanup(domain: RefreshDomain, scope: string): void {
-    this.streamingCleanup.delete(makeInFlightKey(domain, scope));
+    this.applyStreamEvent(domain, scope, { type: 'cleanup-removed' });
   }
 
   clearStreamHealth(domain: RefreshDomain, scope: string): void {
-    this.streamHealth.delete(makeInFlightKey(domain, scope));
+    this.applyStreamEvent(domain, scope, { type: 'health-cleared' });
   }
 
   setStreamHealth(
@@ -523,29 +960,58 @@ export class ClusterRefreshRuntime {
     scope: string,
     payload: AppEvents['refresh:resource-stream-health']
   ): AppEvents['refresh:resource-stream-health'] | undefined {
-    const key = makeInFlightKey(domain, scope);
-    const previous = this.streamHealth.get(key);
-    this.streamHealth.set(key, payload);
-    return previous;
+    const previous = this.getScopeState(domain, scope).stream.health;
+    this.applyStreamEvent(domain, scope, { type: 'health-received', payload });
+    return previous.status === 'known' ? previous.payload : undefined;
+  }
+
+  getStreamHealth(
+    domain: RefreshDomain,
+    scope: string
+  ): AppEvents['refresh:resource-stream-health'] | undefined {
+    const health = this.getScopeState(domain, scope).stream.health;
+    return health.status === 'known' ? health.payload : undefined;
   }
 
   clearAllStreamHealth(): void {
-    this.streamHealth.clear();
+    this.forEachStreamState((state) => {
+      this.applyStreamEvent(state.domain, state.scope, { type: 'health-cleared' });
+    });
   }
 
   clearAsyncStreamingBookkeeping(): void {
-    this.pendingStreaming.clear();
-    this.cancelledStreaming.clear();
-    this.streamingReady.clear();
+    this.forEachStreamState((state) => {
+      this.applyStreamEvent(state.domain, state.scope, { type: 'async-cleared' });
+    });
   }
 
   clearAllStreaming(reset: boolean): void {
-    this.streamingCleanup.clear();
-    this.pendingStreaming.clear();
-    this.cancelledStreaming.clear();
-    if (reset) {
-      this.streamingReady.clear();
+    this.forEachStreamState((state) => {
+      this.applyStreamEvent(state.domain, state.scope, { type: 'all-cleared', reset });
+    });
+  }
+
+  private forEachStreamState(
+    callback: (state: ScopedRefreshState & { scope: string }) => void
+  ): void {
+    Array.from(this.scopedStates.values()).forEach((state) => {
+      if (state.scope !== undefined) {
+        callback(state as ScopedRefreshState & { scope: string });
+      }
+    });
+  }
+
+  private applyStreamEvent(
+    domain: RefreshDomain,
+    scope: string,
+    event: ScopedStreamEvent
+  ): ScopedStreamState {
+    const state = this.getScopeState(domain, scope);
+    const stream = transitionScopedStreamState(state.stream, event);
+    if (stream !== state.stream) {
+      this.storeScopeState({ ...state, stream });
     }
+    return stream;
   }
 
   resolveStreamingFetchMode(input: StreamingFetchDecisionInput): StreamingFetchMode {
@@ -573,18 +1039,14 @@ export class ClusterRefreshRuntime {
   }
 
   resetTransientState(): void {
-    this.blockedStreaming.clear();
-    this.streamHealth.clear();
-    this.pendingStreaming.clear();
-    this.cancelledStreaming.clear();
-    this.streamingReady.clear();
+    this.forEachStreamState((state) => {
+      this.applyStreamEvent(state.domain, state.scope, { type: 'transient-reset' });
+    });
   }
 
   resetAllState(): void {
-    this.inFlight.clear();
-    this.streamingCleanup.clear();
-    this.scopedEnabledState.clear();
-    this.scopedLeases.clear();
-    this.resetTransientState();
+    this.scopedStates.clear();
+    this.knownDomains.clear();
+    this.authState = { status: 'available' };
   }
 }

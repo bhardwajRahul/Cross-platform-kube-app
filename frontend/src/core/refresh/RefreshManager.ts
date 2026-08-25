@@ -41,8 +41,6 @@ export interface RefreshContext {
   };
 }
 
-type RefreshInvocation = 'automatic' | 'foreground' | 'manual';
-
 export interface RefresherState {
   status: 'idle' | 'refreshing' | 'cooldown' | 'error' | 'paused' | 'disabled';
   lastRefreshTime: Date | null;
@@ -57,25 +55,29 @@ type RefreshCallbackOutcome =
   | { status: 'fulfilled' }
   | { status: 'rejected'; error: Error; timedOut: boolean };
 
-type RefreshExecutionSummary = {
-  successCount: number;
-  failures: Array<{ error: Error; timedOut: boolean }>;
-};
-
 interface RefresherInstance {
   config: Refresher;
-  state: RefresherState;
-  intervalTimer?: number; // Browser returns number from setInterval
-  cooldownTimer?: number; // Browser returns number from setTimeout
-  timeoutTimer?: number; // Browser returns number from setTimeout
-  refreshPromise?: Promise<RefreshExecutionSummary>;
-  abortController?: AbortController;
-  isEnabled: boolean;
+  runtime: RefresherRuntimeState;
+  lastRefreshTime: Date | null;
+  nextRefreshTime: Date | null;
+  error: Error | null;
+  consecutiveErrors: number;
 }
 
 import { eventBus } from '@/core/events';
 // Import types from navigation
 import type { ClusterViewType, NamespaceViewType, ViewType } from '@/types/navigation/views';
+import {
+  initialRefresherRuntimeState,
+  isRefresherEnabled,
+  type RefreshExecutionSummary,
+  type RefresherRuntimeEvent,
+  type RefresherRuntimeState,
+  type RefreshInvocation,
+  refresherCooldownTimer,
+  refresherIntervalTimer,
+  transitionRefresherRuntimeState,
+} from './refresherRuntimeState';
 import {
   clusterViewToRefresher,
   namespaceViewToRefresher,
@@ -129,11 +131,11 @@ const canStartRefresh = (
     return true;
   }
   return (
-    instance.isEnabled &&
+    isRefresherEnabled(instance.runtime) &&
     !globallyPaused &&
-    instance.state.status !== 'paused' &&
-    instance.state.status !== 'refreshing' &&
-    instance.state.status !== 'cooldown'
+    instance.runtime.intent.status !== 'paused' &&
+    instance.runtime.execution.status !== 'running' &&
+    instance.runtime.timing.status !== 'cooldown'
   );
 };
 
@@ -143,8 +145,54 @@ class RefreshManager {
   private context: RefreshContext;
   private readonly subscribers: Map<RefresherName, Set<RefreshCallback>> = new Map();
   private isGloballyPaused = false;
+  private executionCounter = 0;
 
-  private emitStateChange(name: RefresherName): void {
+  private transition(instance: RefresherInstance, event: RefresherRuntimeEvent): void {
+    instance.runtime = transitionRefresherRuntimeState(instance.runtime, event);
+  }
+
+  private statusFor(instance: RefresherInstance): RefresherState['status'] {
+    if (instance.runtime.execution.status === 'running') {
+      if (
+        instance.runtime.intent.status === 'paused' &&
+        instance.runtime.execution.invocation === 'automatic'
+      ) {
+        return 'paused';
+      }
+      if (
+        instance.runtime.execution.invocation === 'automatic' &&
+        instance.runtime.execution.controller.signal.aborted
+      ) {
+        return instance.runtime.intent.status === 'disabled' ? 'disabled' : 'idle';
+      }
+      return 'refreshing';
+    }
+    if (instance.runtime.timing.status === 'cooldown') {
+      return 'cooldown';
+    }
+    if (instance.runtime.intent.status === 'disabled') {
+      return 'disabled';
+    }
+    if (instance.runtime.intent.status === 'paused') {
+      return 'paused';
+    }
+    return 'idle';
+  }
+
+  private publicState(
+    instance: RefresherInstance,
+    status: RefresherState['status'] = this.statusFor(instance)
+  ): RefresherState {
+    return {
+      status,
+      lastRefreshTime: instance.lastRefreshTime,
+      nextRefreshTime: instance.nextRefreshTime,
+      error: instance.error,
+      consecutiveErrors: instance.consecutiveErrors,
+    };
+  }
+
+  private emitStateChange(name: RefresherName, status?: RefresherState['status']): void {
     if (typeof window === 'undefined') {
       return;
     }
@@ -152,7 +200,7 @@ class RefreshManager {
     if (!instance) {
       return;
     }
-    const state: RefresherState = { ...instance.state };
+    const state = this.publicState(instance, status);
     eventBus.emit('refresh:state-change', { name, state });
   }
 
@@ -199,18 +247,18 @@ class RefreshManager {
       this.subscribers.set(refresher.name, preservedSubscribers);
     }
 
-    const isEnabled = refresher.enabled ?? previousInstance?.isEnabled ?? true;
+    const isEnabled =
+      refresher.enabled ??
+      (previousInstance ? isRefresherEnabled(previousInstance.runtime) : undefined) ??
+      true;
 
     const instance: RefresherInstance = {
       config: refresher,
-      state: {
-        status: isEnabled ? 'idle' : 'disabled',
-        lastRefreshTime: null,
-        nextRefreshTime: null,
-        error: null,
-        consecutiveErrors: 0,
-      },
-      isEnabled,
+      runtime: initialRefresherRuntimeState(isEnabled),
+      lastRefreshTime: null,
+      nextRefreshTime: null,
+      error: null,
+      consecutiveErrors: 0,
     };
 
     this.refreshers.set(refresher.name, instance);
@@ -249,22 +297,24 @@ class RefreshManager {
     if (!instance) {
       return;
     }
-    if (instance.isEnabled) {
+    if (isRefresherEnabled(instance.runtime)) {
       if (this.isGloballyPaused) {
-        instance.state.status = 'paused';
+        this.transition(instance, { type: 'paused' });
         this.emitStateChange(name);
         return;
       }
-      if (!instance.intervalTimer) {
+      if (instance.runtime.intent.status === 'paused') {
+        this.transition(instance, { type: 'enabled' });
+      }
+      if (refresherIntervalTimer(instance.runtime) === undefined) {
         this.startRefresher(name);
       }
       return;
     }
 
-    instance.isEnabled = true;
-    instance.state.status = 'idle';
+    this.transition(instance, { type: 'enabled' });
     if (this.isGloballyPaused) {
-      instance.state.status = 'paused';
+      this.transition(instance, { type: 'paused' });
       this.emitStateChange(name);
       return;
     }
@@ -280,14 +330,20 @@ class RefreshManager {
       return;
     }
 
-    if (!instance.isEnabled && instance.state.status === 'disabled') {
+    if (
+      instance.runtime.intent.status === 'disabled' &&
+      instance.runtime.timing.status === 'idle' &&
+      instance.runtime.execution.status === 'idle'
+    ) {
       return;
     }
 
-    instance.isEnabled = false;
+    if (instance.runtime.execution.status === 'running') {
+      instance.runtime.execution.controller.abort();
+    }
     this.clearTimers(instance);
-    instance.state.status = 'disabled';
-    instance.state.nextRefreshTime = null;
+    this.transition(instance, { type: 'disabled' });
+    instance.nextRefreshTime = null;
     this.emitStateChange(name);
   }
 
@@ -371,24 +427,29 @@ class RefreshManager {
 
     instance.config = { ...instance.config, interval: normalizedInterval };
 
-    if (!instance.isEnabled || this.isGloballyPaused || instance.state.status === 'paused') {
+    if (
+      !isRefresherEnabled(instance.runtime) ||
+      this.isGloballyPaused ||
+      instance.runtime.intent.status === 'paused'
+    ) {
       return;
     }
 
-    if (instance.intervalTimer) {
-      window.clearInterval(instance.intervalTimer);
-      instance.intervalTimer = undefined;
+    const previousInterval = refresherIntervalTimer(instance.runtime);
+    if (previousInterval !== undefined) {
+      globalThis.clearInterval(previousInterval);
     }
 
     // Reset the cadence without forcing an immediate refresh.
-    instance.intervalTimer = window.setInterval(() => {
-      if (instance.state.status === 'idle') {
+    const intervalTimer = globalThis.setInterval(() => {
+      if (this.statusFor(instance) === 'idle') {
         this.refreshSingle(name, 'automatic');
       }
     }, instance.config.interval);
+    this.transition(instance, { type: 'interval-replaced', intervalTimer });
 
-    if (instance.state.status === 'idle') {
-      instance.state.nextRefreshTime = new Date(Date.now() + instance.config.interval);
+    if (this.statusFor(instance) === 'idle') {
+      instance.nextRefreshTime = new Date(Date.now() + instance.config.interval);
       this.emitStateChange(name);
     }
   }
@@ -421,16 +482,24 @@ class RefreshManager {
   public cancelAllRefreshes(): void {
     this.refreshers.forEach((instance, refresherName) => {
       // Abort any in-progress refresh
-      if (instance.abortController) {
-        instance.abortController.abort();
-        instance.abortController = undefined;
+      if (instance.runtime.execution.status === 'running') {
+        instance.runtime.execution.controller.abort();
       }
       // Clear all timers
       this.clearTimers(instance);
       // Reset state
-      instance.refreshPromise = undefined;
-      instance.state.status = instance.isEnabled ? 'idle' : 'disabled';
-      instance.state.nextRefreshTime = null;
+      if (isRefresherEnabled(instance.runtime)) {
+        this.transition(instance, { type: 'idle' });
+        if (instance.runtime.execution.status === 'running') {
+          this.transition(instance, {
+            type: 'refresh-finished',
+            executionId: instance.runtime.execution.id,
+          });
+        }
+      } else {
+        this.transition(instance, { type: 'disabled' });
+      }
+      instance.nextRefreshTime = null;
       this.emitStateChange(refresherName);
     });
   }
@@ -458,19 +527,23 @@ class RefreshManager {
   public resume(name?: RefresherName): void {
     if (name) {
       const instance = this.refreshers.get(name);
-      if (instance?.isEnabled && instance.state.status === 'paused') {
+      if (
+        instance &&
+        isRefresherEnabled(instance.runtime) &&
+        instance.runtime.intent.status === 'paused'
+      ) {
         this.resumeRefresher(name, instance);
       }
     } else {
       this.isGloballyPaused = false;
       this.refreshers.forEach((instance, refresherName) => {
         // Resume paused refreshers OR start idle refreshers that don't have timers
-        if (instance.isEnabled && instance.state.status === 'paused') {
+        if (isRefresherEnabled(instance.runtime) && instance.runtime.intent.status === 'paused') {
           this.resumeRefresher(refresherName, instance);
         } else if (
-          instance.isEnabled &&
-          instance.state.status === 'idle' &&
-          !instance.intervalTimer
+          isRefresherEnabled(instance.runtime) &&
+          this.statusFor(instance) === 'idle' &&
+          refresherIntervalTimer(instance.runtime) === undefined
         ) {
           // Start refreshers that were registered while globally paused
           this.startRefresher(refresherName);
@@ -484,7 +557,7 @@ class RefreshManager {
    */
   public getState(name: RefresherName): RefresherState | null {
     const instance = this.refreshers.get(name);
-    return instance ? { ...instance.state } : null;
+    return instance ? this.publicState(instance) : null;
   }
 
   /**
@@ -496,39 +569,39 @@ class RefreshManager {
       return;
     }
 
-    if (!instance.isEnabled) {
-      instance.state.status = 'disabled';
-      instance.state.nextRefreshTime = null;
+    if (!isRefresherEnabled(instance.runtime)) {
+      instance.nextRefreshTime = null;
       this.emitStateChange(name);
       return;
     }
 
     if (this.isGloballyPaused) {
-      instance.state.status = 'paused';
+      this.transition(instance, { type: 'paused' });
       this.emitStateChange(name);
       return;
     }
 
     // Clear existing timer if any
-    if (instance.intervalTimer) {
-      window.clearInterval(instance.intervalTimer);
+    const previousInterval = refresherIntervalTimer(instance.runtime);
+    if (previousInterval !== undefined) {
+      globalThis.clearInterval(previousInterval);
     }
 
-    const hasCompletedInitialRun = instance.state.lastRefreshTime !== null;
+    const hasCompletedInitialRun = instance.lastRefreshTime !== null;
 
     // Set up the interval
-    instance.intervalTimer = window.setInterval(() => {
-      if (instance.state.status === 'idle') {
+    const intervalTimer = globalThis.setInterval(() => {
+      if (this.statusFor(instance) === 'idle') {
         this.refreshSingle(name, 'automatic');
       }
     }, instance.config.interval);
 
     // Update next refresh time
-    instance.state.nextRefreshTime = new Date(Date.now() + instance.config.interval);
-    instance.state.status = 'idle';
+    instance.nextRefreshTime = new Date(Date.now() + instance.config.interval);
+    this.transition(instance, { type: 'idle', intervalTimer });
     this.emitStateChange(name);
 
-    if (!hasCompletedInitialRun && !instance.refreshPromise) {
+    if (!hasCompletedInitialRun && instance.runtime.execution.status === 'idle') {
       void this.refreshSingle(name, 'automatic');
     }
   }
@@ -539,13 +612,11 @@ class RefreshManager {
       return;
     }
 
-    if (instance.abortController) {
-      instance.abortController.abort();
-      instance.abortController = undefined;
+    if (instance.runtime.execution.status === 'running') {
+      const { id, controller } = instance.runtime.execution;
+      controller.abort();
+      this.transition(instance, { type: 'refresh-finished', executionId: id });
     }
-
-    instance.refreshPromise = undefined;
-    instance.state.status = 'idle';
     this.emitStateChange(name);
   }
 
@@ -612,8 +683,8 @@ class RefreshManager {
     }
 
     const isManual = invocation === 'manual';
-    if (instance.state.status === 'refreshing') {
-      await this.supersedeRefresh(instance);
+    if (instance.runtime.execution.status === 'running') {
+      await this.supersedeRefresh(instance.runtime.execution);
     }
 
     if (isManual) {
@@ -621,10 +692,6 @@ class RefreshManager {
     }
 
     const abortController = new AbortController();
-    instance.abortController = abortController;
-    instance.state.status = 'refreshing';
-    this.emitStateChange(name);
-    eventBus.emit('refresh:start', { name, isManual });
     const callbacks = this.subscribers.get(name) || new Set();
     const refreshPromise = this.executeRefresh(
       callbacks,
@@ -632,46 +699,65 @@ class RefreshManager {
       abortController.signal,
       instance.config.timeout
     );
-    instance.refreshPromise = refreshPromise;
+    const executionId = ++this.executionCounter;
+    this.transition(instance, {
+      type: 'refresh-started',
+      execution: {
+        id: executionId,
+        controller: abortController,
+        promise: refreshPromise,
+        invocation,
+      },
+    });
+    this.emitStateChange(name);
+    eventBus.emit('refresh:start', { name, isManual });
 
     try {
       const summary = await refreshPromise;
-      this.completeRefresh(name, instance, isManual, summary);
+      this.completeRefresh(name, instance, executionId, isManual, summary);
     } catch (error) {
-      if (this.completeAbortedRefresh(name, instance, abortController, error)) {
+      if (this.completeAbortedRefresh(name, instance, executionId, abortController, error)) {
         return;
       }
-      this.completeFailedRefresh(name, instance, isManual, error);
-    } finally {
-      instance.refreshPromise = undefined;
+      this.completeFailedRefresh(name, instance, executionId, isManual, error);
     }
   }
 
-  private async supersedeRefresh(instance: RefresherInstance): Promise<void> {
-    instance.abortController?.abort();
-    instance.abortController = undefined;
-    if (!instance.refreshPromise) {
-      return;
-    }
+  private async supersedeRefresh(
+    execution: Extract<RefresherRuntimeState['execution'], { status: 'running' }>
+  ): Promise<void> {
+    execution.controller.abort();
     try {
-      await instance.refreshPromise;
+      await execution.promise;
     } catch {
       // Superseded work owns its own error state; the new refresh proceeds.
     }
   }
 
+  private ownsExecution(instance: RefresherInstance, executionId: number): boolean {
+    return (
+      instance.runtime.execution.status === 'running' &&
+      instance.runtime.execution.id === executionId
+    );
+  }
+
   private completeRefresh(
     name: RefresherName,
     instance: RefresherInstance,
+    executionId: number,
     isManual: boolean,
     summary: RefreshExecutionSummary
   ): void {
+    if (!this.ownsExecution(instance, executionId)) {
+      return;
+    }
     if (summary.failures.length > 0 && summary.successCount === 0) {
       throw summary.failures[0].error;
     }
-    instance.state.lastRefreshTime = new Date();
-    instance.state.error = null;
-    instance.state.consecutiveErrors = 0;
+    this.transition(instance, { type: 'refresh-finished', executionId });
+    instance.lastRefreshTime = new Date();
+    instance.error = null;
+    instance.consecutiveErrors = 0;
     eventBus.emit('refresh:complete', { name, isManual, success: true });
     this.enterCooldown(name, instance, isManual, false);
   }
@@ -679,6 +765,7 @@ class RefreshManager {
   private completeAbortedRefresh(
     name: RefresherName,
     instance: RefresherInstance,
+    executionId: number,
     abortController: AbortController,
     error: unknown
   ): boolean {
@@ -687,24 +774,29 @@ class RefreshManager {
     if (!wasAborted) {
       return false;
     }
-    instance.abortController = undefined;
-    instance.state.status = 'idle';
-    this.emitStateChange(name);
+    if (this.ownsExecution(instance, executionId)) {
+      this.transition(instance, { type: 'refresh-finished', executionId });
+      this.emitStateChange(name);
+    }
     return true;
   }
 
   private completeFailedRefresh(
     name: RefresherName,
     instance: RefresherInstance,
+    executionId: number,
     isManual: boolean,
     error: unknown
   ): void {
-    instance.abortController?.abort();
-    instance.abortController = undefined;
-    instance.state.error = error as Error;
-    instance.state.consecutiveErrors++;
-    instance.state.status = 'error';
-    this.emitStateChange(name);
+    const execution = instance.runtime.execution;
+    if (execution.status !== 'running' || execution.id !== executionId) {
+      return;
+    }
+    execution.controller.abort();
+    this.transition(instance, { type: 'refresh-finished', executionId });
+    instance.error = error as Error;
+    instance.consecutiveErrors++;
+    this.emitStateChange(name, 'error');
     eventBus.emit('refresh:complete', { name, isManual, success: false, error });
     this.enterCooldown(name, instance, isManual, true);
   }
@@ -760,9 +852,9 @@ class RefreshManager {
     signal.addEventListener('abort', handleAbort, { once: true });
 
     const timeoutMs = timeoutSeconds * 1000;
-    let timeoutId: number | undefined;
+    let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined;
     const timeoutPromise = new Promise<RefreshCallbackOutcome>((resolve) => {
-      timeoutId = window.setTimeout(() => {
+      timeoutId = globalThis.setTimeout(() => {
         controller.abort();
         signal.removeEventListener('abort', handleAbort);
         resolve({
@@ -778,7 +870,7 @@ class RefreshManager {
       callbackResult = callback(isManual, controller.signal);
     } catch (error) {
       if (timeoutId !== undefined) {
-        window.clearTimeout(timeoutId);
+        globalThis.clearTimeout(timeoutId);
       }
       signal.removeEventListener('abort', handleAbort);
       return {
@@ -797,7 +889,7 @@ class RefreshManager {
       }))
       .finally(() => {
         if (timeoutId !== undefined) {
-          window.clearTimeout(timeoutId);
+          globalThis.clearTimeout(timeoutId);
         }
         signal.removeEventListener('abort', handleAbort);
       });
@@ -820,19 +912,20 @@ class RefreshManager {
     isManual: boolean,
     hadError: boolean
   ): void {
-    instance.state.status = 'cooldown';
-    this.emitStateChange(name);
-
     // Calculate cooldown with exponential backoff for consecutive errors
     // First error uses base cooldown, subsequent errors double each time, capped at 60s
     const MAX_BACKOFF_MS = 60_000;
-    const errorCount = instance.state.consecutiveErrors;
+    const errorCount = instance.consecutiveErrors;
     const backoffMultiplier = errorCount > 1 ? 2 ** (errorCount - 1) : 1;
     const cooldownMs = Math.min(MAX_BACKOFF_MS, instance.config.cooldown * backoffMultiplier);
 
     // Set cooldown timer
-    instance.cooldownTimer = window.setTimeout(() => {
-      instance.state.status = 'idle';
+    const cooldownTimer = globalThis.setTimeout(() => {
+      const previous = instance.runtime;
+      this.transition(instance, { type: 'cooldown-finished', cooldownTimer });
+      if (instance.runtime === previous) {
+        return;
+      }
 
       // If manual refresh, restart the interval timer
       if (isManual) {
@@ -840,7 +933,7 @@ class RefreshManager {
         this.startRefresher(name);
       } else {
         // Update next refresh time
-        instance.state.nextRefreshTime = new Date(Date.now() + instance.config.interval);
+        instance.nextRefreshTime = new Date(Date.now() + instance.config.interval);
         this.emitStateChange(name);
         if (hadError) {
           // Retry immediately after cooldown so errors don't stall until the next interval tick.
@@ -848,15 +941,23 @@ class RefreshManager {
         }
       }
     }, cooldownMs);
+    this.transition(instance, { type: 'cooldown-started', cooldownTimer });
+    this.emitStateChange(name);
   }
 
   /**
    * Pause a refresher
    */
   private pauseRefresher(name: RefresherName, instance: RefresherInstance): void {
+    if (
+      instance.runtime.execution.status === 'running' &&
+      instance.runtime.execution.invocation === 'automatic'
+    ) {
+      instance.runtime.execution.controller.abort();
+    }
     this.clearTimers(instance);
-    instance.state.status = 'paused';
-    instance.state.nextRefreshTime = null;
+    this.transition(instance, { type: 'paused' });
+    instance.nextRefreshTime = null;
     this.emitStateChange(name);
   }
 
@@ -864,13 +965,12 @@ class RefreshManager {
    * Resume a paused refresher
    */
   private resumeRefresher(name: RefresherName, instance: RefresherInstance): void {
-    if (!instance.isEnabled) {
-      instance.state.status = 'disabled';
+    if (!isRefresherEnabled(instance.runtime)) {
       this.emitStateChange(name);
       return;
     }
 
-    instance.state.status = 'idle';
+    this.transition(instance, { type: 'enabled' });
     this.startRefresher(name);
   }
 
@@ -878,18 +978,15 @@ class RefreshManager {
    * Clear all timers for a refresher
    */
   private clearTimers(instance: RefresherInstance): void {
-    if (instance.intervalTimer) {
-      window.clearInterval(instance.intervalTimer);
-      instance.intervalTimer = undefined;
+    const intervalTimer = refresherIntervalTimer(instance.runtime);
+    if (intervalTimer !== undefined) {
+      globalThis.clearInterval(intervalTimer);
     }
-    if (instance.cooldownTimer) {
-      window.clearTimeout(instance.cooldownTimer);
-      instance.cooldownTimer = undefined;
+    const cooldownTimer = refresherCooldownTimer(instance.runtime);
+    if (cooldownTimer !== undefined) {
+      globalThis.clearTimeout(cooldownTimer);
     }
-    if (instance.timeoutTimer) {
-      window.clearTimeout(instance.timeoutTimer);
-      instance.timeoutTimer = undefined;
-    }
+    this.transition(instance, { type: 'idle' });
   }
 }
 

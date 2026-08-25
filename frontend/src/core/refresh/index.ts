@@ -14,7 +14,7 @@ export { useRefreshContext } from './hooks/useRefreshContext';
 export { useRefreshManager } from './hooks/useRefreshManager';
 export { useRefreshWatcher } from './hooks/useRefreshWatcher';
 export { refreshOrchestrator } from './orchestrator';
-export type { RefreshCallback, RefreshContext, Refresher, RefresherState } from './RefreshManager';
+export type { RefreshCallback, RefreshContext, Refresher } from './RefreshManager';
 // Core exports
 export { refreshManager } from './RefreshManager';
 export { useRefreshScopedDomain, useRefreshScopedDomainStates } from './store';

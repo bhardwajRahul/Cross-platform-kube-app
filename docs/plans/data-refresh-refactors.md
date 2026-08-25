@@ -28,27 +28,31 @@ I’d prioritize these refactors in this order. They preserve the current refres
 
 4. **Model frontend refresh as one state machine per `(clusterId, domain, scope)`** — very high simplification, medium-to-high migration risk
 
-   **Status (2026-08-24): in progress; fetch lifecycle seam implemented.**
-   `ScopedFetchState` is now a discriminated `idle`/`fetching` state reduced by
-   explicit fetch-started, stream-signal, settled, and canceled events. Request
-   ownership and the one-trailing-signal latch no longer depend on an optional
-   mutable flag, and stale settle/cancel events cannot clear a replacement
-   request ([refreshRuntime.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/refreshRuntime.ts:17), [refreshRuntime.test.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/refreshRuntime.test.ts:9)).
+   **Status (2026-08-24): implemented.** `ClusterRefreshRuntime` now owns one
+   scoped runtime record for activation and query/snapshot demand, deferred
+   readiness intent, permission epoch, fetch ownership, and stream policy,
+   initialization, connection, and health. Each part is a discriminated state
+   reduced by explicit events, so invalid loose-map combinations and stale
+   async completions cannot overwrite a replacement owner
+   ([refreshRuntime.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/refreshRuntime.ts), [refreshRuntime.test.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/refreshRuntime.test.ts)).
 
-   `ClusterRefreshRuntime` keeps the existing orchestrator boundary while
-   routing start, latch, settle, teardown, and iteration through that reducer;
-   the orchestrator's request scheduling and trailing refetch behavior stay on
-   their existing APIs ([refreshRuntime.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/refreshRuntime.ts:321), [orchestrator.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/orchestrator.ts:1374)).
+   Cluster auth state and scoped permission denial now live with that cluster's
+   runtime; auth recovery begins a new permission epoch without resetting other
+   clusters. The orchestrator keeps the existing public lifecycle APIs and
+   side-effect ordering while delegating state transitions to the runtime
+   ([orchestrator.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/orchestrator.ts), [orchestrator.test.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/orchestrator.test.ts)).
 
-   Remaining seams are `RefreshManager` timing intent, lease/scope enablement,
-   activation/readiness, stream lifecycle/health, permission/auth state, and
-   metric demand. Migrate them one at a time behind current APIs, preserving
-   navigation, remount, multi-cluster, retained-state, and polling behavior.
+   `RefreshManager` now separates enabled/paused intent, interval/cooldown
+   timing, and owned execution into explicit nested states. Execution IDs and
+   timer handles reject stale completions, and disabling or resuming cannot
+   leave contradictory timer/status combinations
+   ([refresherRuntimeState.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/refresherRuntimeState.ts), [RefreshManager.test.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/RefreshManager.test.ts)).
+   Global metrics demand likewise has one `idle`/`requesting`/`waiting-retry`
+   state instead of independent request, key, timer, and backoff fields
+   ([metricsDemandState.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/metricsDemandState.ts), [metricsDemandState.test.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/metricsDemandState.test.ts)).
 
-   Before this migration, `RefreshManager` owned timer, promise, abort, enabled,
-   and context-transition state while the orchestrator separately owned
-   readiness, leases, auth failures, metric demand, and scope enablement;
-   `ClusterRefreshRuntime` independently tracked in-flight requests.
+   The durable ownership and transition rules now live in
+   [refresh-system.md](/Volumes/git/luxury-yacht/app/docs/architecture/refresh-system.md#frontend-runtime-state).
 
 5. **Normalize resource-stream messages through a pure protocol reducer** — high debugging payoff, medium risk
 
