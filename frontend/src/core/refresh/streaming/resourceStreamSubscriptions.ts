@@ -1,11 +1,10 @@
 import { buildClusterScope, parseClusterScopeList } from '../clusterScope';
-import type { ResourceStreamServerMessage } from '../types';
 import type { ResourceStreamClientMessage } from './resourceStreamConnection';
 import { type DoorbellDomain, normalizeResourceScope } from './resourceStreamDomains';
-export type ResourceStreamUpdateMessage = Partial<ResourceStreamServerMessage> & {
-  domain: DoorbellDomain;
-  scope: string;
-};
+import {
+  initialResourceStreamProtocolState,
+  type ResourceStreamProtocolState,
+} from './resourceStreamProtocol';
 
 export type StreamSubscription = {
   key: string;
@@ -16,24 +15,7 @@ export type StreamSubscription = {
   normalizedScope: string;
   clusterId: string;
   clusterName?: string;
-  resourceVersion?: bigint;
-  // Track the last stream sequence applied so we can resume after reconnects.
-  lastSequence?: bigint;
-  // Track message activity so polling is paused only after delivery resumes.
-  lastMessageAt?: number;
-  lastDeliveryAt?: number;
-  lastDeliveryEpoch?: number;
-  // The connection epoch on which this subscription last completed a resync (or
-  // resumed via its sequence token). Connected + synchronized counts as healthy
-  // even with zero deliveries — a quiet domain is not an unhealthy one.
-  lastSyncedEpoch?: number;
-  lastErrorAt?: number;
-  lastErrorReason?: string;
-  updateQueue: ResourceStreamUpdateMessage[];
-  updateTimer: number | null;
-  pendingReset: boolean;
-  resyncInFlight: boolean;
-  lastResyncAt: number;
+  protocol: ResourceStreamProtocolState;
 };
 
 type PendingUnsubscribe = {
@@ -239,17 +221,16 @@ export class ResourceStreamSubscriptionStore {
   }
 
   buildRequestMessage(subscription: StreamSubscription): ResourceStreamClientMessage {
-    const resumeToken = subscription.lastSequence
-      ? subscription.lastSequence.toString()
+    const resumeToken = subscription.protocol.resume.lastSequence
+      ? subscription.protocol.resume.lastSequence.toString()
       : undefined;
-    subscription.pendingReset = !resumeToken;
     return {
       type: 'REQUEST',
       clusterId: subscription.clusterId,
       domain: subscription.domain,
       scope: subscription.storeScope,
-      resourceVersion: subscription.resourceVersion
-        ? subscription.resourceVersion.toString()
+      resourceVersion: subscription.protocol.resume.resourceVersion
+        ? subscription.protocol.resume.resourceVersion.toString()
         : undefined,
       resumeToken,
     };
@@ -273,8 +254,22 @@ export class ResourceStreamSubscriptionStore {
     const key = resourceStreamSubscriptionKey(clusterId, domain, normalizedScope);
     const existing = this.subscriptions.get(key);
     if (existing) {
+      const replaceBlockedOwner =
+        this.hasPendingUnsubscribe(existing) &&
+        existing.protocol.phase.status === 'permission-blocked';
       existing.reportScopes.add(reportScope);
       this.cancelPendingUnsubscribe(existing);
+      if (replaceBlockedOwner) {
+        // Reclaim after a lifecycle stop is a new permission epoch. Install a
+        // fresh owner so late callbacks keep the old terminal protocol object.
+        const replacement = {
+          ...existing,
+          reportScopes: new Set(existing.reportScopes),
+          protocol: initialResourceStreamProtocolState(),
+        };
+        this.subscriptions.set(key, replacement);
+        return replacement;
+      }
       return existing;
     }
 
@@ -287,11 +282,7 @@ export class ResourceStreamSubscriptionStore {
       reportScopes: new Set([reportScope]),
       normalizedScope,
       clusterId,
-      updateQueue: [],
-      updateTimer: null,
-      pendingReset: false,
-      resyncInFlight: false,
-      lastResyncAt: 0,
+      protocol: initialResourceStreamProtocolState(),
     };
     this.subscriptions.set(key, subscription);
     this.logInfo(

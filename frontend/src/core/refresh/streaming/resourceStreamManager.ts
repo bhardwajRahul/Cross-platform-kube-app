@@ -15,25 +15,14 @@ import {
   logAppLogsInfo,
 } from '@/core/logging/appLogsClient';
 import { reportOperationalError } from '@/utils/errorHandler';
-import { stripClusterScope } from '../clusterScope';
-import { isPermissionDeniedStatus, resolvePermissionDeniedMessage } from '../permissionErrors';
 import { getScopedDomainState, setScopedDomainState } from '../store';
-import {
-  RESOURCE_STREAM_MESSAGE_TYPES,
-  RESOURCE_STREAM_SIGNALS,
-  type ResourceStreamMessageType,
-  type ResourceStreamServerMessage,
-  type ResourceStreamSignal,
-} from '../types';
+import type { ResourceStreamServerMessage } from '../types';
 import { ResourceStreamConnection } from './resourceStreamConnection';
 import {
   type DoorbellDomain,
   domainSupportsSourceClock,
   doorbellSourceClocks,
-  isClusterScopedDomain,
   isCompleteResyncStreamDomain,
-  isResourceStreamSourceClock,
-  isSupportedDomain,
   type ResourceStreamSourceClock,
 } from './resourceStreamDomains';
 import {
@@ -43,6 +32,15 @@ import {
   ResourceStreamHealthStore,
   STREAM_HEALTH_STATUS_ORDER,
 } from './resourceStreamHealth';
+import {
+  computeResourceStreamProtocolHealth,
+  type NormalizedResourceStreamProtocolMessage,
+  normalizeResourceStreamProtocolMessage,
+  type ResourceStreamProtocolEffect,
+  type ResourceStreamProtocolEvent,
+  type ResourceStreamProtocolTransition,
+  transitionResourceStreamProtocol,
+} from './resourceStreamProtocol';
 import {
   ResourceStreamSubscriptionStore,
   resourceStreamSubscriptionKey,
@@ -69,116 +67,12 @@ const logDebug = (message: string, cluster?: AppLogsClusterMeta): void => {
   logAppLogsDebug(message, APP_LOG_SOURCES.ResourceStream, cluster);
 };
 
-type SignalEnvelope = {
-  clusterId: string;
-  source: ResourceStreamSourceClock;
-  signal: ResourceStreamSignal;
-  version: string;
-};
-
 type ServerMessage = Partial<ResourceStreamServerMessage>;
 
-type UpdateMessage = ServerMessage & {
-  domain: DoorbellDomain;
-  scope: string;
-  signalEnvelope?: SignalEnvelope;
-};
-
 type ResolvedSubscriptionMessage = {
-  update: UpdateMessage;
+  normalized: NormalizedResourceStreamProtocolMessage;
   subscription: StreamSubscription;
 };
-
-const hasMessageType = (value: unknown): value is ResourceStreamMessageType =>
-  typeof value === 'string' &&
-  RESOURCE_STREAM_MESSAGE_TYPES.includes(value as ResourceStreamMessageType);
-
-const hasSignalType = (value: unknown): value is ResourceStreamSignal =>
-  typeof value === 'string' && RESOURCE_STREAM_SIGNALS.includes(value as ResourceStreamSignal);
-
-const normalizeStreamScope = (domain: DoorbellDomain, scope: unknown): string | null => {
-  if (typeof scope === 'string') {
-    const trimmed = scope.trim();
-    const normalized = stripClusterScope(trimmed);
-    if (normalized || isClusterScopedDomain(domain)) {
-      return normalized;
-    }
-    return null;
-  }
-  // Cluster-scoped updates omit scope in JSON, so treat missing scope as empty.
-  if ((scope === null || scope === undefined) && isClusterScopedDomain(domain)) {
-    return '';
-  }
-  return null;
-};
-
-const resolveUpdateMessage = (message: ServerMessage): UpdateMessage | null => {
-  if (!isSupportedDomain(message.domain)) {
-    return null;
-  }
-  const normalizedScope = normalizeStreamScope(message.domain, message.scope);
-  if (normalizedScope === null) {
-    return null;
-  }
-  const source = message.source;
-  const signal = message.signal;
-  const version = message.version?.trim();
-  const signalClusterId = message.clusterId?.trim();
-  // A message carrying a KNOWN source clock the domain does not declare is a
-  // contract violation (e.g. a metric doorbell aimed at a non-metric domain):
-  // drop it outright rather than letting the legacy `type` path apply it.
-  // Control frames without a source (heartbeat/ack) are unaffected.
-  if (isResourceStreamSourceClock(source) && !domainSupportsSourceClock(message.domain, source)) {
-    return null;
-  }
-  const signalEnvelope =
-    signalClusterId && version && isResourceStreamSourceClock(source) && hasSignalType(signal)
-      ? { clusterId: signalClusterId, source, signal, version }
-      : undefined;
-  if (!hasMessageType(message.type) && !signalEnvelope) {
-    return null;
-  }
-  return { ...message, domain: message.domain, scope: normalizedScope, signalEnvelope };
-};
-
-const normalizeUpdateClusterId = (update: UpdateMessage, clusterId: string): UpdateMessage => {
-  if (!clusterId) {
-    return update;
-  }
-  const messageClusterId = update.clusterId?.trim();
-  if (messageClusterId && messageClusterId === clusterId) {
-    return update;
-  }
-  return { ...update, clusterId };
-};
-
-const parseResourceVersion = (value?: string | number): bigint | null => {
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value) || value <= 0) {
-      return null;
-    }
-    // Avoid precision loss from JSON numbers that exceed safe integer limits.
-    if (!Number.isSafeInteger(value)) {
-      return null;
-    }
-    return BigInt(Math.floor(value));
-  }
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  try {
-    return BigInt(trimmed);
-  } catch (_err) {
-    return null;
-  }
-};
-
-// Stream sequence parsing mirrors resourceVersion semantics for resume tokens.
-const parseStreamSequence = (value?: string | number): bigint | null => parseResourceVersion(value);
 
 export type ResourceStreamTelemetrySummary = {
   resyncCount: number;
@@ -241,7 +135,6 @@ export class ResourceStreamManager {
     },
     resumeItems: () => Array.from(this.subscriptions.values()),
     resumeItem: (subscription) => {
-      this.markResyncing(subscription);
       void this.resyncSubscription(subscription, 'visibility resume');
     },
   });
@@ -279,7 +172,7 @@ export class ResourceStreamManager {
     return byClusterDomain;
   }
 
-  // Expose per-scope health so refresh gating can keep snapshots running until delivery resumes.
+  // Expose per-scope health so refresh gating can decide when polling fallback is required.
   getHealthStatus(domain: DoorbellDomain, scope: string): ResourceStreamHealthStatus {
     return this.streamHealth.status(domain, scope);
   }
@@ -352,175 +245,44 @@ export class ResourceStreamManager {
     clusterId: string,
     parsed: ServerMessage
   ): ResolvedSubscriptionMessage | null {
-    const update = resolveUpdateMessage(parsed);
-    if (!update) {
+    const normalized = normalizeResourceStreamProtocolMessage(parsed);
+    if (!normalized) {
       return null;
     }
-    const messageClusterId =
-      update.signalEnvelope?.clusterId ?? update.clusterId?.trim() ?? clusterId;
+    const messageClusterId = normalized.clusterId ?? clusterId;
     if (!messageClusterId) {
       return null;
     }
     const subscriptionKey = resourceStreamSubscriptionKey(
       messageClusterId,
-      update.domain,
-      update.scope
+      normalized.domain,
+      normalized.scope
     );
     let subscription = this.subscriptions.get(subscriptionKey);
-    let resolvedUpdate = update;
     if (!subscription) {
-      if (update.signalEnvelope) {
+      if (normalized.routing === 'strict') {
         return null;
       }
       // Fall back when cluster IDs drift but the scope/domain pair is unique.
-      subscription = this.findSubscriptionByScope(update.domain, update.scope);
+      subscription = this.findSubscriptionByScope(normalized.domain, normalized.scope);
       if (!subscription) {
         return null;
       }
-      resolvedUpdate = normalizeUpdateClusterId(update, subscription.clusterId);
     }
-    return { update: resolvedUpdate, subscription };
+    return { normalized, subscription };
   }
 
   private captureSubscriptionClusterName(
     subscription: StreamSubscription,
-    parsed: ServerMessage
+    normalized: NormalizedResourceStreamProtocolMessage
   ): void {
     // Server frames carry the cluster DISPLAY NAME (the subscribe ACK always
     // does); capture it so subscription-labeled logging shows the same name
     // as the backend's per-cluster log lines instead of falling back to the
     // raw composite cluster ID.
-    const messageClusterName = parsed.clusterName?.trim();
+    const messageClusterName = normalized.clusterName;
     if (messageClusterName && subscription.clusterName !== messageClusterName) {
       subscription.clusterName = messageClusterName;
-    }
-  }
-
-  private handleSignalReset(subscription: StreamSubscription, update: UpdateMessage): void {
-    const signal = update.signalEnvelope;
-    if (!signal) {
-      return;
-    }
-    if (subscription.pendingReset) {
-      subscription.pendingReset = false;
-      if (this.hasRetainedData(subscription)) {
-        this.bumpSourceVersionOnly(
-          subscription,
-          Date.now(),
-          { [signal.source]: signal.version },
-          signal.version
-        );
-      }
-      this.updateHealthForSubscription(subscription);
-      return;
-    }
-    this.bumpSourceVersionOnly(
-      subscription,
-      Date.now(),
-      { [signal.source]: signal.version },
-      signal.version
-    );
-    void this.resyncSubscription(subscription, 'reset');
-    this.updateHealthForSubscription(subscription);
-  }
-
-  private handleSignalError(
-    subscription: StreamSubscription,
-    update: UpdateMessage,
-    errorMessage: string | null
-  ): void {
-    this.recordSubscriptionError(subscription, errorMessage || 'stream error');
-    // Permission denial is settled until scope/auth recovery; block streaming
-    // instead of entering the resync loop, while retaining unhealthy health.
-    if (isPermissionDeniedStatus(update.errorDetails)) {
-      this.updateHealthForSubscription(subscription);
-      eventBus.emit('refresh:resource-stream-permission-denied', {
-        domain: subscription.domain,
-        scope: subscription.storeScope,
-        reason: errorMessage || 'permission denied',
-      });
-      return;
-    }
-    void this.resyncSubscription(subscription, errorMessage || 'stream error', true);
-    this.updateHealthForSubscription(subscription);
-  }
-
-  private handleSignalMessage(
-    subscription: StreamSubscription,
-    update: UpdateMessage,
-    errorMessage: string | null
-  ): void {
-    switch (update.signalEnvelope?.signal) {
-      case 'changed':
-        this.handleUpdate(subscription, update);
-        this.updateHealthForSubscription(subscription);
-        return;
-      case 'reset':
-        this.handleSignalReset(subscription, update);
-        return;
-      case 'error':
-        this.handleSignalError(subscription, update, errorMessage);
-        return;
-      default:
-        return;
-    }
-  }
-
-  private handleLegacyReset(subscription: StreamSubscription, update: UpdateMessage): void {
-    if (subscription.pendingReset) {
-      subscription.pendingReset = false;
-      // Without a resume token, retained data needs a new doorbell clock
-      // before synchronization can be trusted on this connection.
-      if (this.hasRetainedData(subscription)) {
-        this.bumpLegacyResyncSourceVersion(subscription, update);
-      }
-      this.markSubscriptionSynchronized(subscription);
-      this.updateHealthForSubscription(subscription);
-      return;
-    }
-    this.bumpLegacyResyncSourceVersion(subscription, update);
-    void this.resyncSubscription(subscription, 'reset');
-    this.updateHealthForSubscription(subscription);
-  }
-
-  private handleLegacyMessage(
-    subscription: StreamSubscription,
-    update: UpdateMessage,
-    errorMessage: string | null
-  ): void {
-    switch (update.type) {
-      case 'HEARTBEAT':
-        return;
-      case 'ACK':
-        // The server accepted the subscribe on this connection: the scope is
-        // trusted even with zero deliveries (quiet domain). Without a server
-        // confirmation the subscription must stay degraded so polling falls
-        // back — a send alone proves nothing (found live: a backend without
-        // the domain's selector left the client claiming healthy, frozen).
-        this.markSubscriptionSynchronized(subscription);
-        this.updateHealthForSubscription(subscription);
-        return;
-      case 'RESET':
-        this.handleLegacyReset(subscription, update);
-        return;
-      case 'COMPLETE':
-        this.bumpLegacyResyncSourceVersion(subscription, update);
-        void this.resyncSubscription(subscription, errorMessage || 'complete');
-        this.updateHealthForSubscription(subscription);
-        return;
-      case 'ERROR':
-        this.recordSubscriptionError(subscription, errorMessage || 'stream error');
-        void this.resyncSubscription(subscription, errorMessage || 'stream error', true);
-        this.updateHealthForSubscription(subscription);
-        return;
-      case 'ADDED':
-      case 'MODIFIED':
-      case 'DELETED':
-        this.handleUpdate(subscription, update);
-        this.updateHealthForSubscription(subscription);
-        return;
-      default:
-        return;
     }
   }
 
@@ -534,15 +296,17 @@ export class ResourceStreamManager {
       return;
     }
 
-    const { subscription, update } = resolved;
-    const errorMessage = resolvePermissionDeniedMessage(update.error, update.errorDetails);
-    this.recordSubscriptionMessage(subscription);
-    this.captureSubscriptionClusterName(subscription, parsed);
-    if (update.signalEnvelope) {
-      this.handleSignalMessage(subscription, update, errorMessage);
-      return;
-    }
-    this.handleLegacyMessage(subscription, update, errorMessage);
+    const { subscription, normalized } = resolved;
+    this.captureSubscriptionClusterName(subscription, normalized);
+    this.applyProtocolEvent(subscription, {
+      type: 'message-received',
+      message: normalized.message,
+      now: Date.now(),
+      connectionEpoch: this.connectionEpoch,
+      hasRetainedData: this.hasRetainedData(subscription),
+      completeResync: isCompleteResyncStreamDomain(subscription.domain),
+      maxPendingChanges: MAX_UPDATE_QUEUE,
+    });
   }
 
   private findSubscriptionByScope(
@@ -550,6 +314,62 @@ export class ResourceStreamManager {
     scope: string
   ): StreamSubscription | undefined {
     return this.subscriptions.findByScope(domain, scope);
+  }
+
+  private applyProtocolEvent(
+    subscription: StreamSubscription,
+    event: ResourceStreamProtocolEvent
+  ): ResourceStreamProtocolTransition {
+    const result = transitionResourceStreamProtocol(subscription.protocol, event);
+    subscription.protocol = result.state;
+    result.effects.forEach((effect) => {
+      this.runProtocolEffect(subscription, effect);
+    });
+    this.updateHealthForSubscription(subscription);
+    return result;
+  }
+
+  private runProtocolEffect(
+    subscription: StreamSubscription,
+    effect: ResourceStreamProtocolEffect
+  ): void {
+    switch (effect.type) {
+      case 'schedule-flush': {
+        const timer = window.setTimeout(() => {
+          this.applyProtocolEvent(subscription, { type: 'flush-fired', timer });
+        }, UPDATE_COALESCE_MS);
+        this.applyProtocolEvent(subscription, { type: 'flush-timer-attached', timer });
+        return;
+      }
+      case 'cancel-flush':
+        window.clearTimeout(effect.timer);
+        return;
+      case 'advance-source':
+        this.bumpSourceVersionOnly(subscription, Date.now(), effect.sourceVersions, effect.latest);
+        return;
+      case 'advance-legacy-reset':
+        this.bumpLegacyResyncSourceVersion(subscription);
+        return;
+      case 'request-resync':
+        void this.resyncSubscription(subscription, effect.reason, effect.force, effect.errorReason);
+        return;
+      case 'permission-denied':
+        eventBus.emit('refresh:resource-stream-permission-denied', {
+          domain: subscription.domain,
+          scope: subscription.storeScope,
+          reason: effect.reason,
+        });
+        return;
+      case 'mark-resyncing':
+        this.markResyncing(subscription);
+        return;
+      case 'mark-resync-complete':
+        this.markResyncComplete(subscription);
+        return;
+      case 'send-subscribe':
+        this.subscribe(subscription);
+        return;
+    }
   }
 
   handleConnectionOpen(clusterId: string): void {
@@ -569,23 +389,10 @@ export class ResourceStreamManager {
       if (targetClusterId && subscription.clusterId !== targetClusterId) {
         return;
       }
-      if (subscription.lastSequence && !subscription.resyncInFlight) {
-        this.subscribe(subscription);
-        // Clear resync state when a resume-capable stream reconnects; the
-        // server's ACK (or resumed deliveries) restores synchronized health.
-        this.markResyncComplete(subscription);
-        this.updateHealthForSubscription(subscription);
-        return;
-      }
-      if (!subscription.resyncInFlight) {
-        // No resume token: the subscription's data predates this connection
-        // (fetched while connecting), so changes in the gap could be missed.
-        // A forced resync on the live connection re-establishes trust — its
-        // tail re-subscribes and marks the subscription synchronized.
-        void this.resyncSubscription(subscription, 'reconnect', true);
-        return;
-      }
-      this.subscribe(subscription);
+      this.applyProtocolEvent(subscription, {
+        type: 'connection-opened',
+        epoch: this.connectionEpoch,
+      });
     });
   }
 
@@ -596,10 +403,7 @@ export class ResourceStreamManager {
       if (targetClusterId && subscription.clusterId !== targetClusterId) {
         return;
       }
-      this.markResyncing(subscription);
-      if (!subscription.lastSequence) {
-        void this.resyncSubscription(subscription, message);
-      }
+      this.applyProtocolEvent(subscription, { type: 'connection-lost', reason: message });
     });
   }
 
@@ -640,19 +444,22 @@ export class ResourceStreamManager {
       return;
     }
     const connection = this.getConnection();
-    connection.send(this.subscriptions.buildRequestMessage(subscription));
+    const request = this.subscriptions.buildRequestMessage(subscription);
+    connection.send(request);
+    this.applyProtocolEvent(subscription, {
+      type: 'subscribe-sent',
+      expectsReset: request.resumeToken === undefined,
+    });
   }
 
   private unsubscribe(subscription: StreamSubscription, reset: boolean): void {
     this.subscriptions.cancelPendingUnsubscribe(subscription);
+    this.applyProtocolEvent(subscription, { type: 'stopping' });
     const connection = this.connection;
     if (connection) {
       connection.send(this.subscriptions.buildCancelMessage(subscription));
     }
 
-    if (subscription.updateTimer !== null) {
-      window.clearTimeout(subscription.updateTimer);
-    }
     this.subscriptions.delete(subscription);
     this.updateHealthForSubscription(subscription);
 
@@ -673,56 +480,15 @@ export class ResourceStreamManager {
     );
   }
 
-  private recordSubscriptionMessage(subscription: StreamSubscription): void {
-    subscription.lastMessageAt = Date.now();
-  }
-
-  private markSubscriptionDelivery(subscription: StreamSubscription): void {
-    subscription.lastDeliveryAt = Date.now();
-    subscription.lastDeliveryEpoch = this.connectionEpoch;
-  }
-
-  // markSubscriptionSynchronized records that this subscription's data is
-  // trusted on the CURRENT connection (a resync completed, or the stream
-  // resumed via its sequence token). It clears any prior error: the resync is
-  // the recovery protocol, so recovery must not wait for a delivery that a
-  // quiet domain will never produce.
-  private markSubscriptionSynchronized(subscription: StreamSubscription): void {
-    subscription.lastSyncedEpoch = this.connectionEpoch;
-    subscription.lastErrorAt = undefined;
-    subscription.lastErrorReason = undefined;
-  }
-
-  private recordSubscriptionError(subscription: StreamSubscription, message: string): void {
-    subscription.lastErrorAt = Date.now();
-    subscription.lastErrorReason = message;
-  }
-
   private computeSubscriptionHealth(subscription: StreamSubscription): {
     status: ResourceStreamHealthStatus;
     reason: string;
   } {
-    if (this.connectionStatus !== 'connected') {
-      const reason = this.lastConnectionError || 'stream disconnected';
-      return { status: 'unhealthy', reason };
-    }
-    // Keep the stream unhealthy until a delivery arrives after the last error.
-    if (subscription.lastErrorAt && subscription.lastErrorAt > (subscription.lastDeliveryAt ?? 0)) {
-      return { status: 'unhealthy', reason: subscription.lastErrorReason || 'stream error' };
-    }
-    if (subscription.resyncInFlight) {
-      return { status: 'degraded', reason: 'resyncing' };
-    }
-    if (subscription.lastDeliveryEpoch === this.connectionEpoch) {
-      return { status: 'healthy', reason: 'delivering' };
-    }
-    // Connected + synchronized on this connection is healthy even with zero
-    // deliveries: quiet domains would otherwise poll forever ("awaiting
-    // updates" only means nothing has changed).
-    if (subscription.lastSyncedEpoch === this.connectionEpoch) {
-      return { status: 'healthy', reason: 'synchronized' };
-    }
-    return { status: 'degraded', reason: 'awaiting updates' };
+    return computeResourceStreamProtocolHealth(
+      subscription.protocol,
+      this.connectionStatus,
+      this.lastConnectionError
+    );
   }
 
   private aggregateHealth(
@@ -754,8 +520,8 @@ export class ResourceStreamManager {
         status = health.status;
         reason = health.reason;
       }
-      lastMessageAt = Math.max(lastMessageAt, subscription.lastMessageAt ?? 0);
-      lastDeliveryAt = Math.max(lastDeliveryAt, subscription.lastDeliveryAt ?? 0);
+      lastMessageAt = Math.max(lastMessageAt, subscription.protocol.activity.lastMessageAt ?? 0);
+      lastDeliveryAt = Math.max(lastDeliveryAt, subscription.protocol.activity.lastDeliveryAt ?? 0);
     });
 
     const payload: ResourceStreamHealthPayload = {
@@ -825,97 +591,8 @@ export class ResourceStreamManager {
     this.updateAllHealth();
   }
 
-  private shouldResetDeliveryOnResync(reason: string): boolean {
-    return reason !== 'initial' && reason !== 'manual refresh';
-  }
-
-  private handleUpdate(subscription: StreamSubscription, message: UpdateMessage): void {
-    if (subscription.resyncInFlight) {
-      return;
-    }
-    if (isCompleteResyncStreamDomain(subscription.domain)) {
-      this.markSubscriptionDelivery(subscription);
-      void this.resyncSubscription(subscription, 'complete-only update');
-      return;
-    }
-
-    const incomingSequence = parseStreamSequence(message.sequence);
-    // Stream sequence is the reliable ordering signal; resourceVersion can regress on resyncs.
-    if (
-      incomingSequence &&
-      subscription.lastSequence &&
-      incomingSequence <= subscription.lastSequence
-    ) {
-      return;
-    }
-    if (incomingSequence) {
-      subscription.lastSequence = incomingSequence;
-    }
-    const incomingVersion = parseResourceVersion(message.resourceVersion);
-    if (incomingVersion) {
-      if (!subscription.resourceVersion || incomingVersion > subscription.resourceVersion) {
-        subscription.resourceVersion = incomingVersion;
-      }
-    }
-    this.markSubscriptionDelivery(subscription);
-
-    subscription.updateQueue.push(message);
-    if (subscription.updateQueue.length > MAX_UPDATE_QUEUE) {
-      // Drop the backlog and force a resync so we don't apply stale updates.
-      subscription.updateQueue = [];
-      void this.resyncSubscription(subscription, 'update backlog overflow', true);
-      return;
-    }
-    if (subscription.updateTimer !== null) {
-      return;
-    }
-    subscription.updateTimer = window.setTimeout(() => {
-      subscription.updateTimer = null;
-      this.flushUpdates(subscription);
-    }, UPDATE_COALESCE_MS);
-  }
-
-  private flushUpdates(subscription: StreamSubscription): void {
-    if (subscription.updateQueue.length === 0) {
-      return;
-    }
-    const sourceUpdate = this.sourceVersionsFromUpdates(subscription.updateQueue);
-    subscription.updateQueue = [];
-    this.bumpSourceVersionOnly(
-      subscription,
-      Date.now(),
-      sourceUpdate.sourceVersions,
-      sourceUpdate.latest
-    );
-  }
-
-  private sourceVersionsFromUpdates(
-    updates: Array<{
-      source?: string;
-      signal?: string;
-      version?: string;
-      signalEnvelope?: SignalEnvelope;
-    }>
-  ): { sourceVersions: Partial<Record<ResourceStreamSourceClock, string>>; latest?: string } {
-    const sourceVersions: Partial<Record<ResourceStreamSourceClock, string>> = {};
-    let latest: string | undefined;
-    for (const update of updates) {
-      const source = update.signalEnvelope?.source ?? update.source;
-      const version = update.signalEnvelope?.version ?? update.version?.trim();
-      if (!isResourceStreamSourceClock(source) || !version) {
-        continue;
-      }
-      sourceVersions[source] = version;
-      latest = version;
-    }
-    return { sourceVersions, latest };
-  }
-
-  private bumpLegacyResyncSourceVersion(
-    subscription: StreamSubscription,
-    update: UpdateMessage
-  ): void {
-    const source = this.legacyResyncSource(subscription.domain, update);
+  private bumpLegacyResyncSourceVersion(subscription: StreamSubscription): void {
+    const source = this.legacyResyncSource(subscription.domain);
     if (!source) {
       return;
     }
@@ -923,14 +600,7 @@ export class ResourceStreamManager {
     this.bumpSourceVersionOnly(subscription, Date.now(), { [source]: version }, version);
   }
 
-  private legacyResyncSource(
-    domain: DoorbellDomain,
-    update: UpdateMessage
-  ): ResourceStreamSourceClock | null {
-    const source = update.source;
-    if (isResourceStreamSourceClock(source) && domainSupportsSourceClock(domain, source)) {
-      return source;
-    }
+  private legacyResyncSource(domain: DoorbellDomain): ResourceStreamSourceClock | null {
     if (domainSupportsSourceClock(domain, 'object')) {
       return 'object';
     }
@@ -1019,54 +689,31 @@ export class ResourceStreamManager {
   private async resyncSubscription(
     subscription: StreamSubscription,
     reason: string,
-    force = false
+    force = false,
+    errorReason?: string
   ): Promise<void> {
     // Skip resync work for subscriptions that are already scheduled to stop.
     if (this.subscriptions.hasPendingUnsubscribe(subscription)) {
       return;
     }
-    if (subscription.resyncInFlight) {
-      return;
-    }
     const now = Date.now();
-    if (
-      !force &&
-      subscription.lastResyncAt &&
-      now - subscription.lastResyncAt < RESYNC_COOLDOWN_MS
-    ) {
+    const previous = subscription.protocol;
+    const started = this.applyProtocolEvent(subscription, {
+      type: 'resync-requested',
+      reason,
+      now,
+      force,
+      cooldownMs: RESYNC_COOLDOWN_MS,
+      ...(errorReason ? { errorReason } : {}),
+    });
+    if (started.state === previous || started.state.phase.status !== 'resyncing') {
       return;
-    }
-    subscription.resyncInFlight = true;
-    subscription.lastResyncAt = now;
-    if (this.shouldResetDeliveryOnResync(reason)) {
-      subscription.lastDeliveryEpoch = undefined;
-      subscription.lastSyncedEpoch = undefined;
     }
     this.recordResync(subscription, reason);
-    // Skip setting a user-visible "Stream resyncing" error for initial stream
-    // starts — there is no stale data to warn about. The orchestrator already
-    // set status to 'initialising' via setStreamingLoadingState.
-    if (reason !== 'initial') {
-      this.markResyncing(subscription);
-    }
-    this.updateHealthForSubscription(subscription);
-    if (subscription.updateTimer !== null) {
-      window.clearTimeout(subscription.updateTimer);
-      subscription.updateTimer = null;
-    }
-    subscription.updateQueue = [];
-    subscription.lastSequence = undefined;
-
-    const sourceUpdate = this.sourceVersionsFromUpdates(subscription.updateQueue);
-    this.bumpSourceVersionOnly(subscription, now, sourceUpdate.sourceVersions, sourceUpdate.latest);
-    this.markResyncComplete(subscription);
-    subscription.pendingReset = false;
-    subscription.resyncInFlight = false;
     // Trust is NOT granted here: the tail's subscribe must be confirmed by the
-    // server (ACK, or the pendingReset-absorbed RESET) before health reports
+    // server (ACK, or the initial RESET handshake) before health reports
     // synchronized.
-    this.subscribe(subscription);
-    this.updateHealthForSubscription(subscription);
+    this.applyProtocolEvent(subscription, { type: 'resync-completed' });
   }
 
   private markResyncComplete(subscription: StreamSubscription): void {

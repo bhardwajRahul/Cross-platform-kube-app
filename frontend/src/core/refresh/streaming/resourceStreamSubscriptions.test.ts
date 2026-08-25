@@ -108,12 +108,15 @@ describe('ResourceStreamSubscriptionStore', () => {
       })
     );
     expect(initialRequest.resumeToken).toBeUndefined();
-    expect(subscription.pendingReset).toBe(true);
+    expect(subscription.protocol.phase).toEqual({ status: 'connecting' });
 
-    subscription.lastSequence = 42n;
+    subscription.protocol = {
+      ...subscription.protocol,
+      resume: { ...subscription.protocol.resume, lastSequence: 42n },
+    };
     const resumeRequest = store.buildRequestMessage(subscription);
     expect(resumeRequest.resumeToken).toBe('42');
-    expect(subscription.pendingReset).toBe(false);
+    expect(subscription.protocol.resume.lastSequence).toBe(42n);
   });
 
   it('debounces and cancels pending unsubscribe work', () => {

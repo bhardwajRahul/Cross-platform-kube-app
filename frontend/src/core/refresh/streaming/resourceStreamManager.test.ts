@@ -6,6 +6,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
 
+import { eventBus } from '@/core/events';
+
 const fetchSnapshotMock = vi.hoisted(() => vi.fn());
 const logAppLogsDebugMock = vi.hoisted(() => vi.fn());
 const logAppLogsInfoMock = vi.hoisted(() => vi.fn());
@@ -373,6 +375,104 @@ describe('ResourceStreamManager', () => {
       JSON.stringify({ type: 'ACK', domain: 'namespaces', scope: '', clusterId: 'cluster-a' })
     );
     expect(manager.getHealthStatus('namespaces', storeScope)).toBe('healthy');
+  });
+
+  test('permission denial is terminal until subscription ownership is replaced', async () => {
+    vi.useFakeTimers();
+    installWindowTimers();
+    const manager = new ResourceStreamManager();
+    const storeScope = buildClusterScope('cluster-a', '');
+    const permissionDenied = vi.fn();
+    const unsubscribe = eventBus.on('refresh:resource-stream-permission-denied', permissionDenied);
+
+    try {
+      await manager.start('namespaces', storeScope);
+      await flushPromises();
+      createdSockets[0].onopen?.(new Event('open'));
+      await flushPromises();
+
+      const requestCount = () =>
+        createdSockets[0].send.mock.calls.filter(([payload]) => payload.type === 'REQUEST').length;
+      const requestsBeforeDenial = requestCount();
+      const revisionBeforeDenial =
+        getScopedDomainState('namespaces', storeScope).streamRevision ?? 0;
+
+      manager.handleMessage(
+        'cluster-a',
+        JSON.stringify({
+          type: 'ERROR',
+          clusterId: 'cluster-a',
+          domain: 'namespaces',
+          scope: '',
+          source: 'object',
+          signal: 'error',
+          version: 'object:2',
+          errorDetails: {
+            kind: 'Status',
+            apiVersion: 'v1',
+            message: 'permission denied for domain namespaces (core/namespaces)',
+            reason: 'Forbidden',
+            details: { domain: 'namespaces', resource: 'core/namespaces' },
+            code: 403,
+          },
+        })
+      );
+
+      expect(permissionDenied).toHaveBeenCalledWith({
+        domain: 'namespaces',
+        scope: storeScope,
+        reason: 'permission denied for domain namespaces (core/namespaces)',
+      });
+      expect(manager.getHealthStatus('namespaces', storeScope)).toBe('unhealthy');
+
+      manager.handleMessage(
+        'cluster-a',
+        JSON.stringify({
+          type: 'ACK',
+          clusterId: 'cluster-a',
+          domain: 'namespaces',
+          scope: '',
+        })
+      );
+      manager.handleMessage(
+        'cluster-a',
+        JSON.stringify({
+          type: 'MODIFIED',
+          clusterId: 'cluster-a',
+          domain: 'namespaces',
+          scope: '',
+          source: 'object',
+          signal: 'changed',
+          version: 'object:3',
+          sequence: '3',
+        })
+      );
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(requestCount()).toBe(requestsBeforeDenial);
+      expect(getScopedDomainState('namespaces', storeScope).streamRevision ?? 0).toBe(
+        revisionBeforeDenial
+      );
+      expect(manager.getHealthStatus('namespaces', storeScope)).toBe('unhealthy');
+
+      manager.stop('namespaces', storeScope, false);
+      await manager.start('namespaces', storeScope);
+      await flushPromises();
+
+      expect(requestCount()).toBeGreaterThan(requestsBeforeDenial);
+      manager.handleMessage(
+        'cluster-a',
+        JSON.stringify({
+          type: 'ACK',
+          clusterId: 'cluster-a',
+          domain: 'namespaces',
+          scope: '',
+        })
+      );
+      expect(manager.getHealthStatus('namespaces', storeScope)).toBe('healthy');
+    } finally {
+      unsubscribe();
+    }
   });
 
   // Pins the namespaces doorbell: a SourceObject signal on the namespaces

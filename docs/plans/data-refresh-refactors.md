@@ -56,8 +56,19 @@ I’d prioritize these refactors in this order. They preserve the current refres
 
 5. **Normalize resource-stream messages through a pure protocol reducer** — high debugging payoff, medium risk
 
-   Each subscription currently carries numerous independently mutable epochs, errors, queue, timer, reset, and resync fields ([resourceStreamSubscriptions.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/streaming/resourceStreamSubscriptions.ts:10)). Signal and legacy frames follow separate transition paths ([resourceStreamManager.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/streaming/resourceStreamManager.ts:399), [resourceStreamManager.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/streaming/resourceStreamManager.ts:469)), while health is inferred afterward from combinations of those fields ([resourceStreamManager.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/streaming/resourceStreamManager.ts:701)). One concrete complexity symptom: resync clears `updateQueue`, then immediately derives source versions from that cleared queue ([resourceStreamManager.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/streaming/resourceStreamManager.ts:1057)).
+   **Status (2026-08-24): implemented.** Modern signal envelopes and legacy
+   typed frames now pass through one canonical normalizer and pure reducer. Each
+   subscription owns one explicit connecting/awaiting-ack/synchronized/resyncing/
+   permission-blocked/stopping protocol state; socket, timer, store, health,
+   telemetry, and permission work remains manager-owned effects
+   ([resourceStreamProtocol.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/streaming/resourceStreamProtocol.ts), [resourceStreamManager.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/streaming/resourceStreamManager.ts), [resourceStreamSubscriptions.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/streaming/resourceStreamSubscriptions.ts)).
 
-   Normalize both wire formats into canonical events and reduce them into explicit states such as connecting, awaiting acknowledgement, synchronized, resyncing, permission-blocked, and stopping. Keep network, timer, and store writes as emitted effects. Lock behavior with transition-table tests for replay, reset, quiet subscriptions, permission denial, overflow, replacement, and reconnect.
+   Resync now emits any coalesced source clocks before clearing them, quiet ACKs
+   remain a healthy synchronization boundary, permission denial and stopping
+   are terminal states, and COMPLETE cannot be mistaken for the initial RESET.
+   Transition tests cover modern/legacy parity, replay, initial/later reset,
+   quiet subscriptions, permission denial, overflow, manager replacement,
+   reconnect, resync completion, and late frames from a replaced owner
+   ([resourceStreamProtocol.test.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/streaming/resourceStreamProtocol.test.ts)).
 
 Audit validation baseline (before implementation): focused backend refresh tests passed; focused frontend refresh/streaming tests passed `43` files and `529` tests; targeted rebuild/governor tests passed. No files were changed, and final `git status --short` was empty.

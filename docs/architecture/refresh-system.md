@@ -126,6 +126,28 @@ states plus refresh metadata. Global metrics demand is independently reduced as
 `idle`, `requesting`, or `waiting-retry`; only the matching demand key may
 complete or schedule a retry.
 
+### Frontend resource-stream protocol
+
+Each `(clusterId, domain, scope)` resource-stream subscription owns one protocol
+state. Modern source-clock signals and legacy typed frames are normalized into
+the same acknowledged, heartbeat, changed, reset, and error events before they
+reach that state. The explicit phases are connecting, awaiting acknowledgement,
+synchronized, resyncing, permission-blocked, and stopping.
+
+The protocol reducer owns replay-token progression, initial-versus-later reset
+meaning, update coalescing, resync admission, synchronization, and health
+classification. It does not perform I/O. Socket sends, timer handles, source
+clock/store writes, health publication, telemetry, and permission events are
+effects executed by `ResourceStreamManager`.
+
+An ACK makes a quiet subscription healthy. Advancing sequences reject replayed
+changes. A token-less first RESET completes the initial handshake, while a
+later RESET or manager-replacement COMPLETE re-arms the subscription. Pending
+source clocks are emitted before resync clears coalescing state. Permission
+denial remains terminal until the owning scope/auth lifecycle replaces the
+subscription, and stopping is terminal so late frames or timers cannot affect a
+replacement owner.
+
 ## Behavior classes
 
 - Snapshot domains replace one scoped payload.
