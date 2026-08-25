@@ -1,10 +1,18 @@
 import refreshDomainContractJson from '../../../../backend/refresh/domain/refresh-domain-contract.json';
 import type { StaticRefresherName } from './refresherTypes';
-import type { RefreshDomain } from './types';
+import {
+  type GeneratedRefreshCachePolicy,
+  type GeneratedRefreshDiagnosticsStream,
+  type GeneratedRefreshDomainCategory,
+  type GeneratedRefreshOrchestratorKind,
+  type GeneratedRefreshSourceClock,
+  REFRESH_DOMAIN_POLICIES,
+  type RefreshDomain,
+} from './types';
 
-export type DomainCategory = 'system' | 'cluster' | 'namespace';
+export type DomainCategory = GeneratedRefreshDomainCategory;
 
-export type StreamTelemetryName = 'resources' | 'events' | 'catalog' | 'container-logs';
+export type StreamTelemetryName = GeneratedRefreshDiagnosticsStream;
 
 export interface RefresherTiming {
   interval: number;
@@ -21,15 +29,7 @@ export interface RefreshDomainDescriptor<D extends RefreshDomain = RefreshDomain
   priority?: number;
 }
 
-export type RefreshOrchestratorKind =
-  | 'snapshot'
-  // A snapshot domain refetched by a stream doorbell instead of its poll (the
-  // authored timing remains the stream-down fallback).
-  | 'doorbell-snapshot'
-  | 'resource-stream'
-  | 'event-stream'
-  | 'catalog-stream'
-  | 'container-logs-stream';
+export type RefreshOrchestratorKind = GeneratedRefreshOrchestratorKind;
 
 export type RefreshBehaviorClass =
   | 'snapshot-table'
@@ -58,15 +58,7 @@ export type RefreshScopeContractKind =
   | 'node-maintenance'
   | 'log-stream-selector';
 
-export type RefreshCachePolicy =
-  | 'snapshot-cache'
-  | 'snapshot-cache-with-merge'
-  | 'snapshot-cache-bypass'
-  | 'snapshot-cache-plus-provider-cache'
-  | 'provider-cache'
-  | 'external-catalog-cache'
-  | 'external-catalog-cache-with-merge'
-  | 'stream-only';
+export type RefreshCachePolicy = GeneratedRefreshCachePolicy;
 
 export type RefreshStreamSemantic =
   | 'change-signal'
@@ -125,6 +117,8 @@ export interface RefreshDomainContractEntry<D extends RefreshDomain = RefreshDom
     diagnosticsStream: StreamTelemetryName | null;
     timing: RefresherTiming;
     priority?: number;
+    registrationOrder: number;
+    scheduled?: boolean;
   };
 }
 
@@ -138,7 +132,7 @@ export interface StreamResourceContractRecord {
 // RefreshSourceClock mirrors the backend streammux.Source taxonomy: the clocks
 // that can advance a domain's rows. This is the authored source of metric
 // dependency and doorbell source validation.
-export type RefreshSourceClock = 'object' | 'metric' | 'event' | 'catalog' | 'attention';
+export type RefreshSourceClock = GeneratedRefreshSourceClock;
 
 export interface StreamDomainContractEntry {
   scopeKind: 'pod' | 'namespace' | 'cluster';
@@ -185,21 +179,29 @@ export interface RefreshDomainContract {
 
 export const refreshDomainContract = refreshDomainContractJson as RefreshDomainContract;
 
+export const frontendRefreshDomainPolicies = [...REFRESH_DOMAIN_POLICIES].sort(
+  (left, right) => left.frontend.registrationOrder - right.frontend.registrationOrder
+);
+
+export const METRIC_DEMAND_DOMAINS = REFRESH_DOMAIN_POLICIES.filter((policy) =>
+  (policy.sourceClocks as readonly RefreshSourceClock[]).includes('metric')
+).map((policy) => policy.domain) as RefreshDomain[];
+
 export const REFRESH_DOMAIN_DESCRIPTORS = Object.fromEntries(
-  refreshDomainContract.domains.map((entry) => {
+  REFRESH_DOMAIN_POLICIES.map((policy) => {
     const descriptor: RefreshDomainDescriptor = {
-      domain: entry.domain,
-      refresherName: entry.frontend.refresherName,
-      category: entry.category,
-      timing: entry.frontend.timing,
+      domain: policy.domain,
+      refresherName: policy.frontend.refresherName,
+      category: policy.category,
+      timing: { ...policy.frontend.timing },
     };
-    if (entry.frontend.diagnosticsStream) {
-      descriptor.diagnosticsStream = entry.frontend.diagnosticsStream;
+    if (policy.frontend.diagnosticsStream) {
+      descriptor.diagnosticsStream = policy.frontend.diagnosticsStream;
     }
-    if (entry.frontend.priority !== undefined) {
-      descriptor.priority = entry.frontend.priority;
+    if (policy.frontend.priority !== null) {
+      descriptor.priority = policy.frontend.priority;
     }
-    return [entry.domain, descriptor];
+    return [policy.domain, descriptor];
   })
 ) as { [D in RefreshDomain]: RefreshDomainDescriptor<D> };
 

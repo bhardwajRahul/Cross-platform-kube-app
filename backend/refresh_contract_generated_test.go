@@ -18,6 +18,15 @@ func TestRefreshTypeScriptContractGeneratedInSync(t *testing.T) {
 	require.Equal(t, string(want), string(got), "generated refresh contract is stale; run `go generate ./backend`")
 }
 
+func TestRefreshGoDomainPolicyGeneratedInSync(t *testing.T) {
+	want, err := genrefreshcontracts.RenderGoPolicy()
+	require.NoError(t, err)
+
+	got, err := os.ReadFile("refresh/domain/policy_generated.go")
+	require.NoError(t, err, "generated refresh domain policy is missing; run `go generate ./backend`")
+	require.Equal(t, string(want), string(got), "generated refresh domain policy is stale; run `go generate ./backend`")
+}
+
 func TestRefreshTypeScriptContractHasSingleFormattingOwner(t *testing.T) {
 	biomeConfigJSONC, err := os.ReadFile("../frontend/biome.jsonc")
 	require.NoError(t, err)

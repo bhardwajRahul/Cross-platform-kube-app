@@ -24,6 +24,7 @@ import {
 import { clusterReadiness } from './clusterReadiness';
 import { buildClusterScope, parseClusterScope, parseClusterScopeList } from './clusterScope';
 import { registerDefaultRefreshDomains } from './domainRegistrations';
+import { METRIC_DEMAND_DOMAINS } from './domainRegistry';
 import { type RefreshContext, refreshManager } from './RefreshManager';
 import { RefreshErrorNotifier } from './refreshErrorNotifier';
 import { type RefresherTiming, refresherConfig } from './refresherConfig';
@@ -1651,16 +1652,9 @@ class RefreshOrchestrator {
   }
 
   private metricsDemandClusterIds(): string[] {
-    const metricDomains: readonly RefreshDomain[] = [
-      'cluster-overview',
-      'nodes',
-      'pods',
-      'namespace-workloads',
-      'namespace-metrics',
-    ];
     const demanded: string[] = [];
     this.clusterRuntimes.forEach((runtime, clusterId) => {
-      if (metricDomains.some((domain) => runtime.hasEnabledScopedSources(domain))) {
+      if (METRIC_DEMAND_DOMAINS.some((domain) => runtime.hasEnabledScopedSources(domain))) {
         demanded.push(clusterId);
       }
     });

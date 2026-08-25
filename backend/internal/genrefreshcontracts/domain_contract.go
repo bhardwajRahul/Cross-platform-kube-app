@@ -1,20 +1,104 @@
 package genrefreshcontracts
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 )
 
+type authoredScopeContract struct {
+	Kind              string   `json:"kind"`
+	ClusterPrefix     string   `json:"clusterPrefix"`
+	Parser            string   `json:"parser"`
+	FrontendBuilder   string   `json:"frontendBuilder"`
+	AcceptedEncodings []string `json:"acceptedEncodings"`
+}
+
 type authoredDomainInventory struct {
-	RefreshPayloadType *string `json:"refreshPayloadType"`
+	BehaviorClass      string                `json:"behaviorClass"`
+	ScopeContract      authoredScopeContract `json:"scopeContract"`
+	SingleCluster      bool                  `json:"singleCluster"`
+	PayloadOwner       string                `json:"payloadOwner"`
+	RefreshPayloadType json.RawMessage       `json:"refreshPayloadType"`
+	CachePolicy        string                `json:"cachePolicy"`
+	StreamSemantics    []string              `json:"streamSemantics"`
+	CoverageContract   string                `json:"coverageContract"`
+	CoverageStatus     string                `json:"coverageStatus"`
+}
+
+type authoredBackendPolicy struct {
+	Registration   string `json:"registration"`
+	Permission     string `json:"permission"`
+	ResourceStream bool   `json:"resourceStream"`
+}
+
+type authoredFrontendTiming struct {
+	Interval int `json:"interval"`
+	Cooldown int `json:"cooldown"`
+	Timeout  int `json:"timeout"`
+}
+
+type authoredFrontendPolicy struct {
+	RefresherName     string                 `json:"refresherName"`
+	Orchestrator      string                 `json:"orchestrator"`
+	DiagnosticsStream json.RawMessage        `json:"diagnosticsStream"`
+	Timing            authoredFrontendTiming `json:"timing"`
+	Priority          *int                   `json:"priority,omitempty"`
+	RegistrationOrder *int                   `json:"registrationOrder"`
+	Scheduled         *bool                  `json:"scheduled,omitempty"`
 }
 
 type authoredDomainRegistration struct {
-	Domain string `json:"domain"`
+	Domain       string                 `json:"domain"`
+	Category     string                 `json:"category"`
+	SourceClocks []string               `json:"sourceClocks,omitempty"`
+	Backend      authoredBackendPolicy  `json:"backend"`
+	Frontend     authoredFrontendPolicy `json:"frontend"`
+}
+
+type authoredDomainContract struct {
+	Version         int                                `json:"version"`
+	DomainInventory map[string]authoredDomainInventory `json:"domainInventory"`
+	ResourceStream  json.RawMessage                    `json:"resourceStream"`
+	Domains         []authoredDomainRegistration       `json:"domains"`
+}
+
+var knownCachePolicies = stringSet(
+	"snapshot-cache",
+	"snapshot-cache-with-merge",
+	"snapshot-cache-bypass",
+	"snapshot-cache-plus-provider-cache",
+	"provider-cache",
+	"external-catalog-cache",
+	"external-catalog-cache-with-merge",
+	"stream-only",
+)
+
+var knownDomainCategories = stringSet("system", "cluster", "namespace")
+var knownSourceClocks = stringSet("object", "metric", "event", "catalog", "attention")
+var knownBackendRegistrations = stringSet("direct", "list", "listWatch", "streamOnly")
+var knownBackendPermissions = stringSet("runtime", "exempt", "stream-specific")
+var knownFrontendOrchestrators = stringSet(
+	"snapshot",
+	"doorbell-snapshot",
+	"resource-stream",
+	"event-stream",
+	"catalog-stream",
+	"container-logs-stream",
+)
+var knownDiagnosticsStreams = stringSet("resources", "events", "catalog", "container-logs")
+
+func stringSet(values ...string) map[string]struct{} {
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		result[value] = struct{}{}
+	}
+	return result
 }
 
 func loadContractDomains() ([]domainSpec, error) {
@@ -27,52 +111,205 @@ func loadContractDomains() ([]domainSpec, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read refresh domain contract: %w", err)
 	}
-	var authored struct {
-		DomainInventory map[string]authoredDomainInventory `json:"domainInventory"`
-		Domains         []authoredDomainRegistration       `json:"domains"`
-	}
-	if err := json.Unmarshal(contents, &authored); err != nil {
+	return parseContractDomains(contents)
+}
+
+func parseContractDomains(contents []byte) ([]domainSpec, error) {
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	decoder.DisallowUnknownFields()
+	var authored authoredDomainContract
+	if err := decoder.Decode(&authored); err != nil {
 		return nil, fmt.Errorf("decode refresh domain contract: %w", err)
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return nil, err
+	}
+	if authored.Version != 2 {
+		return nil, fmt.Errorf("refresh domain contract version must be 2, got %d", authored.Version)
+	}
+	if len(authored.Domains) == 0 {
+		return nil, fmt.Errorf("refresh domain contract has no domain registrations")
 	}
 
 	result := make([]domainSpec, 0, len(authored.Domains))
-	seen := make(map[string]struct{}, len(authored.Domains))
+	seenDomains := make(map[string]struct{}, len(authored.Domains))
+	seenFrontendOrder := make(map[int]string, len(authored.Domains))
 	for _, registration := range authored.Domains {
-		domain, err := contractDomainSpec(registration, authored.DomainInventory, seen)
+		domain, err := contractDomainSpec(registration, authored.DomainInventory, seenDomains, seenFrontendOrder)
 		if err != nil {
 			return nil, err
 		}
 		result = append(result, domain)
 	}
-	if len(seen) != len(authored.DomainInventory) {
-		return nil, fmt.Errorf("refresh domain contract has %d inventory entries but %d registrations", len(authored.DomainInventory), len(seen))
+	if len(seenDomains) != len(authored.DomainInventory) {
+		return nil, fmt.Errorf("refresh domain contract has %d inventory entries but %d registrations", len(authored.DomainInventory), len(seenDomains))
+	}
+	for order := range result {
+		if _, ok := seenFrontendOrder[order]; !ok {
+			return nil, fmt.Errorf("refresh domain contract is missing frontend registrationOrder %d", order)
+		}
 	}
 	return result, nil
+}
+
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("decode refresh domain contract: unexpected trailing JSON value")
+		}
+		return fmt.Errorf("decode refresh domain contract: %w", err)
+	}
+	return nil
 }
 
 func contractDomainSpec(
 	registration authoredDomainRegistration,
 	inventoryByDomain map[string]authoredDomainInventory,
-	seen map[string]struct{},
+	seenDomains map[string]struct{},
+	seenFrontendOrder map[int]string,
 ) (domainSpec, error) {
 	if registration.Domain == "" {
 		return domainSpec{}, fmt.Errorf("refresh domain contract contains an empty domain registration")
 	}
-	if _, duplicate := seen[registration.Domain]; duplicate {
+	if _, duplicate := seenDomains[registration.Domain]; duplicate {
 		return domainSpec{}, fmt.Errorf("refresh domain contract registers %q more than once", registration.Domain)
 	}
 	inventory, ok := inventoryByDomain[registration.Domain]
 	if !ok {
 		return domainSpec{}, fmt.Errorf("refresh domain %q is missing from domainInventory", registration.Domain)
 	}
-	seen[registration.Domain] = struct{}{}
-	if inventory.RefreshPayloadType == nil {
-		return domainSpec{domain: registration.Domain, frontendOwned: true}, nil
+	if err := validateKnownValue(registration.Domain, "cachePolicy", inventory.CachePolicy, knownCachePolicies); err != nil {
+		return domainSpec{}, err
 	}
-	if *inventory.RefreshPayloadType == "" {
-		return domainSpec{}, fmt.Errorf("refresh domain %q has an empty refreshPayloadType", registration.Domain)
+	if err := validateKnownValue(registration.Domain, "category", registration.Category, knownDomainCategories); err != nil {
+		return domainSpec{}, err
 	}
-	return domainSpec{domain: registration.Domain, payload: *inventory.RefreshPayloadType}, nil
+	if err := validateKnownValue(registration.Domain, "backend.registration", registration.Backend.Registration, knownBackendRegistrations); err != nil {
+		return domainSpec{}, err
+	}
+	if err := validateKnownValue(registration.Domain, "backend.permission", registration.Backend.Permission, knownBackendPermissions); err != nil {
+		return domainSpec{}, err
+	}
+	if err := validateKnownValue(registration.Domain, "frontend.orchestrator", registration.Frontend.Orchestrator, knownFrontendOrchestrators); err != nil {
+		return domainSpec{}, err
+	}
+	if registration.Frontend.RefresherName == "" {
+		return domainSpec{}, fmt.Errorf("refresh domain %q has an empty frontend.refresherName", registration.Domain)
+	}
+	if registration.Frontend.Timing.Interval <= 0 || registration.Frontend.Timing.Cooldown <= 0 || registration.Frontend.Timing.Timeout <= 0 {
+		return domainSpec{}, fmt.Errorf("refresh domain %q has non-positive frontend timing", registration.Domain)
+	}
+	if registration.Frontend.Priority != nil && *registration.Frontend.Priority < 0 {
+		return domainSpec{}, fmt.Errorf("refresh domain %q has a negative frontend priority", registration.Domain)
+	}
+	if registration.Frontend.RegistrationOrder == nil {
+		return domainSpec{}, fmt.Errorf("refresh domain %q is missing frontend.registrationOrder", registration.Domain)
+	}
+	registrationOrder := *registration.Frontend.RegistrationOrder
+	if registrationOrder < 0 || registrationOrder >= len(inventoryByDomain) {
+		return domainSpec{}, fmt.Errorf("refresh domain %q has out-of-range frontend.registrationOrder %d", registration.Domain, registrationOrder)
+	}
+	if previous, duplicate := seenFrontendOrder[registrationOrder]; duplicate {
+		return domainSpec{}, fmt.Errorf("refresh domains %q and %q share frontend.registrationOrder %d", previous, registration.Domain, registrationOrder)
+	}
+	diagnosticsStream, err := decodeNullableString(registration.Frontend.DiagnosticsStream)
+	if err != nil {
+		return domainSpec{}, fmt.Errorf("refresh domain %q frontend.diagnosticsStream: %w", registration.Domain, err)
+	}
+	if diagnosticsStream != "" {
+		if err := validateKnownValue(registration.Domain, "frontend.diagnosticsStream", diagnosticsStream, knownDiagnosticsStreams); err != nil {
+			return domainSpec{}, err
+		}
+	}
+	seenClocks := make(map[string]struct{}, len(registration.SourceClocks))
+	for _, source := range registration.SourceClocks {
+		if err := validateKnownValue(registration.Domain, "sourceClocks", source, knownSourceClocks); err != nil {
+			return domainSpec{}, err
+		}
+		if _, duplicate := seenClocks[source]; duplicate {
+			return domainSpec{}, fmt.Errorf("refresh domain %q declares source clock %q more than once", registration.Domain, source)
+		}
+		seenClocks[source] = struct{}{}
+	}
+
+	payload, frontendOwned, err := decodePayloadType(inventory.RefreshPayloadType)
+	if err != nil {
+		return domainSpec{}, fmt.Errorf("refresh domain %q refreshPayloadType: %w", registration.Domain, err)
+	}
+	scheduled := true
+	if registration.Frontend.Scheduled != nil {
+		scheduled = *registration.Frontend.Scheduled
+	}
+	priority := 0
+	hasPriority := registration.Frontend.Priority != nil
+	if hasPriority {
+		priority = *registration.Frontend.Priority
+	}
+
+	seenDomains[registration.Domain] = struct{}{}
+	seenFrontendOrder[registrationOrder] = registration.Domain
+	return domainSpec{
+		domain:                    registration.Domain,
+		payload:                   payload,
+		frontendOwned:             frontendOwned,
+		cachePolicy:               inventory.CachePolicy,
+		category:                  registration.Category,
+		sourceClocks:              append([]string(nil), registration.SourceClocks...),
+		backendRegistration:       registration.Backend.Registration,
+		backendPermission:         registration.Backend.Permission,
+		backendResourceStream:     registration.Backend.ResourceStream,
+		frontendRefresherName:     registration.Frontend.RefresherName,
+		frontendOrchestrator:      registration.Frontend.Orchestrator,
+		frontendDiagnosticsStream: diagnosticsStream,
+		frontendTimingInterval:    registration.Frontend.Timing.Interval,
+		frontendTimingCooldown:    registration.Frontend.Timing.Cooldown,
+		frontendTimingTimeout:     registration.Frontend.Timing.Timeout,
+		frontendPriority:          priority,
+		frontendHasPriority:       hasPriority,
+		frontendRegistrationOrder: registrationOrder,
+		frontendScheduled:         scheduled,
+	}, nil
+}
+
+func validateKnownValue(domain, field, value string, known map[string]struct{}) error {
+	if _, ok := known[value]; !ok {
+		return fmt.Errorf("refresh domain %q has unsupported %s %q", domain, field, value)
+	}
+	return nil
+}
+
+func decodeNullableString(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", fmt.Errorf("value is missing")
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", err
+	}
+	if value == "" {
+		return "", fmt.Errorf("value is empty")
+	}
+	return value, nil
+}
+
+func decodePayloadType(raw json.RawMessage) (payload string, frontendOwned bool, err error) {
+	if len(raw) == 0 {
+		return "", false, fmt.Errorf("value is missing")
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", true, nil
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", false, err
+	}
+	if payload == "" {
+		return "", false, fmt.Errorf("value is empty")
+	}
+	return payload, false, nil
 }
 
 func validateDomainPayloadTypes(domains []domainSpec, typesByName map[string]reflect.Type) error {

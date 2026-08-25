@@ -15,8 +15,17 @@ normative timing and visibility rules live in
 - generated frontend domain/payload types;
 - frontend registration, scheduling, diagnostics, and tests.
 
-Do not add aliases or parallel registration tables. Change the authored entry,
-backend/frontend registrations, generated types, and parity tests together.
+The contract generator emits the typed backend policy table in
+`backend/refresh/domain/policy_generated.go` and the typed frontend policy plus
+wire contracts in `frontend/src/core/refresh/types.generated.ts`. Backend
+registration functions and frontend orchestration functions remain keyed
+callbacks; generated policy supplies their order and metadata. Generation
+rejects duplicate domains/orders and unknown policy vocabulary before either
+table is written.
+
+Do not add aliases or parallel registration tables, and never hand-edit either
+generated file. Change the authored entry, keyed backend/frontend callback when
+needed, DTO registry, and parity tests together, then run `go generate ./backend`.
 
 ## Scope and identity
 

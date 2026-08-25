@@ -34,9 +34,25 @@ type aliasSpec struct {
 }
 
 type domainSpec struct {
-	domain        string
-	payload       string
-	frontendOwned bool
+	domain                    string
+	payload                   string
+	frontendOwned             bool
+	cachePolicy               string
+	category                  string
+	sourceClocks              []string
+	backendRegistration       string
+	backendPermission         string
+	backendResourceStream     bool
+	frontendRefresherName     string
+	frontendOrchestrator      string
+	frontendDiagnosticsStream string
+	frontendTimingInterval    int
+	frontendTimingCooldown    int
+	frontendTimingTimeout     int
+	frontendPriority          int
+	frontendHasPriority       bool
+	frontendRegistrationOrder int
+	frontendScheduled         bool
 }
 
 func typeOf[T any]() reflect.Type {

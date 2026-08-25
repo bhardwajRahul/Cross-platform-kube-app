@@ -287,7 +287,8 @@ func (s readinessResourceSet) sorted() []string {
 	return keys
 }
 
-// domainRegistrations returns the ordered domain registration table.
+// domainRegistrations binds executable registration callbacks by domain, then
+// applies the generated backend order from refresh-domain-contract.json.
 func domainRegistrations(deps registrationDeps) []domainRegistration {
 	catalogConfig := snapshot.CatalogConfig{
 		CatalogService:  deps.cfg.ObjectCatalogService,
@@ -310,7 +311,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 	helmProvider, helmOK := deps.cfg.ObjectDetailsProvider.(snapshot.HelmContentProvider)
 	runtimeAccess := domainpermissions.NewRuntimeAccess()
 
-	return []domainRegistration{
+	callbacks := map[string]domainRegistration{
 		// Unscoped: fail fast on missing list permission — a restricted user
 		// gets an explicit permission-denied snapshot (the sidebar renders
 		// "You do not have permission to list namespaces." plus the scope
@@ -320,8 +321,8 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 		// needs no cluster permission at all — it registers directly, with
 		// the runtime policy exempted to match its permissionless data
 		// source.
-		namespacesRegistration(deps),
-		namespaceMetricsRegistration(deps),
+		"namespaces":        namespacesRegistration(deps),
+		"namespace-metrics": namespaceMetricsRegistration(deps),
 
 		// Cluster overview degrades per resource (issue #244): the informer path
 		// needs only the namespaces informer — nodes, pods, and the workload
@@ -331,7 +332,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 		// back to the polling list builder when ANY primary resource is
 		// listable, so a nodes-only or pods-only identity still gets a partial
 		// overview instead of a permission-denied placeholder.
-		listWatchRegistration(listWatchDomainConfig{
+		"cluster-overview": listWatchRegistration(listWatchDomainConfig{
 			name:          "cluster-overview",
 			issueResource: coreNamespacesPermissionResource,
 			logGroup:      "",
@@ -367,16 +368,16 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			deniedReason: "cluster overview requires nodes, pods, or namespaces",
 		}),
 
-		clusterAttentionRegistration(deps, runtimeAccess),
+		"cluster-attention": clusterAttentionRegistration(deps, runtimeAccess),
 
-		withSkipUnless(directRegistration("catalog", func() error {
+		"catalog": withSkipUnless(directRegistration("catalog", func() error {
 			return snapshot.RegisterCatalogDomain(deps.registry, catalogConfig)
 		}), func() bool { return deps.cfg.ObjectCatalogService != nil }),
-		withSkipUnless(directRegistration("catalog-diff", func() error {
+		"catalog-diff": withSkipUnless(directRegistration("catalog-diff", func() error {
 			return snapshot.RegisterCatalogDiffDomain(deps.registry, catalogConfig)
 		}), func() bool { return deps.cfg.ObjectCatalogService != nil }),
 
-		listWatchRegistration(listWatchDomainConfig{
+		"nodes": listWatchRegistration(listWatchDomainConfig{
 			name:          "nodes",
 			issueResource: "core/nodes,pods",
 			logGroup:      "",
@@ -403,7 +404,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			deniedReason: "core/nodes (and pods)",
 		}),
 
-		accessListRegistration(runtimeAccess, listDomainConfig{
+		"cluster-config": accessListRegistration(runtimeAccess, listDomainConfig{
 			name: "cluster-config",
 			register: func(allowed domainpermissions.AllowedResources) error {
 				return snapshot.RegisterClusterConfigDomainWithGatewayAPI(
@@ -417,7 +418,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			},
 		}),
 
-		listWatchRegistration(applyListWatchMeta(listWatchDomainConfig{
+		"cluster-crds": listWatchRegistration(applyListWatchMeta(listWatchDomainConfig{
 			name:   "cluster-crds",
 			checks: []listWatchCheck{crdListWatchCheck},
 			registerInformer: func() error {
@@ -429,7 +430,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			},
 		}, crdMeta)),
 
-		accessListRegistration(runtimeAccess, listDomainConfig{
+		"cluster-custom": accessListRegistration(runtimeAccess, listDomainConfig{
 			name: "cluster-custom",
 			register: func(_ domainpermissions.AllowedResources) error {
 				return snapshot.RegisterClusterCustomDomain(
@@ -441,11 +442,11 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			},
 		}),
 
-		directRegistration("cluster-events", func() error {
+		"cluster-events": directRegistration("cluster-events", func() error {
 			return snapshot.RegisterClusterEventsDomain(deps.registry, deps.informerFactory.SharedInformerFactory(), snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName})
 		}),
 
-		accessListRegistration(runtimeAccess, listDomainConfig{
+		"cluster-rbac": accessListRegistration(runtimeAccess, listDomainConfig{
 			name: "cluster-rbac",
 			register: func(allowed domainpermissions.AllowedResources) error {
 				return snapshot.RegisterClusterRBACDomain(
@@ -458,7 +459,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			},
 		}),
 
-		listWatchRegistration(listWatchDomainConfig{
+		"cluster-storage": listWatchRegistration(listWatchDomainConfig{
 			name:          "cluster-storage",
 			issueResource: "core/persistentvolumes",
 			logGroup:      "",
@@ -477,7 +478,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			deniedReason: "core/persistentvolumes",
 		}),
 
-		accessListRegistration(runtimeAccess, listDomainConfig{
+		"namespace-workloads": accessListRegistration(runtimeAccess, listDomainConfig{
 			name: "namespace-workloads",
 			register: func(allowed domainpermissions.AllowedResources) error {
 				return snapshot.RegisterNamespaceWorkloadsDomain(
@@ -498,14 +499,14 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 				)
 			},
 		}),
-		directRegistration("namespace-autoscaling", func() error {
+		"namespace-autoscaling": directRegistration("namespace-autoscaling", func() error {
 			return snapshot.RegisterNamespaceAutoscalingDomain(
 				deps.registry,
 				deps.informerFactory.SharedInformerFactory(),
 				snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
 			)
 		}),
-		accessListRegistration(runtimeAccess, listDomainConfig{
+		"namespace-config": accessListRegistration(runtimeAccess, listDomainConfig{
 			name: "namespace-config",
 			register: func(allowed domainpermissions.AllowedResources) error {
 				return snapshot.RegisterNamespaceConfigDomain(
@@ -518,7 +519,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			},
 		}),
 
-		withRequire(accessListRegistration(runtimeAccess, listDomainConfig{
+		"namespace-custom": withRequire(accessListRegistration(runtimeAccess, listDomainConfig{
 			name: "namespace-custom",
 			register: func(_ domainpermissions.AllowedResources) error {
 				return snapshot.RegisterNamespaceCustomDomain(
@@ -533,17 +534,17 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			return deps.cfg.DynamicClient != nil
 		})),
 
-		directRegistration("namespace-events", func() error {
+		"namespace-events": directRegistration("namespace-events", func() error {
 			return snapshot.RegisterNamespaceEventsDomain(deps.registry, deps.informerFactory.SharedInformerFactory(), snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName})
 		}),
-		directRegistration("namespace-helm", func() error {
+		"namespace-helm": directRegistration("namespace-helm", func() error {
 			return snapshot.RegisterNamespaceHelmDomain(
 				deps.registry,
 				deps.informerFactory.HelmStorage(),
 				snapshot.ClusterMeta{ClusterID: deps.cfg.ClusterID, ClusterName: deps.cfg.ClusterName},
 			)
 		}),
-		accessListRegistration(runtimeAccess, listDomainConfig{
+		"namespace-network": accessListRegistration(runtimeAccess, listDomainConfig{
 			name: "namespace-network",
 			register: func(allowed domainpermissions.AllowedResources) error {
 				return snapshot.RegisterNamespaceNetworkDomainWithGatewayAPI(
@@ -556,7 +557,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 				)
 			},
 		}),
-		accessListRegistration(runtimeAccess, listDomainConfig{
+		"namespace-quotas": accessListRegistration(runtimeAccess, listDomainConfig{
 			name: "namespace-quotas",
 			register: func(allowed domainpermissions.AllowedResources) error {
 				return snapshot.RegisterNamespaceQuotasDomain(
@@ -569,7 +570,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			},
 		}),
 
-		accessListRegistration(runtimeAccess, listDomainConfig{
+		"namespace-rbac": accessListRegistration(runtimeAccess, listDomainConfig{
 			name: "namespace-rbac",
 			register: func(allowed domainpermissions.AllowedResources) error {
 				return snapshot.RegisterNamespaceRBACDomain(
@@ -582,7 +583,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			},
 		}),
 
-		directRegistration("namespace-storage", func() error {
+		"namespace-storage": directRegistration("namespace-storage", func() error {
 			return snapshot.RegisterNamespaceStorageDomain(
 				deps.registry,
 				deps.informerFactory.SharedInformerFactory(),
@@ -591,7 +592,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			)
 		}),
 
-		directRegistration("pods", func() error {
+		"pods": directRegistration("pods", func() error {
 			return snapshot.RegisterPodDomain(
 				deps.registry,
 				deps.metricsProvider,
@@ -600,22 +601,22 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			)
 		}),
 
-		directRegistration("object-details", func() error {
+		"object-details": directRegistration("object-details", func() error {
 			return snapshot.RegisterObjectDetailsDomain(
 				deps.registry,
 				deps.cfg.ObjectDetailsProvider,
 			)
 		}),
-		withSkipUnless(directRegistration("object-yaml", func() error {
+		"object-yaml": withSkipUnless(directRegistration("object-yaml", func() error {
 			return snapshot.RegisterObjectYAMLDdomain(deps.registry, yamlProvider)
 		}), func() bool { return yamlOK }),
-		withSkipUnless(directRegistration("object-helm-manifest", func() error {
+		"object-helm-manifest": withSkipUnless(directRegistration("object-helm-manifest", func() error {
 			return snapshot.RegisterObjectHelmManifestDomain(deps.registry, helmProvider)
 		}), func() bool { return helmOK }),
-		withSkipUnless(directRegistration("object-helm-values", func() error {
+		"object-helm-values": withSkipUnless(directRegistration("object-helm-values", func() error {
 			return snapshot.RegisterObjectHelmValuesDomain(deps.registry, helmProvider)
 		}), func() bool { return helmOK }),
-		directRegistration("object-events", func() error {
+		"object-events": directRegistration("object-events", func() error {
 			notifier, err := snapshot.RegisterObjectEventsDomain(deps.registry, deps.cfg.KubernetesClient, deps.informerFactory.SharedInformerFactory())
 			if err != nil {
 				return err
@@ -625,7 +626,7 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 			}
 			return nil
 		}),
-		directRegistration("object-map", func() error {
+		"object-map": directRegistration("object-map", func() error {
 			return snapshot.RegisterObjectMapDomain(
 				deps.registry,
 				snapshot.ObjectMapDomainConfig{
@@ -636,10 +637,53 @@ func domainRegistrations(deps registrationDeps) []domainRegistration {
 				},
 			)
 		}),
-		directRegistration("object-maintenance", func() error {
+		"object-maintenance": directRegistration("object-maintenance", func() error {
 			return snapshot.RegisterNodeMaintenanceDomain(deps.registry, deps.cfg.NodeMaintenanceStore)
 		}),
 	}
+	return mustOrderDomainRegistrationCallbacks(callbacks)
+}
+
+func mustOrderDomainRegistrationCallbacks(callbacks map[string]domainRegistration) []domainRegistration {
+	registrations, err := orderDomainRegistrationCallbacks(domain.Policies(), callbacks)
+	if err != nil {
+		panic(err)
+	}
+	return registrations
+}
+
+func orderDomainRegistrationCallbacks(
+	policies []domain.DomainPolicy,
+	callbacks map[string]domainRegistration,
+) ([]domainRegistration, error) {
+	remaining := make(map[string]domainRegistration, len(callbacks))
+	for domainName, callback := range callbacks {
+		remaining[domainName] = callback
+	}
+	registrations := make([]domainRegistration, 0, len(callbacks))
+	for _, policy := range policies {
+		if policy.Backend.Registration == domain.BackendRegistrationStreamOnly {
+			continue
+		}
+		callback, ok := remaining[policy.Domain]
+		if !ok {
+			return nil, fmt.Errorf("refresh registration callback missing for %s", policy.Domain)
+		}
+		if callback.name != policy.Domain {
+			return nil, fmt.Errorf("refresh registration callback %s returns domain %s", policy.Domain, callback.name)
+		}
+		registrations = append(registrations, callback)
+		delete(remaining, policy.Domain)
+	}
+	if len(remaining) > 0 {
+		unknown := make([]string, 0, len(remaining))
+		for domainName := range remaining {
+			unknown = append(unknown, domainName)
+		}
+		sort.Strings(unknown)
+		return nil, fmt.Errorf("refresh registration callbacks have unknown domains: %s", strings.Join(unknown, ", "))
+	}
+	return registrations, nil
 }
 
 func clusterAttentionRegistration(deps registrationDeps, access domainpermissions.RuntimeAccess) domainRegistration {

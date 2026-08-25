@@ -454,9 +454,6 @@ func (s *Service) shouldCacheSnapshot(snap *refresh.Snapshot) bool {
 	if snap == nil {
 		return false
 	}
-	if snap.Domain == "object-maintenance" {
-		return false
-	}
 	// Avoid caching partial snapshots so follow-up requests can rehydrate cleanly.
 	if snap.Stats.Truncated {
 		return false
@@ -480,12 +477,7 @@ func (s *Service) shouldBypassSingleflight(domainName string) bool {
 }
 
 func (s *Service) shouldBypassSnapshotCache(domainName string) bool {
-	switch domainName {
-	case "pods", "namespace-workloads", "namespace-metrics", "nodes", "object-details":
-		return true
-	default:
-		return false
-	}
+	return domain.BypassesSnapshotCache(domainName)
 }
 
 func newSourceVersionEpoch(meta ClusterMeta) string {

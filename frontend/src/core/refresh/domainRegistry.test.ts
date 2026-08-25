@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   DOMAIN_REFRESHER_MAP,
   DOMAIN_STREAM_MAP,
+  frontendRefreshDomainPolicies,
   getRefreshDomainDescriptor,
+  METRIC_DEMAND_DOMAINS,
   PRIORITY_DOMAINS,
   REFRESH_DOMAIN_DESCRIPTORS,
   REFRESHER_TIMING_BY_NAME,
@@ -16,6 +18,53 @@ import {
 } from './refresherTypes';
 
 describe('refresh domain registry', () => {
+  it('preserves frontend registration order from generated policy', () => {
+    expect(frontendRefreshDomainPolicies.map((policy) => policy.domain)).toEqual([
+      'namespaces',
+      'namespace-metrics',
+      'object-events',
+      'cluster-overview',
+      'cluster-attention',
+      'object-maintenance',
+      'object-details',
+      'object-map',
+      'object-yaml',
+      'object-helm-manifest',
+      'object-helm-values',
+      'container-logs',
+      'pods',
+      'catalog',
+      'catalog-diff',
+      'cluster-events',
+      'nodes',
+      'cluster-rbac',
+      'cluster-storage',
+      'cluster-config',
+      'cluster-crds',
+      'cluster-custom',
+      'namespace-events',
+      'namespace-workloads',
+      'namespace-config',
+      'namespace-network',
+      'namespace-rbac',
+      'namespace-storage',
+      'namespace-autoscaling',
+      'namespace-quotas',
+      'namespace-custom',
+      'namespace-helm',
+    ]);
+  });
+
+  it('derives metrics demand from the generated source clocks', () => {
+    expect(METRIC_DEMAND_DOMAINS).toEqual([
+      'namespace-metrics',
+      'cluster-overview',
+      'nodes',
+      'namespace-workloads',
+      'pods',
+    ]);
+  });
+
   it('covers every static refresher name with registry timing', () => {
     const staticRefresherNames: StaticRefresherName[] = [
       ...Object.values(SYSTEM_REFRESHERS),

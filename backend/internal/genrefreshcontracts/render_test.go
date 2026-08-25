@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -44,8 +45,106 @@ func TestRenderEmitsBackendOwnedRefreshContract(t *testing.T) {
 	require.Contains(t, contract, "export interface ResourceStreamServerMessage")
 	require.Contains(t, contract, "export const RESOURCE_STREAM_MESSAGE_TYPES = [")
 	require.Contains(t, contract, "export const RESOURCE_STREAM_SIGNALS = [")
+	require.Contains(t, contract, "export const REFRESH_DOMAIN_POLICIES = [")
+	require.Contains(t, contract, "registrationOrder: 0,")
+	require.Contains(t, contract, "scheduled: false,")
 	require.Contains(t, contract, "export interface BackendDomainPayloadMap")
 	require.Contains(t, contract, "'object-maintenance': NodeMaintenanceSnapshotPayload;")
+}
+
+func TestRenderEmitsTypedGoDomainPolicy(t *testing.T) {
+	generated, err := RenderGoPolicy()
+	require.NoError(t, err)
+
+	contract := string(generated)
+	require.Contains(t, contract, "package domain")
+	require.Contains(t, contract, "var authoredDomainPolicies = []DomainPolicy{")
+	require.Contains(t, contract, `Domain: "namespaces"`)
+	require.Contains(t, contract, "func Policies() []DomainPolicy")
+	require.Contains(t, contract, "func LookupPolicy(domainName string) (DomainPolicy, bool)")
+	require.Contains(t, contract, "func BypassesSnapshotCache(domainName string) bool")
+}
+
+func TestAuthoredPolicySchemaRejectsUnknownAndDuplicateValues(t *testing.T) {
+	valid := `{
+  "version": 2,
+  "domainInventory": {
+    "demo": {"refreshPayloadType": "DemoPayload", "cachePolicy": "snapshot-cache"}
+  },
+  "resourceStream": {},
+  "domains": [{
+    "domain": "demo",
+    "category": "system",
+    "sourceClocks": ["object"],
+    "backend": {"registration": "direct", "permission": "exempt", "resourceStream": false},
+    "frontend": {
+      "refresherName": "demo",
+      "orchestrator": "snapshot",
+      "diagnosticsStream": null,
+      "timing": {"interval": 1000, "cooldown": 500, "timeout": 10},
+      "registrationOrder": 0
+    }
+  }]
+}`
+
+	tests := []struct {
+		name        string
+		contract    string
+		errorPhrase string
+	}{
+		{
+			name:        "unknown cache policy",
+			contract:    strings.Replace(valid, `"snapshot-cache"`, `"mystery-cache"`, 1),
+			errorPhrase: `unsupported cachePolicy "mystery-cache"`,
+		},
+		{
+			name:        "unknown orchestrator",
+			contract:    strings.Replace(valid, `"snapshot"`, `"mystery-orchestrator"`, 1),
+			errorPhrase: `unsupported frontend.orchestrator "mystery-orchestrator"`,
+		},
+		{
+			name:        "duplicate source clock",
+			contract:    strings.Replace(valid, `["object"]`, `["object", "object"]`, 1),
+			errorPhrase: `declares source clock "object" more than once`,
+		},
+		{
+			name:        "missing frontend order",
+			contract:    strings.Replace(valid, ",\n      \"registrationOrder\": 0", "", 1),
+			errorPhrase: `missing frontend.registrationOrder`,
+		},
+		{
+			name:        "unknown field",
+			contract:    strings.Replace(valid, `"domain": "demo",`, `"domain": "demo", "mystery": true,`, 1),
+			errorPhrase: `unknown field "mystery"`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parseContractDomains([]byte(test.contract))
+			require.ErrorContains(t, err, test.errorPhrase)
+		})
+	}
+}
+
+func TestAuthoredPolicySchemaRejectsDuplicateDomainAndFrontendOrder(t *testing.T) {
+	duplicateDomain := `{
+  "version": 2,
+  "domainInventory": {"demo": {"refreshPayloadType": "DemoPayload", "cachePolicy": "snapshot-cache"}},
+  "resourceStream": {},
+  "domains": [
+    {"domain":"demo","category":"system","backend":{"registration":"direct","permission":"exempt","resourceStream":false},"frontend":{"refresherName":"demo","orchestrator":"snapshot","diagnosticsStream":null,"timing":{"interval":1,"cooldown":1,"timeout":1},"registrationOrder":0}},
+    {"domain":"demo","category":"system","backend":{"registration":"direct","permission":"exempt","resourceStream":false},"frontend":{"refresherName":"demo","orchestrator":"snapshot","diagnosticsStream":null,"timing":{"interval":1,"cooldown":1,"timeout":1},"registrationOrder":0}}
+  ]
+}`
+	_, err := parseContractDomains([]byte(duplicateDomain))
+	require.ErrorContains(t, err, `registers "demo" more than once`)
+
+	duplicateOrder := strings.ReplaceAll(duplicateDomain, `"demo"`, `"demo-a"`)
+	duplicateOrder = strings.Replace(duplicateOrder, `"demo-a":`, `"demo-a":{"refreshPayloadType":"DemoPayload","cachePolicy":"snapshot-cache"},"demo-b":`, 1)
+	duplicateOrder = strings.Replace(duplicateOrder, `"domain":"demo-a"`, `"domain":"demo-b"`, 1)
+	_, err = parseContractDomains([]byte(duplicateOrder))
+	require.ErrorContains(t, err, `share frontend.registrationOrder 0`)
 }
 
 func TestContractDomainsMatchAuthoredDomainInventory(t *testing.T) {

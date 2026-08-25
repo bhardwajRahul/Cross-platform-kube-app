@@ -749,6 +749,7 @@
       "frontend": {
         "refresherName": "namespaces",
         "orchestrator": "doorbell-snapshot",
+        "registrationOrder": 0,
         "diagnosticsStream": "resources",
         "timing": { "interval": 2000, "cooldown": 1000, "timeout": 10 },
         "priority": 0
@@ -762,6 +763,7 @@
       "frontend": {
         "refresherName": "namespace-metrics",
         "orchestrator": "doorbell-snapshot",
+        "registrationOrder": 1,
         "diagnosticsStream": "resources",
         "timing": { "interval": 5000, "cooldown": 1000, "timeout": 10 },
         "priority": 0
@@ -775,6 +777,7 @@
       "frontend": {
         "refresherName": "cluster-overview",
         "orchestrator": "doorbell-snapshot",
+        "registrationOrder": 3,
         "diagnosticsStream": "resources",
         "timing": { "interval": 10000, "cooldown": 1000, "timeout": 10 },
         "priority": 3
@@ -788,6 +791,7 @@
       "frontend": {
         "refresherName": "cluster-attention",
         "orchestrator": "doorbell-snapshot",
+        "registrationOrder": 4,
         "diagnosticsStream": "resources",
         "timing": { "interval": 5000, "cooldown": 500, "timeout": 10 },
         "priority": 1
@@ -801,6 +805,7 @@
       "frontend": {
         "refresherName": "catalog",
         "orchestrator": "catalog-stream",
+        "registrationOrder": 13,
         "diagnosticsStream": "catalog",
         "timing": { "interval": 15000, "cooldown": 1500, "timeout": 30 },
         "priority": 4
@@ -813,6 +818,7 @@
       "frontend": {
         "refresherName": "catalog-diff",
         "orchestrator": "snapshot",
+        "registrationOrder": 14,
         "diagnosticsStream": null,
         "timing": { "interval": 15000, "cooldown": 1500, "timeout": 30 }
       }
@@ -825,6 +831,7 @@
       "frontend": {
         "refresherName": "cluster-nodes",
         "orchestrator": "resource-stream",
+        "registrationOrder": 16,
         "diagnosticsStream": "resources",
         "timing": { "interval": 5000, "cooldown": 1000, "timeout": 10 },
         "priority": 1
@@ -838,6 +845,7 @@
       "frontend": {
         "refresherName": "cluster-config",
         "orchestrator": "resource-stream",
+        "registrationOrder": 19,
         "diagnosticsStream": "resources",
         "timing": { "interval": 10000, "cooldown": 1000, "timeout": 10 }
       }
@@ -850,6 +858,7 @@
       "frontend": {
         "refresherName": "cluster-crds",
         "orchestrator": "resource-stream",
+        "registrationOrder": 20,
         "diagnosticsStream": "resources",
         "timing": { "interval": 15000, "cooldown": 1000, "timeout": 60 }
       }
@@ -862,6 +871,7 @@
       "frontend": {
         "refresherName": "cluster-custom",
         "orchestrator": "resource-stream",
+        "registrationOrder": 21,
         "diagnosticsStream": "resources",
         "timing": { "interval": 15000, "cooldown": 1000, "timeout": 60 }
       }
@@ -874,6 +884,7 @@
       "frontend": {
         "refresherName": "cluster-events",
         "orchestrator": "event-stream",
+        "registrationOrder": 15,
         "diagnosticsStream": "events",
         "timing": { "interval": 3000, "cooldown": 1000, "timeout": 10 }
       }
@@ -886,6 +897,7 @@
       "frontend": {
         "refresherName": "cluster-rbac",
         "orchestrator": "resource-stream",
+        "registrationOrder": 17,
         "diagnosticsStream": "resources",
         "timing": { "interval": 10000, "cooldown": 1000, "timeout": 10 }
       }
@@ -898,6 +910,7 @@
       "frontend": {
         "refresherName": "cluster-storage",
         "orchestrator": "resource-stream",
+        "registrationOrder": 18,
         "diagnosticsStream": "resources",
         "timing": { "interval": 10000, "cooldown": 1000, "timeout": 10 }
       }
@@ -910,6 +923,7 @@
       "frontend": {
         "refresherName": "workloads",
         "orchestrator": "resource-stream",
+        "registrationOrder": 23,
         "diagnosticsStream": "resources",
         "timing": { "interval": 5000, "cooldown": 500, "timeout": 10 },
         "priority": 5
@@ -923,6 +937,7 @@
       "frontend": {
         "refresherName": "autoscaling",
         "orchestrator": "resource-stream",
+        "registrationOrder": 28,
         "diagnosticsStream": "resources",
         "timing": { "interval": 5000, "cooldown": 1000, "timeout": 10 }
       }
@@ -935,6 +950,7 @@
       "frontend": {
         "refresherName": "config",
         "orchestrator": "resource-stream",
+        "registrationOrder": 24,
         "diagnosticsStream": "resources",
         "timing": { "interval": 5000, "cooldown": 1000, "timeout": 10 }
       }
@@ -947,6 +963,7 @@
       "frontend": {
         "refresherName": "custom",
         "orchestrator": "resource-stream",
+        "registrationOrder": 30,
         "diagnosticsStream": "resources",
         "timing": { "interval": 10000, "cooldown": 1000, "timeout": 60 }
       }
@@ -959,6 +976,7 @@
       "frontend": {
         "refresherName": "events",
         "orchestrator": "event-stream",
+        "registrationOrder": 22,
         "diagnosticsStream": "events",
         "timing": { "interval": 3000, "cooldown": 1000, "timeout": 10 }
       }
@@ -971,6 +989,7 @@
       "frontend": {
         "refresherName": "helm",
         "orchestrator": "resource-stream",
+        "registrationOrder": 31,
         "diagnosticsStream": "resources",
         "timing": { "interval": 10000, "cooldown": 1000, "timeout": 10 }
       }
@@ -983,6 +1002,7 @@
       "frontend": {
         "refresherName": "network",
         "orchestrator": "resource-stream",
+        "registrationOrder": 25,
         "diagnosticsStream": "resources",
         "timing": { "interval": 5000, "cooldown": 1000, "timeout": 10 }
       }
@@ -995,6 +1015,7 @@
       "frontend": {
         "refresherName": "quotas",
         "orchestrator": "resource-stream",
+        "registrationOrder": 29,
         "diagnosticsStream": "resources",
         "timing": { "interval": 10000, "cooldown": 1000, "timeout": 10 }
       }
@@ -1007,6 +1028,7 @@
       "frontend": {
         "refresherName": "rbac",
         "orchestrator": "resource-stream",
+        "registrationOrder": 26,
         "diagnosticsStream": "resources",
         "timing": { "interval": 10000, "cooldown": 1000, "timeout": 10 }
       }
@@ -1019,6 +1041,7 @@
       "frontend": {
         "refresherName": "storage",
         "orchestrator": "resource-stream",
+        "registrationOrder": 27,
         "diagnosticsStream": "resources",
         "timing": { "interval": 10000, "cooldown": 1000, "timeout": 10 }
       }
@@ -1031,6 +1054,7 @@
       "frontend": {
         "refresherName": "unified-pods",
         "orchestrator": "resource-stream",
+        "registrationOrder": 12,
         "diagnosticsStream": "resources",
         "timing": { "interval": 5000, "cooldown": 1000, "timeout": 30 }
       }
@@ -1042,6 +1066,8 @@
       "frontend": {
         "refresherName": "object-details",
         "orchestrator": "snapshot",
+        "registrationOrder": 6,
+        "scheduled": false,
         "diagnosticsStream": null,
         "timing": { "interval": 10000, "cooldown": 1000, "timeout": 10 }
       }
@@ -1053,6 +1079,7 @@
       "frontend": {
         "refresherName": "object-yaml",
         "orchestrator": "snapshot",
+        "registrationOrder": 8,
         "diagnosticsStream": null,
         "timing": { "interval": 5000, "cooldown": 1000, "timeout": 10 }
       }
@@ -1064,6 +1091,7 @@
       "frontend": {
         "refresherName": "object-helm-manifest",
         "orchestrator": "snapshot",
+        "registrationOrder": 9,
         "diagnosticsStream": null,
         "timing": { "interval": 5000, "cooldown": 1000, "timeout": 10 }
       }
@@ -1075,6 +1103,7 @@
       "frontend": {
         "refresherName": "object-helm-values",
         "orchestrator": "snapshot",
+        "registrationOrder": 10,
         "diagnosticsStream": null,
         "timing": { "interval": 5000, "cooldown": 1000, "timeout": 10 }
       }
@@ -1087,6 +1116,7 @@
       "frontend": {
         "refresherName": "object-events",
         "orchestrator": "doorbell-snapshot",
+        "registrationOrder": 2,
         "diagnosticsStream": "resources",
         "timing": { "interval": 10000, "cooldown": 1000, "timeout": 10 }
       }
@@ -1098,6 +1128,7 @@
       "frontend": {
         "refresherName": "object-map",
         "orchestrator": "snapshot",
+        "registrationOrder": 7,
         "diagnosticsStream": null,
         "timing": { "interval": 5000, "cooldown": 1000, "timeout": 10 }
       }
@@ -1109,6 +1140,7 @@
       "frontend": {
         "refresherName": "object-maintenance",
         "orchestrator": "snapshot",
+        "registrationOrder": 5,
         "diagnosticsStream": null,
         "timing": { "interval": 5000, "cooldown": 1000, "timeout": 10 },
         "priority": 2
@@ -1121,6 +1153,7 @@
       "frontend": {
         "refresherName": "container-logs",
         "orchestrator": "container-logs-stream",
+        "registrationOrder": 11,
         "diagnosticsStream": "container-logs",
         "timing": { "interval": 5000, "cooldown": 1000, "timeout": 10 }
       }

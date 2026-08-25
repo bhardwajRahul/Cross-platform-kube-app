@@ -55,7 +55,8 @@ Applies to Go code under `backend/`.
 	`backend/internal/genrefreshcontracts`; register new DTO and enum types there,
 	set each domain's `refreshPayloadType` in
 	`backend/refresh/domain/refresh-domain-contract.json`, then run
-	`mise exec -- go generate ./backend`.
+	`mise exec -- go generate ./backend`. The same generator owns
+	`backend/refresh/domain/policy_generated.go`; never hand-edit either output.
 - Permission-gated domains: use `RegisterPermissionDeniedDomain` in `backend/refresh/snapshot/permission.go` and surface `PermissionIssue` entries through the refresh system permission-gate paths.
 - Manual refresh entrypoint: `/api/v2/refresh/{domain}` in `backend/refresh/api/server.go`, backed by `ManualQueue` in `backend/refresh/types.go`.
 - Per-cluster stream endpoints are wired in `backend/refresh/system/streams.go`;

@@ -104,6 +104,33 @@ func TestDomainRegistrationOrder(t *testing.T) {
 	require.Equal(t, expected, actual)
 }
 
+func TestDomainRegistrationCallbackOrderingRejectsMissingAndUnknownBindings(t *testing.T) {
+	policies := []domain.DomainPolicy{
+		{Domain: "first", Backend: domain.BackendPolicy{Registration: domain.BackendRegistrationDirect}},
+		{Domain: "stream-only", Backend: domain.BackendPolicy{Registration: domain.BackendRegistrationStreamOnly}},
+	}
+
+	_, err := orderDomainRegistrationCallbacks(policies, map[string]domainRegistration{})
+	require.EqualError(t, err, "refresh registration callback missing for first")
+
+	_, err = orderDomainRegistrationCallbacks(policies, map[string]domainRegistration{
+		"first":   directRegistration("first", func() error { return nil }),
+		"mystery": directRegistration("mystery", func() error { return nil }),
+	})
+	require.EqualError(t, err, "refresh registration callbacks have unknown domains: mystery")
+
+	_, err = orderDomainRegistrationCallbacks(policies, map[string]domainRegistration{
+		"first": directRegistration("wrong", func() error { return nil }),
+	})
+	require.EqualError(t, err, "refresh registration callback first returns domain wrong")
+}
+
+func TestMustOrderDomainRegistrationCallbacksPanicsOnInvalidBindings(t *testing.T) {
+	require.PanicsWithError(t, "refresh registration callback missing for namespaces", func() {
+		mustOrderDomainRegistrationCallbacks(map[string]domainRegistration{})
+	})
+}
+
 func TestDomainRegistrationRunnerRegistersPermissionDenial(t *testing.T) {
 	registry := domain.New()
 	runner := domainRegistrationRunner{

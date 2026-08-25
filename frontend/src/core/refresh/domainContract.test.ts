@@ -4,6 +4,7 @@ import { requireValue } from '@/test-utils/requireValue';
 import {
   DOMAIN_REFRESHER_MAP,
   DOMAIN_STREAM_MAP,
+  frontendRefreshDomainPolicies,
   getRefreshDomainDescriptor,
   REFRESH_DOMAIN_DESCRIPTORS,
   refreshDomainContract,
@@ -26,6 +27,9 @@ const streamManagerMocks = vi.hoisted(() => ({
   resourceStart: vi.fn(),
   resourceStop: vi.fn(),
   resourceRefreshOnce: vi.fn(),
+  containerStart: vi.fn(),
+  containerStop: vi.fn(),
+  containerRefreshOnce: vi.fn(),
 }));
 
 vi.mock('./RefreshManager', () => ({
@@ -46,9 +50,9 @@ vi.mock('./client', () => ({
 
 vi.mock('./streaming/containerLogsStreamManager', () => ({
   containerLogsStreamManager: {
-    startStream: vi.fn(),
-    stop: vi.fn(),
-    refreshOnce: vi.fn(),
+    startStream: streamManagerMocks.containerStart,
+    stop: streamManagerMocks.containerStop,
+    refreshOnce: streamManagerMocks.containerRefreshOnce,
   },
 }));
 
@@ -88,14 +92,19 @@ type ContractDomain = {
       timeout: number;
     };
     priority?: number;
+    registrationOrder: number;
+    scheduled?: boolean;
   };
 };
 
 type RegisteredDomain = {
   category: DomainCategory;
   refresherName: string;
+  scheduled?: boolean;
   streaming?: {
     start?: (scope: string) => Promise<(() => void) | undefined> | (() => void);
+    stop?: (scope: string, options?: { reset?: boolean }) => void;
+    refreshOnce?: (scope: string) => Promise<void> | void;
   };
 };
 
@@ -298,6 +307,9 @@ describe('refresh domain contract', () => {
     );
     expect(new Set(Object.keys(REFRESH_DOMAIN_DESCRIPTORS))).toEqual(new Set(contractDomains));
     expect(new Set(registeredDomains().keys())).toEqual(new Set(contractDomains));
+    expect([...registeredDomains().keys()]).toEqual(
+      frontendRefreshDomainPolicies.map((policy) => policy.domain)
+    );
 
     const resourceStreamDomains = new Set<RefreshDomain>(RESOURCE_STREAM_DOMAINS);
 
@@ -314,6 +326,7 @@ describe('refresh domain contract', () => {
       expect(descriptor.diagnosticsStream).toBe(entry.frontend.diagnosticsStream ?? undefined);
       expect(descriptor.timing).toEqual(entry.frontend.timing);
       expect(descriptor.priority).toBe(entry.frontend.priority);
+      expect(registration?.scheduled).toBe(entry.frontend.scheduled === false ? false : undefined);
 
       switch (entry.frontend.orchestrator) {
         case 'snapshot':
@@ -392,6 +405,40 @@ describe('refresh domain contract', () => {
     expect(streamManagerMocks.resourceStart).toHaveBeenCalledWith(
       'namespace-events',
       'cluster-a|namespace:prod'
+    );
+  });
+
+  it('routes generated streaming lifecycle callbacks to their managers', async () => {
+    const catalog = registeredDomains().get('catalog')?.streaming;
+    await catalog?.start?.('cluster-a|cluster');
+    catalog?.stop?.('cluster-a|cluster', { reset: true });
+    await catalog?.refreshOnce?.('cluster-a|cluster');
+
+    expect(streamManagerMocks.resourceStart).toHaveBeenCalledWith('catalog', 'cluster-a|cluster');
+    expect(streamManagerMocks.resourceStop).toHaveBeenCalledWith(
+      'catalog',
+      'cluster-a|cluster',
+      true
+    );
+    expect(streamManagerMocks.resourceRefreshOnce).toHaveBeenCalledWith(
+      'catalog',
+      'cluster-a|cluster'
+    );
+
+    const logs = registeredDomains().get('container-logs')?.streaming;
+    await logs?.start?.('cluster-a|pod:default/demo:container:app');
+    logs?.stop?.('cluster-a|pod:default/demo:container:app', { reset: true });
+    await logs?.refreshOnce?.('cluster-a|pod:default/demo:container:app');
+
+    expect(streamManagerMocks.containerStart).toHaveBeenCalledWith(
+      'cluster-a|pod:default/demo:container:app'
+    );
+    expect(streamManagerMocks.containerStop).toHaveBeenCalledWith(
+      'cluster-a|pod:default/demo:container:app',
+      true
+    );
+    expect(streamManagerMocks.containerRefreshOnce).toHaveBeenCalledWith(
+      'cluster-a|pod:default/demo:container:app'
     );
   });
 

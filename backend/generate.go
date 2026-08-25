@@ -8,8 +8,9 @@ package backend
 //go:generate go run ./internal/genappbindings/cmd -out resource_details_generated.go -fetchers-out object_detail_fetchers_generated.go
 
 // Refresh HTTP DTOs and domain-to-payload mappings are backend-owned. Keep the
-// existing frontend import boundary, but generate its wire types from Go.
-//go:generate go run ./internal/genrefreshcontracts/cmd -out ../frontend/src/core/refresh/types.generated.ts
+// existing frontend import boundary, but generate its wire types from Go. The
+// authored JSON also generates the typed backend domain-policy table.
+//go:generate go run ./internal/genrefreshcontracts/cmd -out ../frontend/src/core/refresh/types.generated.ts -go-policy-out refresh/domain/policy_generated.go
 
 // Object-action ids, backend command names, permission templates, labels, and
 // per-kind capabilities are generated from the backend catalog and kind registry.
