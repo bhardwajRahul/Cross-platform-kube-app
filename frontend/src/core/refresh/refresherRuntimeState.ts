@@ -52,78 +52,116 @@ export const initialRefresherRuntimeState = (enabled: boolean): RefresherRuntime
 const intervalTimerFor = (timing: RefresherTimingState): RefresherTimer | undefined =>
   timing.intervalTimer;
 
+const enableRefresher = (state: RefresherRuntimeState): RefresherRuntimeState =>
+  state.intent.status !== 'enabled' ? { ...state, intent: { status: 'enabled' } } : state;
+
+const disableRefresher = (state: RefresherRuntimeState): RefresherRuntimeState =>
+  state.intent.status === 'disabled' &&
+  state.timing.status === 'idle' &&
+  state.execution.status === 'idle'
+    ? state
+    : {
+        intent: { status: 'disabled' },
+        timing: { status: 'idle' },
+        execution: { status: 'idle' },
+      };
+
+const pauseRefresher = (state: RefresherRuntimeState): RefresherRuntimeState =>
+  state.intent.status === 'disabled' || state.intent.status === 'paused'
+    ? state
+    : { ...state, intent: { status: 'paused' }, timing: { status: 'idle' } };
+
+const idleRefresher = (
+  state: RefresherRuntimeState,
+  event: Extract<RefresherRuntimeEvent, { type: 'idle' }>
+): RefresherRuntimeState => ({
+  ...state,
+  timing: {
+    status: 'idle',
+    ...(event.intervalTimer !== undefined ? { intervalTimer: event.intervalTimer } : {}),
+  },
+});
+
+const replaceInterval = (
+  state: RefresherRuntimeState,
+  event: Extract<RefresherRuntimeEvent, { type: 'interval-replaced' }>
+): RefresherRuntimeState => ({
+  ...state,
+  timing: { ...state.timing, intervalTimer: event.intervalTimer },
+});
+
+const startRefresh = (
+  state: RefresherRuntimeState,
+  event: Extract<RefresherRuntimeEvent, { type: 'refresh-started' }>
+): RefresherRuntimeState => ({
+  ...state,
+  execution: { status: 'running', ...event.execution },
+});
+
+const finishRefresh = (
+  state: RefresherRuntimeState,
+  event: Extract<RefresherRuntimeEvent, { type: 'refresh-finished' }>
+): RefresherRuntimeState =>
+  state.execution.status !== 'running' || state.execution.id !== event.executionId
+    ? state
+    : { ...state, execution: { status: 'idle' } };
+
+const startCooldown = (
+  state: RefresherRuntimeState,
+  event: Extract<RefresherRuntimeEvent, { type: 'cooldown-started' }>
+): RefresherRuntimeState => {
+  const intervalTimer = intervalTimerFor(state.timing);
+  return {
+    ...state,
+    timing: {
+      status: 'cooldown',
+      cooldownTimer: event.cooldownTimer,
+      ...(intervalTimer !== undefined ? { intervalTimer } : {}),
+    },
+  };
+};
+
+const finishCooldown = (
+  state: RefresherRuntimeState,
+  event: Extract<RefresherRuntimeEvent, { type: 'cooldown-finished' }>
+): RefresherRuntimeState => {
+  if (state.timing.status !== 'cooldown' || state.timing.cooldownTimer !== event.cooldownTimer) {
+    return state;
+  }
+  return {
+    ...state,
+    timing: {
+      status: 'idle',
+      ...(state.timing.intervalTimer !== undefined
+        ? { intervalTimer: state.timing.intervalTimer }
+        : {}),
+    },
+  };
+};
+
 export const transitionRefresherRuntimeState = (
   state: RefresherRuntimeState,
   event: RefresherRuntimeEvent
 ): RefresherRuntimeState => {
   switch (event.type) {
     case 'enabled':
-      return state.intent.status !== 'enabled'
-        ? { ...state, intent: { status: 'enabled' } }
-        : state;
+      return enableRefresher(state);
     case 'disabled':
-      return state.intent.status === 'disabled' &&
-        state.timing.status === 'idle' &&
-        state.execution.status === 'idle'
-        ? state
-        : {
-            intent: { status: 'disabled' },
-            timing: { status: 'idle' },
-            execution: { status: 'idle' },
-          };
+      return disableRefresher(state);
     case 'paused':
-      return state.intent.status === 'disabled' || state.intent.status === 'paused'
-        ? state
-        : { ...state, intent: { status: 'paused' }, timing: { status: 'idle' } };
+      return pauseRefresher(state);
     case 'idle':
-      return {
-        ...state,
-        timing: {
-          status: 'idle',
-          ...(event.intervalTimer !== undefined ? { intervalTimer: event.intervalTimer } : {}),
-        },
-      };
+      return idleRefresher(state, event);
     case 'interval-replaced':
-      return {
-        ...state,
-        timing: { ...state.timing, intervalTimer: event.intervalTimer },
-      };
+      return replaceInterval(state, event);
     case 'refresh-started':
-      return {
-        ...state,
-        execution: { status: 'running', ...event.execution },
-      };
+      return startRefresh(state, event);
     case 'refresh-finished':
-      return state.execution.status !== 'running' || state.execution.id !== event.executionId
-        ? state
-        : { ...state, execution: { status: 'idle' } };
+      return finishRefresh(state, event);
     case 'cooldown-started':
-      return {
-        ...state,
-        timing: {
-          status: 'cooldown',
-          cooldownTimer: event.cooldownTimer,
-          ...(intervalTimerFor(state.timing) !== undefined
-            ? { intervalTimer: intervalTimerFor(state.timing) }
-            : {}),
-        },
-      };
+      return startCooldown(state, event);
     case 'cooldown-finished':
-      if (
-        state.timing.status !== 'cooldown' ||
-        state.timing.cooldownTimer !== event.cooldownTimer
-      ) {
-        return state;
-      }
-      return {
-        ...state,
-        timing: {
-          status: 'idle',
-          ...(state.timing.intervalTimer !== undefined
-            ? { intervalTimer: state.timing.intervalTimer }
-            : {}),
-        },
-      };
+      return finishCooldown(state, event);
   }
 };
 

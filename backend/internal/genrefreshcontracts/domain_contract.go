@@ -163,92 +163,142 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	return nil
 }
 
+type parsedFrontendDomainPolicy struct {
+	diagnosticsStream string
+	priority          int
+	hasPriority       bool
+	registrationOrder int
+	scheduled         bool
+}
+
+func registeredDomainInventory(
+	registration authoredDomainRegistration,
+	inventoryByDomain map[string]authoredDomainInventory,
+	seenDomains map[string]struct{},
+) (authoredDomainInventory, error) {
+	if registration.Domain == "" {
+		return authoredDomainInventory{}, fmt.Errorf("refresh domain contract contains an empty domain registration")
+	}
+	if _, duplicate := seenDomains[registration.Domain]; duplicate {
+		return authoredDomainInventory{}, fmt.Errorf("refresh domain contract registers %q more than once", registration.Domain)
+	}
+	inventory, ok := inventoryByDomain[registration.Domain]
+	if !ok {
+		return authoredDomainInventory{}, fmt.Errorf("refresh domain %q is missing from domainInventory", registration.Domain)
+	}
+	return inventory, nil
+}
+
+func validateDomainPolicies(
+	registration authoredDomainRegistration,
+	inventory authoredDomainInventory,
+) error {
+	if err := validateKnownValue(registration.Domain, "cachePolicy", inventory.CachePolicy, knownCachePolicies); err != nil {
+		return err
+	}
+	if err := validateKnownValue(registration.Domain, "category", registration.Category, knownDomainCategories); err != nil {
+		return err
+	}
+	if err := validateKnownValue(registration.Domain, "backend.registration", registration.Backend.Registration, knownBackendRegistrations); err != nil {
+		return err
+	}
+	if err := validateKnownValue(registration.Domain, "backend.permission", registration.Backend.Permission, knownBackendPermissions); err != nil {
+		return err
+	}
+	return validateKnownValue(registration.Domain, "frontend.orchestrator", registration.Frontend.Orchestrator, knownFrontendOrchestrators)
+}
+
+func parseFrontendDomainPolicy(
+	registration authoredDomainRegistration,
+	inventorySize int,
+	seenFrontendOrder map[int]string,
+) (parsedFrontendDomainPolicy, error) {
+	if registration.Frontend.RefresherName == "" {
+		return parsedFrontendDomainPolicy{}, fmt.Errorf("refresh domain %q has an empty frontend.refresherName", registration.Domain)
+	}
+	if registration.Frontend.Timing.Interval <= 0 || registration.Frontend.Timing.Cooldown <= 0 || registration.Frontend.Timing.Timeout <= 0 {
+		return parsedFrontendDomainPolicy{}, fmt.Errorf("refresh domain %q has non-positive frontend timing", registration.Domain)
+	}
+	if registration.Frontend.Priority != nil && *registration.Frontend.Priority < 0 {
+		return parsedFrontendDomainPolicy{}, fmt.Errorf("refresh domain %q has a negative frontend priority", registration.Domain)
+	}
+	if registration.Frontend.RegistrationOrder == nil {
+		return parsedFrontendDomainPolicy{}, fmt.Errorf("refresh domain %q is missing frontend.registrationOrder", registration.Domain)
+	}
+	registrationOrder := *registration.Frontend.RegistrationOrder
+	if registrationOrder < 0 || registrationOrder >= inventorySize {
+		return parsedFrontendDomainPolicy{}, fmt.Errorf("refresh domain %q has out-of-range frontend.registrationOrder %d", registration.Domain, registrationOrder)
+	}
+	if previous, duplicate := seenFrontendOrder[registrationOrder]; duplicate {
+		return parsedFrontendDomainPolicy{}, fmt.Errorf("refresh domains %q and %q share frontend.registrationOrder %d", previous, registration.Domain, registrationOrder)
+	}
+	diagnosticsStream, err := decodeNullableString(registration.Frontend.DiagnosticsStream)
+	if err != nil {
+		return parsedFrontendDomainPolicy{}, fmt.Errorf("refresh domain %q frontend.diagnosticsStream: %w", registration.Domain, err)
+	}
+	if diagnosticsStream != "" {
+		if err := validateKnownValue(registration.Domain, "frontend.diagnosticsStream", diagnosticsStream, knownDiagnosticsStreams); err != nil {
+			return parsedFrontendDomainPolicy{}, err
+		}
+	}
+
+	policy := parsedFrontendDomainPolicy{
+		diagnosticsStream: diagnosticsStream,
+		hasPriority:       registration.Frontend.Priority != nil,
+		registrationOrder: registrationOrder,
+		scheduled:         true,
+	}
+	if registration.Frontend.Scheduled != nil {
+		policy.scheduled = *registration.Frontend.Scheduled
+	}
+	if policy.hasPriority {
+		policy.priority = *registration.Frontend.Priority
+	}
+	return policy, nil
+}
+
+func validateDomainSourceClocks(registration authoredDomainRegistration) error {
+	seenClocks := make(map[string]struct{}, len(registration.SourceClocks))
+	for _, source := range registration.SourceClocks {
+		if err := validateKnownValue(registration.Domain, "sourceClocks", source, knownSourceClocks); err != nil {
+			return err
+		}
+		if _, duplicate := seenClocks[source]; duplicate {
+			return fmt.Errorf("refresh domain %q declares source clock %q more than once", registration.Domain, source)
+		}
+		seenClocks[source] = struct{}{}
+	}
+	return nil
+}
+
 func contractDomainSpec(
 	registration authoredDomainRegistration,
 	inventoryByDomain map[string]authoredDomainInventory,
 	seenDomains map[string]struct{},
 	seenFrontendOrder map[int]string,
 ) (domainSpec, error) {
-	if registration.Domain == "" {
-		return domainSpec{}, fmt.Errorf("refresh domain contract contains an empty domain registration")
-	}
-	if _, duplicate := seenDomains[registration.Domain]; duplicate {
-		return domainSpec{}, fmt.Errorf("refresh domain contract registers %q more than once", registration.Domain)
-	}
-	inventory, ok := inventoryByDomain[registration.Domain]
-	if !ok {
-		return domainSpec{}, fmt.Errorf("refresh domain %q is missing from domainInventory", registration.Domain)
-	}
-	if err := validateKnownValue(registration.Domain, "cachePolicy", inventory.CachePolicy, knownCachePolicies); err != nil {
-		return domainSpec{}, err
-	}
-	if err := validateKnownValue(registration.Domain, "category", registration.Category, knownDomainCategories); err != nil {
-		return domainSpec{}, err
-	}
-	if err := validateKnownValue(registration.Domain, "backend.registration", registration.Backend.Registration, knownBackendRegistrations); err != nil {
-		return domainSpec{}, err
-	}
-	if err := validateKnownValue(registration.Domain, "backend.permission", registration.Backend.Permission, knownBackendPermissions); err != nil {
-		return domainSpec{}, err
-	}
-	if err := validateKnownValue(registration.Domain, "frontend.orchestrator", registration.Frontend.Orchestrator, knownFrontendOrchestrators); err != nil {
-		return domainSpec{}, err
-	}
-	if registration.Frontend.RefresherName == "" {
-		return domainSpec{}, fmt.Errorf("refresh domain %q has an empty frontend.refresherName", registration.Domain)
-	}
-	if registration.Frontend.Timing.Interval <= 0 || registration.Frontend.Timing.Cooldown <= 0 || registration.Frontend.Timing.Timeout <= 0 {
-		return domainSpec{}, fmt.Errorf("refresh domain %q has non-positive frontend timing", registration.Domain)
-	}
-	if registration.Frontend.Priority != nil && *registration.Frontend.Priority < 0 {
-		return domainSpec{}, fmt.Errorf("refresh domain %q has a negative frontend priority", registration.Domain)
-	}
-	if registration.Frontend.RegistrationOrder == nil {
-		return domainSpec{}, fmt.Errorf("refresh domain %q is missing frontend.registrationOrder", registration.Domain)
-	}
-	registrationOrder := *registration.Frontend.RegistrationOrder
-	if registrationOrder < 0 || registrationOrder >= len(inventoryByDomain) {
-		return domainSpec{}, fmt.Errorf("refresh domain %q has out-of-range frontend.registrationOrder %d", registration.Domain, registrationOrder)
-	}
-	if previous, duplicate := seenFrontendOrder[registrationOrder]; duplicate {
-		return domainSpec{}, fmt.Errorf("refresh domains %q and %q share frontend.registrationOrder %d", previous, registration.Domain, registrationOrder)
-	}
-	diagnosticsStream, err := decodeNullableString(registration.Frontend.DiagnosticsStream)
+	inventory, err := registeredDomainInventory(registration, inventoryByDomain, seenDomains)
 	if err != nil {
-		return domainSpec{}, fmt.Errorf("refresh domain %q frontend.diagnosticsStream: %w", registration.Domain, err)
+		return domainSpec{}, err
 	}
-	if diagnosticsStream != "" {
-		if err := validateKnownValue(registration.Domain, "frontend.diagnosticsStream", diagnosticsStream, knownDiagnosticsStreams); err != nil {
-			return domainSpec{}, err
-		}
+	if err := validateDomainPolicies(registration, inventory); err != nil {
+		return domainSpec{}, err
 	}
-	seenClocks := make(map[string]struct{}, len(registration.SourceClocks))
-	for _, source := range registration.SourceClocks {
-		if err := validateKnownValue(registration.Domain, "sourceClocks", source, knownSourceClocks); err != nil {
-			return domainSpec{}, err
-		}
-		if _, duplicate := seenClocks[source]; duplicate {
-			return domainSpec{}, fmt.Errorf("refresh domain %q declares source clock %q more than once", registration.Domain, source)
-		}
-		seenClocks[source] = struct{}{}
+	frontend, err := parseFrontendDomainPolicy(registration, len(inventoryByDomain), seenFrontendOrder)
+	if err != nil {
+		return domainSpec{}, err
+	}
+	if err := validateDomainSourceClocks(registration); err != nil {
+		return domainSpec{}, err
 	}
 
 	payload, frontendOwned, err := decodePayloadType(inventory.RefreshPayloadType)
 	if err != nil {
 		return domainSpec{}, fmt.Errorf("refresh domain %q refreshPayloadType: %w", registration.Domain, err)
 	}
-	scheduled := true
-	if registration.Frontend.Scheduled != nil {
-		scheduled = *registration.Frontend.Scheduled
-	}
-	priority := 0
-	hasPriority := registration.Frontend.Priority != nil
-	if hasPriority {
-		priority = *registration.Frontend.Priority
-	}
 
 	seenDomains[registration.Domain] = struct{}{}
-	seenFrontendOrder[registrationOrder] = registration.Domain
+	seenFrontendOrder[frontend.registrationOrder] = registration.Domain
 	return domainSpec{
 		domain:                    registration.Domain,
 		payload:                   payload,
@@ -261,14 +311,14 @@ func contractDomainSpec(
 		backendResourceStream:     registration.Backend.ResourceStream,
 		frontendRefresherName:     registration.Frontend.RefresherName,
 		frontendOrchestrator:      registration.Frontend.Orchestrator,
-		frontendDiagnosticsStream: diagnosticsStream,
+		frontendDiagnosticsStream: frontend.diagnosticsStream,
 		frontendTimingInterval:    registration.Frontend.Timing.Interval,
 		frontendTimingCooldown:    registration.Frontend.Timing.Cooldown,
 		frontendTimingTimeout:     registration.Frontend.Timing.Timeout,
-		frontendPriority:          priority,
-		frontendHasPriority:       hasPriority,
-		frontendRegistrationOrder: registrationOrder,
-		frontendScheduled:         scheduled,
+		frontendPriority:          frontend.priority,
+		frontendHasPriority:       frontend.hasPriority,
+		frontendRegistrationOrder: frontend.registrationOrder,
+		frontendScheduled:         frontend.scheduled,
 	}, nil
 }
 

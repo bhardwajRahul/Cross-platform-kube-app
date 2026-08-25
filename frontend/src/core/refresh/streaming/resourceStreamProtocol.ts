@@ -504,136 +504,178 @@ const receiveMessage = (
   ]);
 };
 
+const subscribeSent = (
+  state: ResourceStreamProtocolState,
+  event: Extract<ResourceStreamProtocolEvent, { type: 'subscribe-sent' }>
+): ResourceStreamProtocolTransition => {
+  if (state.phase.status === 'permission-blocked' || state.phase.status === 'stopping') {
+    return transition(state);
+  }
+  return transition({
+    ...state,
+    phase: {
+      status: 'awaiting-ack',
+      expectsReset: event.expectsReset,
+      ...(phaseError(state.phase) ? { errorReason: phaseError(state.phase) } : {}),
+    },
+  });
+};
+
+const connectionOpened = (state: ResourceStreamProtocolState): ResourceStreamProtocolTransition => {
+  if (state.phase.status === 'permission-blocked' || state.phase.status === 'stopping') {
+    return transition(state);
+  }
+  if (state.resume.lastSequence !== undefined) {
+    return transition(
+      {
+        ...state,
+        phase: {
+          status: 'awaiting-ack',
+          expectsReset: false,
+          ...(phaseError(state.phase) ? { errorReason: phaseError(state.phase) } : {}),
+        },
+      },
+      [{ type: 'mark-resync-complete' }, { type: 'send-subscribe' }]
+    );
+  }
+  return transition(state, [
+    {
+      type: 'request-resync',
+      reason: 'reconnect',
+      force: true,
+      ...(phaseError(state.phase) ? { errorReason: phaseError(state.phase) } : {}),
+    },
+  ]);
+};
+
+const connectionLost = (
+  state: ResourceStreamProtocolState,
+  event: Extract<ResourceStreamProtocolEvent, { type: 'connection-lost' }>
+): ResourceStreamProtocolTransition => {
+  if (state.phase.status === 'permission-blocked' || state.phase.status === 'stopping') {
+    return transition(state);
+  }
+  return transition(
+    {
+      ...state,
+      phase: {
+        status: 'connecting',
+        ...(phaseError(state.phase) ? { errorReason: phaseError(state.phase) } : {}),
+      },
+    },
+    [
+      { type: 'mark-resyncing', reason: event.reason },
+      ...(state.resume.lastSequence === undefined
+        ? ([{ type: 'request-resync', reason: event.reason, force: false }] as const)
+        : []),
+    ]
+  );
+};
+
+const attachFlushTimer = (
+  state: ResourceStreamProtocolState,
+  event: Extract<ResourceStreamProtocolEvent, { type: 'flush-timer-attached' }>
+): ResourceStreamProtocolTransition =>
+  state.coalescing.status !== 'waiting-for-timer'
+    ? transition(state)
+    : transition({
+        ...state,
+        coalescing: { ...state.coalescing, status: 'scheduled', timer: event.timer },
+      });
+
+const flushPendingChanges = (
+  state: ResourceStreamProtocolState,
+  event: Extract<ResourceStreamProtocolEvent, { type: 'flush-fired' }>
+): ResourceStreamProtocolTransition => {
+  if (state.coalescing.status !== 'scheduled' || state.coalescing.timer !== event.timer) {
+    return transition(state);
+  }
+  return transition(
+    { ...state, coalescing: { status: 'idle' } },
+    advancePendingEffect(state.coalescing)
+  );
+};
+
+const requestResync = (
+  state: ResourceStreamProtocolState,
+  event: Extract<ResourceStreamProtocolEvent, { type: 'resync-requested' }>
+): ResourceStreamProtocolTransition => {
+  if (
+    state.phase.status === 'resyncing' ||
+    state.phase.status === 'permission-blocked' ||
+    state.phase.status === 'stopping' ||
+    (!event.force && state.lastResyncAt > 0 && event.now - state.lastResyncAt < event.cooldownMs)
+  ) {
+    return transition(state);
+  }
+  return transition(
+    {
+      ...state,
+      phase: {
+        status: 'resyncing',
+        reason: event.reason,
+        ...(event.errorReason ? { errorReason: event.errorReason } : {}),
+      },
+      resume: { ...state.resume, lastSequence: undefined },
+      coalescing: { status: 'idle' },
+      lastResyncAt: event.now,
+    },
+    [
+      ...cancelFlushEffect(state.coalescing),
+      ...advancePendingEffect(state.coalescing, true),
+      ...(event.reason === 'initial'
+        ? []
+        : ([{ type: 'mark-resyncing', reason: event.reason }] as const)),
+    ]
+  );
+};
+
+const completeResync = (state: ResourceStreamProtocolState): ResourceStreamProtocolTransition => {
+  if (state.phase.status !== 'resyncing') {
+    return transition(state);
+  }
+  return transition(
+    {
+      ...state,
+      phase: {
+        status: 'awaiting-ack',
+        expectsReset: true,
+        ...(state.phase.errorReason ? { errorReason: state.phase.errorReason } : {}),
+      },
+    },
+    [{ type: 'mark-resync-complete' }, { type: 'send-subscribe' }]
+  );
+};
+
+const stopProtocol = (state: ResourceStreamProtocolState): ResourceStreamProtocolTransition =>
+  transition(
+    { ...state, phase: { status: 'stopping' }, coalescing: { status: 'idle' } },
+    cancelFlushEffect(state.coalescing)
+  );
+
 export const transitionResourceStreamProtocol = (
   state: ResourceStreamProtocolState,
   event: ResourceStreamProtocolEvent
 ): ResourceStreamProtocolTransition => {
   switch (event.type) {
     case 'subscribe-sent':
-      if (state.phase.status === 'permission-blocked' || state.phase.status === 'stopping') {
-        return transition(state);
-      }
-      return transition({
-        ...state,
-        phase: {
-          status: 'awaiting-ack',
-          expectsReset: event.expectsReset,
-          ...(phaseError(state.phase) ? { errorReason: phaseError(state.phase) } : {}),
-        },
-      });
+      return subscribeSent(state, event);
     case 'connection-opened':
-      if (state.phase.status === 'permission-blocked' || state.phase.status === 'stopping') {
-        return transition(state);
-      }
-      if (state.resume.lastSequence !== undefined) {
-        return transition(
-          {
-            ...state,
-            phase: {
-              status: 'awaiting-ack',
-              expectsReset: false,
-              ...(phaseError(state.phase) ? { errorReason: phaseError(state.phase) } : {}),
-            },
-          },
-          [{ type: 'mark-resync-complete' }, { type: 'send-subscribe' }]
-        );
-      }
-      return transition(state, [
-        {
-          type: 'request-resync',
-          reason: 'reconnect',
-          force: true,
-          ...(phaseError(state.phase) ? { errorReason: phaseError(state.phase) } : {}),
-        },
-      ]);
+      return connectionOpened(state);
     case 'connection-lost':
-      if (state.phase.status === 'permission-blocked' || state.phase.status === 'stopping') {
-        return transition(state);
-      }
-      return transition(
-        {
-          ...state,
-          phase: {
-            status: 'connecting',
-            ...(phaseError(state.phase) ? { errorReason: phaseError(state.phase) } : {}),
-          },
-        },
-        [
-          { type: 'mark-resyncing', reason: event.reason },
-          ...(state.resume.lastSequence === undefined
-            ? ([{ type: 'request-resync', reason: event.reason, force: false }] as const)
-            : []),
-        ]
-      );
+      return connectionLost(state, event);
     case 'message-received':
       return receiveMessage(state, event);
     case 'flush-timer-attached':
-      return state.coalescing.status !== 'waiting-for-timer'
-        ? transition(state)
-        : transition({
-            ...state,
-            coalescing: { ...state.coalescing, status: 'scheduled', timer: event.timer },
-          });
+      return attachFlushTimer(state, event);
     case 'flush-fired':
-      if (state.coalescing.status !== 'scheduled' || state.coalescing.timer !== event.timer) {
-        return transition(state);
-      }
-      return transition(
-        { ...state, coalescing: { status: 'idle' } },
-        advancePendingEffect(state.coalescing)
-      );
-    case 'resync-requested': {
-      if (
-        state.phase.status === 'resyncing' ||
-        state.phase.status === 'permission-blocked' ||
-        state.phase.status === 'stopping' ||
-        (!event.force &&
-          state.lastResyncAt > 0 &&
-          event.now - state.lastResyncAt < event.cooldownMs)
-      ) {
-        return transition(state);
-      }
-      return transition(
-        {
-          ...state,
-          phase: {
-            status: 'resyncing',
-            reason: event.reason,
-            ...(event.errorReason ? { errorReason: event.errorReason } : {}),
-          },
-          resume: { ...state.resume, lastSequence: undefined },
-          coalescing: { status: 'idle' },
-          lastResyncAt: event.now,
-        },
-        [
-          ...cancelFlushEffect(state.coalescing),
-          ...advancePendingEffect(state.coalescing, true),
-          ...(event.reason === 'initial'
-            ? []
-            : ([{ type: 'mark-resyncing', reason: event.reason }] as const)),
-        ]
-      );
-    }
+      return flushPendingChanges(state, event);
+    case 'resync-requested':
+      return requestResync(state, event);
     case 'resync-completed':
-      if (state.phase.status !== 'resyncing') {
-        return transition(state);
-      }
-      return transition(
-        {
-          ...state,
-          phase: {
-            status: 'awaiting-ack',
-            expectsReset: true,
-            ...(state.phase.errorReason ? { errorReason: state.phase.errorReason } : {}),
-          },
-        },
-        [{ type: 'mark-resync-complete' }, { type: 'send-subscribe' }]
-      );
+      return completeResync(state);
     case 'stopping':
-      return transition(
-        { ...state, phase: { status: 'stopping' }, coalescing: { status: 'idle' } },
-        cancelFlushEffect(state.coalescing)
-      );
+      return stopProtocol(state);
   }
 };
 

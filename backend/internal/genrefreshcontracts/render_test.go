@@ -93,9 +93,34 @@ func TestAuthoredPolicySchemaRejectsUnknownAndDuplicateValues(t *testing.T) {
 		errorPhrase string
 	}{
 		{
+			name:        "empty domain",
+			contract:    strings.Replace(valid, `"domain": "demo"`, `"domain": ""`, 1),
+			errorPhrase: `empty domain registration`,
+		},
+		{
+			name:        "missing inventory",
+			contract:    strings.Replace(valid, `"domain": "demo"`, `"domain": "missing"`, 1),
+			errorPhrase: `domain "missing" is missing from domainInventory`,
+		},
+		{
 			name:        "unknown cache policy",
 			contract:    strings.Replace(valid, `"snapshot-cache"`, `"mystery-cache"`, 1),
 			errorPhrase: `unsupported cachePolicy "mystery-cache"`,
+		},
+		{
+			name:        "unknown category",
+			contract:    strings.Replace(valid, `"category": "system"`, `"category": "mystery-category"`, 1),
+			errorPhrase: `unsupported category "mystery-category"`,
+		},
+		{
+			name:        "unknown backend registration",
+			contract:    strings.Replace(valid, `"registration": "direct"`, `"registration": "mystery-registration"`, 1),
+			errorPhrase: `unsupported backend.registration "mystery-registration"`,
+		},
+		{
+			name:        "unknown backend permission",
+			contract:    strings.Replace(valid, `"permission": "exempt"`, `"permission": "mystery-permission"`, 1),
+			errorPhrase: `unsupported backend.permission "mystery-permission"`,
 		},
 		{
 			name:        "unknown orchestrator",
@@ -103,14 +128,49 @@ func TestAuthoredPolicySchemaRejectsUnknownAndDuplicateValues(t *testing.T) {
 			errorPhrase: `unsupported frontend.orchestrator "mystery-orchestrator"`,
 		},
 		{
+			name:        "empty refresher name",
+			contract:    strings.Replace(valid, `"refresherName": "demo"`, `"refresherName": ""`, 1),
+			errorPhrase: `empty frontend.refresherName`,
+		},
+		{
+			name:        "non-positive timing",
+			contract:    strings.Replace(valid, `"interval": 1000`, `"interval": 0`, 1),
+			errorPhrase: `non-positive frontend timing`,
+		},
+		{
+			name:        "negative priority",
+			contract:    strings.Replace(valid, `"registrationOrder": 0`, `"priority": -1, "registrationOrder": 0`, 1),
+			errorPhrase: `negative frontend priority`,
+		},
+		{
 			name:        "duplicate source clock",
 			contract:    strings.Replace(valid, `["object"]`, `["object", "object"]`, 1),
 			errorPhrase: `declares source clock "object" more than once`,
 		},
 		{
+			name:        "unknown source clock",
+			contract:    strings.Replace(valid, `["object"]`, `["mystery-clock"]`, 1),
+			errorPhrase: `unsupported sourceClocks "mystery-clock"`,
+		},
+		{
 			name:        "missing frontend order",
 			contract:    strings.Replace(valid, ",\n      \"registrationOrder\": 0", "", 1),
 			errorPhrase: `missing frontend.registrationOrder`,
+		},
+		{
+			name:        "out-of-range frontend order",
+			contract:    strings.Replace(valid, `"registrationOrder": 0`, `"registrationOrder": 1`, 1),
+			errorPhrase: `out-of-range frontend.registrationOrder 1`,
+		},
+		{
+			name:        "invalid diagnostics stream shape",
+			contract:    strings.Replace(valid, `"diagnosticsStream": null`, `"diagnosticsStream": true`, 1),
+			errorPhrase: `frontend.diagnosticsStream`,
+		},
+		{
+			name:        "unknown diagnostics stream",
+			contract:    strings.Replace(valid, `"diagnosticsStream": null`, `"diagnosticsStream": "mystery-stream"`, 1),
+			errorPhrase: `unsupported frontend.diagnosticsStream "mystery-stream"`,
 		},
 		{
 			name:        "unknown field",

@@ -157,6 +157,17 @@ func rollbackRefreshGenerations(activations map[string]*refreshGenerationActivat
 	}
 }
 
+func refreshGenerationRuntimeCancellations(runtime refreshGenerationRuntime) []context.CancelFunc {
+	cancellations := make([]context.CancelFunc, 0, 2)
+	if runtime.permissionCancel != nil {
+		cancellations = append(cancellations, runtime.permissionCancel)
+	}
+	if runtime.managerCancel != nil {
+		cancellations = append(cancellations, runtime.managerCancel)
+	}
+	return cancellations
+}
+
 func (a *RefreshCoordinator) commitRefreshGenerationRuntime(
 	clusterID string,
 	subsystem *system.Subsystem,
@@ -173,12 +184,7 @@ func (a *RefreshCoordinator) commitRefreshGenerationRuntime(
 	var retired []context.CancelFunc
 	for candidate, runtime := range a.refreshGenerationRuntimes {
 		if candidate == subsystem {
-			if runtime.permissionCancel != nil {
-				retired = append(retired, runtime.permissionCancel)
-			}
-			if runtime.managerCancel != nil {
-				retired = append(retired, runtime.managerCancel)
-			}
+			retired = append(retired, refreshGenerationRuntimeCancellations(runtime)...)
 			delete(a.refreshGenerationRuntimes, candidate)
 			continue
 		}

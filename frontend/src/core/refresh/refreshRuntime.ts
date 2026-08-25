@@ -83,58 +83,77 @@ const totalDemand = (demands: ScopedDemandCounts): number => demands.query + dem
 const demandsFor = (state: ScopedActivationState): ScopedDemandCounts =>
   state.status === 'enabled' || state.status === 'superseded' ? state.demands : NO_SCOPED_DEMAND;
 
+const enableScope = (state: ScopedActivationState): ScopedActivationState =>
+  state.status === 'enabled' ? state : { status: 'enabled', demands: { ...demandsFor(state) } };
+
+const disableScope = (state: ScopedActivationState): ScopedActivationState => {
+  if (state.status === 'disabled') {
+    return state;
+  }
+  if (state.status === 'enabled' && totalDemand(state.demands) > 0) {
+    return state;
+  }
+  return { status: 'disabled' };
+};
+
+const supersedeScope = (state: ScopedActivationState): ScopedActivationState => {
+  if (state.status !== 'enabled') {
+    return state;
+  }
+  return totalDemand(state.demands) > 0
+    ? { status: 'superseded', demands: state.demands }
+    : { status: 'disabled' };
+};
+
+const acquireScopeLease = (
+  state: ScopedActivationState,
+  event: Extract<ScopedActivationEvent, { type: 'lease-acquired' }>
+): ScopedActivationState => {
+  const demands = demandsFor(state);
+  const nextDemands = {
+    ...demands,
+    [event.demand]: demands[event.demand] + 1,
+  };
+  return state.status === 'superseded'
+    ? { status: 'superseded', demands: nextDemands }
+    : { status: 'enabled', demands: nextDemands };
+};
+
+const releaseScopeLease = (
+  state: ScopedActivationState,
+  event: Extract<ScopedActivationEvent, { type: 'lease-released' }>
+): ScopedActivationState => {
+  if (
+    (state.status !== 'enabled' && state.status !== 'superseded') ||
+    state.demands[event.demand] === 0
+  ) {
+    return state;
+  }
+  const nextDemands = {
+    ...state.demands,
+    [event.demand]: state.demands[event.demand] - 1,
+  };
+  if (state.status === 'superseded' && totalDemand(nextDemands) === 0) {
+    return { status: 'disabled' };
+  }
+  return { ...state, demands: nextDemands };
+};
+
 export const transitionScopedActivationState = (
   state: ScopedActivationState,
   event: ScopedActivationEvent
 ): ScopedActivationState => {
   switch (event.type) {
     case 'enabled':
-      if (state.status === 'enabled') {
-        return state;
-      }
-      return { status: 'enabled', demands: { ...demandsFor(state) } };
+      return enableScope(state);
     case 'disabled':
-      if (state.status === 'disabled') {
-        return state;
-      }
-      if (state.status === 'enabled' && totalDemand(state.demands) > 0) {
-        return state;
-      }
-      return { status: 'disabled' };
-    case 'superseded': {
-      if (state.status !== 'enabled') {
-        return state;
-      }
-      return totalDemand(state.demands) > 0
-        ? { status: 'superseded', demands: state.demands }
-        : { status: 'disabled' };
-    }
-    case 'lease-acquired': {
-      const demands = demandsFor(state);
-      const nextDemands = {
-        ...demands,
-        [event.demand]: demands[event.demand] + 1,
-      };
-      return state.status === 'superseded'
-        ? { status: 'superseded', demands: nextDemands }
-        : { status: 'enabled', demands: nextDemands };
-    }
-    case 'lease-released': {
-      if (
-        (state.status !== 'enabled' && state.status !== 'superseded') ||
-        state.demands[event.demand] === 0
-      ) {
-        return state;
-      }
-      const nextDemands = {
-        ...state.demands,
-        [event.demand]: state.demands[event.demand] - 1,
-      };
-      if (state.status === 'superseded' && totalDemand(nextDemands) === 0) {
-        return { status: 'disabled' };
-      }
-      return { ...state, demands: nextDemands };
-    }
+      return disableScope(state);
+    case 'superseded':
+      return supersedeScope(state);
+    case 'lease-acquired':
+      return acquireScopeLease(state, event);
+    case 'lease-released':
+      return releaseScopeLease(state, event);
   }
 };
 
@@ -252,120 +271,186 @@ const inactiveStreamState = (): ScopedStreamState => ({
   health: { status: 'unknown' },
 });
 
+const blockStream = (state: ScopedStreamState): ScopedStreamState =>
+  state.policy === 'blocked' && state.initialization.status === 'idle'
+    ? state
+    : {
+        ...state,
+        policy: 'blocked',
+        initialization: { status: 'idle' },
+      };
+
+const clearStreamBlock = (state: ScopedStreamState): ScopedStreamState =>
+  state.policy === 'allowed' ? state : { ...state, policy: 'allowed' };
+
+const scheduleStreamInitialization = (
+  state: ScopedStreamState,
+  event: Extract<ScopedStreamEvent, { type: 'initialization-scheduled' }>
+): ScopedStreamState => ({
+  ...state,
+  initialization: { status: 'scheduled', task: event.task },
+});
+
+const clearStreamInitialization = (
+  state: ScopedStreamState,
+  event: Extract<ScopedStreamEvent, { type: 'initialization-cleared' }>
+): ScopedStreamState => {
+  if (
+    state.initialization.status === 'idle' ||
+    (event.task !== undefined && state.initialization.task !== event.task)
+  ) {
+    return state;
+  }
+  return { ...state, initialization: { status: 'idle' } };
+};
+
+const beginStreamStart = (
+  state: ScopedStreamState,
+  event: Extract<ScopedStreamEvent, { type: 'start-began' }>
+): ScopedStreamState => {
+  if (state.policy === 'blocked') {
+    return state;
+  }
+  return {
+    ...state,
+    connection: {
+      status: 'starting',
+      task: event.task,
+      cancellationRequested: false,
+    },
+  };
+};
+
+const requestStreamCancellation = (state: ScopedStreamState): ScopedStreamState => {
+  if (state.connection.status === 'inactive' || state.connection.cancellationRequested) {
+    return state;
+  }
+  return {
+    ...state,
+    connection: { ...state.connection, cancellationRequested: true },
+  };
+};
+
+const clearStreamCancellation = (state: ScopedStreamState): ScopedStreamState => {
+  if (state.connection.status === 'inactive' || !state.connection.cancellationRequested) {
+    return state;
+  }
+  return {
+    ...state,
+    connection: { ...state.connection, cancellationRequested: false },
+  };
+};
+
+const finishStreamStart = (
+  state: ScopedStreamState,
+  event: Extract<ScopedStreamEvent, { type: 'start-finished' }>
+): ScopedStreamState => {
+  if (
+    state.connection.status !== 'starting' ||
+    state.connection.task !== event.task ||
+    state.connection.cancellationRequested
+  ) {
+    return state;
+  }
+  return {
+    ...state,
+    connection: {
+      status: 'active',
+      cleanup: event.cleanup,
+      cancellationRequested: false,
+    },
+  };
+};
+
+const failStreamStart = (
+  state: ScopedStreamState,
+  event: Extract<ScopedStreamEvent, { type: 'start-failed' }>
+): ScopedStreamState => {
+  if (state.connection.status !== 'starting' || state.connection.task !== event.task) {
+    return state;
+  }
+  return { ...state, connection: { status: 'inactive' } };
+};
+
+const removeStreamCleanup = (state: ScopedStreamState): ScopedStreamState =>
+  state.connection.status === 'active' ? { ...state, connection: { status: 'inactive' } } : state;
+
+const receiveStreamHealth = (
+  state: ScopedStreamState,
+  event: Extract<ScopedStreamEvent, { type: 'health-received' }>
+): ScopedStreamState => ({
+  ...state,
+  health: { status: 'known', payload: event.payload },
+});
+
+const clearStreamHealth = (state: ScopedStreamState): ScopedStreamState =>
+  state.health.status === 'unknown' ? state : { ...state, health: { status: 'unknown' } };
+
+const clearAsyncStreamState = (state: ScopedStreamState): ScopedStreamState => ({
+  ...state,
+  initialization: { status: 'idle' },
+  connection:
+    state.connection.status === 'starting'
+      ? { status: 'inactive' }
+      : state.connection.status === 'active'
+        ? { ...state.connection, cancellationRequested: false }
+        : state.connection,
+});
+
+const clearAllStreamState = (
+  state: ScopedStreamState,
+  event: Extract<ScopedStreamEvent, { type: 'all-cleared' }>
+): ScopedStreamState => ({
+  ...state,
+  initialization: event.reset ? { status: 'idle' } : state.initialization,
+  connection: { status: 'inactive' },
+});
+
+const resetTransientStreamState = (state: ScopedStreamState): ScopedStreamState => ({
+  policy: 'allowed',
+  initialization: { status: 'idle' },
+  connection:
+    state.connection.status === 'active'
+      ? { ...state.connection, cancellationRequested: false }
+      : { status: 'inactive' },
+  health: { status: 'unknown' },
+});
+
 export const transitionScopedStreamState = (
   state: ScopedStreamState,
   event: ScopedStreamEvent
 ): ScopedStreamState => {
   switch (event.type) {
     case 'stream-blocked':
-      return state.policy === 'blocked' && state.initialization.status === 'idle'
-        ? state
-        : {
-            ...state,
-            policy: 'blocked',
-            initialization: { status: 'idle' },
-          };
+      return blockStream(state);
     case 'stream-block-cleared':
-      return state.policy === 'allowed' ? state : { ...state, policy: 'allowed' };
+      return clearStreamBlock(state);
     case 'initialization-scheduled':
-      return {
-        ...state,
-        initialization: { status: 'scheduled', task: event.task },
-      };
+      return scheduleStreamInitialization(state, event);
     case 'initialization-cleared':
-      if (
-        state.initialization.status === 'idle' ||
-        (event.task !== undefined && state.initialization.task !== event.task)
-      ) {
-        return state;
-      }
-      return { ...state, initialization: { status: 'idle' } };
+      return clearStreamInitialization(state, event);
     case 'start-began':
-      if (state.policy === 'blocked') {
-        return state;
-      }
-      return {
-        ...state,
-        connection: {
-          status: 'starting',
-          task: event.task,
-          cancellationRequested: false,
-        },
-      };
+      return beginStreamStart(state, event);
     case 'start-cancelled':
-      if (state.connection.status === 'inactive' || state.connection.cancellationRequested) {
-        return state;
-      }
-      return {
-        ...state,
-        connection: { ...state.connection, cancellationRequested: true },
-      };
+      return requestStreamCancellation(state);
     case 'start-cancellation-cleared':
-      if (state.connection.status === 'inactive' || !state.connection.cancellationRequested) {
-        return state;
-      }
-      return {
-        ...state,
-        connection: { ...state.connection, cancellationRequested: false },
-      };
+      return clearStreamCancellation(state);
     case 'start-finished':
-      if (
-        state.connection.status !== 'starting' ||
-        state.connection.task !== event.task ||
-        state.connection.cancellationRequested
-      ) {
-        return state;
-      }
-      return {
-        ...state,
-        connection: {
-          status: 'active',
-          cleanup: event.cleanup,
-          cancellationRequested: false,
-        },
-      };
+      return finishStreamStart(state, event);
     case 'start-failed':
-      if (state.connection.status !== 'starting' || state.connection.task !== event.task) {
-        return state;
-      }
-      return { ...state, connection: { status: 'inactive' } };
+      return failStreamStart(state, event);
     case 'cleanup-removed':
-      return state.connection.status === 'active'
-        ? { ...state, connection: { status: 'inactive' } }
-        : state;
+      return removeStreamCleanup(state);
     case 'health-received':
-      return { ...state, health: { status: 'known', payload: event.payload } };
+      return receiveStreamHealth(state, event);
     case 'health-cleared':
-      return state.health.status === 'unknown'
-        ? state
-        : { ...state, health: { status: 'unknown' } };
+      return clearStreamHealth(state);
     case 'async-cleared':
-      return {
-        ...state,
-        initialization: { status: 'idle' },
-        connection:
-          state.connection.status === 'starting'
-            ? { status: 'inactive' }
-            : state.connection.status === 'active'
-              ? { ...state.connection, cancellationRequested: false }
-              : state.connection,
-      };
+      return clearAsyncStreamState(state);
     case 'all-cleared':
-      return {
-        ...state,
-        initialization: event.reset ? { status: 'idle' } : state.initialization,
-        connection: { status: 'inactive' },
-      };
+      return clearAllStreamState(state, event);
     case 'transient-reset':
-      return {
-        policy: 'allowed',
-        initialization: { status: 'idle' },
-        connection:
-          state.connection.status === 'active'
-            ? { ...state.connection, cancellationRequested: false }
-            : { status: 'inactive' },
-        health: { status: 'unknown' },
-      };
+      return resetTransientStreamState(state);
   }
 };
 
