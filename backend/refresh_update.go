@@ -1,11 +1,9 @@
 package backend
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
-	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/internal/logsources"
 	"github.com/luxury-yacht/app/backend/refresh/system"
 )
@@ -165,12 +163,16 @@ func (a *RefreshCoordinator) applyRefreshSelectionUpdate(plan refreshSelectionPl
 	if refreshCtx == nil {
 		return fmt.Errorf("refresh runtime unavailable while applying selection update for clusters %s", strings.Join(plan.clusterOrder, ", "))
 	}
-	a.startRefreshSubsystems(refreshCtx, update.new)
+	activations, err := a.startRefreshGenerations(refreshCtx, update.new)
+	if err != nil {
+		return err
+	}
 	if err := a.refreshAggregates.Load().Update(plan.clusterOrder, update.next); err != nil {
-		a.stopRefreshSubsystems(update.new)
+		rollbackRefreshGenerations(activations)
 		return err
 	}
 	previous := a.replaceRefreshSubsystems(update.next)
+	commitRefreshGenerations(activations)
 	a.startNewObjectCatalogs(plan, update.new)
 	a.stopRemovedRefreshSubsystems(previous, update.next)
 	return nil
@@ -192,47 +194,13 @@ func (a *RefreshCoordinator) stopRemovedRefreshSubsystems(
 		if _, kept := next[id]; kept {
 			continue
 		}
-		a.stopRefreshPermissionRevalidation(id)
-		a.stopRefreshSubsystem(subsystem)
+		a.stopRefreshGeneration(id, subsystem)
 		a.stopObjectCatalogForCluster(id)
 	}
 }
 
 func (a *RefreshCoordinator) stopRefreshSubsystems(subsystems map[string]*system.Subsystem) {
 	for clusterID, subsystem := range subsystems {
-		a.stopRefreshPermissionRevalidation(clusterID)
-		a.stopRefreshSubsystem(subsystem)
-	}
-}
-
-func (a *RefreshCoordinator) stopRefreshSubsystem(subsystem *system.Subsystem) {
-	if subsystem == nil {
-		return
-	}
-	a.stopRefreshSubsystemResources(subsystem)
-	if subsystem.Manager == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), config.RefreshShutdownTimeout)
-	defer cancel()
-	if err := subsystem.Manager.Shutdown(ctx); err != nil {
-		a.logger.Warn(fmt.Sprintf("Failed to shutdown refresh manager: %v", err), logsources.Refresh, subsystem.ClusterMeta.ClusterID, subsystem.ClusterMeta.ClusterName)
-	}
-}
-
-// stopRefreshSubsystemResources cancels work owned directly by a subsystem
-// generation. These resources can exist before Manager construction succeeds,
-// so every teardown path must stop them independently of Manager availability.
-func (a *RefreshCoordinator) stopRefreshSubsystemResources(subsystem *system.Subsystem) {
-	if subsystem == nil {
-		return
-	}
-	subsystem.CancelColdPreparation()
-	subsystem.StopDoorbellNotifiers()
-	if subsystem.ContainerLogs != nil {
-		subsystem.ContainerLogs.Stop()
-	}
-	if subsystem.ResourceStream != nil {
-		subsystem.ResourceStream.Stop()
+		a.stopRefreshGeneration(clusterID, subsystem)
 	}
 }

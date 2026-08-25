@@ -82,10 +82,12 @@ type RefreshCoordinator struct {
 	containerLogsTargetLimiterMu sync.Mutex
 	containerLogsTargetLimiter   *containerlogsstream.GlobalTargetLimiter
 
-	refreshSubsystemsMu      sync.RWMutex
-	refreshSubsystems        map[string]*system.Subsystem
-	refreshAggregates        atomic.Pointer[refreshAggregateHandlers]
-	refreshPermissionCancels map[string]context.CancelFunc
+	refreshSubsystemsMu sync.RWMutex
+	refreshSubsystems   map[string]*system.Subsystem
+	refreshAggregates   atomic.Pointer[refreshAggregateHandlers]
+
+	refreshGenerationMu       sync.Mutex
+	refreshGenerationRuntimes map[*system.Subsystem]refreshGenerationRuntime
 
 	governorReconcileMu sync.Mutex
 	governorMu          sync.Mutex
@@ -136,24 +138,24 @@ type RefreshCoordinatorDependencies struct {
 func newRefreshCoordinator(dependencies RefreshCoordinatorDependencies) *RefreshCoordinator {
 	requireRefreshCoordinatorDependencies(dependencies)
 	coordinator := &RefreshCoordinator{
-		clusterRuntime:           dependencies.ClusterRuntime,
-		clusterWorkspace:         dependencies.ClusterWorkspace,
-		attention:                dependencies.Attention,
-		logger:                   dependencies.Logger,
-		allowedNamespaces:        dependencies.AllowedNamespaces,
-		preferences:              dependencies.Preferences,
-		containerLogsPolicy:      dependencies.ContainerLogsPolicy,
-		permissionFetchPolicy:    dependencies.PermissionFetchPolicy,
-		resources:                dependencies.Resources,
-		context:                  dependencies.Context,
-		runtimeAvailableFn:       dependencies.RuntimeAvailable,
-		emitEventFn:              dependencies.EmitEvent,
-		refreshSubsystems:        make(map[string]*system.Subsystem),
-		refreshPermissionCancels: make(map[string]context.CancelFunc),
-		objectCatalogEntries:     make(map[string]*objectCatalogEntry),
-		resourceProjection:       dependencies.ResourceProjection,
-		nodeMaintenanceStore:     dependencies.NodeMaintenanceStore,
-		metricsInterval:          time.Duration(defaultMetricsIntervalMs()) * time.Millisecond,
+		clusterRuntime:            dependencies.ClusterRuntime,
+		clusterWorkspace:          dependencies.ClusterWorkspace,
+		attention:                 dependencies.Attention,
+		logger:                    dependencies.Logger,
+		allowedNamespaces:         dependencies.AllowedNamespaces,
+		preferences:               dependencies.Preferences,
+		containerLogsPolicy:       dependencies.ContainerLogsPolicy,
+		permissionFetchPolicy:     dependencies.PermissionFetchPolicy,
+		resources:                 dependencies.Resources,
+		context:                   dependencies.Context,
+		runtimeAvailableFn:        dependencies.RuntimeAvailable,
+		emitEventFn:               dependencies.EmitEvent,
+		refreshSubsystems:         make(map[string]*system.Subsystem),
+		refreshGenerationRuntimes: make(map[*system.Subsystem]refreshGenerationRuntime),
+		objectCatalogEntries:      make(map[string]*objectCatalogEntry),
+		resourceProjection:        dependencies.ResourceProjection,
+		nodeMaintenanceStore:      dependencies.NodeMaintenanceStore,
+		metricsInterval:           time.Duration(defaultMetricsIntervalMs()) * time.Millisecond,
 	}
 	dependencies.SettingsBridge.bind(coordinator)
 	return coordinator

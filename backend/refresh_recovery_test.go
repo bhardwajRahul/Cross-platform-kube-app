@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/system"
 	"github.com/stretchr/testify/require"
 )
@@ -27,16 +29,59 @@ func TestTeardownRefreshSubsystem(t *testing.T) {
 	require.Nil(t, app.Refresh.refreshService.Load())
 }
 
-func TestShutdownRefreshSubsystemCancelsPartialGenerationWithoutManager(t *testing.T) {
+func TestStopRefreshGenerationCancelsPartialGenerationWithoutManager(t *testing.T) {
 	app := newWorkspaceCoordinatorTestFixture(t)
 	subsystem := &system.Subsystem{}
 	preparationCtx, started := subsystem.BeginColdPreparation(context.Background(), time.Now())
 	require.True(t, started)
 
-	app.Refresh.shutdownRefreshSubsystem(subsystem)
+	app.Refresh.stopRefreshGeneration("cluster-a", subsystem)
 
 	require.ErrorIs(t, preparationCtx.Err(), context.Canceled,
 		"global teardown must cancel work owned by a partially built subsystem generation")
+}
+
+func TestTeardownRefreshSubsystemUnpublishesBeforeManagerShutdown(t *testing.T) {
+	const clusterID = "cluster-a"
+	app := newWorkspaceCoordinatorTestFixture(t)
+	setRefreshServiceReadyForTest(app.Refresh)
+	app.Refresh.refreshAggregates.Store(&refreshAggregateHandlers{})
+
+	hub := &blockingShutdownInformerHub{
+		shutdownStarted: make(chan struct{}),
+		releaseShutdown: make(chan struct{}),
+	}
+	t.Cleanup(hub.release)
+	manager := refresh.NewManager(nil, hub, nil, nil, nil)
+	require.NoError(t, manager.Start(context.Background()))
+	app.Refresh.setRefreshSubsystem(clusterID, &system.Subsystem{Manager: manager})
+	var runtimeCanceled atomic.Bool
+	app.Refresh.refreshCancel = func() { runtimeCanceled.Store(true) }
+
+	done := make(chan struct{})
+	go func() {
+		app.Refresh.teardownRefreshSubsystem()
+		close(done)
+	}()
+
+	select {
+	case <-hub.shutdownStarted:
+	case <-time.After(time.Second):
+		t.Fatal("refresh manager shutdown did not start")
+	}
+	require.Nil(t, app.Refresh.refreshService.Load())
+	require.Nil(t, app.Refresh.refreshAggregates.Load())
+	require.Nil(t, app.Refresh.getRefreshSubsystem(clusterID))
+	require.False(t, runtimeCanceled.Load(),
+		"the shared parent must remain live until generation resources and managers stop")
+
+	hub.release()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("refresh teardown did not finish")
+	}
+	require.True(t, runtimeCanceled.Load())
 }
 
 func TestTeardownRefreshSubsystemBlocksRuntimeResurrectionUntilSetup(t *testing.T) {

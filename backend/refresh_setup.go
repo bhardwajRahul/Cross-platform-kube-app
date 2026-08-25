@@ -12,9 +12,7 @@ import (
 	"github.com/luxury-yacht/app/backend/internal/logsources"
 	"github.com/luxury-yacht/app/backend/internal/parallel"
 	"github.com/luxury-yacht/app/backend/objectcatalog"
-	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/containerlogsstream"
-	"github.com/luxury-yacht/app/backend/refresh/domain"
 	"github.com/luxury-yacht/app/backend/refresh/system"
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
 	"github.com/luxury-yacht/app/backend/resourcemodel"
@@ -49,15 +47,20 @@ func (a *RefreshCoordinator) setupRefreshSubsystemForSelections(selections []kub
 		return nil
 	}
 
-	a.startRefreshSubsystems(ctx, subsystems)
+	activations, err := a.startRefreshGenerations(ctx, subsystems)
+	if err != nil {
+		return err
+	}
 
 	mux, aggregates, err := a.buildRefreshMux(subsystems, clusterOrder)
 	if err != nil {
+		rollbackRefreshGenerations(activations)
 		return err
 	}
 	a.refreshAggregates.Store(aggregates)
 	a.sweepNamespacesReadiness(subsystems)
 	a.publishRefreshService(mux, subsystems)
+	commitRefreshGenerations(activations)
 
 	// The subsystems above all have live manager starts in flight. Begin settling
 	// them to the governor's tiers (visible Foreground, warm set Background, the
@@ -333,48 +336,6 @@ func (a *RefreshCoordinator) buildRefreshSubsystemForSelection(
 	// from the persisted resourceVersion (a delta) instead of a full re-LIST when it starts.
 	a.restoreClusterIngestStores(clusterMeta.ID, subsystem.IngestManager)
 	return subsystem, nil
-}
-
-// startRefreshSubsystems runs the manager loops and permission revalidation for each subsystem.
-func (a *RefreshCoordinator) startRefreshSubsystems(ctx context.Context, subsystems map[string]*system.Subsystem) {
-	for clusterID, subsystem := range subsystems {
-		manager := subsystem.Manager
-		if manager == nil {
-			continue
-		}
-		clusterName := a.clusterRuntime.clusterNameForID(clusterID)
-		registry := subsystem.Registry
-		go func(mgr *refresh.Manager, registry *domain.Registry, clusterID, clusterName string) {
-			if err := mgr.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				a.logger.Warn(fmt.Sprintf("refresh manager stopped: %v", err), logsources.Refresh, clusterID, clusterName)
-				return
-			}
-			// Start blocks until the factory-backed informer caches have synced. Reconcile
-			// away any row warm-painted from a stale spill whose object was deleted while the
-			// app was closed; ingest-fed stores either have no reconcile source or reconcile
-			// through their reflector's initial Replace.
-			if registry != nil {
-				registry.ReconcileMaintainedStores()
-			}
-		}(manager, registry, clusterID, clusterName)
-		// Keep permission grants fresh; revoke access stops refresh informers/streams.
-		permCtx, cancel := context.WithCancel(ctx)
-		a.storeRefreshPermissionCancel(clusterID, cancel)
-		subsystem.StartPermissionRevalidation(permCtx)
-	}
-}
-
-func (a *RefreshCoordinator) storeRefreshPermissionCancel(clusterID string, cancel context.CancelFunc) {
-	if a == nil || clusterID == "" || cancel == nil {
-		return
-	}
-	if a.refreshPermissionCancels == nil {
-		a.refreshPermissionCancels = make(map[string]context.CancelFunc)
-	}
-	if prev := a.refreshPermissionCancels[clusterID]; prev != nil {
-		prev()
-	}
-	a.refreshPermissionCancels[clusterID] = cancel
 }
 
 // sharedContainerLogsTargetLimiter lazily creates the process-wide container-logs

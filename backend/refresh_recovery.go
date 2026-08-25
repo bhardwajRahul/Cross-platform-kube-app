@@ -1,15 +1,11 @@
 package backend
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"sync"
 	"time"
 
-	"github.com/luxury-yacht/app/backend/internal/config"
-	"github.com/luxury-yacht/app/backend/internal/logsources"
-	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/system"
 )
 
@@ -34,71 +30,24 @@ func (a *RefreshCoordinator) ResetRuntimeState() error {
 }
 
 func (a *RefreshCoordinator) teardownRefreshSubsystem() {
-	a.stopObjectCatalog()
-
-	a.stopRefreshRuntimeContext()
-	a.clearRefreshPermissionCancels()
-
-	subsystems := a.replaceRefreshSubsystems(nil)
+	// Reverse publication before stopping producers so no new request or stream
+	// can resolve a generation while it is being torn down.
 	a.refreshService.Store(nil)
 	aggregates := a.refreshAggregates.Load()
 	a.refreshAggregates.Store(nil)
 	if aggregates != nil && aggregates.resources != nil {
 		aggregates.resources.Stop()
 	}
+	subsystems := a.replaceRefreshSubsystems(nil)
+	a.stopObjectCatalog()
 
-	for _, subsystem := range subsystems {
-		a.shutdownRefreshSubsystem(subsystem)
+	for clusterID, subsystem := range subsystems {
+		a.stopRefreshGeneration(clusterID, subsystem)
 	}
+	a.stopRemainingRefreshGenerationRuntimes()
+	a.stopRefreshRuntimeContext()
 
 	a.setTelemetryRecorder(nil)
-}
-
-func (a *RefreshCoordinator) shutdownRefreshSubsystem(subsystem *system.Subsystem) {
-	if subsystem == nil {
-		return
-	}
-	a.stopRefreshSubsystemResources(subsystem)
-	if subsystem.Manager == nil {
-		return
-	}
-	done := make(chan struct{})
-	go func(manager *refresh.Manager) {
-		ctx, cancel := context.WithTimeout(context.Background(), config.RefreshShutdownTimeout)
-		defer cancel()
-		if err := manager.Shutdown(ctx); err != nil {
-			a.logger.Warn(fmt.Sprintf("Failed to shutdown refresh manager: %v", err), logsources.Refresh)
-		}
-		close(done)
-	}(subsystem.Manager)
-	select {
-	case <-done:
-	case <-time.After(config.RefreshShutdownTimeout):
-		a.logger.Warn("Timed out waiting for refresh manager shutdown", logsources.Refresh)
-	}
-}
-
-func (a *RefreshCoordinator) stopRefreshPermissionRevalidation(clusterID string) {
-	if a == nil || clusterID == "" {
-		return
-	}
-	cancel := a.refreshPermissionCancels[clusterID]
-	if cancel != nil {
-		cancel()
-	}
-	delete(a.refreshPermissionCancels, clusterID)
-}
-
-func (a *RefreshCoordinator) clearRefreshPermissionCancels() {
-	if a == nil || len(a.refreshPermissionCancels) == 0 {
-		return
-	}
-	for id, cancel := range a.refreshPermissionCancels {
-		if cancel != nil {
-			cancel()
-		}
-		delete(a.refreshPermissionCancels, id)
-	}
 }
 
 func (a *RefreshCoordinator) handlePermissionIssues(issues []system.PermissionIssue) {

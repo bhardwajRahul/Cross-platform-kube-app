@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/luxury-yacht/app/backend/internal/authstate"
+	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/system"
 	"github.com/stretchr/testify/require"
 	cgofake "k8s.io/client-go/kubernetes/fake"
@@ -77,7 +78,7 @@ func TestSetSelectedKubeconfigsKeepsRefreshServerOnSelectionChange(t *testing.T)
 
 	originalBuilder := newRefreshSubsystemWithServices
 	newRefreshSubsystemWithServices = func(system.Config) (*system.Subsystem, error) {
-		return &system.Subsystem{}, nil
+		return &system.Subsystem{Manager: refresh.NewManager(nil, nil, nil, nil, nil)}, nil
 	}
 	t.Cleanup(func() { newRefreshSubsystemWithServices = originalBuilder })
 
@@ -155,7 +156,7 @@ func TestAuthFailedClusterDoesNotBlockNewClusterSelection(t *testing.T) {
 	originalBuilder := newRefreshSubsystemWithServices
 	newRefreshSubsystemWithServices = func(cfg system.Config) (*system.Subsystem, error) {
 		builderCalls[cfg.ClusterID] = true
-		return &system.Subsystem{}, nil
+		return &system.Subsystem{Manager: refresh.NewManager(nil, nil, nil, nil, nil)}, nil
 	}
 	t.Cleanup(func() { newRefreshSubsystemWithServices = originalBuilder })
 
@@ -223,7 +224,7 @@ func TestAuthFailedOnInitClusterDoesNotBlockNewClusterSelection(t *testing.T) {
 	originalBuilder := newRefreshSubsystemWithServices
 	newRefreshSubsystemWithServices = func(cfg system.Config) (*system.Subsystem, error) {
 		builderCalls[cfg.ClusterID] = true
-		return &system.Subsystem{}, nil
+		return &system.Subsystem{Manager: refresh.NewManager(nil, nil, nil, nil, nil)}, nil
 	}
 	t.Cleanup(func() { newRefreshSubsystemWithServices = originalBuilder })
 
@@ -306,7 +307,7 @@ users:
 
 	originalBuilder := newRefreshSubsystemWithServices
 	newRefreshSubsystemWithServices = func(system.Config) (*system.Subsystem, error) {
-		return &system.Subsystem{}, nil
+		return &system.Subsystem{Manager: refresh.NewManager(nil, nil, nil, nil, nil)}, nil
 	}
 	t.Cleanup(func() { newRefreshSubsystemWithServices = originalBuilder })
 

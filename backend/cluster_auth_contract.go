@@ -98,10 +98,15 @@ func (r clusterSubsystemRebuild) run() {
 }
 
 func (r clusterSubsystemRebuild) activateSubsystem(newClients *clusterClients, subsystem *system.Subsystem) bool {
-	if !r.startManager(subsystem) {
+	if r.refresh == nil {
+		return false
+	}
+	refreshCtx := r.refresh.ensureRefreshRuntimeContext()
+	activation, err := r.refresh.startRefreshGeneration(refreshCtx, r.clusterID, subsystem)
+	if err != nil {
 		// A subsystem that cannot start has not been published, but all resources
 		// constructed for that generation still need an owner to stop them.
-		r.refresh.stopRefreshSubsystem(subsystem)
+		r.refresh.stopRefreshGeneration(r.clusterID, subsystem)
 		return false
 	}
 
@@ -115,7 +120,7 @@ func (r clusterSubsystemRebuild) activateSubsystem(newClients *clusterClients, s
 			r.refresh.setRefreshSubsystem(r.clusterID, previous)
 		}
 		if previous != subsystem {
-			r.refresh.stopRefreshSubsystem(subsystem)
+			activation.rollback()
 		}
 		return false
 	}
@@ -124,8 +129,9 @@ func (r clusterSubsystemRebuild) activateSubsystem(newClients *clusterClients, s
 	// aggregate consumer routes to it. Until this point the previous generation
 	// remains available if activation fails.
 	r.refresh.clusterRuntime.replaceClusterClient(r.clusterID, newClients)
+	activation.commit()
 	if previous != nil && previous != subsystem {
-		r.refresh.stopRefreshSubsystem(previous)
+		r.refresh.stopRefreshGeneration(r.clusterID, previous)
 	}
 	r.startObjectCatalog(newClients)
 	return true
@@ -173,28 +179,6 @@ func (r clusterSubsystemRebuild) reportBuildError(component, capturePrefix strin
 		logsources.Auth, r.clusterID, r.clusterName,
 	)
 	errorcapture.CaptureWithCluster(r.clusterID, fmt.Sprintf("%s: %v", capturePrefix, err))
-}
-
-func (r clusterSubsystemRebuild) startManager(subsystem *system.Subsystem) bool {
-	if r.refresh == nil || subsystem == nil || subsystem.Manager == nil {
-		return false
-	}
-	refreshCtx := r.refresh.ensureRefreshRuntimeContext()
-	if refreshCtx == nil {
-		return false
-	}
-	go r.runManager(refreshCtx, subsystem)
-	return true
-}
-
-func (r clusterSubsystemRebuild) runManager(ctx context.Context, subsystem *system.Subsystem) {
-	if err := subsystem.Manager.Start(ctx); err != nil {
-		r.refresh.logger.Warn(fmt.Sprintf("Refresh manager for cluster %s stopped: %v", r.clusterID, err), logsources.Auth, r.clusterID, r.clusterName)
-		return
-	}
-	if subsystem.Registry != nil {
-		subsystem.Registry.ReconcileMaintainedStores()
-	}
 }
 
 func refreshSubsystemTopology(subsystems map[string]*system.Subsystem) (map[string]*system.Subsystem, []string) {

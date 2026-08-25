@@ -49,7 +49,7 @@ func (a *RefreshCoordinator) swapRefreshSubsystem(clusterID string, next *system
 	if previous == nil || previous == next {
 		return
 	}
-	a.stopRefreshSubsystem(previous)
+	a.stopRefreshGeneration(clusterID, previous)
 }
 
 func (a *RefreshCoordinator) takeRefreshSubsystem(clusterID string) *system.Subsystem {

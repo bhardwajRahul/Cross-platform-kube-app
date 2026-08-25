@@ -1,69 +1,10 @@
 package backend
 
 import (
-	"context"
 	"fmt"
-	"time"
 
-	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/internal/logsources"
-	"github.com/luxury-yacht/app/backend/refresh/system"
 )
-
-// stopClusterFeeds stops everything that FEEDS a cluster's subsystem — permission
-// revalidation, the resource stream, the refresh manager (which also stops the metrics
-// poller and informer hub), and the informer factory — WITHOUT removing the subsystem from
-// the registry and WITHOUT spilling. It is the shared stop logic for two callers:
-//   - teardownClusterSubsystem, which then takes the subsystem + spills (full teardown), and
-//   - coolClusterToMmapServing, which then swaps the maintained stores to mmap and keeps the
-//     subsystem registered so it serves cooled queries.
-//
-// The subsystem must be the one currently registered for clusterID; the caller passes it so
-// cool can act on the same subsystem it will keep serving.
-func (a *RefreshCoordinator) stopClusterFeeds(clusterID string, subsystem *system.Subsystem) {
-	if a == nil || clusterID == "" || subsystem == nil {
-		return
-	}
-	subsystem.CancelColdPreparation()
-
-	// Stop permission revalidation for this cluster.
-	a.stopRefreshPermissionRevalidation(clusterID)
-
-	// Silence the doorbell notifiers (namespaces, object-events) BEFORE the
-	// stream manager stops: their debounce/rearm timers outlive the informers
-	// and would keep broadcasting into the dead manager.
-	subsystem.StopDoorbellNotifiers()
-
-	// Stop active streams before shutting down their producers.
-	if subsystem.ContainerLogs != nil {
-		subsystem.ContainerLogs.Stop()
-	}
-	if subsystem.ResourceStream != nil {
-		subsystem.ResourceStream.Stop()
-	}
-
-	if subsystem.Manager != nil {
-		done := make(chan struct{})
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), config.RefreshShutdownTimeout)
-			defer cancel()
-			if err := subsystem.Manager.Shutdown(ctx); err != nil {
-				a.logger.Warn(fmt.Sprintf("Failed to shutdown refresh manager for cluster %s: %v", clusterID, err), logsources.Auth, clusterID, clusterID)
-			}
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(config.RefreshShutdownTimeout):
-			a.logger.Warn(fmt.Sprintf("Timed out waiting for refresh manager shutdown for cluster %s", clusterID), logsources.Auth, clusterID, clusterID)
-		}
-	}
-
-	// Shutdown the informer factory if present.
-	if subsystem.InformerFactory != nil {
-		_ = subsystem.InformerFactory.Shutdown()
-	}
-}
 
 // teardownClusterSubsystem stops the refresh subsystem for a specific cluster
 // without affecting other clusters.
@@ -81,16 +22,16 @@ func (a *RefreshCoordinator) teardownClusterSubsystem(clusterID string) {
 	// Get and remove the subsystem for this cluster.
 	subsystem := a.takeRefreshSubsystem(clusterID)
 	if subsystem == nil {
-		// No live subsystem; still ensure permission revalidation is stopped (takeRefreshSubsystem
-		// short-circuits stopClusterFeeds below, which is where reval stop lives).
-		a.stopRefreshPermissionRevalidation(clusterID)
+		// No routed subsystem; still stop any orphaned generation through the
+		// same reverse-order contract.
+		a.stopRefreshGenerationRuntimesForCluster(clusterID)
 		return
 	}
 
 	a.logger.Info(fmt.Sprintf("Tearing down subsystem for cluster %s", clusterID), logsources.Auth, clusterID, clusterID)
 
-	// Stop all feeds (permission reval, resource stream, manager, informer factory).
-	a.stopClusterFeeds(clusterID, subsystem)
+	// Stop all feeds through the shared reverse-order generation contract.
+	a.stopRefreshGeneration(clusterID, subsystem)
 
 	// Spill this cluster's stores to disk now that the subsystem is quiescent, so a re-warm
 	// re-paints them fast before its informers re-sync (the heap they hold is reclaimed by the

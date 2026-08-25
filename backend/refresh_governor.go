@@ -565,9 +565,9 @@ func (a *RefreshCoordinator) coolClusterToMmapServing(clusterID string) {
 		return
 	}
 
-	// Stop the feeds (permission reval, resource stream, manager, informer factory) WITHOUT
-	// removing the subsystem — it stays registered to serve cooled queries.
-	a.stopClusterFeeds(clusterID, subsystem)
+	// Stop the generation's feeds WITHOUT removing the subsystem — it stays
+	// registered to serve cooled queries.
+	a.stopRefreshGeneration(clusterID, subsystem)
 
 	// Swap the maintained stores to mmap. On error, safe-degrade to full teardown.
 	dir, err := a.clusterCooledMmapDir(clusterID)

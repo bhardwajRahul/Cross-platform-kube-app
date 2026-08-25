@@ -151,9 +151,10 @@ func TestClusterSubsystemRebuildHelperPaths(t *testing.T) {
 	require.False(t, ok)
 	require.Nil(t, clients)
 
-	require.False(t, rebuild.startManager(nil))
-	setRefreshRuntimeContextForTest(app.Refresh, context.Background())
-	require.False(t, rebuild.startManager(&system.Subsystem{}))
+	_, err := app.Refresh.startRefreshGeneration(context.Background(), "cluster-a", nil)
+	require.Error(t, err)
+	_, err = app.Refresh.startRefreshGeneration(context.Background(), "cluster-a", &system.Subsystem{})
+	require.Error(t, err)
 
 	subsystems, order := refreshSubsystemTopology(map[string]*system.Subsystem{
 		"cluster-b": {},
@@ -226,7 +227,10 @@ func TestClusterSubsystemRebuildStartsMissingRefreshRuntimeBeforeReadiness(t *te
 	require.Equal(t, ClusterStateLoading, app.ClusterRuntime.clusterLifecycle.GetState(clusterID))
 
 	rebuild := clusterSubsystemRebuild{refresh: app.Refresh, clusterID: clusterID, clusterName: "Cluster A"}
-	require.True(t, rebuild.startManager(subsystem))
+	require.True(t, rebuild.activateSubsystem(
+		&clusterClients{meta: ClusterMeta{ID: clusterID, Name: "Cluster A"}},
+		subsystem,
+	))
 	require.Eventually(t, hub.isStarted, time.Second, 10*time.Millisecond,
 		"auth recovery must start the rebuilt manager even when refresh setup never ran")
 	require.NotNil(t, app.Refresh.currentRefreshRuntimeContext())
@@ -276,7 +280,33 @@ func TestClusterSubsystemRebuildPublishesAfterManagerStartIsScheduled(t *testing
 		"client and subsystem replacements must be committed by the same successful activation")
 	require.Eventually(t, hub.isStarted, time.Second, 10*time.Millisecond)
 
-	app.Refresh.stopRefreshSubsystem(subsystem)
+	app.Refresh.stopRefreshGeneration("cluster-a", subsystem)
+	app.Refresh.stopRefreshRuntimeContext()
+}
+
+func TestClusterSubsystemRebuildStartsPermissionRevalidation(t *testing.T) {
+	const clusterID = "cluster-a"
+	app := newWorkspaceCoordinatorTestFixture(t)
+	setTestAppRuntimeReady(t, app.Lifecycle, context.Background())
+	require.NotNil(t, app.Refresh.ensureRefreshRuntimeContext())
+	setRefreshServiceReadyForTest(app.Refresh)
+	app.Refresh.refreshAggregates.Store(&refreshAggregateHandlers{})
+
+	subsystem := &system.Subsystem{
+		Manager: refresh.NewManager(nil, nil, nil, nil, nil),
+	}
+	rebuild := clusterSubsystemRebuild{
+		refresh: app.Refresh, clusterID: clusterID, clusterName: "Cluster A",
+	}
+
+	require.True(t, rebuild.activateSubsystem(
+		&clusterClients{meta: ClusterMeta{ID: clusterID, Name: "Cluster A"}},
+		subsystem,
+	))
+	require.Same(t, subsystem, permissionRevalidationOwner(app.Refresh, clusterID),
+		"every published generation must own a permission-revalidation cancellation")
+
+	app.Refresh.stopRefreshGeneration(clusterID, subsystem)
 	app.Refresh.stopRefreshRuntimeContext()
 }
 
@@ -325,6 +355,6 @@ func TestClusterSubsystemRebuildRoutesReplacementBeforeStoppingPrevious(t *testi
 
 	oldHub.release()
 	require.True(t, <-result)
-	app.Refresh.stopRefreshSubsystem(next)
+	app.Refresh.stopRefreshGeneration(clusterID, next)
 	app.Refresh.stopRefreshRuntimeContext()
 }
