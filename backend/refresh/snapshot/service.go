@@ -523,7 +523,7 @@ func (s *Service) shouldCacheSnapshot(snap *refresh.Snapshot) bool {
 }
 
 func (s *Service) shouldBypassSingleflight(domainName string) bool {
-	return domainName == "object-maintenance"
+	return domain.BypassesSingleflight(domainName)
 }
 
 func (s *Service) shouldBypassSnapshotCache(domainName string) bool {

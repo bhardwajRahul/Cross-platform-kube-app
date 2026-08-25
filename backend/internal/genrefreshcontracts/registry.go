@@ -43,6 +43,7 @@ type domainSpec struct {
 	backendRegistration       string
 	backendPermission         string
 	backendResourceStream     bool
+	backendBypassSingleflight bool
 	frontendRefresherName     string
 	frontendOrchestrator      string
 	frontendDiagnosticsStream string

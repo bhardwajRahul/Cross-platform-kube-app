@@ -81,7 +81,7 @@ export interface DiagnosticsStreamHeaderRow {
   sessions: number;
   lastConnect: string;
   lastConnectTooltip: string;
-  // Stream-level (socket) delivery/backlog: events/catalog deliver here; for the
+  // Stream-level (socket) delivery/backlog: events deliver here; for the
   // resources stream this is the socket-level backpressure (per-domain delivery
   // lives on the domain rows below).
   delivered: number;
@@ -98,7 +98,7 @@ export interface DiagnosticsStreamHeaderRow {
 
 // Cluster row under a stream. Usually a group label with domain leaves below it
 // (resources/events/container-logs). For streams with no sub-cluster breakdown
-// (catalog), the cluster IS the leaf, so `leaf` carries its per-cluster metrics.
+// the cluster IS the leaf, so `leaf` carries its per-cluster metrics.
 export interface DiagnosticsStreamClusterRow {
   kind: 'cluster';
   rowKey: string;

@@ -56,20 +56,12 @@ const enableRefresher = (state: RefresherRuntimeState): RefresherRuntimeState =>
   state.intent.status !== 'enabled' ? { ...state, intent: { status: 'enabled' } } : state;
 
 const disableRefresher = (state: RefresherRuntimeState): RefresherRuntimeState =>
-  state.intent.status === 'disabled' &&
-  state.timing.status === 'idle' &&
-  state.execution.status === 'idle'
-    ? state
-    : {
-        intent: { status: 'disabled' },
-        timing: { status: 'idle' },
-        execution: { status: 'idle' },
-      };
+  state.intent.status === 'disabled' ? state : { ...state, intent: { status: 'disabled' } };
 
 const pauseRefresher = (state: RefresherRuntimeState): RefresherRuntimeState =>
   state.intent.status === 'disabled' || state.intent.status === 'paused'
     ? state
-    : { ...state, intent: { status: 'paused' }, timing: { status: 'idle' } };
+    : { ...state, intent: { status: 'paused' } };
 
 const idleRefresher = (
   state: RefresherRuntimeState,

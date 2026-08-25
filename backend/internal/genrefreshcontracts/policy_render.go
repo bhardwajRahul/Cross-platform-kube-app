@@ -98,14 +98,14 @@ const (
 	DiagnosticsStreamNone          DiagnosticsStream = ""
 	DiagnosticsStreamResources     DiagnosticsStream = "resources"
 	DiagnosticsStreamEvents        DiagnosticsStream = "events"
-	DiagnosticsStreamCatalog       DiagnosticsStream = "catalog"
 	DiagnosticsStreamContainerLogs DiagnosticsStream = "container-logs"
 )
 
 type BackendPolicy struct {
-	Registration   BackendRegistrationKind
-	Permission     BackendPermissionKind
-	ResourceStream bool
+	Registration       BackendRegistrationKind
+	Permission         BackendPermissionKind
+	ResourceStream     bool
+	BypassSingleflight bool
 }
 
 type FrontendTimingPolicy struct {
@@ -153,10 +153,11 @@ func renderGoPolicyTable(out *bytes.Buffer, domains []domainSpec) {
 			fmt.Fprintf(out, "SourceClock(%s)", strconv.Quote(source))
 		}
 		out.WriteString("}, ")
-		fmt.Fprintf(out, "Backend: BackendPolicy{Registration: BackendRegistrationKind(%s), Permission: BackendPermissionKind(%s), ResourceStream: %t}, ",
+		fmt.Fprintf(out, "Backend: BackendPolicy{Registration: BackendRegistrationKind(%s), Permission: BackendPermissionKind(%s), ResourceStream: %t, BypassSingleflight: %t}, ",
 			strconv.Quote(domain.backendRegistration),
 			strconv.Quote(domain.backendPermission),
 			domain.backendResourceStream,
+			domain.backendBypassSingleflight,
 		)
 		fmt.Fprintf(out, "Frontend: FrontendPolicy{RefresherName: %s, Orchestrator: FrontendOrchestratorKind(%s), DiagnosticsStream: DiagnosticsStream(%s), ",
 			strconv.Quote(domain.frontendRefresherName),
@@ -214,6 +215,13 @@ func BypassesSnapshotCache(domainName string) bool {
 	}
 	return policy.CachePolicy == CachePolicySnapshotCacheBypass ||
 		policy.CachePolicy == CachePolicyProviderCache
+}
+
+// BypassesSingleflight reports whether concurrent snapshot requests must run
+// independently because the domain exposes live operation state.
+func BypassesSingleflight(domainName string) bool {
+	policy, ok := authoredDomainPolicyByName[domainName]
+	return ok && policy.Backend.BypassSingleflight
 }
 `)
 }

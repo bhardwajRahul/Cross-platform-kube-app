@@ -502,7 +502,6 @@ type StreamStatus struct {
 const (
 	StreamEvents        = "events"
 	StreamContainerLogs = "container-logs"
-	StreamCatalog       = "catalog"
 	StreamResources     = "resources"
 )
 

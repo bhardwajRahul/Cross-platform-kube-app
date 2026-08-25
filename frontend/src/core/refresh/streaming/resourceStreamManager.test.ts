@@ -656,6 +656,38 @@ describe('ResourceStreamManager', () => {
     );
   });
 
+  test('adding the Browse metadata query keeps the shared catalog subscription healthy', async () => {
+    vi.useFakeTimers();
+    installWindowTimers();
+    const manager = new ResourceStreamManager();
+    const pageScope = buildClusterScope(
+      'cluster-a',
+      'limit=500&resourceScope=namespace&namespace=team-a&scopeNamespace=team-a'
+    );
+    const metadataScope = buildClusterScope(
+      'cluster-a',
+      'limit=1&resourceScope=namespace&namespace=team-a&scopeNamespace=team-a'
+    );
+
+    await manager.start('catalog', pageScope);
+    await flushPromises();
+    createdSockets[0].onopen?.(new Event('open'));
+    await vi.advanceTimersByTimeAsync(1_100);
+    manager.handleMessage(
+      'cluster-a',
+      JSON.stringify({ type: 'ACK', domain: 'catalog', scope: '', clusterId: 'cluster-a' })
+    );
+    expect(manager.getHealthStatus('catalog', pageScope)).toBe('healthy');
+
+    // Browse owns a second report scope for facets. It reuses the same physical
+    // catalog doorbell and may re-arm that subscribe after the resync cooldown.
+    await vi.advanceTimersByTimeAsync(1_100);
+    await manager.start('catalog', metadataScope);
+
+    expect(manager.getHealthStatus('catalog', pageScope)).toBe('healthy');
+    expect(manager.getHealthStatus('catalog', metadataScope)).toBe('healthy');
+  });
+
   test('A1 changed signal envelope updates sourceVersion without legacy message type', () => {
     vi.useFakeTimers();
     installWindowTimers();

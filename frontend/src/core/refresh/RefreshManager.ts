@@ -339,7 +339,9 @@ class RefreshManager {
     }
 
     if (instance.runtime.execution.status === 'running') {
-      instance.runtime.execution.controller.abort();
+      const execution = instance.runtime.execution;
+      execution.controller.abort();
+      this.transition(instance, { type: 'refresh-finished', executionId: execution.id });
     }
     this.clearTimers(instance);
     this.transition(instance, { type: 'disabled' });

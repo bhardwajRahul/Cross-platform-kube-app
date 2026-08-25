@@ -1687,7 +1687,6 @@ export type GeneratedRefreshOrchestratorKind =
 export type GeneratedRefreshDiagnosticsStream =
   | 'resources'
   | 'events'
-  | 'catalog'
   | 'container-logs';
 
 export interface GeneratedRefreshDomainPolicy {
@@ -1699,6 +1698,7 @@ export interface GeneratedRefreshDomainPolicy {
     registration: GeneratedRefreshBackendRegistration;
     permission: GeneratedRefreshBackendPermission;
     resourceStream: boolean;
+    bypassSingleflight: boolean;
   };
   frontend: {
     refresherName: string;
@@ -1717,7 +1717,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'system',
     cachePolicy: 'snapshot-cache-with-merge',
     sourceClocks: ['object'],
-    backend: { registration: 'listWatch', permission: 'runtime', resourceStream: false },
+    backend: { registration: 'listWatch', permission: 'runtime', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'namespaces',
       orchestrator: 'doorbell-snapshot',
@@ -1733,7 +1733,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'system',
     cachePolicy: 'snapshot-cache-bypass',
     sourceClocks: ['metric'],
-    backend: { registration: 'direct', permission: 'exempt', resourceStream: false },
+    backend: { registration: 'direct', permission: 'exempt', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'namespace-metrics',
       orchestrator: 'doorbell-snapshot',
@@ -1749,7 +1749,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'system',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['metric'],
-    backend: { registration: 'listWatch', permission: 'runtime', resourceStream: false },
+    backend: { registration: 'listWatch', permission: 'runtime', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'cluster-overview',
       orchestrator: 'doorbell-snapshot',
@@ -1765,7 +1765,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'cluster',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['attention'],
-    backend: { registration: 'list', permission: 'runtime', resourceStream: false },
+    backend: { registration: 'list', permission: 'runtime', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'cluster-attention',
       orchestrator: 'doorbell-snapshot',
@@ -1781,11 +1781,11 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'cluster',
     cachePolicy: 'external-catalog-cache',
     sourceClocks: ['catalog'],
-    backend: { registration: 'direct', permission: 'exempt', resourceStream: false },
+    backend: { registration: 'direct', permission: 'exempt', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'catalog',
       orchestrator: 'catalog-stream',
-      diagnosticsStream: 'catalog',
+      diagnosticsStream: 'resources',
       timing: { interval: 15000, cooldown: 1500, timeout: 30 },
       priority: 4,
       registrationOrder: 13,
@@ -1797,7 +1797,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'cluster',
     cachePolicy: 'external-catalog-cache-with-merge',
     sourceClocks: [],
-    backend: { registration: 'direct', permission: 'exempt', resourceStream: false },
+    backend: { registration: 'direct', permission: 'exempt', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'catalog-diff',
       orchestrator: 'snapshot',
@@ -1813,7 +1813,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'cluster',
     cachePolicy: 'snapshot-cache-bypass',
     sourceClocks: ['object', 'metric'],
-    backend: { registration: 'listWatch', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'listWatch', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'cluster-nodes',
       orchestrator: 'resource-stream',
@@ -1829,7 +1829,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'cluster',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['object'],
-    backend: { registration: 'list', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'list', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'cluster-config',
       orchestrator: 'resource-stream',
@@ -1845,7 +1845,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'cluster',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['object'],
-    backend: { registration: 'listWatch', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'listWatch', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'cluster-crds',
       orchestrator: 'resource-stream',
@@ -1861,7 +1861,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'cluster',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['object'],
-    backend: { registration: 'list', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'list', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'cluster-custom',
       orchestrator: 'resource-stream',
@@ -1877,7 +1877,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'cluster',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['event'],
-    backend: { registration: 'direct', permission: 'runtime', resourceStream: false },
+    backend: { registration: 'direct', permission: 'runtime', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'cluster-events',
       orchestrator: 'event-stream',
@@ -1893,7 +1893,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'cluster',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['object'],
-    backend: { registration: 'list', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'list', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'cluster-rbac',
       orchestrator: 'resource-stream',
@@ -1909,7 +1909,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'cluster',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['object'],
-    backend: { registration: 'listWatch', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'listWatch', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'cluster-storage',
       orchestrator: 'resource-stream',
@@ -1925,7 +1925,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'namespace',
     cachePolicy: 'snapshot-cache-bypass',
     sourceClocks: ['object', 'metric'],
-    backend: { registration: 'list', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'list', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'workloads',
       orchestrator: 'resource-stream',
@@ -1941,7 +1941,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'namespace',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['object'],
-    backend: { registration: 'direct', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'direct', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'autoscaling',
       orchestrator: 'resource-stream',
@@ -1957,7 +1957,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'namespace',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['object'],
-    backend: { registration: 'list', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'list', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'config',
       orchestrator: 'resource-stream',
@@ -1973,7 +1973,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'namespace',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['object'],
-    backend: { registration: 'list', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'list', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'custom',
       orchestrator: 'resource-stream',
@@ -1989,7 +1989,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'namespace',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['event'],
-    backend: { registration: 'direct', permission: 'runtime', resourceStream: false },
+    backend: { registration: 'direct', permission: 'runtime', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'events',
       orchestrator: 'event-stream',
@@ -2005,7 +2005,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'namespace',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['object'],
-    backend: { registration: 'direct', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'direct', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'helm',
       orchestrator: 'resource-stream',
@@ -2021,7 +2021,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'namespace',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['object'],
-    backend: { registration: 'list', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'list', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'network',
       orchestrator: 'resource-stream',
@@ -2037,7 +2037,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'namespace',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['object'],
-    backend: { registration: 'list', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'list', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'quotas',
       orchestrator: 'resource-stream',
@@ -2053,7 +2053,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'namespace',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['object'],
-    backend: { registration: 'list', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'list', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'rbac',
       orchestrator: 'resource-stream',
@@ -2069,7 +2069,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'namespace',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['object'],
-    backend: { registration: 'direct', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'direct', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'storage',
       orchestrator: 'resource-stream',
@@ -2085,7 +2085,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'system',
     cachePolicy: 'snapshot-cache-bypass',
     sourceClocks: ['object', 'metric'],
-    backend: { registration: 'direct', permission: 'runtime', resourceStream: true },
+    backend: { registration: 'direct', permission: 'runtime', resourceStream: true, bypassSingleflight: false },
     frontend: {
       refresherName: 'unified-pods',
       orchestrator: 'resource-stream',
@@ -2101,7 +2101,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'system',
     cachePolicy: 'provider-cache',
     sourceClocks: [],
-    backend: { registration: 'direct', permission: 'exempt', resourceStream: false },
+    backend: { registration: 'direct', permission: 'exempt', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'object-details',
       orchestrator: 'snapshot',
@@ -2117,7 +2117,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'system',
     cachePolicy: 'snapshot-cache-plus-provider-cache',
     sourceClocks: [],
-    backend: { registration: 'direct', permission: 'exempt', resourceStream: false },
+    backend: { registration: 'direct', permission: 'exempt', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'object-yaml',
       orchestrator: 'snapshot',
@@ -2133,7 +2133,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'system',
     cachePolicy: 'snapshot-cache-plus-provider-cache',
     sourceClocks: [],
-    backend: { registration: 'direct', permission: 'exempt', resourceStream: false },
+    backend: { registration: 'direct', permission: 'exempt', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'object-helm-manifest',
       orchestrator: 'snapshot',
@@ -2149,7 +2149,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'system',
     cachePolicy: 'snapshot-cache-plus-provider-cache',
     sourceClocks: [],
-    backend: { registration: 'direct', permission: 'exempt', resourceStream: false },
+    backend: { registration: 'direct', permission: 'exempt', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'object-helm-values',
       orchestrator: 'snapshot',
@@ -2165,7 +2165,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'system',
     cachePolicy: 'snapshot-cache',
     sourceClocks: ['event'],
-    backend: { registration: 'direct', permission: 'runtime', resourceStream: false },
+    backend: { registration: 'direct', permission: 'runtime', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'object-events',
       orchestrator: 'doorbell-snapshot',
@@ -2181,7 +2181,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'system',
     cachePolicy: 'snapshot-cache',
     sourceClocks: [],
-    backend: { registration: 'direct', permission: 'runtime', resourceStream: false },
+    backend: { registration: 'direct', permission: 'runtime', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'object-map',
       orchestrator: 'snapshot',
@@ -2197,7 +2197,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'system',
     cachePolicy: 'snapshot-cache-bypass',
     sourceClocks: [],
-    backend: { registration: 'direct', permission: 'exempt', resourceStream: false },
+    backend: { registration: 'direct', permission: 'exempt', resourceStream: false, bypassSingleflight: true },
     frontend: {
       refresherName: 'object-maintenance',
       orchestrator: 'snapshot',
@@ -2213,7 +2213,7 @@ export const REFRESH_DOMAIN_POLICIES = [
     category: 'system',
     cachePolicy: 'stream-only',
     sourceClocks: [],
-    backend: { registration: 'streamOnly', permission: 'stream-specific', resourceStream: false },
+    backend: { registration: 'streamOnly', permission: 'stream-specific', resourceStream: false, bypassSingleflight: false },
     frontend: {
       refresherName: 'container-logs',
       orchestrator: 'container-logs-stream',

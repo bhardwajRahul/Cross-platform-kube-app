@@ -187,17 +187,28 @@ export const normalizeResourceStreamProtocolMessage = (
   };
 };
 
+type ConfirmedStreamHealth = {
+  epoch: number;
+  delivered: boolean;
+};
+
 type AwaitingAckPhase = {
   status: 'awaiting-ack';
   expectsReset: boolean;
   errorReason?: string;
+  preservedHealth?: ConfirmedStreamHealth;
 };
 
 export type ResourceStreamProtocolPhase =
   | { status: 'connecting'; errorReason?: string }
   | AwaitingAckPhase
   | { status: 'synchronized'; epoch: number; delivered: boolean; expectsReset: boolean }
-  | { status: 'resyncing'; reason: string; errorReason?: string }
+  | {
+      status: 'resyncing';
+      reason: string;
+      errorReason?: string;
+      preservedHealth?: ConfirmedStreamHealth;
+    }
   | { status: 'permission-blocked'; reason: string; at: number }
   | { status: 'stopping' };
 
@@ -281,6 +292,19 @@ const transition = (
 
 const phaseError = (phase: ResourceStreamProtocolPhase): string | undefined =>
   'errorReason' in phase ? phase.errorReason : undefined;
+
+const confirmedHealth = (phase: ResourceStreamProtocolPhase): ConfirmedStreamHealth | undefined => {
+  if (phase.status === 'synchronized') {
+    return { epoch: phase.epoch, delivered: phase.delivered };
+  }
+  if (phase.status === 'resyncing' || phase.status === 'awaiting-ack') {
+    return phase.preservedHealth;
+  }
+  return undefined;
+};
+
+const preservesConfirmedHealth = (reason: string): boolean =>
+  reason === 'initial' || reason === 'manual refresh';
 
 const expectsReset = (phase: ResourceStreamProtocolPhase): boolean =>
   (phase.status === 'awaiting-ack' || phase.status === 'synchronized') && phase.expectsReset;
@@ -436,7 +460,7 @@ const receiveReset = (
     ? {
         status: 'synchronized',
         epoch: event.connectionEpoch,
-        delivered: false,
+        delivered: confirmedHealth(state.phase)?.delivered ?? false,
         expectsReset: false,
       }
     : state.phase;
@@ -485,7 +509,7 @@ const receiveMessage = (
       phase: {
         status: 'synchronized',
         epoch: event.connectionEpoch,
-        delivered: false,
+        delivered: confirmedHealth(state.phase)?.delivered ?? false,
         expectsReset: expectsReset(state.phase),
       },
     });
@@ -511,12 +535,14 @@ const subscribeSent = (
   if (state.phase.status === 'permission-blocked' || state.phase.status === 'stopping') {
     return transition(state);
   }
+  const preservedHealth = confirmedHealth(state.phase);
   return transition({
     ...state,
     phase: {
       status: 'awaiting-ack',
       expectsReset: event.expectsReset,
       ...(phaseError(state.phase) ? { errorReason: phaseError(state.phase) } : {}),
+      ...(preservedHealth ? { preservedHealth } : {}),
     },
   });
 };
@@ -608,6 +634,9 @@ const requestResync = (
   ) {
     return transition(state);
   }
+  const preservedHealth = preservesConfirmedHealth(event.reason)
+    ? confirmedHealth(state.phase)
+    : undefined;
   return transition(
     {
       ...state,
@@ -615,6 +644,7 @@ const requestResync = (
         status: 'resyncing',
         reason: event.reason,
         ...(event.errorReason ? { errorReason: event.errorReason } : {}),
+        ...(preservedHealth ? { preservedHealth } : {}),
       },
       resume: { ...state.resume, lastSequence: undefined },
       coalescing: { status: 'idle' },
@@ -641,6 +671,7 @@ const completeResync = (state: ResourceStreamProtocolState): ResourceStreamProto
         status: 'awaiting-ack',
         expectsReset: true,
         ...(state.phase.errorReason ? { errorReason: state.phase.errorReason } : {}),
+        ...(state.phase.preservedHealth ? { preservedHealth: state.phase.preservedHealth } : {}),
       },
     },
     [{ type: 'mark-resync-complete' }, { type: 'send-subscribe' }]
@@ -691,10 +722,25 @@ export const computeResourceStreamProtocolHealth = (
     case 'permission-blocked':
       return { status: 'unhealthy', reason: state.phase.reason };
     case 'resyncing':
+      if (state.phase.preservedHealth) {
+        return {
+          status: 'healthy',
+          reason: state.phase.preservedHealth.delivered ? 'delivering' : 'synchronized',
+        };
+      }
       return state.phase.errorReason
         ? { status: 'unhealthy', reason: state.phase.errorReason }
         : { status: 'degraded', reason: 'resyncing' };
     case 'awaiting-ack':
+      if (state.phase.preservedHealth) {
+        return {
+          status: 'healthy',
+          reason: state.phase.preservedHealth.delivered ? 'delivering' : 'synchronized',
+        };
+      }
+      return state.phase.errorReason
+        ? { status: 'unhealthy', reason: state.phase.errorReason }
+        : { status: 'degraded', reason: 'awaiting updates' };
     case 'connecting':
       return state.phase.errorReason
         ? { status: 'unhealthy', reason: state.phase.errorReason }

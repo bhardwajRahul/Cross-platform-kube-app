@@ -32,9 +32,10 @@ type authoredDomainInventory struct {
 }
 
 type authoredBackendPolicy struct {
-	Registration   string `json:"registration"`
-	Permission     string `json:"permission"`
-	ResourceStream bool   `json:"resourceStream"`
+	Registration       string `json:"registration"`
+	Permission         string `json:"permission"`
+	ResourceStream     bool   `json:"resourceStream"`
+	BypassSingleflight bool   `json:"bypassSingleflight,omitempty"`
 }
 
 type authoredFrontendTiming struct {
@@ -91,7 +92,7 @@ var knownFrontendOrchestrators = stringSet(
 	"catalog-stream",
 	"container-logs-stream",
 )
-var knownDiagnosticsStreams = stringSet("resources", "events", "catalog", "container-logs")
+var knownDiagnosticsStreams = stringSet("resources", "events", "container-logs")
 
 func stringSet(values ...string) map[string]struct{} {
 	result := make(map[string]struct{}, len(values))
@@ -309,6 +310,7 @@ func contractDomainSpec(
 		backendRegistration:       registration.Backend.Registration,
 		backendPermission:         registration.Backend.Permission,
 		backendResourceStream:     registration.Backend.ResourceStream,
+		backendBypassSingleflight: registration.Backend.BypassSingleflight,
 		frontendRefresherName:     registration.Frontend.RefresherName,
 		frontendOrchestrator:      registration.Frontend.Orchestrator,
 		frontendDiagnosticsStream: frontend.diagnosticsStream,

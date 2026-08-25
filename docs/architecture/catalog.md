@@ -64,6 +64,11 @@ Typed refresh rows are enrichments. They are not competing identity systems.
 - Browse catalog consumer:
   `frontend/src/modules/browse/hooks/useBrowseCatalog.ts`
 
+Browse keeps separate page-query and metadata/facet report scopes, but both
+share the cluster's physical catalog doorbell subscription. Catalog delivery
+diagnostics are emitted as the `catalog` domain of the unified `resources`
+stream; there is no standalone catalog diagnostics stream.
+
 ## Change Checklist
 
 When touching catalog behavior:

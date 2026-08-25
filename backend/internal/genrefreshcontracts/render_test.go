@@ -63,6 +63,7 @@ func TestRenderEmitsTypedGoDomainPolicy(t *testing.T) {
 	require.Contains(t, contract, "func Policies() []DomainPolicy")
 	require.Contains(t, contract, "func LookupPolicy(domainName string) (DomainPolicy, bool)")
 	require.Contains(t, contract, "func BypassesSnapshotCache(domainName string) bool")
+	require.Contains(t, contract, "func BypassesSingleflight(domainName string) bool")
 }
 
 func TestAuthoredPolicySchemaRejectsUnknownAndDuplicateValues(t *testing.T) {
@@ -126,6 +127,16 @@ func TestAuthoredPolicySchemaRejectsUnknownAndDuplicateValues(t *testing.T) {
 			name:        "unknown orchestrator",
 			contract:    strings.Replace(valid, `"snapshot"`, `"mystery-orchestrator"`, 1),
 			errorPhrase: `unsupported frontend.orchestrator "mystery-orchestrator"`,
+		},
+		{
+			name: "retired standalone catalog diagnostics stream",
+			contract: strings.Replace(
+				valid,
+				`"diagnosticsStream": null`,
+				`"diagnosticsStream": "catalog"`,
+				1,
+			),
+			errorPhrase: `unsupported frontend.diagnosticsStream "catalog"`,
 		},
 		{
 			name:        "empty refresher name",

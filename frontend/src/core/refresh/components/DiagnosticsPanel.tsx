@@ -40,6 +40,7 @@ import {
 } from '../client';
 import { refreshOrchestrator } from '../orchestrator';
 import { refreshManager } from '../RefreshManager';
+import { isResourceStreamDomain as isResourceTableDomain } from '../resourceStreamViews';
 import { type DomainSnapshotState, useRefreshScopedDomainEntries, useRefreshState } from '../store';
 import { resourceStreamManager } from '../streaming/resourceStreamManager';
 import type {
@@ -81,6 +82,8 @@ import {
   STALE_THRESHOLD_MS,
   STREAM_MODE_BY_NAME,
   STREAM_ONLY_DOMAINS,
+  selectCatalogStreamTelemetry,
+  selectDomainStreamTelemetry,
 } from './diagnostics';
 import { GridTablePerformance } from './diagnostics/GridTablePerformance';
 import { resolveModeDetails } from './diagnostics/modeDetails';
@@ -257,7 +260,7 @@ const isTransientResourceTableQueryScope = (
   domain: RefreshDomain,
   scope: string | undefined
 ): boolean => {
-  if (DOMAIN_STREAM_MAP[domain] !== 'resources') {
+  if (!isResourceTableDomain(domain)) {
     return false;
   }
   const { scope: scopeTail } = parseClusterScopeList((scope ?? '').trim());
@@ -704,7 +707,7 @@ const resolveDomainTelemetrySources = (
   return {
     telemetryInfo: telemetrySummary?.snapshots.find((entry) => entry.domain === domain),
     streamTelemetry: streamName
-      ? telemetrySummary?.streams.find((entry) => entry.name === streamName)
+      ? selectDomainStreamTelemetry(telemetrySummary?.streams, streamName, domain)
       : undefined,
     isResourceStreamDomain: streamName === 'resources',
     streamMode: streamName ? (STREAM_MODE_BY_NAME[streamName] ?? 'streaming') : null,
@@ -1896,9 +1899,7 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
 
   const telemetryMetrics = telemetrySummary?.metrics;
   const eventStreamTelemetry = telemetrySummary?.streams.find((entry) => entry.name === 'events');
-  const catalogStreamTelemetry = telemetrySummary?.streams.find(
-    (entry) => entry.name === 'catalog'
-  );
+  const catalogStreamTelemetry = selectCatalogStreamTelemetry(telemetrySummary?.streams);
   const containerLogsStreamTelemetry = telemetrySummary?.streams.find(
     (entry) => entry.name === 'container-logs'
   );

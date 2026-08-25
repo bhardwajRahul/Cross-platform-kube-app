@@ -806,7 +806,7 @@
         "refresherName": "catalog",
         "orchestrator": "catalog-stream",
         "registrationOrder": 13,
-        "diagnosticsStream": "catalog",
+        "diagnosticsStream": "resources",
         "timing": { "interval": 15000, "cooldown": 1500, "timeout": 30 },
         "priority": 4
       }
@@ -1136,7 +1136,12 @@
     {
       "domain": "object-maintenance",
       "category": "system",
-      "backend": { "registration": "direct", "permission": "exempt", "resourceStream": false },
+      "backend": {
+        "registration": "direct",
+        "permission": "exempt",
+        "resourceStream": false,
+        "bypassSingleflight": true
+      },
       "frontend": {
         "refresherName": "object-maintenance",
         "orchestrator": "snapshot",

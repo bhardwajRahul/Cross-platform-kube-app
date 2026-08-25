@@ -130,7 +130,6 @@ export type GeneratedRefreshOrchestratorKind =
 export type GeneratedRefreshDiagnosticsStream =
   | 'resources'
   | 'events'
-  | 'catalog'
   | 'container-logs';
 
 export interface GeneratedRefreshDomainPolicy {
@@ -142,6 +141,7 @@ export interface GeneratedRefreshDomainPolicy {
     registration: GeneratedRefreshBackendRegistration;
     permission: GeneratedRefreshBackendPermission;
     resourceStream: boolean;
+    bypassSingleflight: boolean;
   };
   frontend: {
     refresherName: string;
@@ -168,10 +168,11 @@ export const REFRESH_DOMAIN_POLICIES = [
 			out.WriteString(quoteString(source))
 		}
 		out.WriteString("],\n")
-		fmt.Fprintf(out, "    backend: { registration: %s, permission: %s, resourceStream: %t },\n",
+		fmt.Fprintf(out, "    backend: { registration: %s, permission: %s, resourceStream: %t, bypassSingleflight: %t },\n",
 			quoteString(domain.backendRegistration),
 			quoteString(domain.backendPermission),
 			domain.backendResourceStream,
+			domain.backendBypassSingleflight,
 		)
 		out.WriteString("    frontend: {\n")
 		fmt.Fprintf(out, "      refresherName: %s,\n", quoteString(domain.frontendRefresherName))

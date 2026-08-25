@@ -710,9 +710,9 @@ export class ResourceStreamManager {
       return;
     }
     this.recordResync(subscription, reason);
-    // Trust is NOT granted here: the tail's subscribe must be confirmed by the
-    // server (ACK, or the initial RESET handshake) before health reports
-    // synchronized.
+    // Recovery resyncs must be confirmed by the server before health reports
+    // synchronized. Initial/manual lifecycle resubscriptions retain health that
+    // this connection already confirmed while they wait for the next ACK.
     this.applyProtocolEvent(subscription, { type: 'resync-completed' });
   }
 

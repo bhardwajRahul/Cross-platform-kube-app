@@ -42,7 +42,6 @@ import { formatDurationMs, formatLastUpdated } from './diagnosticsPanelUtils';
 const STREAM_LABELS: Record<string, string> = {
   resources: 'Resources',
   events: 'Events',
-  catalog: 'Catalog',
   'container-logs': 'Container Logs',
 };
 
@@ -162,6 +161,67 @@ const mostRecentError = (entries: TelemetryStreamStatus[]): { message: string; a
   return { message, at: at > 0 ? at : undefined };
 };
 
+const sumStreamValue = (
+  entries: TelemetryStreamStatus[],
+  select: (entry: TelemetryStreamStatus) => number
+): number => entries.reduce((total, entry) => total + select(entry), 0);
+
+const maxStreamValue = (
+  entries: TelemetryStreamStatus[],
+  select: (entry: TelemetryStreamStatus) => number
+): number => entries.reduce((latest, entry) => Math.max(latest, select(entry)), 0);
+
+export const selectDomainStreamTelemetry = (
+  streams: TelemetryStreamStatus[] | null | undefined,
+  streamName: string,
+  domain: string
+): TelemetryStreamStatus | undefined => {
+  const matchingStream = (streams ?? []).filter((entry) => entry.name === streamName);
+  return (
+    matchingStream.find((entry) => entry.domain === domain) ??
+    matchingStream.find((entry) => !entry.domain)
+  );
+};
+
+// Catalog is a domain on the unified resources socket. Present its domain
+// deliveries together with the owning socket's session/connect state so the
+// summary cannot drift back to the retired standalone catalog stream.
+export const selectCatalogStreamTelemetry = (
+  streams: TelemetryStreamStatus[] | null | undefined
+): TelemetryStreamStatus | undefined => {
+  const resourceEntries = (streams ?? []).filter((entry) => entry.name === 'resources');
+  const socketEntries = resourceEntries.filter((entry) => !entry.domain);
+  const catalogEntries = resourceEntries.filter((entry) => entry.domain === 'catalog');
+  if (socketEntries.length === 0 && catalogEntries.length === 0) {
+    return undefined;
+  }
+
+  const error = mostRecentError([...socketEntries, ...catalogEntries]);
+  const latestSkip = [...socketEntries, ...catalogEntries]
+    .filter((entry) => entry.lastSkipReason)
+    .sort((left, right) => right.lastEvent - left.lastEvent)[0]?.lastSkipReason;
+  return {
+    name: 'resources',
+    domain: 'catalog',
+    activeSessions: sumStreamValue(socketEntries, (entry) => entry.activeSessions),
+    totalMessages: sumStreamValue(catalogEntries, (entry) => entry.totalMessages),
+    droppedMessages:
+      sumStreamValue(socketEntries, (entry) => entry.droppedMessages) +
+      sumStreamValue(catalogEntries, (entry) => entry.droppedMessages),
+    skippedTargets:
+      sumStreamValue(socketEntries, (entry) => entry.skippedTargets) +
+      sumStreamValue(catalogEntries, (entry) => entry.skippedTargets),
+    errorCount:
+      sumStreamValue(socketEntries, (entry) => entry.errorCount) +
+      sumStreamValue(catalogEntries, (entry) => entry.errorCount),
+    lastConnect: maxStreamValue(socketEntries, (entry) => entry.lastConnect),
+    lastEvent: maxStreamValue(catalogEntries, (entry) => entry.lastEvent),
+    ...(error.message !== '—' ? { lastError: error.message } : {}),
+    ...(error.at !== undefined ? { lastErrorAt: error.at } : {}),
+    ...(latestSkip ? { lastSkipReason: latestSkip } : {}),
+  };
+};
+
 export const buildDiagnosticsStreamRows = (
   telemetrySummary: TelemetrySummary | null,
   filteredRows: ActiveDomainRow[],
@@ -199,8 +259,8 @@ export const buildDiagnosticsStreamRows = (
     const domainEntries = entries.filter((entry) => entry.domain);
 
     // Header = socket-level: Sessions/Last Connect are the single socket's, and
-    // delivered/dropped/errors here is stream-level (events/catalog delivery, or
-    // the resources socket backlog) — per-domain delivery is on the leaves.
+    // delivered/dropped/errors here is stream-level (events delivery or the
+    // resources socket backlog) — per-domain delivery is on the leaves.
     const lastConnectInfo = formatLastUpdated(
       maxOf(entries.map((e) => e.lastConnect)) || undefined
     );
@@ -225,8 +285,8 @@ export const buildDiagnosticsStreamRows = (
       activeDomainCount: domainEntries.length,
     });
 
-    // Streams with no sub-cluster breakdown (e.g. catalog): the cluster is the
-    // leaf, so each cluster's entry becomes a cluster-leaf row carrying its own
+    // Streams with no domain deliveries yet use the cluster as the leaf, so
+    // each cluster's entry becomes a cluster-leaf row carrying its own
     // metrics. Only split out per-cluster rows when there's more than one cluster
     // — a single cluster adds nothing the header doesn't already show.
     if (domainEntries.length === 0) {

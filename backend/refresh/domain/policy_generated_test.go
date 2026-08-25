@@ -22,6 +22,12 @@ func TestGeneratedSnapshotCacheBypassPolicy(t *testing.T) {
 	require.False(t, BypassesSnapshotCache("unknown-domain"))
 }
 
+func TestGeneratedSingleflightBypassPolicy(t *testing.T) {
+	require.True(t, BypassesSingleflight("object-maintenance"))
+	require.False(t, BypassesSingleflight("namespaces"))
+	require.False(t, BypassesSingleflight("unknown-domain"))
+}
+
 func TestGeneratedPoliciesReturnDefensiveSourceClockCopies(t *testing.T) {
 	policies := Policies()
 	require.NotEmpty(t, policies)

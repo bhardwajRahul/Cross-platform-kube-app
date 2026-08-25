@@ -25,6 +25,7 @@ import {
   buildOrchestratorSummary,
   buildPermissionRows,
   dedupeDiagnosticsRows,
+  selectDomainStreamTelemetry,
 } from './diagnosticsRowModel';
 
 const telemetry = (streams: TelemetrySummary['streams']): TelemetrySummary =>
@@ -86,6 +87,29 @@ describe('diagnosticsRowModel', () => {
 
   test('returns empty stream rows when telemetry is unavailable', () => {
     expect(buildDiagnosticsStreamRows(null, [], {})).toEqual([]);
+  });
+
+  test('selects the matching resource-domain telemetry instead of the socket aggregate', () => {
+    const socket = {
+      name: 'resources',
+      activeSessions: 1,
+      totalMessages: 100,
+      droppedMessages: 9,
+      skippedTargets: 0,
+      errorCount: 2,
+      lastConnect: 10,
+      lastEvent: 20,
+    };
+    const catalog = {
+      ...socket,
+      domain: 'catalog',
+      activeSessions: 0,
+      totalMessages: 7,
+      droppedMessages: 0,
+      errorCount: 0,
+    };
+
+    expect(selectDomainStreamTelemetry([socket, catalog], 'resources', 'catalog')).toBe(catalog);
   });
 
   test('builds the resources stream as a tree: header (socket-level) + cluster + per-domain leaves', () => {
@@ -178,11 +202,11 @@ describe('diagnosticsRowModel', () => {
     });
   });
 
-  test('renders a non-per-domain stream (catalog) as a header-only row with no children', () => {
+  test('renders one socket-only resource stream as a header-only row', () => {
     const rows = buildDiagnosticsStreamRows(
       telemetry([
         {
-          name: 'catalog',
+          name: 'resources',
           activeSessions: 1,
           totalMessages: 3,
           droppedMessages: 2,
@@ -190,31 +214,31 @@ describe('diagnosticsRowModel', () => {
           errorCount: 1,
           lastConnect: 0,
           lastEvent: 0,
-          lastError: 'catalog stalled',
+          lastError: 'resource stream stalled',
         },
       ]),
-      [{ domain: 'catalog', label: 'Browse Catalog' }],
+      [],
       {}
     );
 
-    // Catalog has no per-domain telemetry → just a header row; its delivery is stream-level.
+    // With no per-domain delivery yet, only the socket header is shown.
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       kind: 'stream',
-      label: 'Catalog',
+      label: 'Resources',
       sessions: 1,
       delivered: 3,
       dropped: 2,
       errors: 1,
-      lastError: 'catalog stalled',
+      lastError: 'resource stream stalled',
     });
   });
 
-  test('builds a cluster-leaf stream (catalog) as header + one leaf per cluster', () => {
+  test('builds socket-only resource telemetry as a header plus one leaf per cluster', () => {
     const rows = buildDiagnosticsStreamRows(
       telemetry([
         {
-          name: 'catalog',
+          name: 'resources',
           clusterId: 'c1',
           clusterName: 'kwok',
           activeSessions: 1,
@@ -226,7 +250,7 @@ describe('diagnosticsRowModel', () => {
           lastEvent: 0,
         },
         {
-          name: 'catalog',
+          name: 'resources',
           clusterId: 'c2',
           clusterName: 'kind',
           activeSessions: 1,
@@ -236,7 +260,7 @@ describe('diagnosticsRowModel', () => {
           errorCount: 1,
           lastConnect: 0,
           lastEvent: 0,
-          lastError: 'catalog stalled',
+          lastError: 'resource stream stalled',
         },
       ]),
       [],
@@ -246,11 +270,11 @@ describe('diagnosticsRowModel', () => {
     // No sub-cluster child → the cluster IS the leaf: header → one cluster leaf
     // per cluster (sorted), each carrying its own metrics.
     expect(rows.map((row) => row.kind)).toEqual(['stream', 'cluster', 'cluster']);
-    expect(rows[0]).toMatchObject({ kind: 'stream', label: 'Catalog', sessions: 2 });
+    expect(rows[0]).toMatchObject({ kind: 'stream', label: 'Resources', sessions: 2 });
     const kind = rows.find((row) => row.kind === 'cluster' && row.cluster === 'kind');
     const kwok = rows.find((row) => row.kind === 'cluster' && row.cluster === 'kwok');
     expect(kind).toMatchObject({
-      leaf: { delivered: 5, dropped: 2, errors: 1, lastError: 'catalog stalled' },
+      leaf: { delivered: 5, dropped: 2, errors: 1, lastError: 'resource stream stalled' },
     });
     expect(kwok).toMatchObject({ leaf: { delivered: 20, dropped: 0, errors: 0 } });
   });

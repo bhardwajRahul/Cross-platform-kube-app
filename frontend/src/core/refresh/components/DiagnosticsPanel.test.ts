@@ -1059,6 +1059,20 @@ describe('DiagnosticsPanel component', () => {
       ],
     ]);
 
+    const healthSpy = vi
+      .spyOn(resourceStreamManager, 'getHealthSnapshot')
+      .mockImplementation((domain, scope) =>
+        domain === 'catalog'
+          ? {
+              domain: 'catalog',
+              scope,
+              status: 'healthy',
+              reason: 'synchronized',
+              connectionStatus: 'connected',
+            }
+          : null
+      );
+
     const { DiagnosticsPanel } = await import('./DiagnosticsPanel');
     const rendered = await renderDiagnosticsPanel(DiagnosticsPanel, { isOpen: true });
     await selectRefreshDomainsTab(rendered.container);
@@ -1071,6 +1085,7 @@ describe('DiagnosticsPanel component', () => {
         label: cells[0]?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
         scope: cells[1]?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
         role: cells[2]?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+        mode: cells[4]?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
       };
     });
 
@@ -1082,6 +1097,7 @@ describe('DiagnosticsPanel component', () => {
     expect(catalogRows.map((row) => row.role)).toEqual(
       expect.arrayContaining(['Metadata', 'Page Query'])
     );
+    expect(catalogRows.map((row) => row.mode)).toEqual(['streaming', 'streaming']);
 
     const nodeRows = rows.filter((row) => row.label === 'Nodes');
     expect(nodeRows).toHaveLength(1);
@@ -1090,6 +1106,7 @@ describe('DiagnosticsPanel component', () => {
     expect(nodeRows.map((row) => row.role)).toEqual(['Live Scope']);
 
     await rendered.unmount();
+    healthSpy.mockRestore();
   });
 
   test('renders telemetry summaries after successful fetch', async () => {
@@ -1151,15 +1168,16 @@ describe('DiagnosticsPanel component', () => {
           lastEvent: now - 1500,
         },
         {
-          name: 'catalog',
-          activeSessions: 3,
+          name: 'resources',
+          domain: 'catalog',
+          activeSessions: 0,
           totalMessages: 20,
           droppedMessages: 4,
           skippedTargets: 0,
           errorCount: 1,
           lastConnect: now - 7000,
           lastEvent: now - 2000,
-          lastError: 'Catalog stream disconnected',
+          lastError: 'Catalog subscription disconnected',
         },
         {
           name: 'container-logs',
@@ -1267,7 +1285,7 @@ describe('DiagnosticsPanel component', () => {
       '.diagnostics-summary-card:nth-of-type(4) .diagnostics-summary-primary'
     );
     expect(catalogPrimary?.className).toContain('diagnostics-summary-error');
-    expect(catalogPrimary?.textContent).toContain('Active: 3');
+    expect(catalogPrimary?.textContent).toContain('Active: 1');
     expect(catalogPrimary?.textContent).toContain('Batches: 20');
 
     const logPrimary = rendered.container.querySelector<HTMLSpanElement>(
@@ -1290,7 +1308,10 @@ describe('DiagnosticsPanel component', () => {
     expect(streamsSection?.textContent).toContain('Streams');
     expect(streamsSection?.textContent).toContain('Resources');
     const streamRows = streamsSection?.querySelectorAll('tbody tr') ?? [];
-    expect(streamRows).toHaveLength(4);
+    expect(streamRows).toHaveLength(5);
+    expect(
+      Array.from(streamRows).some((row) => row.textContent?.toLowerCase().includes('catalog'))
+    ).toBe(true);
     const resourcesRow = Array.from(streamRows).find((row) =>
       row.textContent?.includes('Resources')
     );
@@ -1568,7 +1589,7 @@ describe('DiagnosticsPanel component', () => {
     await rendered.unmount();
   });
 
-  test('shows catalog stream degradation separately from resource stream recovery state', async () => {
+  test('shows catalog degradation on its unified resource-stream domain row', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2024-01-01T12:00:00Z'));
     const now = Date.now();
@@ -1597,15 +1618,18 @@ describe('DiagnosticsPanel component', () => {
             lastError: 'Resource stream disconnected',
           },
           {
-            name: 'catalog',
-            activeSessions: 1,
+            name: 'resources',
+            domain: 'catalog',
+            clusterId: 'cluster-a',
+            clusterName: 'Cluster A',
+            activeSessions: 0,
             totalMessages: 3,
             droppedMessages: 2,
             skippedTargets: 0,
             errorCount: 1,
             lastConnect: now - 1200,
             lastEvent: now - 700,
-            lastError: 'Catalog stream disconnected',
+            lastError: 'Catalog subscription disconnected',
           },
         ],
       })
@@ -1638,21 +1662,21 @@ describe('DiagnosticsPanel component', () => {
 
     const streamsSection = rendered.container.querySelector('.diagnostics-section');
     const streamRows = Array.from(streamsSection?.querySelectorAll('tbody tr') ?? []);
-    const catalogRow = streamRows.find((row) => row.textContent?.includes('Catalog'));
+    const catalogRow = streamRows.find((row) => row.textContent?.toLowerCase().includes('catalog'));
     const resourcesRow = streamRows.find((row) => row.textContent?.includes('Resources'));
     expect(catalogRow).toBeDefined();
     expect(resourcesRow).toBeDefined();
 
-    // Both fixtures are domain-less stream header rows: Name | Delivered |
+    // Catalog is a domain leaf under the Resources socket: Name | Delivered |
     // Dropped | Errors(3) | Resyncs(4) | Fallbacks(5) | Last Event | Last Error(7).
     const catalogCells = requireValue(
       catalogRow,
       'expected test value in DiagnosticsPanel.test.ts'
     ).querySelectorAll('td');
     expect(catalogCells[3]?.textContent?.trim()).toBe('1');
-    expect(catalogCells[4]?.textContent?.trim()).toBe('-');
-    expect(catalogCells[5]?.textContent?.trim()).toBe('-');
-    expect(catalogCells[7]?.textContent?.trim()).toBe('Catalog stream disconnected');
+    expect(catalogCells[4]?.textContent?.trim()).toBe('0');
+    expect(catalogCells[5]?.textContent?.trim()).toBe('0');
+    expect(catalogCells[7]?.textContent?.trim()).toBe('Catalog subscription disconnected');
 
     const resourceCells = requireValue(
       resourcesRow,

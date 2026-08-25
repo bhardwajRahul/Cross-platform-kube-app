@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  computeResourceStreamProtocolHealth,
   initialResourceStreamProtocolState,
   normalizeResourceStreamProtocolMessage,
   transitionResourceStreamProtocol,
@@ -104,6 +105,46 @@ describe('transitionResourceStreamProtocol', () => {
     });
     expect(result.effects).toEqual([]);
   });
+
+  it.each(['initial', 'manual refresh'])(
+    '%s resubscribe preserves confirmed stream health',
+    (reason) => {
+      let state = initialResourceStreamProtocolState();
+      ({ state } = transitionResourceStreamProtocol(state, {
+        type: 'subscribe-sent',
+        expectsReset: true,
+      }));
+      ({ state } = receive(state, {
+        type: 'message-received',
+        message: { kind: 'acknowledged' },
+        now: 10,
+        connectionEpoch: 3,
+        hasRetainedData: true,
+        completeResync: false,
+        maxPendingChanges: 1_000,
+      }));
+
+      const requested = transitionResourceStreamProtocol(state, {
+        type: 'resync-requested',
+        reason,
+        now: 2_000,
+        force: true,
+        cooldownMs: 1_000,
+      });
+      expect(computeResourceStreamProtocolHealth(requested.state, 'connected', '')).toEqual({
+        status: 'healthy',
+        reason: 'synchronized',
+      });
+
+      const completed = transitionResourceStreamProtocol(requested.state, {
+        type: 'resync-completed',
+      });
+      expect(computeResourceStreamProtocolHealth(completed.state, 'connected', '')).toEqual({
+        status: 'healthy',
+        reason: 'synchronized',
+      });
+    }
+  );
 
   it('absorbs the first reset, invalidates retained data, and resyncs on a later reset', () => {
     let state = initialResourceStreamProtocolState();

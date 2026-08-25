@@ -66,7 +66,7 @@ vi.mock('./streaming/resourceStreamManager', () => ({
 }));
 
 type DomainCategory = 'system' | 'cluster' | 'namespace';
-type DiagnosticsStream = 'resources' | 'events' | 'catalog' | 'container-logs';
+type DiagnosticsStream = 'resources' | 'events' | 'container-logs';
 type OrchestratorKind =
   | 'snapshot'
   | 'doorbell-snapshot'
@@ -251,7 +251,6 @@ describe('refresh domain contract', () => {
     const diagnosticsStreams = new Set<DiagnosticsStream>([
       'resources',
       'events',
-      'catalog',
       'container-logs',
     ]);
 
@@ -375,7 +374,7 @@ describe('refresh domain contract', () => {
           expect(registration?.streaming).toBeDefined();
           expect(resourceStreamDomains.has(entry.domain)).toBe(false);
           expect(entry.domain).toBe('catalog');
-          expect(entry.frontend.diagnosticsStream).toBe('catalog');
+          expect(entry.frontend.diagnosticsStream).toBe('resources');
           expect(entry.sourceClocks).toEqual(['catalog']);
           break;
         case 'container-logs-stream':
@@ -527,7 +526,7 @@ describe('refresh domain contract', () => {
         case 'catalog-stream':
           expect(inventory.behaviorClass).toBe('catalog-stream');
           expect(entry.domain).toBe('catalog');
-          expect(entry.frontend.diagnosticsStream).toBe('catalog');
+          expect(entry.frontend.diagnosticsStream).toBe('resources');
           expect(inventory.scopeContract.kind).toBe('catalog-query');
           expect(inventory.payloadOwner).toBe('backend/objectcatalog.Service');
           expect(inventory.cachePolicy).toBe('external-catalog-cache');

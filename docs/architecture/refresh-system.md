@@ -148,6 +148,11 @@ denial remains terminal until the owning scope/auth lifecycle replaces the
 subscription, and stopping is terminal so late frames or timers cannot affect a
 replacement owner.
 
+Initial and manual lifecycle resubscriptions retain previously confirmed
+synchronized/delivering health while awaiting their next ACK. Gap, error,
+overflow, visibility, and reconnect recovery do not retain that confirmation;
+they remain degraded or unhealthy so snapshot polling can provide fallback.
+
 ## Behavior classes
 
 - Snapshot domains replace one scoped payload.
