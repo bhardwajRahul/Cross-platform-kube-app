@@ -1286,13 +1286,20 @@ class RefreshOrchestrator {
       return false;
     }
 
+    let streamingExpected = false;
     let streamingHealthy = false;
     if (config.streaming && this.shouldStreamScope(domain, scope)) {
+      streamingExpected = true;
       this.startStreamingScope(domain, scope, config.streaming);
       streamingHealthy = this.isStreamingHealthy(domain, scope);
     }
     if (!options.isManual && streamingHealthy) {
       return true;
+    }
+    if (!options.isManual && streamingExpected && isResourceStreamDomain(domain)) {
+      // Query-only consumers refetch their own page instead of loading a base
+      // snapshot here, but the scheduled poll is still a stream fallback.
+      resourceStreamManager.recordStreamFallback(domain, scope, 'stream not delivering');
     }
     setScopedDomainState(domain, scope, (previous) => ({
       ...previous,
@@ -1327,7 +1334,7 @@ class RefreshOrchestrator {
       this.startStreamingScope(domain, scope, streaming);
     }
 
-    const fetchMode = runtime.resolveStreamingFetchMode({
+    const decision = runtime.resolveStreamingFetchMode({
       domain,
       scope,
       shouldStream,
@@ -1336,7 +1343,12 @@ class RefreshOrchestrator {
       streamingHealthy: this.isStreamingHealthy(domain, scope),
       hasData: Boolean(getScopedDomainState(domain, scope).data),
     });
-    return fetchMode === 'skip';
+    if (decision.fallback && isResourceStreamDomain(domain)) {
+      // Count the poll the stream should have made unnecessary, so diagnostics
+      // can tell "streaming is on" from "streaming is carrying the load".
+      resourceStreamManager.recordStreamFallback(domain, scope, 'stream not delivering');
+    }
+    return decision.mode === 'skip';
   }
 
   async fetchScopedDomain<K extends RefreshDomain>(

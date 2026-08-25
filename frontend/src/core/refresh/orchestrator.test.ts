@@ -182,6 +182,7 @@ const resourceStreamMocks = vi.hoisted(() => ({
   stop: vi.fn(),
   refreshOnce: vi.fn(),
   isHealthy: vi.fn(() => false),
+  recordStreamFallback: vi.fn(),
 }));
 
 vi.mock('./streaming/resourceStreamManager', () => ({
@@ -230,6 +231,7 @@ describe('refreshOrchestrator', () => {
     resourceStreamMocks.refreshOnce.mockReset();
     resourceStreamMocks.isHealthy.mockReset();
     resourceStreamMocks.isHealthy.mockReturnValue(false);
+    resourceStreamMocks.recordStreamFallback.mockReset();
     catalogStreamMocks.start.mockReset();
     catalogStreamMocks.stop.mockReset();
     catalogStreamMocks.refreshOnce.mockReset();
@@ -2343,6 +2345,11 @@ describe('refreshOrchestrator', () => {
 
     expect(clientMocks.fetchSnapshotMock).not.toHaveBeenCalled();
     expect(getScopedDomainState('cluster-config', scope).queryReconcileVersion).toBe(1);
+    expect(resourceStreamMocks.recordStreamFallback).toHaveBeenCalledWith(
+      'cluster-config',
+      scope,
+      'stream not delivering'
+    );
     refreshOrchestrator.releaseScopedDomainLease('cluster-config', scope, { demand: 'query' });
   });
 
@@ -2365,6 +2372,7 @@ describe('refreshOrchestrator', () => {
 
     expect(clientMocks.fetchSnapshotMock).not.toHaveBeenCalled();
     expect(getScopedDomainState('cluster-config', scope).queryReconcileVersion).toBeUndefined();
+    expect(resourceStreamMocks.recordStreamFallback).not.toHaveBeenCalled();
     refreshOrchestrator.releaseScopedDomainLease('cluster-config', scope, { demand: 'query' });
   });
 
