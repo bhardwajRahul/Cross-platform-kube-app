@@ -532,6 +532,18 @@ func (s *Subsystem) StopDoorbellNotifiers() {
 	}
 }
 
+// CancelInFlightSnapshots stops work tied to the current live generation
+// without permanently closing the snapshot service. A cooled subsystem keeps
+// the same service and may accept new reads from its retained stores.
+func (s *Subsystem) CancelInFlightSnapshots() {
+	if s == nil || s.SnapshotService == nil {
+		return
+	}
+	if canceler, ok := s.SnapshotService.(interface{ CancelInFlight() }); ok {
+		canceler.CancelInFlight()
+	}
+}
+
 // metricsSignalObserver sends every completed attempt to the namespace health
 // notifier, while only successful samples ring the shared SourceMetric
 // doorbell. This preserves polling for poll-augmented domains while allowing a

@@ -9,6 +9,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type cancelTrackingSnapshotService struct {
+	canceled bool
+}
+
+func (*cancelTrackingSnapshotService) Build(context.Context, string, string) (*refresh.Snapshot, error) {
+	return &refresh.Snapshot{}, nil
+}
+
+func (s *cancelTrackingSnapshotService) CancelInFlight() {
+	s.canceled = true
+}
+
 func permissionRevalidationOwner(
 	coordinator *RefreshCoordinator,
 	clusterID string,
@@ -96,6 +108,16 @@ func TestRefreshGenerationStopCannotCancelRoutedReplacement(t *testing.T) {
 	app.Refresh.stopRefreshGeneration(clusterID, next)
 	require.Nil(t, permissionRevalidationOwner(app.Refresh, clusterID))
 	require.False(t, hasRefreshManagerContext(app.Refresh, next))
+}
+
+func TestRefreshGenerationStopCancelsOnlyCurrentSnapshotFlights(t *testing.T) {
+	app := newWorkspaceCoordinatorTestFixture(t)
+	service := &cancelTrackingSnapshotService{}
+	subsystem := &system.Subsystem{SnapshotService: service}
+
+	app.Refresh.stopRefreshGeneration("cluster-a", subsystem)
+
+	require.True(t, service.canceled)
 }
 
 func TestRefreshGenerationBatchCommitAndRollback(t *testing.T) {

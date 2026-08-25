@@ -16,9 +16,15 @@ I’d prioritize these refactors in this order. They preserve the current refres
 
 3. **Make snapshot singleflight independent of the first caller’s cancellation** — high value, contained change
 
-   `BuildRequest` captures the initiating request’s `ctx` inside the shared `singleflight.Group.Do` closure ([service.go](/Volumes/git/luxury-yacht/app/backend/refresh/snapshot/service.go:161), [service.go](/Volumes/git/luxury-yacht/app/backend/refresh/snapshot/service.go:169)). Same-key requests therefore share work whose lifetime is controlled by whichever caller created the flight.
+   **Status (2026-08-24): implemented.** `snapshotBuildFlights` gives each caller
+   an independent wait context while reference-counting the shared build. A
+   canceled leader no longer cancels a live follower; the build stops when every
+   waiter leaves ([service_flights.go](/Volumes/git/luxury-yacht/app/backend/refresh/snapshot/service_flights.go:12), [service.go](/Volumes/git/luxury-yacht/app/backend/refresh/snapshot/service.go:164)).
 
-   Replace this with `DoChan` or a small reference-counted flight abstraction: each caller may stop waiting on its own context, one canceled waiter cannot cancel live followers, and backend work is canceled only when every waiter leaves or the subsystem generation stops. Add tests for canceled leader/live follower, all callers canceled, cache bypass isolation, and permission-sensitive keys.
+   The snapshot service wraps the full permission/readiness/build path in a
+   rotatable generation cancellation epoch. Generation teardown cancels current
+   flights before producers stop, while later requests keep the same service
+   usable for governor-cooled retained reads ([service.go](/Volumes/git/luxury-yacht/app/backend/refresh/snapshot/service.go:189), [manager.go](/Volumes/git/luxury-yacht/app/backend/refresh/system/manager.go:535), [refresh_generation.go](/Volumes/git/luxury-yacht/app/backend/refresh_generation.go:257)). Regression tests cover leader/follower cancellation, all-waiter cancellation, readiness cancellation, generation reuse, cache-bypass isolation, and permission-specific cache keys.
 
 4. **Model frontend refresh as one state machine per `(clusterId, domain, scope)`** — very high simplification, medium-to-high migration risk
 

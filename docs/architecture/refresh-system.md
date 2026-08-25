@@ -128,6 +128,13 @@ kind metadata. See [large-data.md](large-data.md) and
   must not demote an already-ready cluster.
 - Snapshot caches are allowed only for cache-tolerant data. Live app-managed
   operation state bypasses stale snapshot/singleflight paths.
+- Same-key snapshot callers share one build but retain independent wait
+  contexts. Canceling one caller releases only that waiter; the shared build is
+  canceled when every waiter leaves.
+- Generation retirement rotates the snapshot service's cancellation epoch and
+  cancels its current permission, readiness, and build work. The service is not
+  permanently closed because governor-cooled subsystems continue serving new
+  reads from retained stores.
 
 ## Stream start invariant
 

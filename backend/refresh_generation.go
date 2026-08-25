@@ -254,6 +254,7 @@ func (a *RefreshCoordinator) stopRefreshGeneration(clusterID string, subsystem *
 	}
 	runtime := a.takeRefreshGenerationRuntime(subsystem)
 	subsystem.CancelColdPreparation()
+	subsystem.CancelInFlightSnapshots()
 	if runtime.permissionCancel != nil {
 		runtime.permissionCancel()
 	}

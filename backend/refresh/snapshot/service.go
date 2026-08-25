@@ -21,8 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/sync/singleflight"
-
 	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/domain"
@@ -31,11 +29,12 @@ import (
 	"github.com/luxury-yacht/app/backend/refresh/telemetry"
 )
 
-// Service builds snapshots through registered domain builders and applies short-lived caching via singleflight.
+// Service builds snapshots through registered domain builders and applies
+// short-lived caching with shared-build deduplication.
 type Service struct {
 	registry            *domain.Registry
 	telemetry           *telemetry.Recorder
-	group               singleflight.Group
+	flights             snapshotBuildFlights
 	sequence            uint64
 	cluster             ClusterMeta
 	informerHubMu       sync.RWMutex
@@ -49,6 +48,9 @@ type Service struct {
 	permissionChecker   *permissions.Checker
 	runtimeAccess       domainpermissions.RuntimeAccess
 	requestSerial       uint64
+	generationMu        sync.Mutex
+	generationRequests  map[uint64]context.CancelFunc
+	generationRequestID uint64
 }
 
 // errInformerSyncTimeout marks snapshot builds rejected because the refresh
@@ -99,6 +101,7 @@ func newService(
 		informerSyncTimeout: config.RefreshInformerSyncTimeout,
 		permissionChecker:   checker,
 		runtimeAccess:       access,
+		generationRequests:  make(map[uint64]context.CancelFunc),
 	}
 }
 
@@ -159,20 +162,63 @@ func (s *Service) Build(ctx context.Context, domainName, scope string) (*refresh
 }
 
 func (s *Service) BuildRequest(ctx context.Context, req BuildRequest) (*refresh.Snapshot, error) {
+	ctx, cancel := s.withGenerationContext(ctx)
+	defer cancel()
 	ctx, plan, err := s.prepareBuildRequest(ctx, req)
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if cached := s.loadBuildRequestCache(plan); cached != nil {
 		return cached, nil
 	}
-	value, err, _ := s.group.Do(plan.groupKey, func() (interface{}, error) {
-		return s.buildRequestSnapshot(ctx, plan)
+	flight := s.flights.join(plan.groupKey, ctx, func(buildCtx context.Context) (*refresh.Snapshot, error) {
+		return s.buildRequestSnapshot(buildCtx, plan)
 	})
-	if err != nil {
-		return nil, err
+	defer s.flights.leave(plan.groupKey, flight)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-flight.done:
+		return flight.snapshot, flight.err
 	}
-	return value.(*refresh.Snapshot), nil
+}
+
+// CancelInFlight aborts and detaches the builds owned by the current subsystem
+// generation. Later builds remain allowed so a governor-cooled service can keep
+// serving its retained stores after its live producers stop.
+func (s *Service) CancelInFlight() {
+	if s == nil {
+		return
+	}
+	s.generationMu.Lock()
+	requests := s.generationRequests
+	s.generationRequests = make(map[uint64]context.CancelFunc)
+	for _, cancel := range requests {
+		cancel()
+	}
+	s.flights.cancelAll()
+	s.generationMu.Unlock()
+}
+
+func (s *Service) withGenerationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	requestCtx, cancel := context.WithCancel(ctx)
+	s.generationMu.Lock()
+	s.generationRequestID++
+	requestID := s.generationRequestID
+	s.generationRequests[requestID] = cancel
+	s.generationMu.Unlock()
+	return requestCtx, func() {
+		s.generationMu.Lock()
+		delete(s.generationRequests, requestID)
+		s.generationMu.Unlock()
+		cancel()
+	}
 }
 
 type snapshotBuildRequestPlan struct {
@@ -246,6 +292,10 @@ func (s *Service) buildRequestSnapshot(ctx context.Context, plan snapshotBuildRe
 	snapshot, err := s.registry.Build(ctx, plan.domain, plan.scope)
 	duration := time.Since(start)
 	if err != nil {
+		s.recordBuildFailure(plan, duration, err)
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		s.recordBuildFailure(plan, duration, err)
 		return nil, err
 	}
