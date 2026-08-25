@@ -28,9 +28,27 @@ I’d prioritize these refactors in this order. They preserve the current refres
 
 4. **Model frontend refresh as one state machine per `(clusterId, domain, scope)`** — very high simplification, medium-to-high migration risk
 
-   `RefreshManager` owns timer, promise, abort, enabled, and context-transition state ([RefreshManager.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/RefreshManager.ts:65), [RefreshManager.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/RefreshManager.ts:317)). The orchestrator separately owns readiness, leases, auth failures, metric demand, and scope enablement ([orchestrator.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/orchestrator.ts:110), [orchestrator.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/orchestrator.ts:510)); `ClusterRefreshRuntime` independently tracks in-flight requests ([refreshRuntime.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/refreshRuntime.ts:93)).
+   **Status (2026-08-24): in progress; fetch lifecycle seam implemented.**
+   `ScopedFetchState` is now a discriminated `idle`/`fetching` state reduced by
+   explicit fetch-started, stream-signal, settled, and canceled events. Request
+   ownership and the one-trailing-signal latch no longer depend on an optional
+   mutable flag, and stale settle/cancel events cannot clear a replacement
+   request ([refreshRuntime.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/refreshRuntime.ts:17), [refreshRuntime.test.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/refreshRuntime.test.ts:9)).
 
-   Introduce a discriminated state machine with events such as lease acquired/released, activation ready, fetch started/settled, signal received, stream synchronized/failed, auth failed, and cluster removed. Let `RefreshManager` emit timing intent only. Migrate one event seam at a time behind current APIs and verify existing navigation, remount, multi-cluster, and retained-state behavior after every step.
+   `ClusterRefreshRuntime` keeps the existing orchestrator boundary while
+   routing start, latch, settle, teardown, and iteration through that reducer;
+   the orchestrator's request scheduling and trailing refetch behavior stay on
+   their existing APIs ([refreshRuntime.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/refreshRuntime.ts:321), [orchestrator.ts](/Volumes/git/luxury-yacht/app/frontend/src/core/refresh/orchestrator.ts:1374)).
+
+   Remaining seams are `RefreshManager` timing intent, lease/scope enablement,
+   activation/readiness, stream lifecycle/health, permission/auth state, and
+   metric demand. Migrate them one at a time behind current APIs, preserving
+   navigation, remount, multi-cluster, retained-state, and polling behavior.
+
+   Before this migration, `RefreshManager` owned timer, promise, abort, enabled,
+   and context-transition state while the orchestrator separately owned
+   readiness, leases, auth failures, metric demand, and scope enablement;
+   `ClusterRefreshRuntime` independently tracked in-flight requests.
 
 5. **Normalize resource-stream messages through a pure protocol reducer** — high debugging payoff, medium risk
 

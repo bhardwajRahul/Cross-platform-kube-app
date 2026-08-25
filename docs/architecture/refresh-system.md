@@ -128,6 +128,10 @@ kind metadata. See [large-data.md](large-data.md) and
   must not demote an already-ready cluster.
 - Snapshot caches are allowed only for cache-tolerant data. Live app-managed
   operation state bypasses stale snapshot/singleflight paths.
+- Frontend snapshot request ownership is an explicit per-scope `idle`/`fetching`
+  state machine. Start, stream-signal, settle, and cancel events are reduced in
+  one place; only the owning request may settle or cancel the scope, and
+  repeated stream signals latch exactly one trailing fetch.
 - Same-key snapshot callers share one build but retain independent wait
   contexts. Canceling one caller releases only that waiter; the shared build is
   canceled when every waiter leaves.

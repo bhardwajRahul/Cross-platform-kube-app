@@ -3325,12 +3325,16 @@ describe('refreshOrchestrator', () => {
     runtimeA.pendingStreaming.set(keyA, Promise.resolve(undefined));
     runtimeA.cancelledStreaming.add(keyA);
     runtimeA.inFlight.set(keyA, {
-      controller: new AbortController(),
-      isManual: false,
-      requestId: 1,
-      contextVersion: 0,
-      domain: 'cluster-config',
-      scope: scopeA,
+      status: 'fetching',
+      request: {
+        controller: new AbortController(),
+        isManual: false,
+        requestId: 1,
+        contextVersion: 0,
+        domain: 'cluster-config',
+        scope: scopeA,
+      },
+      trailingStreamSignal: false,
     });
 
     orchestratorInternals.handleClusterAuthFailed({ clusterId: 'cluster-a' });
@@ -3377,20 +3381,28 @@ describe('refreshOrchestrator', () => {
     const controllerA = new AbortController();
     const controllerB = new AbortController();
     runtimeA.inFlight.set(makeTestInFlightKey('cluster-config', scopeA), {
-      controller: controllerA,
-      isManual: false,
-      requestId: 1,
-      contextVersion: 0,
-      domain: 'cluster-config',
-      scope: scopeA,
+      status: 'fetching',
+      request: {
+        controller: controllerA,
+        isManual: false,
+        requestId: 1,
+        contextVersion: 0,
+        domain: 'cluster-config',
+        scope: scopeA,
+      },
+      trailingStreamSignal: false,
     });
     runtimeB.inFlight.set(makeTestInFlightKey('cluster-config', scopeB), {
-      controller: controllerB,
-      isManual: false,
-      requestId: 2,
-      contextVersion: 0,
-      domain: 'cluster-config',
-      scope: scopeB,
+      status: 'fetching',
+      request: {
+        controller: controllerB,
+        isManual: false,
+        requestId: 2,
+        contextVersion: 0,
+        domain: 'cluster-config',
+        scope: scopeB,
+      },
+      trailingStreamSignal: false,
     });
 
     eventBus.emit('cluster:auth:failed', { clusterId: 'cluster-a' });
@@ -3622,12 +3634,16 @@ describe('refreshOrchestrator', () => {
     orchestratorInternals
       .getRuntimeForScope('cluster-config', scope)
       .inFlight.set(`cluster-config::${scope}`, {
-        controller: new AbortController(),
-        isManual: false,
-        requestId: 1,
-        contextVersion: 0,
-        domain: 'cluster-config',
-        scope,
+        status: 'fetching',
+        request: {
+          controller: new AbortController(),
+          isManual: false,
+          requestId: 1,
+          contextVersion: 0,
+          domain: 'cluster-config',
+          scope,
+        },
+        trailingStreamSignal: false,
       });
 
     orchestratorInternals.handleResetViews();

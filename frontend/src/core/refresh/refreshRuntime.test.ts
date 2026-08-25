@@ -1,6 +1,64 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { ClusterRefreshRuntime, makeInFlightKey } from './refreshRuntime';
+import {
+  ClusterRefreshRuntime,
+  makeInFlightKey,
+  transitionScopedFetchState,
+} from './refreshRuntime';
+
+describe('transitionScopedFetchState', () => {
+  it('keeps replacement ownership and coalesces repeated stream signals', () => {
+    const firstRequest = {
+      controller: new AbortController(),
+      isManual: false,
+      requestId: 1,
+      contextVersion: 0,
+      domain: 'cluster-config' as const,
+      scope: 'cluster-a|',
+    };
+    const replacementRequest = {
+      ...firstRequest,
+      controller: new AbortController(),
+      isManual: true,
+      requestId: 2,
+    };
+
+    let state = transitionScopedFetchState(
+      { status: 'idle' },
+      { type: 'fetch-started', request: firstRequest }
+    );
+    state = transitionScopedFetchState(state, { type: 'stream-signal-received' });
+    state = transitionScopedFetchState(state, { type: 'stream-signal-received' });
+
+    expect(state).toEqual({
+      status: 'fetching',
+      request: firstRequest,
+      trailingStreamSignal: true,
+    });
+
+    state = transitionScopedFetchState(state, {
+      type: 'fetch-started',
+      request: replacementRequest,
+    });
+    const afterStaleSettle = transitionScopedFetchState(state, {
+      type: 'fetch-settled',
+      requestId: firstRequest.requestId,
+    });
+    const afterStaleCancel = transitionScopedFetchState(afterStaleSettle, {
+      type: 'fetch-cancelled',
+      requestId: firstRequest.requestId,
+    });
+
+    expect(afterStaleSettle).toBe(state);
+    expect(afterStaleCancel).toBe(state);
+    expect(
+      transitionScopedFetchState(afterStaleCancel, {
+        type: 'fetch-settled',
+        requestId: replacementRequest.requestId,
+      })
+    ).toEqual({ status: 'idle' });
+  });
+});
 
 describe('ClusterRefreshRuntime', () => {
   it('keeps enabled scoped domain state behind runtime operations', () => {
@@ -161,6 +219,41 @@ describe('ClusterRefreshRuntime', () => {
 
     expect(runtime.isStreamingBlocked('cluster-config', 'cluster-a|')).toBe(false);
     expect(runtime.getEnabledScopes('cluster-config')).toEqual(['cluster-a|']);
+  });
+
+  it('ignores stale settle and cancel events after a request is replaced', () => {
+    const runtime = new ClusterRefreshRuntime('cluster-a');
+    const scope = 'cluster-a|';
+    const firstRequest = {
+      controller: new AbortController(),
+      isManual: false,
+      requestId: 1,
+      contextVersion: 0,
+      domain: 'cluster-config' as const,
+      scope,
+    };
+    const replacementRequest = {
+      ...firstRequest,
+      controller: new AbortController(),
+      isManual: true,
+      requestId: 2,
+    };
+
+    const key = runtime.setInFlight(firstRequest);
+    runtime.setInFlight(replacementRequest);
+
+    expect(runtime.settleInFlight('cluster-config', scope, firstRequest.requestId)).toBeUndefined();
+    expect(runtime.teardownInFlight(key, firstRequest)).toBeUndefined();
+    expect(replacementRequest.controller.signal.aborted).toBe(false);
+    expect(runtime.getInFlight('cluster-config', scope)?.requestId).toBe(
+      replacementRequest.requestId
+    );
+
+    expect(runtime.settleInFlight('cluster-config', scope, replacementRequest.requestId)).toEqual({
+      ...replacementRequest,
+      trailingStreamSignal: false,
+    });
+    expect(runtime.getInFlight('cluster-config', scope)).toBeUndefined();
   });
 
   it('reference-counts scoped leases so concurrent holders share one enable', () => {

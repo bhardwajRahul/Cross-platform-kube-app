@@ -12,12 +12,51 @@ export type InFlightRequest = {
   contextVersion: number;
   domain: RefreshDomain;
   scope?: string;
-  // Set when a stream-signal fetch arrived while this request was in flight:
-  // the signal proves this response predates the change, so its finally block
-  // runs exactly ONE trailing stream-signal fetch. Latching (instead of
-  // aborting) keeps busy scopes progressing — signals can arrive faster than
-  // a round trip, and abort-and-replace would starve the scope.
-  rerunStreamSignal?: boolean;
+};
+
+export type ScopedFetchState =
+  | { status: 'idle' }
+  | {
+      status: 'fetching';
+      request: InFlightRequest;
+      // A stream signal proves the active response predates a change. Any
+      // number of signals coalesce into one trailing fetch after this request.
+      trailingStreamSignal: boolean;
+    };
+
+export type ScopedFetchEvent =
+  | { type: 'fetch-started'; request: InFlightRequest }
+  | { type: 'stream-signal-received' }
+  | { type: 'fetch-settled'; requestId: number }
+  | { type: 'fetch-cancelled'; requestId: number };
+
+export type TrackedInFlightRequest = InFlightRequest & {
+  trailingStreamSignal: boolean;
+};
+
+export const transitionScopedFetchState = (
+  state: ScopedFetchState,
+  event: ScopedFetchEvent
+): ScopedFetchState => {
+  switch (event.type) {
+    case 'fetch-started':
+      return {
+        status: 'fetching',
+        request: event.request,
+        trailingStreamSignal: false,
+      };
+    case 'stream-signal-received':
+      if (state.status === 'idle' || state.trailingStreamSignal) {
+        return state;
+      }
+      return { ...state, trailingStreamSignal: true };
+    case 'fetch-settled':
+    case 'fetch-cancelled':
+      if (state.status === 'idle' || state.request.requestId !== event.requestId) {
+        return state;
+      }
+      return { status: 'idle' };
+  }
 };
 
 export type RefreshDemand = 'query' | 'snapshot';
@@ -92,7 +131,7 @@ const MULTI_ACTIVE_SCOPE_DOMAINS = new Set<RefreshDomain>([
 
 export class ClusterRefreshRuntime {
   readonly clusterId: string;
-  private readonly inFlight = new Map<string, InFlightRequest>();
+  private readonly inFlight = new Map<string, ScopedFetchState>();
   private readonly streamingCleanup = new Map<string, () => void>();
   private readonly pendingStreaming = new Map<string, Promise<(() => void) | undefined>>();
   private readonly streamingReady = new Map<string, Promise<void>>();
@@ -279,29 +318,81 @@ export class ClusterRefreshRuntime {
     });
   }
 
-  getInFlight(domain: RefreshDomain, scope?: string): InFlightRequest | undefined {
-    return this.inFlight.get(makeInFlightKey(domain, scope));
+  private getFetchState(key: string): ScopedFetchState {
+    return this.inFlight.get(key) ?? { status: 'idle' };
+  }
+
+  private applyFetchEvent(key: string, event: ScopedFetchEvent): ScopedFetchState {
+    const next = transitionScopedFetchState(this.getFetchState(key), event);
+    if (next.status === 'idle') {
+      this.inFlight.delete(key);
+    } else {
+      this.inFlight.set(key, next);
+    }
+    return next;
+  }
+
+  private trackedRequest(state: ScopedFetchState): TrackedInFlightRequest | undefined {
+    if (state.status === 'idle') {
+      return undefined;
+    }
+    return {
+      ...state.request,
+      trailingStreamSignal: state.trailingStreamSignal,
+    };
+  }
+
+  getInFlight(domain: RefreshDomain, scope?: string): TrackedInFlightRequest | undefined {
+    return this.trackedRequest(this.getFetchState(makeInFlightKey(domain, scope)));
   }
 
   setInFlight(request: InFlightRequest): string {
     const key = makeInFlightKey(request.domain, request.scope);
-    this.inFlight.set(key, request);
+    this.applyFetchEvent(key, { type: 'fetch-started', request });
     return key;
   }
 
-  teardownInFlight(key: string, request: Pick<InFlightRequest, 'controller' | 'cleanup'>): void {
-    request.controller.abort();
-    request.cleanup?.();
-    this.inFlight.delete(key);
+  latchTrailingStreamSignal(domain: RefreshDomain, scope?: string): void {
+    const key = makeInFlightKey(domain, scope);
+    this.applyFetchEvent(key, { type: 'stream-signal-received' });
   }
 
-  deleteInFlight(domain: RefreshDomain, scope?: string): void {
-    this.inFlight.delete(makeInFlightKey(domain, scope));
+  settleInFlight(
+    domain: RefreshDomain,
+    scope: string | undefined,
+    requestId: number
+  ): TrackedInFlightRequest | undefined {
+    const key = makeInFlightKey(domain, scope);
+    const previous = this.getFetchState(key);
+    const tracked = this.trackedRequest(previous);
+    const next = this.applyFetchEvent(key, { type: 'fetch-settled', requestId });
+    return next === previous ? undefined : tracked;
   }
 
-  forEachInFlight(callback: (request: InFlightRequest, key: string) => void): void {
-    Array.from(this.inFlight.entries()).forEach(([key, request]) => {
-      callback(request, key);
+  teardownInFlight(
+    key: string,
+    request: Pick<InFlightRequest, 'requestId'>
+  ): TrackedInFlightRequest | undefined {
+    const previous = this.getFetchState(key);
+    const tracked = this.trackedRequest(previous);
+    const next = this.applyFetchEvent(key, {
+      type: 'fetch-cancelled',
+      requestId: request.requestId,
+    });
+    if (next === previous || !tracked) {
+      return undefined;
+    }
+    tracked.controller.abort();
+    tracked.cleanup?.();
+    return tracked;
+  }
+
+  forEachInFlight(callback: (request: TrackedInFlightRequest, key: string) => void): void {
+    Array.from(this.inFlight.entries()).forEach(([key, state]) => {
+      const request = this.trackedRequest(state);
+      if (request) {
+        callback(request, key);
+      }
     });
   }
 

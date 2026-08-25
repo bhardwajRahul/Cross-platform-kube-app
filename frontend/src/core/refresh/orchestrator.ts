@@ -206,7 +206,7 @@ class RefreshOrchestrator {
       if (details.scope && this.isScopedDomainEnabledInternal(details.domain, details.scope)) {
         this.recordPendingClusterReadiness(details.domain, details.scope, {
           isManual: details.isManual,
-          streamSignal: Boolean(details.streamSignal || details.rerunStreamSignal),
+          streamSignal: Boolean(details.streamSignal || details.trailingStreamSignal),
         });
       }
       this.teardownInFlight(runtime, key, details);
@@ -1382,14 +1382,13 @@ class RefreshOrchestrator {
       return true;
     }
     if (options.isManual) {
-      currentInFlight.controller.abort();
       this.teardownInFlight(runtime, makeInFlightKey(domain, scope), currentInFlight);
       return true;
     }
     if (options.streamSignal) {
       // Coalesce doorbells arriving during the request into one trailing
       // refetch. Aborting here can starve a busy scope indefinitely.
-      currentInFlight.rerunStreamSignal = true;
+      runtime.latchTrailingStreamSignal(domain, scope);
     }
     return false;
   }
@@ -1533,11 +1532,10 @@ class RefreshOrchestrator {
     execution: ScopedFetchExecution<K>
   ): void {
     const { runtime, scope, requestId, contextVersion } = execution;
-    const tracked = runtime.getInFlight(domain, scope);
-    if (tracked?.requestId === requestId) {
+    const tracked = runtime.settleInFlight(domain, scope, requestId);
+    if (tracked) {
       tracked.cleanup?.();
-      runtime.deleteInFlight(domain, scope);
-      if (tracked.rerunStreamSignal && contextVersion === this.contextVersion) {
+      if (tracked.trailingStreamSignal && contextVersion === this.contextVersion) {
         void this.performFetch(domain, scope, {
           isManual: false,
           streamSignal: true,
@@ -1728,7 +1726,7 @@ class RefreshOrchestrator {
   private teardownInFlight(
     runtime: ClusterRefreshRuntime,
     key: string,
-    details: { controller: AbortController; cleanup?: () => void; contextVersion: number }
+    details: { requestId: number }
   ): void {
     runtime.teardownInFlight(key, details);
   }
