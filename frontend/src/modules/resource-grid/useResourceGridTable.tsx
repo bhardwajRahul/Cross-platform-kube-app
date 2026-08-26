@@ -6,8 +6,10 @@
 
 import { ALL_NAMESPACES_SCOPE } from '@modules/namespace/constants';
 import { useNamespaceFilterOptions } from '@modules/namespace/hooks/useNamespaceFilterOptions';
+import type { CustomMetadataColumnDefinition } from '@shared/components/tables/customMetadataColumns';
 import {
   GRIDTABLE_VIRTUALIZATION_DEFAULT,
+  type GridColumnDefinition,
   type GridTableFilterConfig,
   type GridTableFilterState,
 } from '@shared/components/tables/GridTable';
@@ -41,6 +43,24 @@ const resourceGridPartialDataLabel = (tableMode: ResourceGridTableMode) =>
   tableMode === 'Local Partial'
     ? 'This table is showing a bounded or recent local window. Search, filters, sort, export, and selection apply only to the visible dataset.'
     : undefined;
+
+const buildFavoriteColumns = <T,>(
+  columns: GridColumnDefinition<T>[],
+  customColumns: CustomMetadataColumnDefinition[]
+) => [
+  ...columns.map((column) => ({
+    key: column.key,
+    label: column.header,
+    hideable: column.hideable !== false,
+    sortable: column.sortable === true,
+  })),
+  ...customColumns.map((column) => ({
+    key: column.key,
+    label: column.header,
+    hideable: true,
+    sortable: false,
+  })),
+];
 
 const useDefaultResourceGridKey = <T extends ResourceGridTableRow>(
   fallbackClusterId?: string | null
@@ -107,6 +127,7 @@ export function useNamespaceResourceGridTable<T extends ResourceGridTableRow>({
 export function useObjectPanelResourceGridTable<T extends ResourceGridTableRow>({
   viewId,
   tableMode,
+  supportsCustomMetadataColumns,
   clusterIdentity,
   enabled = true,
   data,
@@ -138,6 +159,7 @@ export function useObjectPanelResourceGridTable<T extends ResourceGridTableRow>(
   const binding = useGridTableBinding({
     data,
     tableMode,
+    supportsCustomMetadataColumns,
     columns,
     keyExtractor: resolvedKeyExtractor,
     defaultSortKey: defaultSort.key,
@@ -181,6 +203,7 @@ export function useObjectPanelResourceGridTable<T extends ResourceGridTableRow>(
 
 export function useQueryResourceGridTable<T extends ResourceGridTableRow>({
   tableMode,
+  supportsCustomMetadataColumns,
   data,
   columns,
   persistence,
@@ -199,6 +222,7 @@ export function useQueryResourceGridTable<T extends ResourceGridTableRow>({
   const binding = useGridTableBinding({
     data,
     tableMode,
+    supportsCustomMetadataColumns,
     columns,
     keyExtractor: resolvedKeyExtractor,
     defaultSortKey,
@@ -208,6 +232,14 @@ export function useQueryResourceGridTable<T extends ResourceGridTableRow>({
     persistence,
     virtualization,
   });
+  const favoriteColumns = useMemo(
+    () =>
+      buildFavoriteColumns(
+        columns,
+        supportsCustomMetadataColumns ? (persistence.customColumns ?? []) : []
+      ),
+    [columns, persistence.customColumns, supportsCustomMetadataColumns]
+  );
 
   const { item: favToggle, modal: favModal } = useFavToggle({
     filters: persistence.filters,
@@ -215,12 +247,7 @@ export function useQueryResourceGridTable<T extends ResourceGridTableRow>({
     sortDirection: binding.sortConfig?.direction ?? 'asc',
     columnVisibility: persistence.columnVisibility ?? {},
     columnOrder: persistence.columnOrder ?? [],
-    columns: columns.map((column) => ({
-      key: column.key,
-      label: column.header,
-      hideable: column.hideable !== false,
-      sortable: column.sortable === true,
-    })),
+    columns: favoriteColumns,
     setFilters: persistence.setFilters,
     setSortConfig: persistence.setSortConfig,
     setColumnVisibility: persistence.setColumnVisibility,
@@ -275,6 +302,7 @@ export function useQueryResourceGridTable<T extends ResourceGridTableRow>({
 function useResourceGridTableCommon<T extends ResourceGridTableRow>({
   data,
   tableMode,
+  supportsCustomMetadataColumns,
   columns,
   availableKinds: kindOptions,
   diagnosticsLabel,
@@ -298,6 +326,7 @@ function useResourceGridTableCommon<T extends ResourceGridTableRow>({
   const binding = useGridTableBinding({
     data,
     tableMode,
+    supportsCustomMetadataColumns,
     columns,
     keyExtractor,
     defaultSortKey,
@@ -429,18 +458,21 @@ function useResourceGridTableCommon<T extends ResourceGridTableRow>({
       showNamespaceFilters,
     ]
   );
+  const favoriteColumns = useMemo(
+    () =>
+      buildFavoriteColumns(
+        columns,
+        supportsCustomMetadataColumns ? (persistence.customColumns ?? []) : []
+      ),
+    [columns, persistence.customColumns, supportsCustomMetadataColumns]
+  );
   const { item: favToggle, modal: favModal } = useFavToggle({
     filters: persistence.filters,
     sortColumn: sortConfig?.key ?? null,
     sortDirection: sortConfig?.direction ?? 'asc',
     columnVisibility: persistence.columnVisibility ?? {},
     columnOrder: persistence.columnOrder ?? [],
-    columns: columns.map((column) => ({
-      key: column.key,
-      label: column.header,
-      hideable: column.hideable !== false,
-      sortable: column.sortable === true,
-    })),
+    columns: favoriteColumns,
     setFilters: persistence.setFilters,
     setSortConfig: persistence.setSortConfig,
     setColumnVisibility: persistence.setColumnVisibility,

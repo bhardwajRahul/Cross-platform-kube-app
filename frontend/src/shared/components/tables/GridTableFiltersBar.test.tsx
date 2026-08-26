@@ -51,7 +51,9 @@ vi.mock('@shared/components/dropdowns/Dropdown', () => ({
     renderOption?: (option: MockDropdownOption, isSelected: boolean) => React.ReactNode;
     renderOptionActions?: (option: MockDropdownOption) => React.ReactNode;
     getOptionRowProps?: (option: MockDropdownOption) => Record<string, unknown>;
-    additionalBulkActions?: React.ReactNode;
+    additionalBulkActions?:
+      | React.ReactNode
+      | ((context: { closeDropdown: () => void }) => React.ReactNode);
   }) => (
     <div className={dropdownClassName}>
       <select
@@ -78,7 +80,9 @@ vi.mock('@shared/components/dropdowns/Dropdown', () => ({
           {renderOptionActions?.(option)}
         </div>
       ))}
-      {additionalBulkActions}
+      {(typeof additionalBulkActions === 'function'
+        ? additionalBulkActions({ closeDropdown: vi.fn() })
+        : additionalBulkActions) ?? null}
     </div>
   ),
 }));
@@ -205,12 +209,15 @@ describe('GridTableFiltersBar', () => {
       '[data-testid="clusters"]'
     ) as HTMLSelectElement;
     expect(clusterDropdown).toBeTruthy();
-    expect(Array.from(clusterDropdown.options).map(({ text, value }) => ({ text, value }))).toEqual(
-      [
-        { text: 'alpha', value: 'cluster-a' },
-        { text: 'beta', value: 'cluster-b' },
-      ]
-    );
+    expect(
+      Array.from(clusterDropdown.options).map(({ text, value }) => ({
+        text,
+        value,
+      }))
+    ).toEqual([
+      { text: 'alpha', value: 'cluster-a' },
+      { text: 'beta', value: 'cluster-b' },
+    ]);
 
     await act(async () => {
       clusterDropdown.value = 'cluster-b';
@@ -337,8 +344,18 @@ describe('GridTableFiltersBar', () => {
         kinds: [],
         namespaces: [],
         queryFacets: [
-          { key: 'status', label: 'Status', placeholder: 'All statuses', options: [] },
-          { key: 'owner', label: 'Owner', placeholder: 'All owners', options: [] },
+          {
+            key: 'status',
+            label: 'Status',
+            placeholder: 'All statuses',
+            options: [],
+          },
+          {
+            key: 'owner',
+            label: 'Owner',
+            placeholder: 'All owners',
+            options: [],
+          },
         ],
       },
       onFiltersChange,
@@ -663,7 +680,12 @@ describe('GridTableFiltersBar', () => {
         namespaces: [],
         searchBehavior: 'query',
       },
-      resultCount: { filtered: 100, unfiltered: 100001, totalIsExact: false, capped: true },
+      resultCount: {
+        filtered: 100,
+        unfiltered: 100001,
+        totalIsExact: false,
+        capped: true,
+      },
     });
 
     const resultCount = container.querySelector('[data-gridtable-filter-role="result-count"]');
@@ -696,7 +718,12 @@ describe('GridTableFiltersBar', () => {
         namespaces: [],
         searchBehavior: 'query',
       },
-      resultCount: { filtered: 250, unfiltered: 5000, totalIsExact: true, capped: true },
+      resultCount: {
+        filtered: 250,
+        unfiltered: 5000,
+        totalIsExact: true,
+        capped: true,
+      },
     });
 
     const resultCount = container.querySelector('[data-gridtable-filter-role="result-count"]');
@@ -808,7 +835,9 @@ describe('GridTableFiltersBar', () => {
       searchShortcutActive: false,
     });
 
-    const config = searchShortcutMock.register.mock.calls[0][0] as { isActive: boolean };
+    const config = searchShortcutMock.register.mock.calls[0][0] as {
+      isActive: boolean;
+    };
     expect(config.isActive).toBe(false);
   });
 
@@ -936,7 +965,10 @@ describe('GridTableFiltersBar', () => {
       dropEffect: 'none',
       setData: vi.fn(),
     };
-    const dragStart = new Event('dragstart', { bubbles: true, cancelable: true });
+    const dragStart = new Event('dragstart', {
+      bubbles: true,
+      cancelable: true,
+    });
     Object.defineProperty(dragStart, 'dataTransfer', { value: dataTransfer });
     await act(async () => nameRow.dispatchEvent(dragStart));
 
@@ -951,11 +983,21 @@ describe('GridTableFiltersBar', () => {
 
     expect(onReorderColumn).toHaveBeenCalledWith('name', 1);
 
-    const upwardDragStart = new Event('dragstart', { bubbles: true, cancelable: true });
-    Object.defineProperty(upwardDragStart, 'dataTransfer', { value: dataTransfer });
+    const upwardDragStart = new Event('dragstart', {
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(upwardDragStart, 'dataTransfer', {
+      value: dataTransfer,
+    });
     await act(async () => ageRow.dispatchEvent(upwardDragStart));
-    const upwardDragOver = new Event('dragover', { bubbles: true, cancelable: true });
-    Object.defineProperty(upwardDragOver, 'dataTransfer', { value: dataTransfer });
+    const upwardDragOver = new Event('dragover', {
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(upwardDragOver, 'dataTransfer', {
+      value: dataTransfer,
+    });
     await act(async () => nameRow.dispatchEvent(upwardDragOver));
     expect(nameRow.dataset.dropPosition).toBe('before');
 
@@ -988,6 +1030,50 @@ describe('GridTableFiltersBar', () => {
       'button[aria-label="Reset columns"]'
     ) as HTMLButtonElement;
     expect(reset.disabled).toBe(true);
+  });
+
+  it('adds, edits, and directly deletes custom metadata columns from the Columns menu', async () => {
+    const onAddCustomMetadataColumn = vi.fn();
+    const onEditCustomMetadataColumn = vi.fn();
+    const onRemoveCustomMetadataColumn = vi.fn();
+    await renderFilters({
+      showColumnsDropdown: true,
+      columnOptions: [
+        { label: 'Name', value: 'name' },
+        { label: 'Owner', value: 'metadata:label:example.com/owner' },
+      ],
+      columnValue: ['name', 'metadata:label:example.com/owner'],
+      onColumnsChange: vi.fn(),
+      onMoveColumn: vi.fn(),
+      onReorderColumn: vi.fn(),
+      customMetadataColumnKeys: new Set(['metadata:label:example.com/owner']),
+      onAddCustomMetadataColumn,
+      onEditCustomMetadataColumn,
+      onRemoveCustomMetadataColumn,
+      columnsDropdownId: 'columns',
+      renderColumnsValue: () => 'Columns',
+    });
+
+    const addCustomColumnButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Add Custom Column"]'
+    );
+    expect(addCustomColumnButton?.textContent).toBe('Add');
+    await act(async () => {
+      addCustomColumnButton?.click();
+    });
+    expect(onAddCustomMetadataColumn).toHaveBeenCalledTimes(1);
+
+    expect(container.querySelector('button[aria-label="Edit Name"]')).toBeNull();
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Edit Owner"]')?.click();
+    });
+    expect(onEditCustomMetadataColumn).toHaveBeenCalledWith('metadata:label:example.com/owner');
+
+    expect(container.querySelector('button[aria-label="Delete Name"]')).toBeNull();
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Delete Owner"]')?.click();
+    });
+    expect(onRemoveCustomMetadataColumn).toHaveBeenCalledWith('metadata:label:example.com/owner');
   });
 
   it('presents required columns as required rather than disabled', async () => {

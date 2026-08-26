@@ -36,6 +36,10 @@ type ColumnsDropdownConfig = {
   onReorderColumn?: (key: string, targetIndex: number) => void;
   canResetColumns?: boolean;
   onResetColumns?: () => void;
+  customMetadataColumnKeys?: Set<string>;
+  onAddCustomMetadataColumn?: () => void;
+  onEditCustomMetadataColumn?: (key: string) => void;
+  onRemoveCustomMetadataColumn?: (key: string) => void;
 };
 
 type SearchShortcutConfig = {
@@ -378,6 +382,10 @@ export function useGridTableFiltersPresentation<T>({
       onReorderColumn: columnsDropdown?.onReorderColumn,
       canResetColumns: columnsDropdown?.canResetColumns,
       onResetColumns: columnsDropdown?.onResetColumns,
+      customMetadataColumnKeys: columnsDropdown?.customMetadataColumnKeys,
+      onAddCustomMetadataColumn: columnsDropdown?.onAddCustomMetadataColumn,
+      onEditCustomMetadataColumn: columnsDropdown?.onEditCustomMetadataColumn,
+      onRemoveCustomMetadataColumn: columnsDropdown?.onRemoveCustomMetadataColumn,
       showColumnsDropdown,
       searchShortcutActive,
       searchShortcutPriority,

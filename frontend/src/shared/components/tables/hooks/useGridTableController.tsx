@@ -9,6 +9,13 @@
  * Extracted from GridTable.tsx — no behavioral change, purely mechanical.
  */
 
+import CustomMetadataColumnEditor, {
+  type CustomMetadataColumnEditorState,
+} from '@shared/components/tables/CustomMetadataColumnEditor';
+import {
+  buildCustomMetadataGridColumns,
+  collectAvailableCustomMetadataKeys,
+} from '@shared/components/tables/customMetadataColumns';
 import type { GridTableProps } from '@shared/components/tables/GridTable.types';
 import { getTextContent } from '@shared/components/tables/GridTable.utils';
 import { useGridTableKeyboardScopes } from '@shared/components/tables/GridTableKeys';
@@ -40,7 +47,7 @@ import {
   recordGridTableScrollFrameSample,
 } from '@shared/components/tables/performance/gridTablePerformanceStore';
 import type { MutableRefObject, ReactElement, ReactNode, RefObject } from 'react';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type GridTableProfilerOptions = NonNullable<Parameters<typeof useGridTableProfiler>[0]>;
 
@@ -213,7 +220,8 @@ export interface GridTableControllerResult<T> {
 
 export function useGridTableController<T>({
   data: inputData,
-  columns,
+  columns: declaredColumns,
+  customMetadataColumns,
   keyExtractor,
   getRowClassName,
   isRowSelected,
@@ -264,7 +272,47 @@ export function useGridTableController<T>({
   const contextMenuActiveRef = useRef(false);
   const clusterKeyCheckRef = useRef(false);
   const keyExtractorRef = useRef(keyExtractor);
+  const [customColumnEditorState, setCustomColumnEditorState] =
+    useState<CustomMetadataColumnEditorState | null>(null);
   const externalColumnWidths = useGridTableExternalWidths(controlledColumnWidths);
+  const columns = useMemo(
+    () => [
+      ...declaredColumns,
+      ...buildCustomMetadataGridColumns<T>(customMetadataColumns?.definitions ?? []),
+    ],
+    [customMetadataColumns?.definitions, declaredColumns]
+  );
+  const customMetadataColumnKeys = useMemo(
+    () => new Set(customMetadataColumns?.definitions.map((definition) => definition.key) ?? []),
+    [customMetadataColumns?.definitions]
+  );
+  const availableCustomMetadataKeys = useMemo(
+    () => (customColumnEditorState === null ? [] : collectAvailableCustomMetadataKeys(sourceData)),
+    [customColumnEditorState, sourceData]
+  );
+  const handleAddCustomMetadataColumn = useCallback(() => {
+    setCustomColumnEditorState({ mode: 'create' });
+  }, []);
+  const handleEditCustomMetadataColumn = useCallback(
+    (key: string) => {
+      const definition = customMetadataColumns?.definitions.find((column) => column.key === key);
+      if (definition) {
+        setCustomColumnEditorState({ mode: 'edit', definition });
+      }
+    },
+    [customMetadataColumns?.definitions]
+  );
+  const handleRemoveCustomMetadataColumn = useCallback(
+    (key: string) => {
+      customMetadataColumns?.onChange(
+        customMetadataColumns.definitions.filter((definition) => definition.key !== key)
+      );
+    },
+    [customMetadataColumns]
+  );
+  const handleCloseCustomMetadataColumnEditor = useCallback(() => {
+    setCustomColumnEditorState(null);
+  }, []);
 
   const { wrapWithProfiler, warnDevOnce, startFrameSampler, stopFrameSampler } =
     useGridTableProfiler(getProfilerOptions(diagnosticsLabel));
@@ -425,9 +473,15 @@ export function useGridTableController<T>({
     resetColumnOrder,
     canResetAutoWidthColumns: layoutCanResetAutoWidthColumns,
     resetAutoWidthColumns: resetLayoutAutoWidthColumns,
+    customMetadataColumnKeys,
+    onAddCustomMetadataColumn: customMetadataColumns ? handleAddCustomMetadataColumn : undefined,
+    onEditCustomMetadataColumn: customMetadataColumns ? handleEditCustomMetadataColumn : undefined,
+    onRemoveCustomMetadataColumn: customMetadataColumns
+      ? handleRemoveCustomMetadataColumn
+      : undefined,
   });
 
-  const filtersNode = useGridTableFiltersPresentation<T>({
+  const filtersPresentation = useGridTableFiltersPresentation<T>({
     filterModel,
     data: sourceData,
     totalDataCount,
@@ -439,6 +493,20 @@ export function useGridTableController<T>({
     exportFilename,
     hasAllLocalMatches: Boolean(localPagination),
   });
+  const filtersNode = (
+    <>
+      {filtersPresentation}
+      {!!customMetadataColumns && (
+        <CustomMetadataColumnEditor
+          state={customColumnEditorState}
+          definitions={customMetadataColumns.definitions}
+          availableKeys={availableCustomMetadataKeys}
+          onChange={customMetadataColumns.onChange}
+          onClose={handleCloseCustomMetadataColumnEditor}
+        />
+      )}
+    </>
+  );
 
   const { getCachedCellContent } = useGridTableCellCache<T>({
     renderedColumns,

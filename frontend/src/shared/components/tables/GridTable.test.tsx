@@ -10,6 +10,7 @@ import {
   createResourceBarColumn,
   createTextColumn,
 } from '@shared/components/tables/columnFactories';
+import { createCustomMetadataColumnDefinition } from '@shared/components/tables/customMetadataColumns';
 import GridTable, {
   GRIDTABLE_VIRTUALIZATION_DEFAULT,
   type GridColumnDefinition,
@@ -79,6 +80,10 @@ interface SimpleRow {
   id: string;
   label: string;
   name?: string;
+  metadata?: {
+    labels?: Record<string, string>;
+    annotations?: Record<string, string>;
+  };
 }
 
 const defaultColumns: GridColumnDefinition<SimpleRow>[] = [
@@ -129,6 +134,7 @@ type RenderOptions = Partial<{
     pageSizeOptions: readonly number[];
     onPageSizeChange: (value: number) => void;
   };
+  customMetadataColumns: NonNullable<GridTableProps<SimpleRow>['customMetadataColumns']>;
 }>;
 
 let cleanupRoot: (() => void) | null = null;
@@ -210,7 +216,12 @@ describe('GridTable virtualization', () => {
   it('renders only the virtual window when virtualization is active', () => {
     const { container, cleanup } = renderGridTable({
       data: createRows(100),
-      virtualization: { enabled: true, threshold: 1, overscan: 1, estimateRowHeight: 40 },
+      virtualization: {
+        enabled: true,
+        threshold: 1,
+        overscan: 1,
+        estimateRowHeight: 40,
+      },
     });
     cleanupRoot = cleanup;
 
@@ -342,14 +353,22 @@ describe('GridTable virtualization', () => {
 
       cleanup();
     } finally {
-      Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+      Object.defineProperty(navigator, 'clipboard', {
+        value: undefined,
+        configurable: true,
+      });
     }
   });
 
   it('updates the rendered slice when scrolling', async () => {
     const { container, cleanup, scrollWrapper } = renderGridTable({
       data: createRows(120),
-      virtualization: { enabled: true, threshold: 1, overscan: 1, estimateRowHeight: 40 },
+      virtualization: {
+        enabled: true,
+        threshold: 1,
+        overscan: 1,
+        estimateRowHeight: 40,
+      },
     });
     cleanupRoot = cleanup;
 
@@ -383,7 +402,12 @@ describe('GridTable virtualization', () => {
           render: renderCell,
         },
       ],
-      virtualization: { enabled: true, threshold: 1, overscan: 1, estimateRowHeight: 40 },
+      virtualization: {
+        enabled: true,
+        threshold: 1,
+        overscan: 1,
+        estimateRowHeight: 40,
+      },
     });
     cleanupRoot = cleanup;
 
@@ -408,7 +432,12 @@ describe('GridTable virtualization', () => {
   it('maintains focus on focused row content while the virtual window shifts', () => {
     const { container, cleanup, scrollWrapper } = renderGridTable({
       data: createRows(60),
-      virtualization: { enabled: true, threshold: 1, overscan: 2, estimateRowHeight: 40 },
+      virtualization: {
+        enabled: true,
+        threshold: 1,
+        overscan: 2,
+        estimateRowHeight: 40,
+      },
     });
     cleanupRoot = cleanup;
 
@@ -431,7 +460,12 @@ describe('GridTable virtualization', () => {
   it('preserves focus order as rows recycle during sequential navigation', async () => {
     const { container, cleanup, scrollWrapper } = renderGridTable({
       data: createRows(200),
-      virtualization: { enabled: true, threshold: 1, overscan: 2, estimateRowHeight: 40 },
+      virtualization: {
+        enabled: true,
+        threshold: 1,
+        overscan: 2,
+        estimateRowHeight: 40,
+      },
     });
     cleanupRoot = cleanup;
 
@@ -502,9 +536,17 @@ describe('GridTable virtualization', () => {
     ];
 
     const { container, cleanup } = renderGridTable({
-      data: createRows(150).map((row, index) => ({ ...row, name: `Name ${index}` })),
+      data: createRows(150).map((row, index) => ({
+        ...row,
+        name: `Name ${index}`,
+      })),
       columns: wideColumns,
-      virtualization: { enabled: true, threshold: 1, overscan: 1, estimateRowHeight: 40 },
+      virtualization: {
+        enabled: true,
+        threshold: 1,
+        overscan: 1,
+        estimateRowHeight: 40,
+      },
     });
     cleanupRoot = cleanup;
 
@@ -533,9 +575,17 @@ describe('GridTable virtualization', () => {
     ];
 
     const { container, cleanup } = renderGridTable({
-      data: createRows(150).map((row, index) => ({ ...row, name: `Name ${index}` })),
+      data: createRows(150).map((row, index) => ({
+        ...row,
+        name: `Name ${index}`,
+      })),
       columns: wideColumns,
-      virtualization: { enabled: true, threshold: 1, overscan: 1, estimateRowHeight: 40 },
+      virtualization: {
+        enabled: true,
+        threshold: 1,
+        overscan: 1,
+        estimateRowHeight: 40,
+      },
     });
     cleanupRoot = cleanup;
 
@@ -563,7 +613,12 @@ describe('GridTable virtualization', () => {
 
     const { cleanup } = renderGridTable({
       data: createRows(30),
-      virtualization: { enabled: true, threshold: 1, overscan: 1, estimateRowHeight: 40 },
+      virtualization: {
+        enabled: true,
+        threshold: 1,
+        overscan: 1,
+        estimateRowHeight: 40,
+      },
     });
     cleanupRoot = cleanup;
 
@@ -613,7 +668,12 @@ describe('GridTable virtualization', () => {
 
     const { container, cleanup, rerender } = renderGridTable({
       data: rows,
-      virtualization: { enabled: true, threshold: 1, overscan: 1, estimateRowHeight: 40 },
+      virtualization: {
+        enabled: true,
+        threshold: 1,
+        overscan: 1,
+        estimateRowHeight: 40,
+      },
     });
     cleanupRoot = cleanup;
 
@@ -846,7 +906,12 @@ describe('GridTable interactions (non-virtualized)', () => {
     expect(firstCell).not.toBeNull();
     act(() => {
       requireValue(firstCell, 'expected test value in GridTable.test.tsx').dispatchEvent(
-        new MouseEvent('contextmenu', { bubbles: true, button: 2, clientX: 50, clientY: 50 })
+        new MouseEvent('contextmenu', {
+          bubbles: true,
+          button: 2,
+          clientX: 50,
+          clientY: 50,
+        })
       );
     });
 
@@ -1274,6 +1339,7 @@ function renderGridTable(options: RenderOptions = {}) {
     columnWidths: options.columnWidths ?? {},
     paginationControls: options.paginationControls,
     localPagination: options.localPagination,
+    customMetadataColumns: options.customMetadataColumns,
   };
 
   let currentProps = initialProps;
@@ -1325,6 +1391,184 @@ function renderGridTable(options: RenderOptions = {}) {
 
   return { container, rerender, cleanup, scrollWrapper };
 }
+
+it('appends configured metadata columns to the rendered and exportable column set', () => {
+  const owner = createCustomMetadataColumnDefinition({
+    source: 'label',
+    metadataKey: 'example.com/owner',
+    header: 'Owner',
+  });
+  const { container, cleanup } = renderGridTable({
+    data: [
+      {
+        id: 'row-1',
+        label: 'Row 1',
+        metadata: { labels: { 'example.com/owner': 'platform' } },
+      },
+      { id: 'row-2', label: 'Row 2' },
+    ],
+    virtualization: { enabled: false },
+    customMetadataColumns: { definitions: [owner], onChange: vi.fn() },
+  });
+
+  expect(container.querySelector('.gridtable--header')?.textContent).toContain('Owner');
+  expect(container.textContent).toContain('platform');
+  expect(container.textContent).toContain('-');
+
+  cleanup();
+});
+
+it('does not inspect row metadata until the custom-column editor opens', async () => {
+  let metadataReads = 0;
+  const row: SimpleRow = { id: 'row-1', label: 'Row 1' };
+  Object.defineProperty(row, 'metadata', {
+    configurable: true,
+    get: () => {
+      metadataReads += 1;
+      return { labels: { 'example.com/owner': 'platform' } };
+    },
+  });
+  const { container, cleanup } = renderGridTable({
+    data: [row],
+    filters: { enabled: true },
+    enableColumnVisibilityMenu: true,
+    virtualization: { enabled: false },
+    customMetadataColumns: { definitions: [], onChange: vi.fn() },
+  });
+  cleanupRoot = cleanup;
+  await flushAsync();
+
+  expect(metadataReads).toBe(0);
+  await act(async () => {
+    requireValue(
+      container.querySelector<HTMLButtonElement>(
+        '[data-gridtable-filter-role="columns"] .dropdown-trigger'
+      ),
+      'expected Columns trigger'
+    ).click();
+  });
+  expect(metadataReads).toBe(0);
+
+  await act(async () => {
+    requireValue(
+      document.body.querySelector<HTMLButtonElement>('button[aria-label="Add Custom Column"]'),
+      'expected Add Custom Column action'
+    ).click();
+  });
+  expect(metadataReads).toBeGreaterThan(0);
+});
+
+it('creates a custom metadata column from the Columns menu', async () => {
+  const onChange = vi.fn();
+  const { container, cleanup } = renderGridTable({
+    data: [
+      {
+        id: 'row-1',
+        label: 'Row 1',
+        metadata: { labels: { 'example.com/owner': 'platform' } },
+      },
+      { id: 'row-2', label: 'Row 2' },
+    ],
+    filters: { enabled: true },
+    enableColumnVisibilityMenu: true,
+    virtualization: { enabled: false },
+    customMetadataColumns: { definitions: [], onChange },
+  });
+  cleanupRoot = cleanup;
+  await flushAsync();
+
+  await act(async () => {
+    requireValue(
+      container.querySelector<HTMLButtonElement>(
+        '[data-gridtable-filter-role="columns"] .dropdown-trigger'
+      ),
+      'expected Columns trigger'
+    ).click();
+    await Promise.resolve();
+  });
+  await act(async () => {
+    requireValue(
+      document.body.querySelector<HTMLButtonElement>('button[aria-label="Add Custom Column"]'),
+      'expected Add Custom Column action'
+    ).click();
+    await Promise.resolve();
+  });
+
+  expect(document.body.querySelector('[role="dialog"]')?.textContent).toContain(
+    'Add Custom Column'
+  );
+  expect(document.body.querySelector('dialog[aria-label="Columns"]')).toBeNull();
+  await act(async () => {
+    requireValue(
+      document.body.querySelector<HTMLButtonElement>('button[aria-label="Metadata Key"]'),
+      'expected metadata key selector'
+    ).click();
+  });
+  await act(async () => {
+    const metadataKeyOption = Array.from(
+      document.body.querySelectorAll<HTMLElement>('.dropdown-option')
+    ).find((option) => option.textContent?.includes('example.com/owner'));
+    requireValue(metadataKeyOption, 'expected metadata key option').click();
+  });
+  await act(async () => {
+    requireValue(
+      document.body.querySelector<HTMLButtonElement>(
+        '.custom-metadata-column-editor button[type="submit"]'
+      ),
+      'expected Add submit action'
+    ).click();
+  });
+
+  expect(onChange).toHaveBeenCalledWith([
+    {
+      key: 'metadata:label:example.com/owner',
+      source: 'label',
+      metadataKey: 'example.com/owner',
+      header: 'Owner',
+    },
+  ]);
+});
+
+it('deletes a custom metadata column directly from the Columns menu', async () => {
+  const owner = createCustomMetadataColumnDefinition({
+    source: 'label',
+    metadataKey: 'example.com/owner',
+    header: 'Owner',
+  });
+  const onChange = vi.fn();
+  const { container, cleanup } = renderGridTable({
+    data: [
+      {
+        id: 'row-1',
+        label: 'Row 1',
+        metadata: { labels: { 'example.com/owner': 'platform' } },
+      },
+    ],
+    filters: { enabled: true },
+    enableColumnVisibilityMenu: true,
+    virtualization: { enabled: false },
+    customMetadataColumns: { definitions: [owner], onChange },
+  });
+  cleanupRoot = cleanup;
+  await flushAsync();
+
+  await act(async () => {
+    requireValue(
+      container.querySelector<HTMLButtonElement>(
+        '[data-gridtable-filter-role="columns"] .dropdown-trigger'
+      ),
+      'expected Columns trigger'
+    ).click();
+  });
+  await act(async () => {
+    requireValue(
+      document.body.querySelector<HTMLButtonElement>('button[aria-label="Delete Owner"]'),
+      'expected direct delete action'
+    ).click();
+  });
+
+  expect(onChange).toHaveBeenCalledWith([]);
+});
 
 it('renders the full dataset when virtualization is disabled', () => {
   const { container, cleanup } = renderGridTable({
@@ -1625,7 +1869,11 @@ it('ignores wrapper context menus when no empty-area items are exposed', async (
 
   act(() => {
     requireValue(wrapper, 'expected test value in GridTable.test.tsx').dispatchEvent(
-      new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 })
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        clientX: 50,
+        clientY: 50,
+      })
     );
   });
 
@@ -1750,8 +1998,20 @@ it('copies resource-bar columns using their displayed CPU and memory values', as
   ];
 
   const resourceRows = [
-    { id: 'row-0', label: 'Alpha', name: 'Alpha', cpu: '250m', memory: '512Mi' },
-    { id: 'row-1', label: 'Beta', name: 'Beta', cpu: '1', memory: `${2 * 1024 * 1024 * 1024}` },
+    {
+      id: 'row-0',
+      label: 'Alpha',
+      name: 'Alpha',
+      cpu: '250m',
+      memory: '512Mi',
+    },
+    {
+      id: 'row-1',
+      label: 'Beta',
+      name: 'Beta',
+      cpu: '1',
+      memory: `${2 * 1024 * 1024 * 1024}`,
+    },
   ] as unknown as SimpleRow[];
 
   const { container, cleanup } = renderGridTable({
@@ -1789,7 +2049,11 @@ it('copies resource-bar columns using their displayed CPU and memory values', as
 
 it('shows cell-level context menu items for the targeted row', async () => {
   const customItems = vi.fn((item: SimpleRow, columnKey: string) => [
-    { label: `Inspect ${item.label}`, onClick: vi.fn(), id: `${columnKey}-inspect` },
+    {
+      label: `Inspect ${item.label}`,
+      onClick: vi.fn(),
+      id: `${columnKey}-inspect`,
+    },
   ]);
 
   const { container, cleanup } = renderGridTable({
@@ -1809,7 +2073,11 @@ it('shows cell-level context menu items for the targeted row', async () => {
 
   await act(async () => {
     requireValue(firstCell, 'expected test value in GridTable.test.tsx').dispatchEvent(
-      new MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 20 })
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        clientX: 20,
+        clientY: 20,
+      })
     );
     await Promise.resolve();
   });
@@ -1929,7 +2197,11 @@ it('does not hide locked columns through visibility menu', async () => {
 
   await act(async () => {
     requireValue(extraHeader, 'expected test value in GridTable.test.tsx').dispatchEvent(
-      new MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 20 })
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        clientX: 20,
+        clientY: 20,
+      })
     );
     await Promise.resolve();
   });
@@ -1954,7 +2226,12 @@ it('shows sort and hide actions in the sortable header context menu', async () =
   const onSort = vi.fn();
   const onColumnVisibilityChange = vi.fn();
   const columns: GridColumnDefinition<SimpleRow>[] = [
-    { key: 'label', header: 'Label', render: (row) => row.label, sortable: true },
+    {
+      key: 'label',
+      header: 'Label',
+      render: (row) => row.label,
+      sortable: true,
+    },
     { key: 'id', header: 'ID', render: (row) => row.id, sortable: true },
   ];
 
@@ -1977,7 +2254,11 @@ it('shows sort and hide actions in the sortable header context menu', async () =
 
   await act(async () => {
     requireValue(labelHeader, 'expected test value in GridTable.test.tsx').dispatchEvent(
-      new MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 20 })
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        clientX: 20,
+        clientY: 20,
+      })
     );
     await Promise.resolve();
   });
@@ -2000,7 +2281,11 @@ it('shows sort and hide actions in the sortable header context menu', async () =
 
   await act(async () => {
     requireValue(labelHeader, 'expected test value in GridTable.test.tsx').dispatchEvent(
-      new MouseEvent('contextmenu', { bubbles: true, clientX: 20, clientY: 20 })
+      new MouseEvent('contextmenu', {
+        bubbles: true,
+        clientX: 20,
+        clientY: 20,
+      })
     );
     await Promise.resolve();
   });
@@ -2231,7 +2516,12 @@ it('does not warn when keyExtractor returns a cluster-scoped key', async () => {
 
 it('renders native table, row, header, and cell semantics', () => {
   const sortableColumns: GridColumnDefinition<SimpleRow>[] = [
-    { key: 'label', header: 'Label', render: (row) => row.label, sortable: true },
+    {
+      key: 'label',
+      header: 'Label',
+      render: (row) => row.label,
+      sortable: true,
+    },
   ];
 
   const { container, cleanup } = renderGridTable({
@@ -2271,8 +2561,18 @@ it('renders native table, row, header, and cell semantics', () => {
 
 it('sets aria-sort="ascending" on the actively sorted column header', () => {
   const sortableColumns: GridColumnDefinition<SimpleRow>[] = [
-    { key: 'label', header: 'Label', render: (row) => row.label, sortable: true },
-    { key: 'name', header: 'Name', render: (row) => row.name ?? '', sortable: true },
+    {
+      key: 'label',
+      header: 'Label',
+      render: (row) => row.label,
+      sortable: true,
+    },
+    {
+      key: 'name',
+      header: 'Name',
+      render: (row) => row.name ?? '',
+      sortable: true,
+    },
   ];
 
   const container = document.createElement('div');

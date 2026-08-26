@@ -281,11 +281,15 @@ func TestCanonicalResourceRowWireFixtureMatchesProductionProducers(t *testing.T)
 	var stable any
 	require.NoError(t, json.Unmarshal(produced, &stable))
 	normalizeCanonicalFixtureVolatility(stable)
-	want, err := json.Marshal(stable)
+	want, err := json.MarshalIndent(stable, "", "  ")
 	require.NoError(t, err)
 	want = append(want, '\n')
 
 	fixturePath := filepath.Join("..", "..", "..", "frontend", "src", "test-fixtures", "canonical-resource-row-wire.json")
+	if os.Getenv("UPDATE_CANONICAL_RESOURCE_ROW_WIRE") == "1" {
+		require.NoError(t, os.WriteFile(fixturePath, want, 0o644))
+		return
+	}
 	got, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatalf("read canonical resource row wire fixture: %v\nfixture contents:\n%s", err, want)
@@ -296,6 +300,51 @@ func TestCanonicalResourceRowWireFixtureMatchesProductionProducers(t *testing.T)
 	}
 	if !reflect.DeepEqual(stable, committed) {
 		t.Fatalf("canonical resource row wire fixture differs from production producers\nfixture contents:\n%s", want)
+	}
+}
+
+func TestCanonicalResourceRowWireMetadataOverheadStaysMeasured(t *testing.T) {
+	withMetadata, err := json.Marshal(canonicalRowWireFixtures(t))
+	require.NoError(t, err)
+
+	var withoutMetadata any
+	require.NoError(t, json.Unmarshal(withMetadata, &withoutMetadata))
+	metadataRows := removeCanonicalFixtureTableMetadata(withoutMetadata)
+	require.Equal(t, 16, metadataRows)
+	withoutMetadataBytes, err := json.Marshal(withoutMetadata)
+	require.NoError(t, err)
+
+	overhead := len(withMetadata) - len(withoutMetadataBytes)
+	require.LessOrEqual(t, overhead, metadataRows*45)
+	t.Logf(
+		"canonical metadata projection: rows=%d total_bytes=%d overhead_bytes=%d overhead_per_row=%.1f",
+		metadataRows,
+		len(withMetadata),
+		overhead,
+		float64(overhead)/float64(metadataRows),
+	)
+}
+
+func removeCanonicalFixtureTableMetadata(value any) int {
+	switch typed := value.(type) {
+	case []any:
+		count := 0
+		for _, entry := range typed {
+			count += removeCanonicalFixtureTableMetadata(entry)
+		}
+		return count
+	case map[string]any:
+		count := 0
+		if _, ok := typed["metadata"]; ok {
+			delete(typed, "metadata")
+			count++
+		}
+		for _, entry := range typed {
+			count += removeCanonicalFixtureTableMetadata(entry)
+		}
+		return count
+	default:
+		return 0
 	}
 }
 

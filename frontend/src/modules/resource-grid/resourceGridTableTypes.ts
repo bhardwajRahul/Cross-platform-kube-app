@@ -6,6 +6,7 @@
 
 import type { ContextMenuItem } from '@shared/components/ContextMenu';
 import type { IconBarItem } from '@shared/components/IconBar/IconBar';
+import type { CustomMetadataColumnDefinition } from '@shared/components/tables/customMetadataColumns';
 import type {
   ColumnWidthState,
   GridColumnDefinition,
@@ -17,7 +18,7 @@ import type {
 } from '@shared/components/tables/GridTable';
 import type { GridTableFilterPersistenceOptions } from '@shared/components/tables/persistence/gridTablePersistence';
 import type React from 'react';
-import type { ResourceRef } from '@/core/refresh/types';
+import type { ResourceRef, ResourceTableMetadata } from '@/core/refresh/types';
 import type { SortConfig, SortDirection } from '@/hooks/useTableSort';
 import type { ResourceGridObjectIdentityAdapter } from './useResourceGridObjectIdentity';
 
@@ -34,6 +35,10 @@ export interface GridTableBindingProps<T> {
   onColumnVisibilityChange?: (visibility: Record<string, boolean>) => void;
   columnOrder?: string[] | null;
   onColumnOrderChange?: (order: string[]) => void;
+  customMetadataColumns?: {
+    definitions: CustomMetadataColumnDefinition[];
+    onChange: (definitions: CustomMetadataColumnDefinition[]) => void;
+  };
   /** Arms the scope-toggle + Copy + Export trio in the filter bar. */
   fetchAllRows?: () => Promise<T[]>;
   /** Default filename offered by the file Export action. */
@@ -50,6 +55,9 @@ export interface ResourceGridTableRow {
   clusterName?: string | null;
   group?: string | null;
   version?: string | null;
+  metadata?: ResourceTableMetadata | null;
+  labels?: Record<string, string>;
+  annotations?: Record<string, string>;
 }
 
 export type ResourceGridTableMode =
@@ -64,6 +72,8 @@ export const isQueryBackedResourceGridTableMode = (mode: ResourceGridTableMode):
 export interface ResourceGridTableBaseParams<T extends ResourceGridTableRow> {
   viewId: string;
   tableMode: ResourceGridTableMode;
+  /** Whether rows in this table carry Kubernetes label/annotation metadata. */
+  supportsCustomMetadataColumns: boolean;
   data: T[];
   columns: GridColumnDefinition<T>[];
   keyExtractor?: (item: T, index: number) => string;
@@ -132,6 +142,8 @@ export interface ResourceGridPersistence<T extends ResourceGridTableRow> {
   setColumnVisibility: (next: Record<string, boolean>) => void;
   columnOrder: string[] | null;
   setColumnOrder: (next: string[]) => void;
+  customColumns: CustomMetadataColumnDefinition[];
+  setCustomColumns: (next: CustomMetadataColumnDefinition[]) => void;
   filters: GridTableFilterState;
   setFilters: NonNullable<GridTableFilterConfig<T>['onChange']>;
   pageSize: number | null;
@@ -173,6 +185,7 @@ export interface ObjectPanelResourceGridTableSurfaceProps<T extends ResourceGrid
 
 export interface QueryResourceGridTableParams<T extends ResourceGridTableRow> {
   tableMode: ResourceGridTableMode;
+  supportsCustomMetadataColumns: boolean;
   data: T[];
   columns: GridColumnDefinition<T>[];
   persistence: ResourceGridPersistence<T>;

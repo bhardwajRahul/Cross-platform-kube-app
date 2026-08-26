@@ -7,6 +7,7 @@
 
 import { ALL_NAMESPACES_SCOPE } from '@modules/namespace/constants';
 import { NamespaceContext } from '@modules/namespace/contexts/NamespaceContext';
+import { createCustomMetadataColumnDefinition } from '@shared/components/tables/customMetadataColumns';
 import type { GridColumnDefinition } from '@shared/components/tables/GridTable';
 import { DEFAULT_GRID_TABLE_FILTER_STATE } from '@shared/components/tables/gridTableFilterState';
 import { useGridTablePersistence } from '@shared/components/tables/persistence/useGridTablePersistence';
@@ -28,8 +29,8 @@ vi.mock('@modules/kubernetes/config/KubeconfigContext', () => ({
   }),
 }));
 
-vi.mock('@ui/favorites/FavToggle', () => ({
-  useFavToggle: () => ({
+const favoriteMocks = vi.hoisted(() => ({
+  useFavToggle: vi.fn(() => ({
     item: {
       type: 'toggle',
       id: 'favorite',
@@ -39,7 +40,11 @@ vi.mock('@ui/favorites/FavToggle', () => ({
       title: 'Save as favorite',
     },
     modal: null,
-  }),
+  })),
+}));
+
+vi.mock('@ui/favorites/FavToggle', () => ({
+  useFavToggle: favoriteMocks.useFavToggle,
 }));
 
 interface TestRow extends ResourceGridTableRow {
@@ -78,6 +83,7 @@ const renderObjectPanelGrid = (
     result.current = useObjectPanelResourceGridTable<TestRow>({
       viewId: 'test-grid',
       tableMode: 'Local Complete',
+      supportsCustomMetadataColumns: true,
       clusterIdentity: 'alpha:ctx',
       data: [row],
       columns,
@@ -125,6 +131,7 @@ const renderNamespaceGrid = (
     result.current = useNamespaceResourceGridTable<TestRow>({
       viewId: 'namespace-pods',
       tableMode: 'Query Backed Dynamic',
+      supportsCustomMetadataColumns: true,
       namespace: ALL_NAMESPACES_SCOPE,
       data: [row],
       columns,
@@ -264,6 +271,40 @@ describe('useObjectPanelResourceGridTable', () => {
 });
 
 describe('useNamespaceResourceGridTable', () => {
+  it('omits custom metadata controls for rows that do not support Kubernetes metadata', () => {
+    const harness = renderNamespaceGrid({ supportsCustomMetadataColumns: false });
+
+    expect(harness.result.current?.gridTableProps.customMetadataColumns).toBeUndefined();
+
+    harness.cleanup();
+  });
+
+  it('publishes custom metadata columns to the favorite column contract', () => {
+    favoriteMocks.useFavToggle.mockClear();
+    const harness = renderNamespaceGrid();
+    const ownerColumn = createCustomMetadataColumnDefinition({
+      source: 'label',
+      metadataKey: 'example.com/owner',
+      header: 'Owner',
+    });
+
+    act(() => harness.result.current?.persistence?.setCustomColumns([ownerColumn]));
+
+    expect(favoriteMocks.useFavToggle).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        columns: expect.arrayContaining([
+          expect.objectContaining({
+            key: ownerColumn.key,
+            label: 'Owner',
+            hideable: true,
+            sortable: false,
+          }),
+        ]),
+      })
+    );
+    harness.cleanup();
+  });
+
   it('keeps all namespace options selected when the namespace dropdown selects all', () => {
     const harness = renderNamespaceGrid();
 

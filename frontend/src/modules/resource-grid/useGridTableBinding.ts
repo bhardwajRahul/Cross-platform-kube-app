@@ -5,6 +5,7 @@
  * sorting, persistence-backed table state, virtualization, and canonical row keys.
  */
 
+import type { CustomMetadataColumnDefinition } from '@shared/components/tables/customMetadataColumns';
 import {
   type ColumnWidthState,
   GRIDTABLE_VIRTUALIZATION_DEFAULT,
@@ -26,11 +27,14 @@ interface GridTableBindingPersistence {
   setColumnVisibility?: (next: Record<string, boolean>) => void;
   columnOrder?: string[] | null;
   setColumnOrder?: (next: string[]) => void;
+  customColumns?: CustomMetadataColumnDefinition[];
+  setCustomColumns?: (next: CustomMetadataColumnDefinition[]) => void;
 }
 
 interface GridTableBindingParams<T> {
   data: T[];
   tableMode: ResourceGridTableMode;
+  supportsCustomMetadataColumns: boolean;
   columns: GridColumnDefinition<T>[];
   keyExtractor: (item: T, index: number) => string;
   defaultSortKey?: string;
@@ -45,6 +49,7 @@ interface GridTableBindingParams<T> {
 export function useGridTableBinding<T>({
   data,
   tableMode,
+  supportsCustomMetadataColumns,
   columns,
   keyExtractor,
   defaultSortKey,
@@ -88,10 +93,29 @@ export function useGridTableBinding<T>({
               onColumnVisibilityChange: persistence.setColumnVisibility,
               columnOrder: persistence.columnOrder ?? null,
               onColumnOrderChange: persistence.setColumnOrder,
+              ...(supportsCustomMetadataColumns &&
+              persistence.customColumns &&
+              persistence.setCustomColumns
+                ? {
+                    customMetadataColumns: {
+                      definitions: persistence.customColumns,
+                      onChange: persistence.setCustomColumns,
+                    },
+                  }
+                : {}),
             }
           : {}),
       },
     }),
-    [filters, handleSort, keyExtractor, persistence, sortConfig, sortedData, virtualization]
+    [
+      filters,
+      handleSort,
+      keyExtractor,
+      persistence,
+      sortConfig,
+      sortedData,
+      supportsCustomMetadataColumns,
+      virtualization,
+    ]
   );
 }

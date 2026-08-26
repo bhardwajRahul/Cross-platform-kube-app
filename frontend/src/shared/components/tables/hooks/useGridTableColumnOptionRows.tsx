@@ -3,6 +3,7 @@ import {
   DropdownFilterOption,
   dropdownFilterOptionState,
 } from '@shared/components/dropdowns/Dropdown/DropdownFilterOption';
+import { CloseIcon, EditIcon } from '@shared/components/icons/SharedIcons';
 import type React from 'react';
 import { useEffect, useState } from 'react';
 
@@ -15,6 +16,9 @@ interface GridTableColumnOptionRowsOptions {
   columnOptions?: DropdownOption[];
   onMoveColumn?: (key: string, offset: -1 | 1) => void;
   onReorderColumn?: (key: string, targetIndex: number) => void;
+  customMetadataColumnKeys?: Set<string>;
+  onEditCustomMetadataColumn?: (key: string) => void;
+  onRemoveCustomMetadataColumn?: (key: string) => void;
 }
 
 interface GridTableColumnOptionRows {
@@ -28,6 +32,9 @@ export function useGridTableColumnOptionRows({
   columnOptions,
   onMoveColumn,
   onReorderColumn,
+  customMetadataColumnKeys,
+  onEditCustomMetadataColumn,
+  onRemoveCustomMetadataColumn,
 }: GridTableColumnOptionRowsOptions): GridTableColumnOptionRows {
   const [draggingColumnKey, setDraggingColumnKey] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<ColumnDropTarget | null>(null);
@@ -121,23 +128,55 @@ export function useGridTableColumnOptionRows({
       return null;
     }
     return (
-      <button
-        type="button"
-        className="gridtable-column-drag-handle"
-        data-column-key={option.value}
-        onKeyDown={(event) => {
-          if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') {
-            return;
-          }
-          event.preventDefault();
-          event.stopPropagation();
-          onMoveColumn(option.value, event.key === 'ArrowUp' ? -1 : 1);
-        }}
-        aria-label={`Reorder ${option.label}. Drag the row, or use Up and Down Arrow keys.`}
-        title="Drag the row, or use Up and Down Arrow keys to reorder"
-      >
-        ⠿
-      </button>
+      <span className="gridtable-column-option-actions">
+        {customMetadataColumnKeys?.has(option.value) && onEditCustomMetadataColumn && (
+          <button
+            type="button"
+            className="gridtable-column-edit-action"
+            aria-label={`Edit ${option.label}`}
+            title={`Edit ${option.label}`}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onEditCustomMetadataColumn(option.value);
+            }}
+          >
+            <EditIcon width={13} height={13} />
+          </button>
+        )}
+        {customMetadataColumnKeys?.has(option.value) && onRemoveCustomMetadataColumn && (
+          <button
+            type="button"
+            className="gridtable-column-delete-action"
+            aria-label={`Delete ${option.label}`}
+            title={`Delete ${option.label}`}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onRemoveCustomMetadataColumn(option.value);
+            }}
+          >
+            <CloseIcon width={11} height={11} />
+          </button>
+        )}
+        <button
+          type="button"
+          className="gridtable-column-drag-handle"
+          data-column-key={option.value}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            onMoveColumn(option.value, event.key === 'ArrowUp' ? -1 : 1);
+          }}
+          aria-label={`Reorder ${option.label}. Drag the row, or use Up and Down Arrow keys.`}
+          title="Drag the row, or use Up and Down Arrow keys to reorder"
+        >
+          ⠿
+        </button>
+      </span>
     );
   };
 
