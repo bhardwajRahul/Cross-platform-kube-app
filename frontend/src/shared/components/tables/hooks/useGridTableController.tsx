@@ -317,12 +317,18 @@ export function useGridTableController<T>({
   const { wrapWithProfiler, warnDevOnce, startFrameSampler, stopFrameSampler } =
     useGridTableProfiler(getProfilerOptions(diagnosticsLabel));
 
-  const { orderedColumns, moveColumn, reorderColumn, canResetColumnOrder, resetColumnOrder } =
-    useColumnOrderController({
-      columns,
-      columnOrder,
-      onColumnOrderChange,
-    });
+  const {
+    orderedColumns,
+    moveColumn,
+    reorderColumn,
+    reorderVisibleColumn,
+    canResetColumnOrder,
+    resetColumnOrder,
+  } = useColumnOrderController({
+    columns,
+    columnOrder,
+    onColumnOrderChange,
+  });
 
   const { renderedColumns, isColumnVisible, applyVisibilityChanges, lockedColumns } =
     useColumnVisibilityController<T>({
@@ -467,6 +473,7 @@ export function useGridTableController<T>({
     isColumnVisible,
     applyVisibilityChanges,
     enableColumnVisibilityMenu,
+    canReorderColumns: columnOrder === null || onColumnOrderChange !== undefined,
     moveColumn,
     reorderColumn,
     canResetColumnOrder,
@@ -651,6 +658,8 @@ export function useGridTableController<T>({
     handleResizeStart,
     handleResizeKeyDown,
     autoSizeColumn,
+    canReorderColumns: filteringEnabled && Boolean(columnsDropdownConfig?.onReorderColumn),
+    reorderVisibleColumn,
     sortConfig,
   });
 

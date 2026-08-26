@@ -13,6 +13,7 @@ import {
   getColumnMinWidth,
 } from '@shared/components/tables/hooks/gridTableColumnWidthMath';
 import type { ColumnRenderModel } from '@shared/components/tables/hooks/useGridTableColumnVirtualization';
+import { useGridTableHeaderReorder } from '@shared/components/tables/hooks/useGridTableHeaderReorder';
 import type React from 'react';
 
 export interface UseGridTableHeaderRowParams<T> {
@@ -24,6 +25,8 @@ export interface UseGridTableHeaderRowParams<T> {
   handleResizeStart: (event: React.MouseEvent, leftKey: string, rightKey: string) => void;
   handleResizeKeyDown: (event: React.KeyboardEvent, columnKey: string) => void;
   autoSizeColumn: (columnKey: string) => void;
+  canReorderColumns: boolean;
+  reorderVisibleColumn: (key: string, visibleKeys: string[], insertIndex: number) => void;
   sortConfig?: { key: string; direction: 'asc' | 'desc' | null } | null;
 }
 
@@ -36,8 +39,17 @@ export function useGridTableHeaderRow<T>({
   handleResizeStart,
   handleResizeKeyDown,
   autoSizeColumn,
+  canReorderColumns,
+  reorderVisibleColumn,
   sortConfig,
 }: UseGridTableHeaderRowParams<T>): React.ReactNode {
+  const visibleColumnKeys = columnRenderModels.map((model) => model.key);
+  const getHeaderDragProps = useGridTableHeaderReorder({
+    enabled: canReorderColumns,
+    visibleColumnKeys,
+    onReorderVisibleColumn: reorderVisibleColumn,
+  });
+
   return (
     <AriaGridRow className="gridtable-header">
       {columnRenderModels.map((model, index) => {
@@ -69,25 +81,33 @@ export function useGridTableHeaderRow<T>({
             data-column={column.key}
             data-align={column.alignHeader ?? 'left'}
             data-sortable={isSortable}
+            {...getHeaderDragProps(column.key, index)}
             onContextMenu={
               handleHeaderContextMenu ? (e) => handleHeaderContextMenu(e, column.key) : undefined
             }
             style={model.cellStyle}
           >
             <span className="header-content">
-              {isSortable ? (
-                <button
-                  type="button"
-                  className="gridtable-sort-button"
-                  onClick={() => handleHeaderClick(column)}
-                  aria-label={`Sort by ${typeof column.header === 'string' ? column.header : column.key}`}
-                >
-                  {column.header}
-                  {renderSortIndicator(column.key)}
-                </button>
-              ) : (
-                <span>{column.header}</span>
-              )}
+              <span className="gridtable-header-label-group">
+                {!!canReorderColumns && (
+                  <span className="gridtable-header-drag-handle" aria-hidden="true">
+                    ⠿
+                  </span>
+                )}
+                {isSortable ? (
+                  <button
+                    type="button"
+                    className="gridtable-sort-button"
+                    onClick={() => handleHeaderClick(column)}
+                    aria-label={`Sort by ${typeof column.header === 'string' ? column.header : column.key}`}
+                  >
+                    {column.header}
+                    {renderSortIndicator(column.key)}
+                  </button>
+                ) : (
+                  <span className="gridtable-header-label">{column.header}</span>
+                )}
+              </span>
             </span>
             {!!showResizeHandle && (
               <hr
