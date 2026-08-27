@@ -8,21 +8,11 @@
 
 import type { types } from '@core/backend-api/models';
 import type { DetailsTabProps } from '@modules/object-panel/components/ObjectPanel/Details/DetailsTab';
-import DetailsTab from '@modules/object-panel/components/ObjectPanel/Details/DetailsTab';
-import EventsTab from '@modules/object-panel/components/ObjectPanel/Events/EventsTab';
-import ManifestTab from '@modules/object-panel/components/ObjectPanel/Helm/ManifestTab';
-import ValuesTab from '@modules/object-panel/components/ObjectPanel/Helm/ValuesTab';
 import {
   type ObjectPanelScopedDomainRef,
   useObjectPanelScopedDomainCleanups,
 } from '@modules/object-panel/components/ObjectPanel/hooks/useObjectPanelScopedDomainLifecycle';
-import { JobsTab } from '@modules/object-panel/components/ObjectPanel/Jobs/JobsTab';
-import LogViewer from '@modules/object-panel/components/ObjectPanel/Logs/LogViewer';
-import MapTab from '@modules/object-panel/components/ObjectPanel/Map/MapTab';
-import NodeLogsTab from '@modules/object-panel/components/ObjectPanel/NodeLogs/NodeLogsTab';
 import type { NodeLogSource } from '@modules/object-panel/components/ObjectPanel/NodeLogs/nodeLogsApi';
-import { PodsTab } from '@modules/object-panel/components/ObjectPanel/Pods/PodsTab';
-import ShellTab from '@modules/object-panel/components/ObjectPanel/Shell/ShellTab';
 import type {
   CapabilityReasons,
   CapabilityState,
@@ -30,10 +20,43 @@ import type {
   PanelObjectData,
   ViewType,
 } from '@modules/object-panel/components/ObjectPanel/types';
-import YamlTab from '@modules/object-panel/components/ObjectPanel/Yaml/YamlTab';
+import { loadObjectPanelDetails } from '@modules/object-panel/objectPanelDetailsLazyModule';
 import { ErrorBoundary } from '@shared/components/errors/ErrorBoundary';
 import { ErrorSurface } from '@shared/components/errors/ErrorSurface';
-import { useMemo } from 'react';
+import LoadingSpinner from '@shared/components/LoadingSpinner';
+import React, { lazy, type ReactNode, useMemo } from 'react';
+
+const DetailsTab = lazy(loadObjectPanelDetails);
+const EventsTab = lazy(
+  () => import('@modules/object-panel/components/ObjectPanel/Events/EventsTab')
+);
+const ManifestTab = lazy(
+  () => import('@modules/object-panel/components/ObjectPanel/Helm/ManifestTab')
+);
+const ValuesTab = lazy(() => import('@modules/object-panel/components/ObjectPanel/Helm/ValuesTab'));
+const JobsTab = lazy(() =>
+  import('@modules/object-panel/components/ObjectPanel/Jobs/JobsTab').then((module) => ({
+    default: module.JobsTab,
+  }))
+);
+const LogViewer = lazy(() => import('@modules/object-panel/components/ObjectPanel/Logs/LogViewer'));
+const MapTab = lazy(() => import('@modules/object-panel/components/ObjectPanel/Map/MapTab'));
+const NodeLogsTab = lazy(
+  () => import('@modules/object-panel/components/ObjectPanel/NodeLogs/NodeLogsTab')
+);
+const PodsTab = lazy(() =>
+  import('@modules/object-panel/components/ObjectPanel/Pods/PodsTab').then((module) => ({
+    default: module.PodsTab,
+  }))
+);
+const ShellTab = lazy(() => import('@modules/object-panel/components/ObjectPanel/Shell/ShellTab'));
+const YamlTab = lazy(() => import('@modules/object-panel/components/ObjectPanel/Yaml/YamlTab'));
+
+const LazyTabContent = ({ name, children }: { name: string; children: ReactNode }) => (
+  <React.Suspense fallback={<LoadingSpinner message={`Loading ${name}...`} />}>
+    {children}
+  </React.Suspense>
+);
 
 const TabErrorFallback = ({ tabName, reset }: { tabName: string; reset: () => void }) => (
   <div className="object-panel-tab-content">
@@ -172,7 +195,9 @@ export function ObjectPanelContent({
           resetKeys={detailScope ? [detailScope] : undefined}
           fallback={(_, reset) => <TabErrorFallback tabName="Details" reset={reset} />}
         >
-          <DetailsTab {...detailTabProps} />
+          <LazyTabContent name="details">
+            <DetailsTab {...detailTabProps} />
+          </LazyTabContent>
         </ErrorBoundary>
       )}
 
@@ -182,14 +207,16 @@ export function ObjectPanelContent({
           resetKeys={[objectData?.name ?? '', objectData?.namespace ?? ''].filter(Boolean)}
           fallback={(_, reset) => <TabErrorFallback tabName="Logs" reset={reset} />}
         >
-          <LogViewer
-            isActive={isPanelOpen && activeTab === 'logs'}
-            resourceKind={objectKind || 'pod'}
-            containerLogsScope={containerLogsScope}
-            activePodNames={activePodNames}
-            clusterId={objectData?.clusterId ?? null}
-            panelId={panelId}
-          />
+          <LazyTabContent name="logs">
+            <LogViewer
+              isActive={isPanelOpen && activeTab === 'logs'}
+              resourceKind={objectKind || 'pod'}
+              containerLogsScope={containerLogsScope}
+              activePodNames={activePodNames}
+              clusterId={objectData?.clusterId ?? null}
+              panelId={panelId}
+            />
+          </LazyTabContent>
         </ErrorBoundary>
       )}
 
@@ -199,15 +226,17 @@ export function ObjectPanelContent({
           resetKeys={[objectData?.name ?? '', objectData?.namespace ?? ''].filter(Boolean)}
           fallback={(_, reset) => <TabErrorFallback tabName="Shell" reset={reset} />}
         >
-          <ShellTab
-            namespace={objectData?.namespace || ''}
-            resourceName={objectData?.name || ''}
-            isActive={isPanelOpen && activeTab === 'shell'}
-            disabledReason={capabilityReasons.shell}
-            debugDisabledReason={capabilityReasons.debug}
-            availableContainers={availableContainers}
-            clusterId={objectData?.clusterId ?? null}
-          />
+          <LazyTabContent name="shell">
+            <ShellTab
+              namespace={objectData?.namespace || ''}
+              resourceName={objectData?.name || ''}
+              isActive={isPanelOpen && activeTab === 'shell'}
+              disabledReason={capabilityReasons.shell}
+              debugDisabledReason={capabilityReasons.debug}
+              availableContainers={availableContainers}
+              clusterId={objectData?.clusterId ?? null}
+            />
+          </LazyTabContent>
         </ErrorBoundary>
       )}
 
@@ -217,14 +246,16 @@ export function ObjectPanelContent({
           resetKeys={[objectData?.name ?? '', objectData?.clusterId ?? ''].filter(Boolean)}
           fallback={(_, reset) => <TabErrorFallback tabName="Logs" reset={reset} />}
         >
-          <NodeLogsTab
-            panelId={panelId}
-            nodeName={objectData?.name || ''}
-            clusterId={objectData?.clusterId ?? null}
-            isActive={isPanelOpen && activeTab === 'logs'}
-            availability={nodeLogsState}
-            sources={nodeLogSources}
-          />
+          <LazyTabContent name="logs">
+            <NodeLogsTab
+              panelId={panelId}
+              nodeName={objectData?.name || ''}
+              clusterId={objectData?.clusterId ?? null}
+              isActive={isPanelOpen && activeTab === 'logs'}
+              availability={nodeLogsState}
+              sources={nodeLogSources}
+            />
+          </LazyTabContent>
         </ErrorBoundary>
       )}
 
@@ -234,12 +265,14 @@ export function ObjectPanelContent({
           resetKeys={[objectData?.name ?? '', objectData?.namespace ?? ''].filter(Boolean)}
           fallback={(_, reset) => <TabErrorFallback tabName="Events" reset={reset} />}
         >
-          <EventsTab
-            objectData={objectData}
-            isActive={isPanelOpen && activeTab === 'events'}
-            eventsScope={eventsScope}
-            panelId={panelId}
-          />
+          <LazyTabContent name="events">
+            <EventsTab
+              objectData={objectData}
+              isActive={isPanelOpen && activeTab === 'events'}
+              eventsScope={eventsScope}
+              panelId={panelId}
+            />
+          </LazyTabContent>
         </ErrorBoundary>
       )}
 
@@ -249,7 +282,9 @@ export function ObjectPanelContent({
           resetKeys={[objectData?.name ?? '', objectData?.namespace ?? ''].filter(Boolean)}
           fallback={(_, reset) => <TabErrorFallback tabName="Pods" reset={reset} />}
         >
-          <PodsTab isActive={isPanelOpen && activeTab === 'pods'} />
+          <LazyTabContent name="pods">
+            <PodsTab isActive={isPanelOpen && activeTab === 'pods'} />
+          </LazyTabContent>
         </ErrorBoundary>
       )}
 
@@ -259,13 +294,15 @@ export function ObjectPanelContent({
           resetKeys={[objectData?.name ?? '', objectData?.namespace ?? ''].filter(Boolean)}
           fallback={(_, reset) => <TabErrorFallback tabName="Jobs" reset={reset} />}
         >
-          <JobsTab
-            jobs={cronJobDetails?.jobs ?? EMPTY_JOBS}
-            loading={!cronJobDetails && !!detailTabProps?.detailsLoading}
-            isActive={isPanelOpen && activeTab === 'jobs'}
-            clusterId={objectData?.clusterId}
-            clusterName={objectData?.clusterName}
-          />
+          <LazyTabContent name="jobs">
+            <JobsTab
+              jobs={cronJobDetails?.jobs ?? EMPTY_JOBS}
+              loading={!cronJobDetails && !!detailTabProps?.detailsLoading}
+              isActive={isPanelOpen && activeTab === 'jobs'}
+              clusterId={objectData?.clusterId}
+              clusterName={objectData?.clusterName}
+            />
+          </LazyTabContent>
         </ErrorBoundary>
       )}
 
@@ -275,13 +312,15 @@ export function ObjectPanelContent({
           resetKeys={detailScope ? [detailScope] : undefined}
           fallback={(_, reset) => <TabErrorFallback tabName="YAML" reset={reset} />}
         >
-          <YamlTab
-            scope={detailScope}
-            isActive={isPanelOpen && activeTab === 'yaml'}
-            canEdit={capabilities.canEditYaml}
-            editDisabledReason={capabilityReasons.editYaml}
-            clusterId={objectData?.clusterId ?? null}
-          />
+          <LazyTabContent name="YAML">
+            <YamlTab
+              scope={detailScope}
+              isActive={isPanelOpen && activeTab === 'yaml'}
+              canEdit={capabilities.canEditYaml}
+              editDisabledReason={capabilityReasons.editYaml}
+              clusterId={objectData?.clusterId ?? null}
+            />
+          </LazyTabContent>
         </ErrorBoundary>
       )}
 
@@ -291,11 +330,13 @@ export function ObjectPanelContent({
           resetKeys={mapScope ? [mapScope] : undefined}
           fallback={(_, reset) => <TabErrorFallback tabName="Map" reset={reset} />}
         >
-          <MapTab
-            objectData={objectData}
-            isActive={isPanelOpen && activeTab === 'map'}
-            mapScope={mapScope}
-          />
+          <LazyTabContent name="map">
+            <MapTab
+              objectData={objectData}
+              isActive={isPanelOpen && activeTab === 'map'}
+              mapScope={mapScope}
+            />
+          </LazyTabContent>
         </ErrorBoundary>
       )}
 
@@ -305,7 +346,9 @@ export function ObjectPanelContent({
           resetKeys={helmScope ? [helmScope] : undefined}
           fallback={(_, reset) => <TabErrorFallback tabName="Manifest" reset={reset} />}
         >
-          <ManifestTab scope={helmScope} isActive={isPanelOpen && activeTab === 'manifest'} />
+          <LazyTabContent name="manifest">
+            <ManifestTab scope={helmScope} isActive={isPanelOpen && activeTab === 'manifest'} />
+          </LazyTabContent>
         </ErrorBoundary>
       )}
 
@@ -315,7 +358,9 @@ export function ObjectPanelContent({
           resetKeys={helmScope ? [helmScope] : undefined}
           fallback={(_, reset) => <TabErrorFallback tabName="Values" reset={reset} />}
         >
-          <ValuesTab scope={helmScope} isActive={isPanelOpen && activeTab === 'values'} />
+          <LazyTabContent name="values">
+            <ValuesTab scope={helmScope} isActive={isPanelOpen && activeTab === 'values'} />
+          </LazyTabContent>
         </ErrorBoundary>
       )}
     </div>

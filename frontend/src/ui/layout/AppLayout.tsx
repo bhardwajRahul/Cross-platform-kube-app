@@ -12,12 +12,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 // App Stuff
 import '@/App.css';
 import { useViewState } from '@core/contexts/ViewStateContext';
-import ClusterOverview from '@modules/cluster/components/ClusterOverview';
-import { ClusterResourcesManager } from '@modules/cluster/components/ClusterResourcesManager';
-import GlobalViews from '@modules/global/components/GlobalViews';
+import type { ClusterResourceManagerProps } from '@modules/cluster/components/ClusterResourcesManager';
 import { useKubeconfig } from '@modules/kubernetes/config/KubeconfigContext';
-import AllNamespacesView from '@modules/namespace/components/AllNamespacesView';
-import NamespaceResourcesViews from '@modules/namespace/components/NsResourcesViews';
 import { isAllNamespaces } from '@modules/namespace/constants';
 import { useNamespace } from '@modules/namespace/contexts/NamespaceContext';
 import { NamespaceResourcesProvider } from '@modules/namespace/contexts/NsResourcesContext';
@@ -27,6 +23,10 @@ import {
   useObjectMapDebugSnapshots,
 } from '@modules/object-map/objectMapDebugStore';
 import { useObjectPanelState } from '@modules/object-panel/contexts/ObjectPanelStateContext';
+import {
+  loadObjectPanel,
+  preloadObjectPanelModules,
+} from '@modules/object-panel/objectPanelLazyModules';
 // Error Handling
 import { ErrorNotificationSystem } from '@shared/components/errors/ErrorNotificationSystem';
 import { CopyIcon } from '@shared/components/icons/LogIcons';
@@ -62,9 +62,36 @@ import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
 } from '@/hooks/useSidebarResize';
-import BrowseView from '@/modules/browse/components/BrowseView';
 
 const Sidebar = withLazyBoundary(() => import('@ui/layout/Sidebar'), 'Loading sidebar...');
+const ClusterOverview = withLazyBoundary(
+  () => import('@modules/cluster/components/ClusterOverview'),
+  'Loading cluster overview...'
+);
+const ClusterResourcesManager = withLazyBoundary<Readonly<ClusterResourceManagerProps>>(
+  () =>
+    import('@modules/cluster/components/ClusterResourcesManager').then((module) => ({
+      default: module.ClusterResourcesManager,
+    })),
+  'Loading cluster resources...'
+);
+const GlobalViews = withLazyBoundary(
+  () => import('@modules/global/components/GlobalViews'),
+  'Loading global resources...'
+);
+const AllNamespacesView = withLazyBoundary(
+  () => import('@modules/namespace/components/AllNamespacesView'),
+  'Loading all namespaces...'
+);
+const NamespaceResourcesViews = withLazyBoundary(
+  () => import('@modules/namespace/components/NsResourcesViews'),
+  'Loading namespace resources...'
+);
+const BrowseView = withLazyBoundary(
+  () => import('@/modules/browse/components/BrowseView'),
+  'Loading Browse...'
+);
+const ObjectPanel = withLazyBoundary(loadObjectPanel, 'Loading object details...');
 
 const SettingsModal = withLazyBoundary(
   () => import('@ui/modals/SettingsModal'),
@@ -248,11 +275,6 @@ const AppDebugOverlays = (props: AppDebugOverlaysProps) => (
   </>
 );
 
-// ObjectPanel is imported eagerly because panels are only rendered on-demand
-// (when openPanels has entries). A lazy boundary would flash a loading spinner
-// on the first click before the chunk loads.
-import ObjectPanel from '@modules/object-panel/components/ObjectPanel/ObjectPanel';
-
 const DevTestErrorBoundaryLazy = React.lazy(() => import('@ui/errors/TestErrorBoundary'));
 
 export const AppLayout: React.FC = () => {
@@ -309,6 +331,24 @@ export const AppLayout: React.FC = () => {
     focusPanel,
     setLastFocusedGroupKey,
   });
+
+  useEffect(() => {
+    const warmObjectPanelModules = () => {
+      // Speculative loading is best-effort. The lazy boundaries surface a real
+      // import failure if the user later opens the panel.
+      void preloadObjectPanelModules().catch(() => undefined);
+    };
+    if (openPanels.size > 0) {
+      warmObjectPanelModules();
+      return;
+    }
+    if (typeof window.requestIdleCallback === 'function') {
+      const idleCallbackId = window.requestIdleCallback(warmObjectPanelModules, { timeout: 1500 });
+      return () => window.cancelIdleCallback(idleCallbackId);
+    }
+    const timeoutId = window.setTimeout(warmObjectPanelModules, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [openPanels.size]);
 
   useEffect(() => {
     setObjectMapDebugOverlayVisible(isMapDebugOverlayVisible);
