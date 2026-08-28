@@ -9,6 +9,15 @@
 
 ### Changed
 
+- The namespace Network view's free-form Details column is replaced by three
+  aligned columns: **Context**, **Network**, and **Summary**. Rows label their
+  own resource-specific meaning (such as Type, Class, Parent, Service, Cluster
+  IP, Hosts, or Ports), related-object values open the referenced object, long
+  lists collapse to "first +N" with the full list in the tooltip and search,
+  narrow cells preserve their label and truncate only the portion of the value
+  that does not fit, and summaries render as plain label/value text with warning
+  emphasis reserved for not-ready endpoints. Context and Network are sortable;
+  search matches everything, including collapsed hosts.
 - Redesigned the Columns dropdown to support the new features. Additionally:
   - Columns that cannot be hidden are indicated with a lock icon.
     - Locked visibility columns can still have reordered.

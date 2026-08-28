@@ -1160,7 +1160,9 @@ describe('query-backed leaf first load', () => {
       label: 'namespace network',
       element: <NsViewNetwork namespace={ALL_NAMESPACES_SCOPE} showNamespaceColumn={true} />,
       payload: { resources: [] },
-      expected: ['age', 'kind', 'name', 'namespace'],
+      // Context + Network are slot columns backed by matching server sort
+      // fields; Summary stays non-sortable (mixed label+number text).
+      expected: ['age', 'context', 'kind', 'name', 'namespace', 'network'],
     },
     {
       label: 'namespace storage',

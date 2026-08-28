@@ -9,7 +9,7 @@ import { OBJECT_ACTION_IDS } from '@shared/actions/objectActionContract';
 import type ConfirmationModal from '@shared/components/modals/ConfirmationModal';
 import type { GridTableProps } from '@shared/components/tables/GridTable';
 import { withStableListKeys } from '@shared/utils/stableListKeys';
-import { act } from 'react';
+import React, { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -295,7 +295,30 @@ describe('NsViewNetwork', () => {
         ...ref,
       },
       kindAlias: 'Ingress',
-      details: 'Hosts: web.example.com',
+      details: [
+        {
+          slot: 'reference',
+          label: 'Class',
+          value: 'nginx',
+          link: {
+            ref: {
+              clusterId: 'alpha:ctx',
+              group: 'networking.k8s.io',
+              version: 'v1',
+              kind: 'IngressClass',
+              resource: 'ingressclasses',
+              name: 'nginx',
+            },
+          },
+        },
+        {
+          slot: 'address',
+          label: 'Hosts',
+          value: 'web.example.com +1',
+          search: 'web.example.com, api.example.com',
+        },
+        { slot: 'counts', label: 'Rules', value: '2' },
+      ],
       age: '3h',
       ...row,
     };
@@ -442,17 +465,109 @@ describe('NsViewNetwork', () => {
     expect(deleteItem).toBeUndefined();
   });
 
-  it('renders details column with styling when text present', async () => {
+  it('renders stable context, network, and summary columns', async () => {
     permissionState.set('Ingress:delete:team-a', { allowed: true, pending: false });
-    const entry = baseNetwork({ details: 'Hosts: example.com' });
+    const entry = baseNetwork();
     await renderNetworkView();
-    const detailsColumn = getColumn('details');
-    const rendered = requireReactElement<{ className?: string }>(
-      detailsColumn.render(entry),
-      'expected the network details cell element'
+
+    const contextColumn = getColumn('context');
+    expect(contextColumn.header).toBe('Context');
+    const contextCell = requireReactElement<{ className?: string }>(
+      contextColumn.render(entry),
+      'expected the context cell element'
     );
-    expect(renderOutputToText(rendered)).toContain('Hosts: example.com');
-    expect(rendered.props.className).toContain('network-details');
+    expect(renderOutputToText(contextCell)).toContain('nginx');
+    expect(renderOutputToText(contextCell)).toContain('Class:');
+    expect(contextCell.props.className).toBe('detail-segments');
+
+    const networkColumn = getColumn('network');
+    expect(networkColumn.header).toBe('Network');
+    const networkCell = requireReactElement<{
+      title?: string;
+      'data-gridtable-export-text'?: string;
+    }>(networkColumn.render(entry), 'expected the network cell element');
+    expect(renderOutputToText(networkCell)).toContain('web.example.com +1');
+    expect(networkCell.props.title).toBe('Hosts: web.example.com, api.example.com');
+    expect(networkCell.props['data-gridtable-export-text']).toBe('Hosts: web.example.com +1');
+
+    const summaryColumn = getColumn('summary');
+    expect(summaryColumn.header).toBe('Summary');
+    expect(summaryColumn.sortable).toBe(false);
+    const summaryCell = requireReactElement<{ className?: string }>(
+      summaryColumn.render(entry),
+      'expected the summary cell element'
+    );
+    const summaryMarkup = renderOutputToText(summaryCell);
+    expect(summaryCell.props.className).toBe('detail-segments');
+    expect(summaryMarkup).not.toContain('class="detail-segment"');
+    expect(summaryMarkup).toContain('Rules:');
+
+    const warningSummary = renderOutputToText(
+      summaryColumn.render(
+        baseNetwork({
+          details: [
+            { slot: 'counts', label: 'Ready', value: '2' },
+            { slot: 'counts', label: 'Not ready', value: '1', presentation: 'warning' },
+          ],
+        })
+      )
+    );
+    expect(warningSummary).toContain('detail-segment-separator');
+    expect(warningSummary).toContain('detail-segment-value status-text warning');
+
+    // A row with no address segments renders the shared no-value marker.
+    const bare = baseNetwork({ details: [{ slot: 'counts', label: 'Targets', value: '1' }] });
+    expect(networkColumn.render(bare)).toBe('-');
+  });
+
+  it('renders kind and name from the canonical resource reference', async () => {
+    const entry = baseNetwork();
+    await renderNetworkView();
+
+    expect(renderOutputToText(getColumn('kind').render(entry))).toContain('Ingress');
+    expect(renderOutputToText(getColumn('name').render(entry))).toContain('web-gateway');
+  });
+
+  it('opens a linked class segment in the object panel', async () => {
+    const entry = baseNetwork();
+    await renderNetworkView();
+    const detailsColumn = getColumn('context');
+    const rendered = detailsColumn.render(entry);
+
+    const findButton = (node: React.ReactNode): React.ReactElement | undefined => {
+      if (Array.isArray(node)) {
+        for (const child of node) {
+          const match = findButton(child);
+          if (match) {
+            return match;
+          }
+        }
+        return undefined;
+      }
+      if (!React.isValidElement(node)) {
+        return undefined;
+      }
+      if (node.type === 'button') {
+        return node;
+      }
+      return findButton((node.props as { children?: React.ReactNode }).children);
+    };
+
+    const button = requireValue(findButton(rendered), 'expected the linked segment button');
+    const props = button.props as {
+      onClick: (event: {
+        altKey: boolean;
+        preventDefault: () => void;
+        stopPropagation: () => void;
+      }) => void;
+    };
+
+    act(() => {
+      props.onClick({ altKey: false, preventDefault: vi.fn(), stopPropagation: vi.fn() });
+    });
+    expect(openWithObjectMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'IngressClass', name: 'nginx', clusterId: 'alpha:ctx' })
+    );
   });
 
   it('handles delete failure with errorHandler', async () => {

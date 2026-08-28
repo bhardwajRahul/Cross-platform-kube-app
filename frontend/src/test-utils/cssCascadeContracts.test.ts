@@ -148,6 +148,85 @@ describe('strict CSS cascade contracts', () => {
     );
   });
 
+  it('keeps object-panel links authoritative over late-loaded gridtable css copies', () => {
+    // gridtables.css is @imported by several lazy view stylesheets, so a copy
+    // of `.gridtable-link { color: ... }` can load AFTER the object panel's
+    // shared.css. The object-panel-link style must win that tie through
+    // scoped specificity, never through load order.
+    const style = installStyles(
+      readProjectFile('src/modules/object-panel/components/ObjectPanel/shared.css').replace(
+        /var\(--color-object-panel-link\)/g,
+        'rgb(170, 170, 170)'
+      ),
+      readProjectFile('styles/components/gridtables.css').replace(
+        /var\(--color-text\)/g,
+        'rgb(224, 224, 224)'
+      )
+    );
+    style.dataset.cssContract = 'object-panel-link-order';
+    document.body.innerHTML = `
+      <div class="grid-cell"><span class="grid-cell-content">
+        <button class="gridtable-cell-button gridtable-link object-panel-link">api</button>
+      </span></div>
+    `;
+
+    const button = document.querySelector<HTMLButtonElement>('.object-panel-link');
+    expect(window.getComputedStyle(button as HTMLButtonElement).color).toBe('rgb(170, 170, 170)');
+  });
+
+  it('keeps detail-segment presentation authoritative inside object-panel links', () => {
+    const style = installStyles(
+      readProjectFile('styles/components/badges.css').replace(
+        /var\(--color-warning\)/g,
+        'rgb(255, 165, 0)'
+      ),
+      readProjectFile('src/modules/object-panel/components/ObjectPanel/shared.css').replace(
+        /var\(--color-object-panel-link\)/g,
+        'rgb(170, 170, 170)'
+      )
+    );
+    style.dataset.cssContract = 'detail-segment-link-presentation';
+    document.body.innerHTML = `
+      <button class="gridtable-cell-button gridtable-link object-panel-link detail-segment-value">
+        <span class="status-text warning">api</span>
+      </button>
+    `;
+
+    const button = document.querySelector<HTMLButtonElement>('.detail-segment-value');
+    const value = document.querySelector<HTMLElement>('.detail-segment-value .status-text');
+    expect(window.getComputedStyle(button as HTMLButtonElement).color).toBe('rgb(170, 170, 170)');
+    expect(window.getComputedStyle(value as HTMLElement).color).toBe('rgb(255, 165, 0)');
+  });
+
+  it('truncates a detail-segment value within the space left after its label', () => {
+    const style = installStyles(
+      readProjectFile('src/shared/components/tables/detailSegmentsColumn.css')
+    );
+    style.dataset.cssContract = 'detail-segment-value-overflow';
+    document.body.innerHTML = `
+      <span class="detail-segments">
+        <span class="detail-segment-text">
+          <span class="detail-segment-label">Service:</span>
+          <button class="detail-segment-value">argocd-dex-server</button>
+        </span>
+      </span>
+    `;
+
+    const container = document.querySelector<HTMLElement>('.detail-segments');
+    const segment = document.querySelector<HTMLElement>('.detail-segment-text');
+    const label = document.querySelector<HTMLElement>('.detail-segment-label');
+    const value = document.querySelector<HTMLButtonElement>('.detail-segment-value');
+
+    expect(window.getComputedStyle(container as HTMLElement).display).toBe('inline-flex');
+    expect(window.getComputedStyle(container as HTMLElement).maxWidth).toBe('100%');
+    expect(window.getComputedStyle(segment as HTMLElement).display).toBe('inline-flex');
+    expect(window.getComputedStyle(segment as HTMLElement).minWidth).toBe('0px');
+    expect(window.getComputedStyle(label as HTMLElement).flexShrink).toBe('0');
+    expect(window.getComputedStyle(value as HTMLButtonElement).minWidth).toBe('0px');
+    expect(window.getComputedStyle(value as HTMLButtonElement).overflow).toBe('hidden');
+    expect(window.getComputedStyle(value as HTMLButtonElement).textOverflow).toBe('ellipsis');
+  });
+
   it('keeps sortable table headers uppercase over native button styling', () => {
     const style = installStyles(
       'button { text-transform: none; }',

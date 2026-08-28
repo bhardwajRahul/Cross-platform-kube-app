@@ -10,6 +10,7 @@ import {
   NamespaceAggregatedResourceGridView,
 } from '@modules/resource-grid/AggregatedResourceGridView';
 import * as cf from '@shared/components/tables/columnFactories';
+import { createDetailSegmentsColumn } from '@shared/components/tables/detailSegmentsColumn';
 import React from 'react';
 import type {
   NamespaceNetworkSnapshotPayload,
@@ -38,7 +39,13 @@ const networkSpec: AggregatedResourceGridViewSpec<NetworkData> = {
   defaultSort: { key: 'name', direction: 'asc' },
   showKindDropdown: true,
   namespaceLinkTab: 'network',
-  buildColumns: ({ identity, useShortResourceNames }) => [
+  buildColumns: ({
+    identity,
+    openReference,
+    navigateReference,
+    fallbackClusterName,
+    useShortResourceNames,
+  }) => [
     cf.createKindColumn<NetworkData>({
       key: 'kind',
       getKind: (resource) => resource.ref.kind,
@@ -52,9 +59,33 @@ const networkSpec: AggregatedResourceGridViewSpec<NetworkData> = {
       onAltClick: identity.navigate,
       getClassName: () => 'object-panel-link',
     }),
-    cf.createTextColumn<NetworkData>('details', 'Details', (resource) => resource.details || '-', {
-      getClassName: (resource) => (resource.details ? 'network-details' : undefined),
-      sortable: false,
+    // Stable concepts keep the mixed-kind table scannable. Each row's segment
+    // label supplies the kind-specific meaning (Class, Parent, Type, Ports...).
+    createDetailSegmentsColumn<NetworkData>({
+      key: 'context',
+      header: 'Context',
+      slot: 'reference',
+      sortable: true,
+      getSegments: (resource) => resource.details,
+      openReference,
+      navigateReference,
+      clusterName: fallbackClusterName,
+      autoSizeMaxWidth: 260,
+    }),
+    createDetailSegmentsColumn<NetworkData>({
+      key: 'network',
+      header: 'Network',
+      slot: 'address',
+      sortable: true,
+      getSegments: (resource) => resource.details,
+      autoSizeMaxWidth: 320,
+    }),
+    createDetailSegmentsColumn<NetworkData>({
+      key: 'summary',
+      header: 'Summary',
+      slot: 'counts',
+      getSegments: (resource) => resource.details,
+      autoSizeMaxWidth: 280,
     }),
     cf.createAgeColumn(),
   ],
