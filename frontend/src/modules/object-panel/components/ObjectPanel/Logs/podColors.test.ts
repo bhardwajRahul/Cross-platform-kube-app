@@ -43,6 +43,24 @@ describe('podColors', () => {
     expect(forward[secondPod]).toBe(reversed[secondPod]);
   });
 
+  it('resolves color collisions in locale-alphabetical pod name order', () => {
+    const firstAlphabetically = 'ä-pod-15';
+    const secondAlphabetically = 'z-pod-0';
+
+    expect(hashPodColorIndex(firstAlphabetically, palette.length)).toBe(
+      hashPodColorIndex(secondAlphabetically, palette.length)
+    );
+
+    const colorMap = buildStablePodColorMap(
+      [secondAlphabetically, firstAlphabetically],
+      palette,
+      'fallback'
+    );
+
+    expect(colorMap[firstAlphabetically]).toBe('color-15');
+    expect(colorMap[secondAlphabetically]).toBe('color-16');
+  });
+
   it('uses every available color before reusing a palette slot', () => {
     const podNames = Array.from({ length: 20 }, (_, index) => `pod-${index + 1}`);
     const colorMap = buildStablePodColorMap(podNames, palette, 'fallback');

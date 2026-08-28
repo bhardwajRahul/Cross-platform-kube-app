@@ -21,7 +21,7 @@ export const buildStablePodColorMap = (
   const usedColorIndexes = new Set<number>();
   const normalizedPodNames = Array.from(
     new Set(podNames.map((podName) => podName.trim()).filter(Boolean))
-  ).sort();
+  ).sort((left, right) => left.localeCompare(right));
 
   normalizedPodNames.forEach((podName) => {
     let colorIndex = hashPodColorIndex(podName, palette.length);
