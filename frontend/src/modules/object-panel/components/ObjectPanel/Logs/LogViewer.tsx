@@ -146,6 +146,7 @@ interface LogViewerProps {
 const CONTAINER_LOGS_DOMAIN = 'container-logs' as const;
 const PARSED_POD_COLUMN_MIN_WIDTH = 80;
 const PARSED_METADATA_AUTOSIZE_MAX_WIDTH = 320;
+const POD_LOG_COLOR_PALETTE_SLOTS = Array.from({ length: 24 }, (_, index) => index + 1);
 const RAW_LOG_VIRTUALIZATION_THRESHOLD = 120;
 const RAW_LOG_VIRTUALIZATION_OVERSCAN = 10;
 const RAW_LOG_ESTIMATE_ROW_HEIGHT = 26;
@@ -2052,8 +2053,8 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
   // draw from the same set; values resolve per appearance mode.
   const podColors = useMemo(() => {
     const styles = getComputedStyle(document.documentElement);
-    const palette = Array.from({ length: 24 }, (_, i) =>
-      styles.getPropertyValue(`--hash-color-${i + 1}`).trim()
+    const palette = POD_LOG_COLOR_PALETTE_SLOTS.map((slot) =>
+      styles.getPropertyValue(`--hash-color-${slot}`).trim()
     );
     const fallbackColor = styles.getPropertyValue('--hash-color-fallback').trim();
     return buildStablePodColorMap(availablePods, palette, fallbackColor);

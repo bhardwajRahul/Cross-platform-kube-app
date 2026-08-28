@@ -260,8 +260,8 @@
   /* Hash-based color palette — slots map to the same hue families as the
      dark mode. Tailwind-600 values for saturated contrast on white bgs.
 
-     Layout: slots 1..17 walk the wheel, 18..20 are shoulder hues, 21..24
-     are earthy neutrals. */
+     Layout: slots 1..17 walk the wheel, 18..20 are shoulder hues, 21..23
+     are earthy neutrals, and 24 is a saturated turquoise. */
   --hash-color-1: #dc2626; /* red */
   --hash-color-2: #ea580c; /* orange */
   --hash-color-3: #d97706; /* amber */
@@ -285,7 +285,7 @@
   --hash-color-21: #7c4f2c; /* brown */
   --hash-color-22: #5d6f29; /* olive */
   --hash-color-23: #475569; /* slate */
-  --hash-color-24: #78716c; /* stone */
+  --hash-color-24: #0f766e; /* deep turquoise */
   --hash-color-fallback: var(--color-base-500);
   /* Light theme text is already saturated against the white bg; no boost
      applied. The vars exist so badges.css uses one formula across themes. */

@@ -2759,7 +2759,9 @@ describe('LogViewer active pod synchronisation', () => {
     });
   });
 
-  it('preserves workload pod color metadata when using a custom timestamp format', async () => {
+  it('assigns distinct workload pod colors while retaining all 24 palette slots', async () => {
+    const firstPod = 'argocd-repo-server-7898d489bb-q26sj';
+    const secondPod = 'argocd-repo-server-7898d489bb-nsqrr';
     setAppPreferencesForTesting({
       objPanelLogsApiTimestampFormat: 'YYYY/MM/DD HH:mm:ss',
       objPanelLogsApiTimestampUseLocalTimeZone: false,
@@ -2775,14 +2777,14 @@ describe('LogViewer active pod synchronisation', () => {
     seedLogSnapshot(
       [
         {
-          pod: 'web-1',
+          pod: firstPod,
           container: 'app',
           line: 'first',
           timestamp: '2024-05-01T10:00:00Z',
           isInit: false,
         },
         {
-          pod: 'web-2',
+          pod: secondPod,
           container: 'app',
           line: 'second',
           timestamp: '2024-05-01T10:00:01Z',
@@ -2792,25 +2794,28 @@ describe('LogViewer active pod synchronisation', () => {
       defaultScope
     );
 
-    await renderViewer({ activePodNames: ['web-1', 'web-2'] });
+    await renderViewer({ activePodNames: [firstPod, secondPod] });
     await flushAsync();
 
     const firstPodButton = await waitForElement(() =>
       container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Show only logs from pod web-1"]'
+        `button[aria-label="Show only logs from pod ${firstPod}"]`
       )
     );
     const secondPodButton = await waitForElement(() =>
       container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Show only logs from pod web-2"]'
+        `button[aria-label="Show only logs from pod ${secondPod}"]`
       )
     );
 
-    expect(firstPodButton.style.getPropertyValue('--pod-color')).toBeTruthy();
-    expect(secondPodButton.style.getPropertyValue('--pod-color')).toBeTruthy();
-    expect(firstPodButton.style.getPropertyValue('--pod-color')).not.toBe(
-      secondPodButton.style.getPropertyValue('--pod-color')
-    );
+    const podColors = [
+      firstPodButton.style.getPropertyValue('--pod-color'),
+      secondPodButton.style.getPropertyValue('--pod-color'),
+    ];
+    expect(podColors[0]).toBeTruthy();
+    expect(podColors[1]).toBeTruthy();
+    expect(podColors[0]).not.toBe(podColors[1]);
+    expect(podColors).toContain('rgb(24, 24, 24)');
 
     for (let index = 1; index <= 24; index += 1) {
       document.documentElement.style.removeProperty(`--hash-color-${index}`);

@@ -263,7 +263,8 @@
 
      Layout: slots 1..17 walk the color wheel (red → orange → ... → rose) at
      saturated Tailwind-400 values, slots 18..20 are "shoulder" hues that
-     fill the largest visible gaps, slots 21..24 are earthy neutrals. */
+     fill the largest visible gaps, slots 21..23 are earthy neutrals, and 24
+     is a saturated turquoise. */
   --hash-color-1: #f87171; /* red */
   --hash-color-2: #fb923c; /* orange */
   --hash-color-3: #fbbf24; /* amber */
@@ -287,7 +288,7 @@
   --hash-color-21: #b08868; /* brown */
   --hash-color-22: #95a86a; /* olive */
   --hash-color-23: #94a3b8; /* slate */
-  --hash-color-24: #d6d3d1; /* stone */
+  --hash-color-24: #5eead4; /* bright turquoise */
   --hash-color-fallback: var(--color-base-400);
   /* Boosts badge text within the same hue: small lightness lift plus chroma
      multiplier in OKLCH space, so text reads as a more vivid version of
