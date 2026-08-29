@@ -80,18 +80,17 @@ const scrollExpandedNamespaceIntoView = (namespaceKey: string) => {
   const escapedKey = escapeAttributeSelectorValue(namespaceKey);
   const namespaceElement = document.querySelector(`.sidebar-item[data-namespace="${escapedKey}"]`);
   const parentContainer = namespaceElement?.closest('.namespace-items');
-  const expandedViews = namespaceElement?.parentElement?.querySelector('.sidebar-views');
-  if (!namespaceElement || !parentContainer || !expandedViews) {
+  const namespaceGroup = namespaceElement?.closest('.sidebar-namespace-group');
+  if (!namespaceElement || !parentContainer || !namespaceGroup) {
     return;
   }
 
   const containerRect = parentContainer.getBoundingClientRect();
-  const namespaceRect = namespaceElement.getBoundingClientRect();
-  const expandedRect = expandedViews.getBoundingClientRect();
+  const namespaceGroupRect = namespaceGroup.getBoundingClientRect();
   const needsScroll =
-    namespaceRect.top < containerRect.top || expandedRect.bottom > containerRect.bottom;
+    namespaceGroupRect.top < containerRect.top || namespaceGroupRect.bottom > containerRect.bottom;
   if (needsScroll) {
-    namespaceElement.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    namespaceGroup.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 };
 
@@ -189,11 +188,30 @@ const SidebarNamespaceViews = ({
   isTargetSelected,
   onNamespaceViewSelect,
 }: SidebarNamespaceViewsProps) => {
+  const expandedViewsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isExpanded) {
+      return;
+    }
+    const expandedViews = expandedViewsRef.current;
+    if (!expandedViews) {
+      return;
+    }
+    const handleAnimationEnd = (event: AnimationEvent) => {
+      if (event.target === expandedViews) {
+        scrollExpandedNamespaceIntoView(namespaceKey);
+      }
+    };
+    expandedViews.addEventListener('animationend', handleAnimationEnd);
+    return () => expandedViews.removeEventListener('animationend', handleAnimationEnd);
+  }, [isExpanded, namespaceKey]);
+
   if (!isExpanded) {
     return null;
   }
   return (
-    <div className="sidebar-views" id={namespaceViewsId}>
+    <div ref={expandedViewsRef} className="sidebar-views" id={namespaceViewsId}>
       {getNamespaceViews(scope).map((view) => (
         <button
           type="button"
@@ -264,7 +282,7 @@ const SidebarNamespaceRow = ({
   };
 
   return (
-    <div>
+    <div className="sidebar-namespace-group">
       <div className="sidebar-item-row">
         <button
           type="button"

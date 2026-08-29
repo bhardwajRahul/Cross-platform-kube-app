@@ -705,58 +705,101 @@ describe('Sidebar', () => {
     expect(viewStateMock.setActiveClusterView).toHaveBeenCalledWith('nodes');
   });
 
-  it('scrolls expanded namespaces into view after toggling', () => {
+  it('scrolls the complete expanded namespace group into view after toggling', () => {
     namespaceState.selectedNamespace = undefined;
     namespaceState.selectedNamespaceClusterId = undefined;
     renderSidebar();
-    const originalScroll = Element.prototype.scrollIntoView;
-    const scrollSpy = vi.fn();
-    Element.prototype.scrollIntoView = (options) => scrollSpy(options);
-    const originalQuerySelector = document.querySelector;
-    const fakeElement = {
-      scrollIntoView: scrollSpy,
-      getBoundingClientRect: () => ({ top: 0, bottom: 50 }) as DOMRect,
-      closest: () => ({
-        getBoundingClientRect: () => ({ top: 200, bottom: 300 }) as DOMRect,
-      }),
-      parentElement: {
-        querySelector: () => ({
-          getBoundingClientRect: () => ({ top: 400, bottom: 900 }) as DOMRect,
-        }),
-      },
-    } as unknown as Element;
-    document.querySelector = vi.fn((selector: string) => {
-      if (selector.includes('.sidebar-item')) {
-        return fakeElement;
-      }
-      return originalQuerySelector.call(document, selector);
-    }) as typeof document.querySelector;
-
     vi.useFakeTimers();
 
     const namespaceToggle = requireValue(
-      container,
-      'expected test value in Sidebar.test.tsx'
-    ).querySelector<HTMLDivElement>(
-      `[data-sidebar-target-kind="namespace-toggle"][data-sidebar-target-namespace="${namespaceKey(
-        'default'
-      )}"]`
+      requireValue(
+        container,
+        'expected test value in Sidebar.test.tsx'
+      ).querySelector<HTMLButtonElement>(
+        `[data-sidebar-target-kind="namespace-toggle"][data-sidebar-target-namespace="${namespaceKey(
+          'default'
+        )}"]`
+      ),
+      'expected namespace toggle'
     );
-    expect(namespaceToggle).not.toBeNull();
     act(() => {
-      requireValue(namespaceToggle, 'expected test value in Sidebar.test.tsx').click();
+      namespaceToggle.click();
     });
 
-    vi.runAllTimers();
-    expect(scrollSpy).toHaveBeenCalled();
+    const namespaceItems = requireValue(
+      namespaceToggle.closest('.namespace-items'),
+      'expected namespace scroll container'
+    );
+    const namespaceGroup = requireValue(
+      namespaceToggle.parentElement?.parentElement,
+      'expected complete namespace group'
+    );
+    requireValue(
+      namespaceGroup.querySelector('.sidebar-views'),
+      'expected expanded namespace views'
+    );
+    namespaceItems.getBoundingClientRect = () => ({ top: 200, bottom: 800 }) as DOMRect;
+    namespaceGroup.getBoundingClientRect = () => ({ top: 450, bottom: 900 }) as DOMRect;
+    const namespaceGroupScroll = vi.fn();
+    const namespaceNameScroll = vi.fn();
+    namespaceGroup.scrollIntoView = namespaceGroupScroll;
+    namespaceToggle.scrollIntoView = namespaceNameScroll;
+
+    act(() => vi.runAllTimers());
+
+    expect(namespaceGroupScroll).toHaveBeenCalledWith({ block: 'nearest', behavior: 'smooth' });
+    expect(namespaceNameScroll).not.toHaveBeenCalled();
     vi.useRealTimers();
-    if (originalScroll) {
-      Element.prototype.scrollIntoView = originalScroll;
-    } else {
-      // @ts-expect-error cleanup
-      Element.prototype.scrollIntoView = undefined;
-    }
-    document.querySelector = originalQuerySelector;
+  });
+
+  it('rechecks the complete namespace group after its expansion animation settles', () => {
+    namespaceState.selectedNamespace = undefined;
+    namespaceState.selectedNamespaceClusterId = undefined;
+    renderSidebar();
+    vi.useFakeTimers();
+
+    const namespaceToggle = requireValue(
+      requireValue(
+        container,
+        'expected test value in Sidebar.test.tsx'
+      ).querySelector<HTMLButtonElement>(
+        `[data-sidebar-target-kind="namespace-toggle"][data-sidebar-target-namespace="${namespaceKey(
+          'default'
+        )}"]`
+      ),
+      'expected namespace toggle'
+    );
+    act(() => namespaceToggle.click());
+
+    const namespaceItems = requireValue(
+      namespaceToggle.closest('.namespace-items'),
+      'expected namespace scroll container'
+    );
+    const namespaceGroup = requireValue(
+      namespaceToggle.closest('.sidebar-namespace-group'),
+      'expected complete namespace group'
+    );
+    const expandedViews = requireValue(
+      namespaceGroup.querySelector('.sidebar-views'),
+      'expected expanded namespace views'
+    );
+    let namespaceGroupBottom = 700;
+    namespaceItems.getBoundingClientRect = () => ({ top: 200, bottom: 800 }) as DOMRect;
+    namespaceGroup.getBoundingClientRect = () =>
+      ({ top: 450, bottom: namespaceGroupBottom }) as DOMRect;
+    const namespaceGroupScroll = vi.fn();
+    namespaceGroup.scrollIntoView = namespaceGroupScroll;
+
+    act(() => vi.runAllTimers());
+    expect(namespaceGroupScroll).not.toHaveBeenCalled();
+
+    namespaceGroupBottom = 900;
+    act(() => {
+      expandedViews.dispatchEvent(new Event('animationend', { bubbles: true }));
+    });
+
+    expect(namespaceGroupScroll).toHaveBeenCalledWith({ block: 'nearest', behavior: 'smooth' });
+    vi.useRealTimers();
   });
 
   it('escapes namespace keys before building the expansion scroll selector', () => {
