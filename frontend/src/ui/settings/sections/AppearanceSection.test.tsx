@@ -260,12 +260,12 @@ describe('AppearanceSection', () => {
 
   it('prompts when color swatches are reset', async () => {
     const accentReset = requireValue(
-      container.querySelector<HTMLButtonElement>('button[title="Reset Accent Color"]'),
-      'expected the Reset Accent Color button'
+      container.querySelector<HTMLButtonElement>('button[title="Reset Accent color"]'),
+      'expected the Reset Accent color button'
     );
     const linkReset = requireValue(
-      container.querySelector<HTMLButtonElement>('button[title="Reset Link Color"]'),
-      'expected the Reset Link Color button'
+      container.querySelector<HTMLButtonElement>('button[title="Reset Link color"]'),
+      'expected the Reset Link color button'
     );
 
     await act(async () => {
