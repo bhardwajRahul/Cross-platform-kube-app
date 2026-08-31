@@ -245,9 +245,14 @@ func (s *Service) prepareBuildRequest(ctx context.Context, req BuildRequest) (co
 		s.recordInformerSyncFailure(req.Domain, req.Scope, syncWait, err)
 		return nil, snapshotBuildRequestPlan{}, err
 	}
+	readiness := s.resourceReadiness(req.Domain)
+	ctx = withResourceReadiness(ctx, readiness)
 	cacheKey := s.cacheKey(req.Domain, req.Scope)
 	if permissionCacheKey != "" {
 		cacheKey += ":permissions:" + permissionCacheKey
+	}
+	if readinessKey := resourceReadinessFingerprint(readiness); readinessKey != "" {
+		cacheKey += ":readiness:" + readinessKey
 	}
 	bypassSnapshotCache := s.shouldBypassSnapshotCache(req.Domain)
 	return ctx, snapshotBuildRequestPlan{
@@ -259,6 +264,18 @@ func (s *Service) prepareBuildRequest(ctx context.Context, req BuildRequest) (co
 		skipCacheLoad:       refresh.HasCacheBypass(ctx) || bypassSnapshotCache,
 		syncWait:            syncWait,
 	}, nil
+}
+
+func (s *Service) resourceReadiness(domainName string) map[string]refresh.ResourceReadiness {
+	keys, scoped := s.domainReadiness[domainName]
+	if !scoped || len(keys) == 0 {
+		return nil
+	}
+	reporter, ok := s.currentInformerHub().(refresh.ResourceReadinessReporter)
+	if !ok {
+		return nil
+	}
+	return reporter.ResourceReadiness(keys)
 }
 
 func (s *Service) recordInformerSyncFailure(domainName, scope string, syncWait time.Duration, err error) {
@@ -511,12 +528,12 @@ func (s *Service) shouldCacheSnapshot(snap *refresh.Snapshot) bool {
 	if snap.Stats.TotalBatches > 0 && !snap.Stats.IsFinalBatch {
 		return false
 	}
-	// A namespaces snapshot built before its workload ingest stores settled reports
+	// A namespaces snapshot built before its workload ingest stores are genuinely ready reports
 	// workload absence as not-yet-known and keeps the cluster readiness gate closed.
 	// Serving it from cache would pin that pre-sync state for the TTL; rebuilding on
 	// the next poll lets the corrected flags and the Ready flip land immediately
-	// after the stores settle.
-	if payload, ok := snap.Payload.(NamespaceSnapshot); ok && !payload.WorkloadsReady {
+	// after the stores actually sync or are permission-skipped.
+	if payload, ok := snap.Payload.(NamespaceSnapshot); ok && payload.WorkloadReadiness != NamespaceWorkloadReady {
 		return false
 	}
 	return true

@@ -10,9 +10,9 @@ the completed `v2` rewrite plan.
 
 - **Store + query engine:** `backend/refresh/querypage/` — the owned columnar
   `Store[R]` and the `Query → Page` engine.
-- **Ingestion:** `backend/refresh/ingest/` — owned-reflector WatchList ingestion with
+- **Ingestion:** `backend/refresh/ingest/` — owned-reflector LIST+WATCH ingestion with
   projection-at-intake; `backend/refresh/informer/` — the shared typed-informer factory
-  (uncut kinds), projection transform, and WatchList probe.
+  (uncut kinds), projection transform, and process-wide startup transport policy.
 - **Per-domain serve + maintained stores:** `backend/refresh/snapshot/` —
   `querypage_typed.go` (`resolveTypedSnapshotPageViaStore`, `resolveMaintainedDirect`,
   `typedMaintainedStore`); `backend/objectcatalog/` for Browse.
@@ -76,18 +76,29 @@ the completed `v2` rewrite plan.
   cross-kind-join domains); Browse → `objectcatalog` `queryViaEngine`. Each domain is
   gated byte-identical to a brute list+project path (`…MaintainedMatchesListPath`).
 
-## Ingestion (owned-reflector WatchList + projection-at-intake)
+## Ingestion (owned-reflector LIST+WATCH + projection-at-intake)
 
 - **Project at intake, discard the typed object.** `ingest.ProjectingReflector` borrows
   client-go's List/Watch/relist/RV machinery and feeds a `ProjectingStore` that keeps
   only the projected bundle. `informer.StripManagedFields` (a `WithTransform` on every
   factory) drops `managedFields` before any cache — the core memory lever. Starting
   points: `ingest/manager.go`, `ingest/projecting_store.go`, `informer/projection.go`.
-- **WatchList, capability-probed, LIST fallback.** `informer/watchlist_probe.go` probes
-  WatchList at first connect and disables the client-go gate if the
-  `initial-events-end` bookmark is stripped (Teleport-style proxies) → robust LIST+WATCH.
+- **LIST+WATCH is the startup transport.** `informer/watchlist_config.go` disables
+  client-go's beta WatchList gate before reflectors are constructed. A capability probe
+  is insufficient because a proxy can deliver the required terminal bookmark while
+  streaming a large initial collection too slowly for an interactive application.
+  Ordinary LIST establishes the complete baseline; WATCH then carries live changes.
   A per-GVR sync-deadline degrades a hung GVR instead of wedging the cluster
-  (`informer/factory.go`). WatchList is **beta** — the LIST fallback is load-bearing.
+  (`informer/factory.go`). Deadline settlement is only a liveness decision: until
+  the source completes a real initial list, snapshots that depend on it report
+  partial/inexact data with a syncing issue instead of an authoritative empty
+  result.
+- **Immediate parallel cold start.** The ingest manager declares each kind's
+  permission-approved partitions before launching that kind, then starts every permitted
+  reflector without an additional application-level admission queue. Client-go's
+  per-cluster REST rate limiter remains the request-pressure boundary. The shared
+  15-second liveness deadline can mark a still-syncing source degraded, but never delays
+  another source from beginning its initial LIST.
 - **Two cutover shapes.** Registry-driven single-object kinds flip a descriptor
   `IngestOwned` flag (the generic path wires maintained store, catalog, object-map,
   response-cache). Cross-kind-join domains (pods, workloads, network, nodes) use a
@@ -127,16 +138,17 @@ the completed `v2` rewrite plan.
   restarts as part of re-warm. Starting points:
   `domain/maintained_stores.go`, `querypage/columnstore_mmap.go`, `refresh_spill.go`.
 - **Cold has a server-owned entry gate.** A desired Cold tier stays unapplied while
-  the live subsystem builds settled `namespaces` and `cluster-overview` snapshots
+  the live subsystem builds ready `namespaces` and `cluster-overview` snapshots
   for its cluster scope. The namespace build uses the aggregate lifecycle callback,
   so Ready and the retained sidebar/Global payloads exist before any producer stops.
   Preparation waits on that lifecycle state and the current subsystem generation's
   namespace workload tracker without polling namespace snapshots, retries the overview
   from the backend, and does not wait for tab activation. This generation-local gate
   prevents a retained Ready state from cooling a replacement subsystem before its own
-  stores settle. Only a successful preparation marks the subsystem eligible for
-  cooling; the governor records Cold after the executor reaches it. Preparation is
-  owned by that subsystem generation: replacement or teardown cancels an in-flight
+  stores actually sync or are explicitly permission-skipped. Only a successful
+  preparation marks the subsystem eligible for cooling; the governor records Cold
+  after the executor reaches it. Preparation is owned by that subsystem generation:
+  replacement or teardown cancels an in-flight
   build, and the retry loop exits as soon as the generation is no longer current.
   Under sustained HeapInuse pressure only, an unsettled preparation that exceeds one
   bounded snapshot-attempt grace degrades to the normal full teardown path. Available
@@ -164,18 +176,25 @@ the completed `v2` rewrite plan.
   the applied tier only after that work completes. Catalog gating reads the plan: it
   closes before cooling stops feeds and opens before re-warm starts the catalog. A live
   tier is reached only when both the subsystem and its cluster object catalog exist.
-- **Cluster-Ready is server-driven.** The loading→ready transition rides a namespaces
-  snapshot build after the workload stores settle; the backend self-builds it on each
-  pre-Ready namespaces doorbell (`runNamespacesReadinessSelfBuild` via the
+- **Cluster workload readiness is server-driven.** A namespaces snapshot moves
+  `loading`/`loading_slow` to `degraded` once every workload source has settled but at
+  least one missed the deadline. `degraded` is operational: available refresh data,
+  permissions, actions, and navigation remain usable while incomplete tables stay
+  labelled. Only actual initial sync or an explicit permission skip moves the cluster
+  to `ready`. The backend self-builds the snapshot on each pending/degraded namespaces
+  doorbell (`runNamespacesReadinessSelfBuild` via the
   `Subsystem.NamespacesDoorbell` observer, wired per cluster in
   `buildRefreshSubsystemForSelection`). Readiness never depends on the frontend
-  asking first.
+  asking first. Idle re-arm ticks inspect only source readiness; they rebuild workload
+  rollups on an ingest event, a readiness edge, or a throttled pending change. Governor
+  Cold admission remains stricter and requires actual `ready` data for the current
+  subsystem generation.
 - **Client publication and lifecycle are ordered per cluster.** Startup settings and
   saved-selection restore run through the runtime selection coordinator. A completed
   client is installed inside its per-cluster operation before that operation publishes
   `connected`, without waiting for sibling builds. Building the refresh subsystem then
   advances the cluster to `loading`; stale client-build completions cannot demote
-  `loading`, `loading_slow`, or `ready` back to `connecting`/`connected`.
+  `loading`, `loading_slow`, `degraded`, or `ready` back to `connecting`/`connected`.
 
 ## Delivery — page + refetch-on-signal
 

@@ -67,6 +67,14 @@ func (s *coldPreparationNamespaceSource) HasSyncedFor(schema.GroupVersionResourc
 	return s.synced
 }
 
+func (s *coldPreparationNamespaceSource) RawHasSyncedFor(gvr schema.GroupVersionResource) bool {
+	return s.HasSyncedFor(gvr)
+}
+
+func (s *coldPreparationNamespaceSource) PermissionSkippedFor(schema.GroupVersionResource) bool {
+	return false
+}
+
 func (s *coldPreparationNamespaceSource) CatalogRows(schema.GroupVersionResource) []interface{} {
 	return nil
 }
@@ -95,7 +103,7 @@ func (s *coldPreparationSnapshotService) Build(_ context.Context, domainName, sc
 			Domain: domainName,
 			Scope:  scope,
 			Payload: snapshot.NamespaceSnapshot{
-				WorkloadsReady: s.namespaceReady,
+				WorkloadReadiness: map[bool]snapshot.NamespaceWorkloadReadiness{false: snapshot.NamespaceWorkloadPending, true: snapshot.NamespaceWorkloadReady}[s.namespaceReady],
 			},
 		}, nil
 	case "cluster-overview":
@@ -335,7 +343,10 @@ func TestColdPreparationUsesAggregateLifecycleBeforeCooling(t *testing.T) {
 		[]string{"cluster-a"},
 		map[string]*system.Subsystem{"cluster-a": subsystem},
 	)
-	aggregate.onNamespaceSnapshot = func(clusterID string) {
+	aggregate.onNamespaceSnapshot = func(clusterID string, readiness snapshot.NamespaceWorkloadReadiness) {
+		if readiness != snapshot.NamespaceWorkloadReady {
+			return
+		}
 		state := app.ClusterRuntime.clusterLifecycle.GetState(clusterID)
 		if state == ClusterStateLoading || state == ClusterStateLoadingSlow {
 			app.ClusterRuntime.clusterLifecycle.SetState(clusterID, ClusterStateReady)
@@ -407,7 +418,7 @@ func TestColdPreparationRequiresCurrentSubsystemWorkloadReadiness(t *testing.T) 
 
 	source.setSynced(true)
 	require.Eventually(t, subsystem.ColdServingReady, time.Second, 10*time.Millisecond,
-		"preparation must continue after the current subsystem settles")
+		"preparation must continue after the current subsystem really syncs")
 	require.Equal(t, []string{"cluster-overview@cluster-a|"}, service.callsSnapshot())
 }
 

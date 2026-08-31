@@ -33,6 +33,7 @@ import (
 	"github.com/luxury-yacht/app/backend/kind/kindregistry"
 	"github.com/luxury-yacht/app/backend/kind/streamrows"
 	"github.com/luxury-yacht/app/backend/kind/streamspec"
+	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/informer"
 
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
@@ -75,7 +76,11 @@ type ObjectMapProjector func(obj metav1.Object) interface{}
 // entry is one ingested kind: the reflector that drives intake and the store
 // that holds its projected rows.
 type entry struct {
-	desc  streamspec.Descriptor
+	desc streamspec.Descriptor
+	// gvr is the concrete resource identity used to register this entry. Bespoke
+	// reflectors have no stream descriptor, so readiness warnings must use this
+	// field rather than desc.GVR() (whose zero value logs as /, Resource=).
+	gvr   schema.GroupVersionResource
 	store *ProjectingStore
 
 	// parts are the kind's reflectors: one per configured scope namespace for
@@ -101,7 +106,7 @@ type entry struct {
 	objectMapProject ObjectMapProjector
 
 	// degraded latches true when this kind's store has not synced within the manager's
-	// sync deadline, so a single never-syncing reflector (RBAC denial, hung WatchList,
+	// sync deadline, so a single never-syncing reflector (RBAC denial, hung initial LIST,
 	// projection error) is excluded from the readiness gate instead of blocking it
 	// forever — mirroring the informer factory's per-informer degrade (issue #225,
 	// informer/factory.go stateSettled). The reflector keeps retrying LIST+WATCH in the
@@ -290,13 +295,13 @@ func (m *IngestManager) addDescriptor(desc streamspec.Descriptor) {
 // kinds) build a single cluster-wide part; a namespace scope fans one part
 // per configured namespace, each writing its own store partition.
 func (m *IngestManager) installReflector(e *entry, gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, restClient rest.Interface, example apiruntime.Object) {
+	e.gvr = gvr
 	e.example = example
 	for _, namespace := range m.partitionNamespaces(gvr) {
 		lw := cache.NewListWatchFromClient(restClient, gvr.Resource, namespace, fields.Everything())
-		// ToListWatcherWithWatchListSemantics lets the reflector use WatchList when the
-		// client advertises support and fall back to LIST+WATCH otherwise — exactly as
-		// the generated informers do. The client argument is the typed group client so
-		// its WatchList capability is detected.
+		// Preserve client-go's capability metadata on the ListWatcher just as generated
+		// informers do. The process-wide startup transport policy currently disables
+		// WatchList before any reflector is constructed.
 		wrapped := cache.ToListWatcherWithWatchListSemantics(lw, restClient)
 		name := gvk.String()
 		if namespace != "" {
@@ -367,7 +372,7 @@ func (m *IngestManager) RegisterDynamicCatalogReflector(gvr schema.GroupVersionR
 	if _, exists := m.entries[gvr]; exists {
 		return false
 	}
-	e := &entry{store: newIngestProjectingStore(catalogProjectionFor(project))}
+	e := &entry{gvr: gvr, store: newIngestProjectingStore(catalogProjectionFor(project))}
 	e.onDemand.Store(true)
 	example := &unstructuredv1.Unstructured{}
 	example.SetGroupVersionKind(gvk)
@@ -638,8 +643,8 @@ func (m *IngestManager) markStarted() {
 
 func launchIngestEntry(runCtx context.Context, launch ingestLaunchEntry, filter func(string, string, string) bool) {
 	launched := permittedIngestPartitions(launch, filter)
-	// Expected partitions must be declared BEFORE any reflector of the
-	// entry runs, so the store's sync gate counts exactly the launched set.
+	// Expected partitions must be declared BEFORE any reflector of the entry
+	// runs, so the store's sync gate counts exactly the launched set.
 	launch.e.store.SetExpectedPartitions(launched)
 	for _, part := range launch.e.parts {
 		if part.skipped.Load() {
@@ -833,7 +838,7 @@ func (m *IngestManager) Stop() {
 
 // HasSynced reports whether every kind's store has SETTLED — synced or degraded past
 // the sync deadline. It is the readiness gate the composite hub blocks on; gating it
-// on raw sync alone let a single never-syncing reflector (RBAC denial, hung WatchList,
+// on raw sync alone let a single never-syncing reflector (RBAC denial, hung initial LIST,
 // projection error) wedge the whole subsystem's readiness — and, because Manager.Start
 // blocks on it before starting the metrics poller, wedge metrics too. The deadline
 // degrade mirrors the informer factory's stateSettled (issue #225).
@@ -859,10 +864,10 @@ func (m *IngestManager) HasSynced() bool {
 }
 
 // entrySettled reports whether one kind's store has stopped gating readiness: it has
-// synced, or it has been marked degraded, or it has exceeded the sync deadline without
-// syncing (flipped to degraded here, logged once). A degraded store keeps retrying
-// LIST+WATCH in the background, so HasSynced still reflects a later real sync — the
-// degrade only stops it BLOCKING the initial gate.
+// synced, was permission-skipped, or exceeded the initial-sync deadline (flipped to
+// degraded here, logged once). A degraded reflector keeps retrying LIST+WATCH, so a
+// later real sync replaces the degraded data state. Degradation only stops the source
+// BLOCKING the initial gate.
 func (m *IngestManager) entrySettled(e *entry) bool {
 	if e.allPartsSkipped() {
 		// Permission-skipped: reflector never launched, store stays empty; settled so it
@@ -882,7 +887,8 @@ func (m *IngestManager) entrySettled(e *entry) bool {
 		// into the settled decision made a raced HasSynced return a false
 		// negative, which can block Manager.Start's readiness wait.
 		if e.degraded.CompareAndSwap(false, true) {
-			klog.Warningf("ingest store for %s did not sync within the deadline — marking degraded and excluding from readiness (LIST+WATCH retries continue in the background)", e.desc.GVR())
+			klog.Warningf("ingest data for %s in cluster %s did not sync within the deadline — marking degraded and excluding from readiness (LIST+WATCH retries continue in the background)",
+				e.gvr, m.meta.ClusterName)
 		}
 		return true
 	}
@@ -891,8 +897,8 @@ func (m *IngestManager) entrySettled(e *entry) bool {
 
 // syncDeadlineExceeded reports whether the per-cluster ingest sync deadline has passed
 // since Start stamped startedAt. A zero startedAt (Start not yet called) or a
-// non-positive deadline never fires, so the deadline can only degrade a store after the
-// reflectors have actually been given the chance to run.
+// non-positive deadline never fires, so the deadline can only degrade a store after its
+// reflector has been launched.
 func (m *IngestManager) syncDeadlineExceeded() bool {
 	if m.syncDeadline <= 0 {
 		return false
@@ -1142,6 +1148,39 @@ func (m *IngestManager) HasSyncedFor(gvr schema.GroupVersionResource) bool {
 		return e.store.HasSynced()
 	}
 	return m.entrySettled(e)
+}
+
+// ResourceReadinessFor reports the data-availability state for one ingest
+// source. Unlike HasSyncedFor, deadline degradation is not reported as ready:
+// it releases the liveness gate while keeping downstream snapshot envelopes
+// visibly partial until the store completes a real initial sync.
+func (m *IngestManager) ResourceReadinessFor(gvr schema.GroupVersionResource) refresh.ResourceReadiness {
+	m.mu.Lock()
+	e, ok := m.entries[gvr]
+	m.mu.Unlock()
+	if !ok {
+		return refresh.ResourceReadinessUnavailable
+	}
+	if e.allPartsSkipped() {
+		return refresh.ResourceReadinessUnavailable
+	}
+	if e.store.HasSynced() {
+		return refresh.ResourceReadinessReady
+	}
+	if e.onDemand.Load() {
+		return refresh.ResourceReadinessPending
+	}
+	// entrySettled owns the one-shot deadline transition and warning. Re-check
+	// the concrete state afterward rather than treating settlement itself as
+	// data availability.
+	_ = m.entrySettled(e)
+	if e.store.HasSynced() {
+		return refresh.ResourceReadinessReady
+	}
+	if e.degraded.Load() {
+		return refresh.ResourceReadinessDegraded
+	}
+	return refresh.ResourceReadinessPending
 }
 
 // RawHasSyncedFor reports whether gvr's store has completed an actual initial

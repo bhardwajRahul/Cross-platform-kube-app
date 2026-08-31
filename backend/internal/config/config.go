@@ -45,11 +45,10 @@ const (
 
 	// RefreshInformerSyncDeadline bounds how long a single informer may take to reach
 	// its initial sync after Start before it is marked DEGRADED and excluded from the
-	// "all settled" readiness gate. A WatchList stream behind a bookmark-stripping proxy
-	// never signals sync completion, so without this deadline one hung GVR would block
-	// the whole cluster's readiness forever. A degraded informer is logged once and keeps
-	// retrying in the background; it stops gating readiness so the rest of the cluster
-	// becomes usable.
+	// "all settled" readiness gate. Without this deadline, an unavailable API or a hung
+	// initial LIST for one GVR would block the whole cluster's readiness forever. A
+	// degraded informer is logged once and keeps retrying in the background; it stops
+	// gating readiness so the rest of the cluster becomes usable.
 	RefreshInformerSyncDeadline = 15 * time.Second
 
 	// RefreshMetricsInterval determines the cadence for the metrics poller (node/pod metrics).

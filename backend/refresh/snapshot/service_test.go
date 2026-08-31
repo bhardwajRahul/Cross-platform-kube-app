@@ -29,9 +29,10 @@ func testClusterMeta() ClusterMeta {
 }
 
 type fakeInformerHub struct {
-	mu      sync.RWMutex
-	synced  bool
-	pending map[string]bool
+	mu        sync.RWMutex
+	synced    bool
+	pending   map[string]bool
+	readiness map[string]refresh.ResourceReadiness
 }
 
 func (h *fakeInformerHub) Start(context.Context) error { return nil }
@@ -57,6 +58,16 @@ func (h *fakeInformerHub) ResourcesSettled(keys []string) bool {
 
 func (h *fakeInformerHub) Shutdown() error { return nil }
 
+func (h *fakeInformerHub) ResourceReadiness(keys []string) map[string]refresh.ResourceReadiness {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	result := make(map[string]refresh.ResourceReadiness, len(keys))
+	for _, key := range keys {
+		result[key] = h.readiness[key]
+	}
+	return result
+}
+
 func (h *fakeInformerHub) setSynced(synced bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -70,6 +81,48 @@ func (h *fakeInformerHub) setPending(key string, pending bool) {
 		h.pending = make(map[string]bool)
 	}
 	h.pending[key] = pending
+}
+
+func (h *fakeInformerHub) setReadiness(key string, readiness refresh.ResourceReadiness) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.readiness == nil {
+		h.readiness = make(map[string]refresh.ResourceReadiness)
+	}
+	h.readiness[key] = readiness
+}
+
+func TestServiceBuildCarriesResourceReadinessAndInvalidatesItsCacheIdentity(t *testing.T) {
+	const key = "core/pods"
+	require.Equal(t, refresh.ResourceReadinessUnknown, resourceReadinessFromContext(context.Background(), key))
+	reg := domain.New()
+	builds := 0
+	require.NoError(t, reg.Register(refresh.DomainConfig{
+		Name: "demo-readiness",
+		BuildSnapshot: func(ctx context.Context, scope string) (*refresh.Snapshot, error) {
+			builds++
+			return &refresh.Snapshot{
+				Domain:  "demo-readiness",
+				Scope:   scope,
+				Payload: resourceReadinessFromContext(ctx, key).String(),
+			}, nil
+		},
+	}))
+	hub := &fakeInformerHub{synced: true}
+	hub.setReadiness(key, refresh.ResourceReadinessDegraded)
+	service := NewServiceWithPermissions(reg, nil, testClusterMeta(), nil).
+		WithInformerHub(hub).
+		WithDomainReadiness(map[string][]string{"demo-readiness": {key}})
+
+	first, err := service.Build(context.Background(), "demo-readiness", "cluster-a|")
+	require.NoError(t, err)
+	require.Equal(t, "degraded", first.Payload)
+
+	hub.setReadiness(key, refresh.ResourceReadinessReady)
+	second, err := service.Build(context.Background(), "demo-readiness", "cluster-a|")
+	require.NoError(t, err)
+	require.Equal(t, "ready", second.Payload)
+	require.Equal(t, 2, builds, "a ready source must not reuse a degraded cached snapshot")
 }
 
 // TestServiceSetInformerHubSwapsSyncGate proves the cool path can swap a Service's informer
@@ -164,8 +217,8 @@ func TestServiceBuildRecordsInformerSyncWait(t *testing.T) {
 }
 
 // TestServiceDoesNotCacheNotReadyNamespaceSnapshots pins the cache rule for the fast
-// namespace paint: a snapshot built BEFORE the workload ingest stores settle
-// (WorkloadsReady=false) must not be cached — the TTL would pin the pre-sync flags and
+// namespace paint: a snapshot built BEFORE the workload ingest stores are genuinely ready
+// (pending readiness) must not be cached — the TTL would pin the pre-sync flags and
 // delay the cluster Ready flip by up to cache TTL + poll. Once ready, caching resumes.
 func TestServiceDoesNotCacheNotReadyNamespaceSnapshots(t *testing.T) {
 	reg := domain.New()
@@ -178,7 +231,7 @@ func TestServiceDoesNotCacheNotReadyNamespaceSnapshots(t *testing.T) {
 			return &refresh.Snapshot{
 				Domain:  "namespaces",
 				Scope:   scope,
-				Payload: NamespaceSnapshot{WorkloadsReady: ready},
+				Payload: NamespaceSnapshot{WorkloadReadiness: map[bool]NamespaceWorkloadReadiness{false: NamespaceWorkloadPending, true: NamespaceWorkloadReady}[ready]},
 			}, nil
 		},
 	}))
@@ -196,6 +249,29 @@ func TestServiceDoesNotCacheNotReadyNamespaceSnapshots(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.Equal(t, 3, builds, "ready namespace snapshots must be cached again")
+}
+
+func TestServiceDoesNotCacheDegradedNamespaceSnapshots(t *testing.T) {
+	reg := domain.New()
+	builds := 0
+	require.NoError(t, reg.Register(refresh.DomainConfig{
+		Name: "namespaces",
+		BuildSnapshot: func(_ context.Context, scope string) (*refresh.Snapshot, error) {
+			builds++
+			return &refresh.Snapshot{
+				Domain:  "namespaces",
+				Scope:   scope,
+				Payload: NamespaceSnapshot{WorkloadReadiness: NamespaceWorkloadDegraded},
+			}, nil
+		},
+	}))
+	service := NewServiceWithPermissions(reg, nil, testClusterMeta(), nil)
+
+	for i := 0; i < 2; i++ {
+		_, err := service.Build(context.Background(), "namespaces", "cluster-a|")
+		require.NoError(t, err)
+	}
+	require.Equal(t, 2, builds, "degraded namespace snapshots must rebuild so late recovery is immediate")
 }
 
 func TestServiceBuildEmitsSequenceAndChecksum(t *testing.T) {

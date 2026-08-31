@@ -58,7 +58,6 @@ vi.mock('@modules/kubernetes/config/KubeconfigContext', () => ({
 vi.mock('@core/contexts/ClusterLifecycleContext', () => ({
   useClusterLifecycle: () => ({
     getClusterState: () => mockClusterLifecycleState,
-    isClusterReady: () => mockClusterLifecycleState === 'ready',
   }),
   ClusterLifecycleProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
@@ -225,6 +224,18 @@ describe('FavoritesContext', () => {
 
     expect(mockSetViewType).toHaveBeenCalledWith('cluster');
     expect(mockSetActiveClusterView).toHaveBeenCalledWith(null);
+  });
+
+  it('applies favorite navigation when the cluster is operational but data is incomplete', async () => {
+    mockClusterLifecycleState = 'degraded';
+    await renderProvider();
+
+    act(() => {
+      stateRef.current?.setPendingFavorite(makeFavorite());
+    });
+
+    expect(mockSetViewType).toHaveBeenCalledWith('namespace');
+    expect(mockOnNamespaceSelect).toHaveBeenCalledWith('default');
   });
 
   it('waits for namespaces before applying namespace favorite navigation', async () => {
