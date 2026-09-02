@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eventBus } from '@/core/events';
 import {
   type AppPreferenceKey,
+  applyBroadcastAppearanceModePreference,
   commitIntegerPreferenceInput,
   createPaletteTintPreferenceWorkflow,
   getAccentColor,
@@ -89,6 +90,10 @@ const telemetryMocks = vi.hoisted(() => ({
   captureUserVisibleError: vi.fn(),
   recordBrokerRequestCompleted: vi.fn(),
   recordBrokerRequestStarted: vi.fn(),
+}));
+
+const desktopRuntimeMocks = vi.hoisted(() => ({
+  emitBroadcastEvent: vi.fn(),
 }));
 
 vi.mock('@/core/telemetry/sentry', () => telemetryMocks);
@@ -262,8 +267,8 @@ const preferenceSchema = (overrides: Record<string, Partial<Record<string, unkno
     {
       key: 'objectPanelDockedBottomHeight',
       type: 'integer',
-      defaultValue: 400,
-      currentValue: 400,
+      defaultValue: 600,
+      currentValue: 600,
       min: 200,
       max: 9999,
       runtimeSideEffect: false,
@@ -271,8 +276,8 @@ const preferenceSchema = (overrides: Record<string, Partial<Record<string, unkno
     {
       key: 'objectPanelFloatingWidth',
       type: 'integer',
-      defaultValue: 500,
-      currentValue: 500,
+      defaultValue: 600,
+      currentValue: 600,
       min: 450,
       max: 9999,
       runtimeSideEffect: false,
@@ -280,27 +285,9 @@ const preferenceSchema = (overrides: Record<string, Partial<Record<string, unkno
     {
       key: 'objectPanelFloatingHeight',
       type: 'integer',
-      defaultValue: 400,
-      currentValue: 400,
+      defaultValue: 800,
+      currentValue: 800,
       min: 200,
-      max: 9999,
-      runtimeSideEffect: false,
-    },
-    {
-      key: 'objectPanelFloatingX',
-      type: 'integer',
-      defaultValue: 100,
-      currentValue: 100,
-      min: 1,
-      max: 9999,
-      runtimeSideEffect: false,
-    },
-    {
-      key: 'objectPanelFloatingY',
-      type: 'integer',
-      defaultValue: 100,
-      currentValue: 100,
-      min: 1,
       max: 9999,
       runtimeSideEffect: false,
     },
@@ -410,6 +397,7 @@ vi.mock('@core/backend-api', () => ({
 
 vi.mock('@core/desktop-runtime', () => ({
   desktopRuntimeAvailable: () => true,
+  emitBroadcastEvent: (...args: unknown[]) => desktopRuntimeMocks.emitBroadcastEvent(...args),
 }));
 
 describe('appPreferences', () => {
@@ -423,6 +411,8 @@ describe('appPreferences', () => {
     telemetryMocks.captureUserVisibleError.mockReset();
     telemetryMocks.recordBrokerRequestCompleted.mockReset();
     telemetryMocks.recordBrokerRequestStarted.mockReset();
+    desktopRuntimeMocks.emitBroadcastEvent.mockReset();
+    desktopRuntimeMocks.emitBroadcastEvent.mockResolvedValue(false);
     appMocks.GetAppSettingsSchema.mockResolvedValue(null);
     appMocks.UpdateAppPreferences.mockResolvedValue({ settings: {}, changedKeys: [] });
   });
@@ -442,6 +432,15 @@ describe('appPreferences', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('uses the backend-aligned Object Panel layout defaults before hydration', () => {
+    expect(getObjectPanelLayoutDefaults()).toEqual({
+      dockedRightWidth: 600,
+      dockedBottomHeight: 600,
+      floatingWidth: 600,
+      floatingHeight: 800,
+    });
   });
 
   it('hydrates preferences from backend settings', async () => {
@@ -789,6 +788,50 @@ describe('appPreferences', () => {
     expect(getGridTablePersistenceMode()).toBe('namespaced');
   });
 
+  it('broadcasts an appearance mode only after persistence succeeds', async () => {
+    appMocks.GetAppSettings.mockResolvedValue({ appearanceMode: 'light' });
+    await hydrateAppPreferences({ force: true });
+
+    await setAppearanceModePreference('dark');
+
+    expect(appMocks.UpdateAppPreferences).toHaveBeenCalledWith({
+      changes: [{ key: 'appearanceMode', value: 'dark' }],
+    });
+    expect(desktopRuntimeMocks.emitBroadcastEvent).toHaveBeenCalledWith(
+      'settings:appearance-mode-changed',
+      { mode: 'dark' }
+    );
+  });
+
+  it('broadcasts persisted preference changes to peer webviews', async () => {
+    appMocks.GetAppSettings.mockResolvedValue({ autoRefreshEnabled: true });
+    await hydrateAppPreferences({ force: true });
+
+    setAutoRefreshEnabled(false);
+    await flushPromises();
+
+    expect(desktopRuntimeMocks.emitBroadcastEvent).toHaveBeenCalledWith(
+      'settings:preferences-changed',
+      undefined
+    );
+  });
+
+  it('applies a valid peer appearance mode to the local cache and storage', async () => {
+    appMocks.GetAppSettings.mockResolvedValue({ appearanceMode: 'light' });
+    await hydrateAppPreferences({ force: true });
+    const modes: string[] = [];
+    const unsubscribe = eventBus.on('settings:appearance-mode', (mode) => modes.push(mode));
+
+    applyBroadcastAppearanceModePreference('dark');
+    applyBroadcastAppearanceModePreference('invalid');
+
+    expect(getAppearanceModePreference()).toBe('dark');
+    expect(localStorage.getItem('app-appearance-mode-preference')).toBe('dark');
+    expect(modes).toEqual(['dark']);
+    expect(appMocks.UpdateAppPreferences).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
   it('hydrates, persists, and emits the error reporting preference', async () => {
     appMocks.GetAppSettings.mockResolvedValue({ errorReportingEnabled: false });
     await hydrateAppPreferences({ force: true });
@@ -816,8 +859,6 @@ describe('appPreferences', () => {
       dockedBottomHeight: 20_000,
       floatingWidth: 1,
       floatingHeight: 20_000,
-      floatingX: -5,
-      floatingY: 20_000,
     });
 
     expect(getObjectPanelLayoutDefaults()).toEqual({
@@ -825,8 +866,6 @@ describe('appPreferences', () => {
       dockedBottomHeight: 9999,
       floatingWidth: 450,
       floatingHeight: 9999,
-      floatingX: 100,
-      floatingY: 9999,
     });
     expect(appMocks.UpdateAppPreferences).toHaveBeenCalledWith({
       changes: [
@@ -834,8 +873,6 @@ describe('appPreferences', () => {
         { key: 'objectPanelDockedBottomHeight', value: 9999 },
         { key: 'objectPanelFloatingWidth', value: 450 },
         { key: 'objectPanelFloatingHeight', value: 9999 },
-        { key: 'objectPanelFloatingX', value: 100 },
-        { key: 'objectPanelFloatingY', value: 9999 },
       ],
     });
   });
@@ -892,6 +929,7 @@ describe('appPreferences', () => {
     expect(getAppearanceModePreference()).toBe('system');
     expect(localStorage.getItem('app-appearance-mode-preference')).toBe('system');
     expect(localStorage.getItem('app-appearance-bootstrap-v1')).toBe('previous-bootstrap');
+    expect(desktopRuntimeMocks.emitBroadcastEvent).not.toHaveBeenCalled();
   });
 
   it('rejects invalid Object Panel Logs Tab API timestamp formats before persisting', async () => {

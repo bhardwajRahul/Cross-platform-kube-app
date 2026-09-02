@@ -6,7 +6,7 @@
  */
 
 import type { types } from '@core/backend-api/models';
-import { useViewState } from '@core/contexts/ViewStateContext';
+import { useOptionalViewState } from '@core/contexts/ViewStateContext';
 import { useNamespace } from '@modules/namespace/contexts/NamespaceContext';
 import { useObjectPanel } from '@modules/object-panel/hooks/useObjectPanel';
 import {
@@ -79,8 +79,8 @@ export const JobsTab: React.FC<JobsTabProps> = ({
   clusterName,
 }) => {
   const { openWithObject, objectData } = useObjectPanel();
-  const { navigateToView } = useNavigateToView();
-  const viewState = useViewState();
+  const { available: navigationAvailable, navigateToView } = useNavigateToView();
+  const viewState = useOptionalViewState();
   const namespaceContext = useNamespace();
 
   // Augment each job with cluster context from the panel.
@@ -128,7 +128,7 @@ export const JobsTab: React.FC<JobsTabProps> = ({
 
   const handleNamespaceSelect = useCallback(
     (job: JobRow) => {
-      if (!job.namespace) {
+      if (!job.namespace || !viewState) {
         return;
       }
       namespaceContext.setSelectedNamespace(job.namespace, job.clusterId ?? undefined);
@@ -143,36 +143,40 @@ export const JobsTab: React.FC<JobsTabProps> = ({
       createKindColumn<JobRow>({
         getKind: () => 'Job',
         onClick: handleJobOpen,
-        onAltClick: (job) =>
-          navigateToView(
-            buildRequiredObjectReference(
-              {
-                kind: 'Job',
-                name: job.name,
-                namespace: job.namespace,
-                clusterId: job.clusterId,
-                clusterName: job.clusterName,
-              },
-              { fallbackClusterId: objectData?.clusterId }
-            )
-          ),
+        onAltClick: navigationAvailable
+          ? (job) =>
+              navigateToView(
+                buildRequiredObjectReference(
+                  {
+                    kind: 'Job',
+                    name: job.name,
+                    namespace: job.namespace,
+                    clusterId: job.clusterId,
+                    clusterName: job.clusterName,
+                  },
+                  { fallbackClusterId: objectData?.clusterId }
+                )
+              )
+          : undefined,
         sortable: false,
       }),
       createResourceNameColumn<JobRow>({
         onClick: handleJobOpen,
-        onAltClick: (job) =>
-          navigateToView(
-            buildRequiredObjectReference(
-              {
-                kind: 'Job',
-                name: job.name,
-                namespace: job.namespace,
-                clusterId: job.clusterId,
-                clusterName: job.clusterName,
-              },
-              { fallbackClusterId: objectData?.clusterId }
-            )
-          ),
+        onAltClick: navigationAvailable
+          ? (job) =>
+              navigateToView(
+                buildRequiredObjectReference(
+                  {
+                    kind: 'Job',
+                    name: job.name,
+                    namespace: job.namespace,
+                    clusterId: job.clusterId,
+                    clusterName: job.clusterName,
+                  },
+                  { fallbackClusterId: objectData?.clusterId }
+                )
+              )
+          : undefined,
         getClassName: () => 'object-panel-link',
         getTitle: (job) => job.name,
       }),
@@ -189,8 +193,8 @@ export const JobsTab: React.FC<JobsTabProps> = ({
       afterColumnKey: 'name',
       accessor: (job) => job.namespace,
       onClick: handleNamespaceSelect,
-      isInteractive: (job) => Boolean(job.namespace),
-      getClassName: () => 'object-panel-link',
+      isInteractive: (job) => Boolean(job.namespace && viewState),
+      getClassName: (job) => (job.namespace && viewState ? 'object-panel-link' : undefined),
     });
 
     withNamespace.push(
@@ -202,7 +206,14 @@ export const JobsTab: React.FC<JobsTabProps> = ({
     );
 
     return withColumnSizing(withNamespace, COLUMN_SIZING);
-  }, [handleJobOpen, handleNamespaceSelect, navigateToView, objectData?.clusterId]);
+  }, [
+    handleJobOpen,
+    handleNamespaceSelect,
+    navigateToView,
+    navigationAvailable,
+    objectData?.clusterId,
+    viewState,
+  ]);
 
   const getSearchTokens = useCallback((job: JobRow) => {
     const tokens = [job.name, job.namespace, job.status];

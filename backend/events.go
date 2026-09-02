@@ -1,6 +1,9 @@
 package backend
 
-import "github.com/wailsapp/wails/v3/pkg/application"
+import (
+	"github.com/luxury-yacht/app/internal/panelwindow"
+	"github.com/wailsapp/wails/v3/pkg/application"
+)
 
 const (
 	appLogsAddedEventName               = "app-logs:added"
@@ -15,7 +18,13 @@ const (
 	clusterLifecycleEventName           = "cluster:lifecycle"
 	clusterScopeChangedEventName        = "cluster:scope:changed"
 	kubeconfigAvailableChangedEventName = "kubeconfig:available-changed"
+	appearanceModeChangedEventName      = "settings:appearance-mode-changed"
+	preferencesChangedEventName         = "settings:preferences-changed"
 )
+
+type AppearanceModeChangedEvent struct {
+	Mode string `json:"mode"`
+}
 
 type ClusterAuthEvent struct {
 	ClusterID   string `json:"clusterId"`
@@ -77,6 +86,8 @@ func init() {
 	application.RegisterEvent[ClusterLifecycleEvent](clusterLifecycleEventName)
 	application.RegisterEvent[ClusterScopeChangedEvent](clusterScopeChangedEventName)
 	application.RegisterEvent[application.Void](kubeconfigAvailableChangedEventName)
+	application.RegisterEvent[AppearanceModeChangedEvent](appearanceModeChangedEventName)
+	application.RegisterEvent[application.Void](preferencesChangedEventName)
 
 	application.RegisterEvent[application.Void]("debug:open-inspector")
 	application.RegisterEvent[application.Void]("debug:toggle-error-overlay")
@@ -100,6 +111,24 @@ func init() {
 	application.RegisterEvent[application.Void]("zoom-in")
 	application.RegisterEvent[application.Void]("zoom-out")
 	application.RegisterEvent[application.Void]("zoom-reset")
+	application.RegisterEvent[panelwindow.WindowOpenedEvent](panelwindow.WindowOpenedEventName)
+	application.RegisterEvent[panelwindow.WindowDockRequestedEvent](panelwindow.WindowDockRequestedEventName)
+	application.RegisterEvent[panelwindow.WindowFocusRequestedEvent](panelwindow.WindowFocusRequestedEventName)
+	application.RegisterEvent[panelwindow.WindowCloseRequestedEvent](panelwindow.WindowCloseRequestedEventName)
+	application.RegisterEvent[panelwindow.WindowClosedEvent](panelwindow.WindowClosedEventName)
+	application.RegisterEvent[panelwindow.OwnerCloseRequestedEvent](panelwindow.OwnerCloseRequestedEventName)
+	application.RegisterEvent[panelwindow.ObjectOpenRequestEvent](panelwindow.ObjectOpenRequestedEventName)
+	application.RegisterEvent[panelwindow.ObjectOpenAuthorizedEvent](panelwindow.ObjectOpenAuthorizedEventName)
+	application.RegisterEvent[panelwindow.SnapshotUpdatedEvent](panelwindow.SnapshotUpdatedEventName)
+	application.RegisterEvent[panelwindow.TabCloseRequestedEvent](panelwindow.TabCloseRequestedEventName)
+	application.RegisterEvent[panelwindow.TabCloseAuthorizedEvent](panelwindow.TabCloseAuthorizedEventName)
+	application.RegisterEvent[panelwindow.TabTransferRequestedEvent](panelwindow.TabTransferRequestedEventName)
+	application.RegisterEvent[panelwindow.TabTransferInsertRequestedEvent](panelwindow.TabTransferInsertRequestedEventName)
+	application.RegisterEvent[panelwindow.TabTransferCommittedEvent](panelwindow.TabTransferCommittedEventName)
+	application.RegisterEvent[panelwindow.TabTransferFailedEvent](panelwindow.TabTransferFailedEventName)
+	application.RegisterEvent[panelwindow.ApplicationQuitPreflightRequestedEvent](panelwindow.ApplicationQuitPreflightRequestedEventName)
+	application.RegisterEvent[panelwindow.WindowGuardRequestedEvent](panelwindow.WindowGuardRequestedEventName)
+	application.RegisterEvent[panelwindow.WindowGuardResultEvent](panelwindow.WindowGuardResultEventName)
 
 	application.RegisterEvent[[]ShellSessionInfo](shellListEventName)
 	application.RegisterEvent[ShellOutputEvent](shellOutputEventName)

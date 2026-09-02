@@ -212,6 +212,10 @@ func TestAppGetAppSettingsReturnsDefaultWhenMissing(t *testing.T) {
 	expected.AnonymizedID = settings.AnonymizedID
 	require.Equal(t, expected, settings)
 	require.Equal(t, settings, app.Preferences.appSettings)
+	require.Equal(t, 600, settings.ObjectPanelDockedRightWidth)
+	require.Equal(t, 600, settings.ObjectPanelDockedBottomHeight)
+	require.Equal(t, 600, settings.ObjectPanelFloatingWidth)
+	require.Equal(t, 800, settings.ObjectPanelFloatingHeight)
 }
 
 func TestErrorReportingPreferenceDefaultsEnabledInSettingsAndSchema(t *testing.T) {
@@ -847,8 +851,6 @@ func TestLoadSettingsFileNormalizesDefaults(t *testing.T) {
 	require.Equal(t, defaultObjectPanelDockedBottomHeight, settings.Preferences.ObjectPanelDockedBottomHeight)
 	require.Equal(t, defaultObjectPanelFloatingWidth, settings.Preferences.ObjectPanelFloatingWidth)
 	require.Equal(t, defaultObjectPanelFloatingHeight, settings.Preferences.ObjectPanelFloatingHeight)
-	require.Equal(t, defaultObjectPanelFloatingX, settings.Preferences.ObjectPanelFloatingX)
-	require.Equal(t, defaultObjectPanelFloatingY, settings.Preferences.ObjectPanelFloatingY)
 	require.Equal(t, defaultKubeconfigSearchPaths(), settings.Kubeconfig.SearchPaths)
 }
 
@@ -881,8 +883,6 @@ func TestNormalizeSettingsFileIsIdempotentAndPreservesExplicitValues(t *testing.
 			ObjectPanelDockedBottomHeight: maxObjectPanelLayoutValue + 1,
 			ObjectPanelFloatingWidth:      maxObjectPanelLayoutValue + 1,
 			ObjectPanelFloatingHeight:     maxObjectPanelLayoutValue + 1,
-			ObjectPanelFloatingX:          maxObjectPanelLayoutValue + 1,
-			ObjectPanelFloatingY:          maxObjectPanelLayoutValue + 1,
 			PaletteHue:                    175,
 			PaletteSaturation:             65,
 			PaletteBrightness:             -10,
@@ -907,7 +907,7 @@ func TestNormalizeSettingsFileIsIdempotentAndPreservesExplicitValues(t *testing.
 	require.Equal(t, maxObjPanelLogsTargetGlobalLimit, got.Preferences.ObjPanelLogs.TargetGlobalLimit)
 	require.Equal(t, maxTablePageSize, got.Preferences.DefaultTablePageSize)
 	require.Equal(t, maxObjectPanelLayoutValue, got.Preferences.ObjectPanelDockedRightWidth)
-	require.Equal(t, maxObjectPanelLayoutValue, got.Preferences.ObjectPanelFloatingY)
+	require.Equal(t, maxObjectPanelLayoutValue, got.Preferences.ObjectPanelFloatingHeight)
 	require.Equal(t, 175, got.Preferences.PaletteHueLight)
 	require.Equal(t, 175, got.Preferences.PaletteHueDark)
 	require.Zero(t, got.Preferences.PaletteHue)
@@ -987,14 +987,15 @@ func TestAppGetAppSettingsSchemaIncludesBackendOwnedDefaults(t *testing.T) {
 	require.True(t, byKey[appPreferenceAppearanceMode].RuntimeSideEffect)
 	require.Equal(t, defaultObjectPanelPosition, byKey[appPreferenceDefaultObjectPanelPosition].DefaultValue)
 	require.Equal(t, defaultObjectPanelPosition, byKey[appPreferenceDefaultObjectPanelPosition].CurrentValue)
-	require.Equal(t, defaultObjectPanelDockedRightWidth, byKey[appPreferenceObjectPanelDockedRightWidth].DefaultValue)
+	require.Equal(t, 600, byKey[appPreferenceObjectPanelDockedRightWidth].DefaultValue)
+	require.Equal(t, 600, byKey[appPreferenceObjectPanelDockedBottomHeight].DefaultValue)
+	require.Equal(t, 600, byKey[appPreferenceObjectPanelFloatingWidth].DefaultValue)
+	require.Equal(t, 800, byKey[appPreferenceObjectPanelFloatingHeight].DefaultValue)
 	require.Equal(t, defaultKubernetesClientQPS, byKey[appPreferenceKubernetesClientQPS].DefaultValue)
 	require.Equal(t, minKubernetesClientQPS, *byKey[appPreferenceKubernetesClientQPS].Min)
 	require.Equal(t, maxKubernetesClientQPS, *byKey[appPreferenceKubernetesClientQPS].Max)
 	require.Equal(t, minObjectPanelDockedRightWidth, *byKey[appPreferenceObjectPanelDockedRightWidth].Min)
 	require.Equal(t, maxObjectPanelLayoutValue, *byKey[appPreferenceObjectPanelDockedRightWidth].Max)
-	require.Equal(t, minObjectPanelFloatingX, *byKey[appPreferenceObjectPanelFloatingX].Min)
-	require.Equal(t, maxObjectPanelLayoutValue, *byKey[appPreferenceObjectPanelFloatingX].Max)
 }
 
 func TestAppSettingsSchemaCoversUpdateAppPreferenceKeys(t *testing.T) {

@@ -3,23 +3,18 @@
  *
  * Test suite for DockablePanelProvider.
  * Covers tab-group state, panel lifecycle, focus routing, drag adapters,
- * and the container-level empty-space drop target.
+ * and drag adapters.
  */
 
 import { useKubeconfig } from '@modules/kubernetes/config/KubeconfigContext';
-import {
-  TAB_DRAG_DATA_TYPE,
-  type TabDragPayload,
-  TabDragProvider,
-} from '@shared/components/tabs/dragCoordinator';
+import { TabDragProvider } from '@shared/components/tabs/dragCoordinator';
 import type React from 'react';
 import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requireValue } from '@/test-utils/requireValue';
-import { useDockablePanelEmptySpaceDropTarget } from './DockablePanelContentArea';
+import { resolveObjectPanelMountTarget } from '@/ui/layout/objectPanelMountTarget';
 import { DockablePanelProvider, useDockablePanelContext } from './DockablePanelProvider';
-import { DockableTabBar } from './DockableTabBar';
 import { clearPanelState } from './useDockablePanelState';
 
 type DockablePanelContextValue = ReturnType<typeof useDockablePanelContext>;
@@ -69,6 +64,12 @@ const render = async (element: React.ReactElement) => {
 
   return {
     container,
+    rerender: async (nextElement: React.ReactElement) => {
+      await act(async () => {
+        root.render(<TabDragProvider>{nextElement}</TabDragProvider>);
+        await Promise.resolve();
+      });
+    },
     unmount: async () => {
       await act(async () => {
         root.unmount();
@@ -77,67 +78,6 @@ const render = async (element: React.ReactElement) => {
     },
   };
 };
-
-const setRect = (element: Element, left: number, right: number, top = 0, bottom = 28) => {
-  Object.defineProperty(element, 'getBoundingClientRect', {
-    configurable: true,
-    value: () => ({
-      x: left,
-      y: top,
-      left,
-      right,
-      top,
-      bottom,
-      width: right - left,
-      height: bottom - top,
-      toJSON: () => ({}),
-    }),
-  });
-};
-
-/**
- * Minimal DataTransfer polyfill for jsdom drag simulation.
- */
-function createDataTransfer(): DataTransfer {
-  const store = new Map<string, string>();
-  return {
-    dropEffect: 'move',
-    effectAllowed: 'move',
-    files: [] as unknown as FileList,
-    items: [] as unknown as DataTransferItemList,
-    types: [] as unknown as readonly string[],
-    setData: (format: string, data: string) => {
-      store.set(format, data);
-    },
-    getData: (format: string) => store.get(format) ?? '',
-    clearData: () => {
-      store.clear();
-    },
-    setDragImage: () => undefined,
-  } as unknown as DataTransfer;
-}
-
-function dispatchDragEvent(
-  target: EventTarget,
-  type: string,
-  clientX: number,
-  clientY: number,
-  dataTransfer: DataTransfer
-) {
-  const event = new Event(type, { bubbles: true, cancelable: true }) as Event & {
-    clientX: number;
-    clientY: number;
-    dataTransfer: DataTransfer;
-  };
-  Object.defineProperty(event, 'clientX', { value: clientX });
-  Object.defineProperty(event, 'clientY', { value: clientY });
-  Object.defineProperty(event, 'dataTransfer', { value: dataTransfer });
-  target.dispatchEvent(event);
-}
-
-function seedPayload(dataTransfer: DataTransfer, payload: TabDragPayload) {
-  dataTransfer.setData(TAB_DRAG_DATA_TYPE, JSON.stringify(payload));
-}
 
 describe('DockablePanelProvider', () => {
   beforeEach(() => {
@@ -188,6 +128,82 @@ describe('DockablePanelProvider', () => {
     expect(preview?.querySelector('.dockable-tab-drag-preview__label')).toBeTruthy();
     expect(preview?.querySelector('.dockable-tab-drag-preview__kind')).toBeTruthy();
 
+    await unmount();
+  });
+
+  it('routes native tab close intent without removing the local tab before authorization', async () => {
+    const contextRef: { current: DockablePanelContextValue | null } = { current: null };
+    const requestClose = vi.fn();
+    const Consumer: React.FC = () => {
+      contextRef.current = useDockablePanelContext();
+      return null;
+    };
+    const Provider = DockablePanelProvider as React.ComponentType<
+      React.PropsWithChildren<{
+        nativeWindowMode: boolean;
+        onTabCloseRequest: (panelId: string) => void;
+      }>
+    >;
+    const { unmount } = await render(
+      <Provider nativeWindowMode onTabCloseRequest={requestClose}>
+        <Consumer />
+      </Provider>
+    );
+
+    await act(async () => {
+      requireDockableContext(contextRef.current).registerPanel({
+        panelId: 'panel-a',
+        title: 'A',
+        position: 'right',
+      });
+      requireDockableContext(contextRef.current).syncPanelGroup('panel-a', 'right');
+      await Promise.resolve();
+    });
+    await act(async () => {
+      requireDockableContext(contextRef.current).closeTab('panel-a');
+      await Promise.resolve();
+    });
+
+    expect(requestClose).toHaveBeenCalledWith('panel-a');
+    expect(requireDockableContext(contextRef.current).tabGroups.right.tabs).toEqual(['panel-a']);
+    await unmount();
+  });
+
+  it('treats a void group-move callback as an intercepted request', async () => {
+    const contextRef: { current: DockablePanelContextValue | null } = { current: null };
+    const requestMove = vi.fn();
+    const Consumer: React.FC = () => {
+      contextRef.current = useDockablePanelContext();
+      return null;
+    };
+    const Provider = DockablePanelProvider as React.ComponentType<
+      React.PropsWithChildren<{
+        onGroupMoveRequest: (
+          group: { groupKey: string; tabs: string[]; activeTab: string | null },
+          targetPosition: 'right' | 'bottom' | 'floating'
+        ) => void;
+      }>
+    >;
+    const { unmount } = await render(
+      <Provider onGroupMoveRequest={requestMove}>
+        <Consumer />
+      </Provider>
+    );
+
+    await act(async () => {
+      const context = requireDockableContext(contextRef.current);
+      context.registerPanel({ panelId: 'panel-a', title: 'A', position: 'right' });
+      context.syncPanelGroup('panel-a', 'right');
+      await Promise.resolve();
+    });
+
+    expect(requireDockableContext(contextRef.current).requestGroupMove?.('right', 'bottom')).toBe(
+      true
+    );
+    expect(requestMove).toHaveBeenCalledWith(
+      { groupKey: 'right', tabs: ['panel-a'], activeTab: 'panel-a' },
+      'bottom'
+    );
     await unmount();
   });
 
@@ -301,6 +317,147 @@ describe('DockablePanelProvider', () => {
       requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
         .tabGroups.right.tabs
     ).toEqual(['logs']);
+
+    await unmount();
+  });
+
+  it('discards closed native-panel layouts from their owning cluster while another cluster is active', async () => {
+    const contextRef: { current: DockablePanelContextValue | null } = { current: null };
+
+    const Consumer: React.FC = () => {
+      contextRef.current = useDockablePanelContext();
+      return null;
+    };
+
+    setMockedKubeconfig({
+      selectedClusterId: 'cluster-a',
+      selectedClusterIds: ['cluster-a', 'cluster-b'],
+    });
+    const renderProvider = () => (
+      <DockablePanelProvider>
+        <Consumer />
+      </DockablePanelProvider>
+    );
+    const { rerender, unmount } = await render(renderProvider());
+
+    await act(async () => {
+      requireDockableContext(contextRef.current).syncPanelGroup('panel-a', 'right');
+      await Promise.resolve();
+    });
+
+    setMockedKubeconfig({
+      selectedClusterId: 'cluster-b',
+      selectedClusterIds: ['cluster-a', 'cluster-b'],
+    });
+    await rerender(renderProvider());
+
+    await act(async () => {
+      requireDockableContext(contextRef.current).syncPanelGroup('panel-b', 'bottom');
+      requireDockableContext(contextRef.current).discardPanelLayouts('cluster-a', ['panel-a']);
+      await Promise.resolve();
+    });
+    expect(requireDockableContext(contextRef.current).tabGroups.bottom.tabs).toEqual(['panel-b']);
+
+    setMockedKubeconfig({
+      selectedClusterId: 'cluster-a',
+      selectedClusterIds: ['cluster-a', 'cluster-b'],
+    });
+    await rerender(renderProvider());
+    expect(requireDockableContext(contextRef.current).tabGroups.right.tabs).toEqual([]);
+
+    await unmount();
+  });
+
+  it.each([
+    { previousPosition: 'right', targetPosition: 'bottom' },
+    { previousPosition: 'bottom', targetPosition: 'right' },
+  ] as const)(
+    'moves a returning native group from $previousPosition to requested $targetPosition dock',
+    async ({ previousPosition, targetPosition }) => {
+      const contextRef: { current: DockablePanelContextValue | null } = { current: null };
+
+      const Consumer: React.FC = () => {
+        contextRef.current = useDockablePanelContext();
+        return null;
+      };
+
+      const { unmount } = await render(
+        <DockablePanelProvider>
+          <Consumer />
+        </DockablePanelProvider>
+      );
+
+      await act(async () => {
+        const context = requireDockableContext(contextRef.current);
+        context.syncPanelGroup('panel-a', previousPosition);
+        context.syncPanelGroup('panel-b', previousPosition);
+        context.dockPanelGroup('cluster-a', ['panel-a', 'panel-b'], 'panel-a', targetPosition);
+        await Promise.resolve();
+      });
+
+      const groups = requireDockableContext(contextRef.current).tabGroups;
+      expect(groups[previousPosition].tabs).toEqual([]);
+      expect(groups[targetPosition].tabs).toEqual(['panel-a', 'panel-b']);
+      expect(groups[targetPosition].activeTab).toBe('panel-a');
+
+      await unmount();
+    }
+  );
+
+  it('removes a transferred native group so a new workspace panel can lead the dock', async () => {
+    const contextRef: { current: DockablePanelContextValue | null } = { current: null };
+
+    const Consumer: React.FC = () => {
+      contextRef.current = useDockablePanelContext();
+      return null;
+    };
+
+    const { unmount } = await render(
+      <DockablePanelProvider>
+        <Consumer />
+      </DockablePanelProvider>
+    );
+
+    await act(async () => {
+      const context = requireDockableContext(contextRef.current);
+      context.syncPanelGroup('native-panel', 'right');
+      context.detachPanelGroup('cluster-a', ['native-panel']);
+      context.syncPanelGroup('new-workspace-panel', 'right');
+      await Promise.resolve();
+    });
+
+    expect(requireDockableContext(contextRef.current).tabGroups.right).toEqual({
+      tabs: ['new-workspace-panel'],
+      activeTab: 'new-workspace-panel',
+    });
+
+    await unmount();
+  });
+
+  it('does not create an in-page floating group when no native move owner is installed', async () => {
+    const contextRef: { current: DockablePanelContextValue | null } = { current: null };
+
+    const Consumer: React.FC = () => {
+      contextRef.current = useDockablePanelContext();
+      return null;
+    };
+
+    const { unmount } = await render(
+      <DockablePanelProvider>
+        <Consumer />
+      </DockablePanelProvider>
+    );
+
+    await act(async () => {
+      const context = requireDockableContext(contextRef.current);
+      context.syncPanelGroup('object-a', 'right');
+      context.movePanelBetweenGroups('object-a', 'floating');
+      await Promise.resolve();
+    });
+
+    const groups = requireDockableContext(contextRef.current).tabGroups;
+    expect(groups.right.tabs).toEqual(['object-a']);
+    expect(groups.floating).toEqual([]);
 
     await unmount();
   });
@@ -444,11 +601,8 @@ describe('DockablePanelProvider', () => {
     await unmount();
   });
 
-  it('keeps an already-floating panel in its own group during subsequent syncs', async () => {
-    const contextRef: { current: ReturnType<typeof useDockablePanelContext> | null } = {
-      current: null,
-    };
-
+  it('isolates a new floating panel when it has a unique preferred source group', async () => {
+    const contextRef: { current: DockablePanelContextValue | null } = { current: null };
     const Consumer: React.FC = () => {
       contextRef.current = useDockablePanelContext();
       return null;
@@ -461,68 +615,25 @@ describe('DockablePanelProvider', () => {
     );
 
     await act(async () => {
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).registerPanel({
-        panelId: 'float-a',
-        title: 'Float A',
-        position: 'floating',
-      });
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).syncPanelGroup('float-a', 'floating');
+      const context = requireDockableContext(contextRef.current);
+      context.registerPanel({ panelId: 'float-a', title: 'Float A', position: 'floating' });
+      context.syncPanelGroup('float-a', 'floating');
+      context.setLastFocusedGroupKey('floating-1');
       await Promise.resolve();
     });
 
     await act(async () => {
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).registerPanel({
-        panelId: 'right-b',
-        title: 'Right B',
-        position: 'right',
-      });
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).syncPanelGroup('right-b', 'right');
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).setLastFocusedGroupKey('floating-1');
+      const context = requireDockableContext(contextRef.current);
+      const mountTarget = resolveObjectPanelMountTarget(undefined, 'floating', 'float-b');
+      context.registerPanel({ panelId: 'float-b', title: 'Float B', position: 'floating' });
+      context.syncPanelGroup('float-b', mountTarget.position, mountTarget.groupKey);
       await Promise.resolve();
     });
 
-    await act(async () => {
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).movePanelBetweenGroups('right-b', 'floating');
-      await Promise.resolve();
-    });
-
-    // Existing floating panel should remain in floating-1 even after another
-    // tab is moved to a new floating group and this panel re-syncs.
-    await act(async () => {
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).syncPanelGroup('float-a', 'floating');
-      await Promise.resolve();
-    });
-
-    const floatingGroups = requireValue(
-      contextRef.current,
-      'expected test value in DockablePanelProvider.test.tsx'
-    ).tabGroups.floating;
-    expect(floatingGroups).toHaveLength(2);
-    expect(floatingGroups[0].groupId).toBe('floating-1');
-    expect(floatingGroups[0].tabs).toEqual(['float-a']);
-    expect(floatingGroups[1].groupId).toBe('floating-2');
-    expect(floatingGroups[1].tabs).toEqual(['right-b']);
+    expect(requireDockableContext(contextRef.current).tabGroups.floating).toEqual([
+      { groupId: 'floating-1', tabs: ['float-a'], activeTab: 'float-a' },
+      { groupId: 'floating-2', tabs: ['float-b'], activeTab: 'float-b' },
+    ]);
 
     await unmount();
   });
@@ -637,98 +748,6 @@ describe('DockablePanelProvider', () => {
     await unmount();
   });
 
-  it('keeps focus on moved floating panel so the next open joins that floating panel', async () => {
-    const contextRef: { current: ReturnType<typeof useDockablePanelContext> | null } = {
-      current: null,
-    };
-
-    const Consumer: React.FC = () => {
-      contextRef.current = useDockablePanelContext();
-      return null;
-    };
-
-    const { unmount } = await render(
-      <DockablePanelProvider>
-        <Consumer />
-      </DockablePanelProvider>
-    );
-
-    await act(async () => {
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).registerPanel({
-        panelId: 'obj-a',
-        title: 'Object A',
-        position: 'right',
-      });
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).syncPanelGroup('obj-a', 'right');
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).movePanelBetweenGroups('obj-a', 'floating');
-      await Promise.resolve();
-    });
-
-    expect(
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).getLastFocusedPosition()
-    ).toBe('floating');
-    expect(
-      requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
-        .tabGroups.floating
-    ).toHaveLength(1);
-    expect(
-      requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
-        .tabGroups.floating[0].tabs
-    ).toEqual(['obj-a']);
-
-    await act(async () => {
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).registerPanel({
-        panelId: 'obj-b',
-        title: 'Object B',
-        position: requireValue(
-          contextRef.current,
-          'expected test value in DockablePanelProvider.test.tsx'
-        ).getLastFocusedPosition(),
-      });
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).syncPanelGroup(
-        'obj-b',
-        requireValue(
-          contextRef.current,
-          'expected test value in DockablePanelProvider.test.tsx'
-        ).getLastFocusedPosition()
-      );
-      await Promise.resolve();
-    });
-
-    expect(
-      requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
-        .tabGroups.floating
-    ).toHaveLength(1);
-    expect(
-      requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
-        .tabGroups.floating[0].tabs
-    ).toEqual(['obj-a', 'obj-b']);
-
-    await unmount();
-  });
-
   it('moves focus to another group when the focused group is removed directly from the store', async () => {
     const contextRef: { current: ReturnType<typeof useDockablePanelContext> | null } = {
       current: null,
@@ -795,64 +814,6 @@ describe('DockablePanelProvider', () => {
       requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
         .lastFocusedGroupKey
     ).toBe('right');
-
-    await unmount();
-  });
-
-  it('moves and focuses via the centralized movePanelBetweenGroupsAndFocus command', async () => {
-    const contextRef: { current: ReturnType<typeof useDockablePanelContext> | null } = {
-      current: null,
-    };
-
-    const Consumer: React.FC = () => {
-      contextRef.current = useDockablePanelContext();
-      return null;
-    };
-
-    const { unmount } = await render(
-      <DockablePanelProvider>
-        <Consumer />
-      </DockablePanelProvider>
-    );
-
-    await act(async () => {
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).registerPanel({
-        panelId: 'obj-a',
-        title: 'Object A',
-        position: 'right',
-      });
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).syncPanelGroup('obj-a', 'right');
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).movePanelBetweenGroupsAndFocus('obj-a', 'floating');
-      await Promise.resolve();
-    });
-
-    expect(
-      requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
-        .tabGroups.floating
-    ).toHaveLength(1);
-    expect(
-      requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
-        .tabGroups.floating[0].tabs
-    ).toEqual(['obj-a']);
-    expect(
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).getLastFocusedPosition()
-    ).toBe('floating');
 
     await unmount();
   });
@@ -1117,149 +1078,6 @@ describe('DockablePanelProvider', () => {
       'expected test value in DockablePanelProvider.test.tsx'
     );
     expect(afterReorder.tabs).toEqual(['b', 'a', 'c', 'd']);
-
-    await unmount();
-  });
-
-  it('createFloatingGroupWithPanel moves a panel into a new floating group at the cursor', async () => {
-    const contextRef: { current: ReturnType<typeof useDockablePanelContext> | null } = {
-      current: null,
-    };
-
-    const Consumer: React.FC = () => {
-      contextRef.current = useDockablePanelContext();
-      return null;
-    };
-
-    const { unmount } = await render(
-      <DockablePanelProvider>
-        <Consumer />
-      </DockablePanelProvider>
-    );
-
-    await act(async () => {
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).registerPanel({
-        panelId: 'bottom-a',
-        title: 'Bottom A',
-        position: 'bottom',
-      });
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).syncPanelGroup('bottom-a', 'bottom');
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).createFloatingGroupWithPanel('bottom-a', 'bottom', { x: 220, y: 220 });
-      await Promise.resolve();
-    });
-
-    expect(
-      requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
-        .tabGroups.bottom.tabs
-    ).toEqual([]);
-    expect(
-      requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
-        .tabGroups.floating
-    ).toHaveLength(1);
-    expect(
-      requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
-        .tabGroups.floating[0].tabs
-    ).toEqual(['bottom-a']);
-
-    await unmount();
-  });
-
-  it('empty-space drop target creates a floating group from an existing panel', async () => {
-    // Integration test for Task 9 Step 5: the hook from
-    // DockablePanelContentArea.tsx wires a container-level drop target
-    // that calls createFloatingGroupWithPanel on drop.
-    const contextRef: { current: ReturnType<typeof useDockablePanelContext> | null } = {
-      current: null,
-    };
-
-    const Harness: React.FC = () => {
-      const ctx = useDockablePanelContext();
-      contextRef.current = ctx;
-      const { ref: dropRef } = useDockablePanelEmptySpaceDropTarget();
-      const bottomTabs = ctx.tabGroups.bottom.tabs.map((panelId) => ({
-        panelId,
-        title: ctx.panelRegistrations.get(panelId)?.title ?? panelId,
-      }));
-      return (
-        <div
-          ref={dropRef as (el: HTMLDivElement | null) => void}
-          className="dockable-container-test-harness"
-        >
-          <DockableTabBar
-            tabs={bottomTabs}
-            activeTab={ctx.tabGroups.bottom.activeTab}
-            onTabClick={() => undefined}
-            groupKey="bottom"
-          />
-        </div>
-      );
-    };
-
-    const { container, unmount } = await render(
-      <DockablePanelProvider>
-        <Harness />
-      </DockablePanelProvider>
-    );
-
-    await act(async () => {
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).registerPanel({
-        panelId: 'bottom-a',
-        title: 'Bottom A',
-        position: 'bottom',
-      });
-      requireValue(
-        contextRef.current,
-        'expected test value in DockablePanelProvider.test.tsx'
-      ).syncPanelGroup('bottom-a', 'bottom');
-      await Promise.resolve();
-    });
-
-    const containerEl = container.querySelector('.dockable-container-test-harness') as HTMLElement;
-    setRect(containerEl, 0, 800, 0, 600);
-
-    const dataTransfer = createDataTransfer();
-    seedPayload(dataTransfer, {
-      kind: 'dockable-tab',
-      panelId: 'bottom-a',
-      sourceGroupId: 'bottom',
-    });
-
-    await act(async () => {
-      // Dispatch the drop on the outer container (not on a tab bar) so
-      // it lands on the empty-space drop target, not the bar's target.
-      dispatchDragEvent(containerEl, 'dragover', 400, 300, dataTransfer);
-      dispatchDragEvent(containerEl, 'drop', 400, 300, dataTransfer);
-      await Promise.resolve();
-    });
-
-    expect(
-      requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
-        .tabGroups.bottom.tabs
-    ).toEqual([]);
-    expect(
-      requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
-        .tabGroups.floating
-    ).toHaveLength(1);
-    expect(
-      requireValue(contextRef.current, 'expected test value in DockablePanelProvider.test.tsx')
-        .tabGroups.floating[0].tabs
-    ).toEqual(['bottom-a']);
 
     await unmount();
   });

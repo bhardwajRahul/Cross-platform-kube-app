@@ -32,6 +32,16 @@ export const onEvent = <E extends DesktopEventName>(
     handler(event.data);
   });
 
+export const onBroadcastEvent = <E extends DesktopEventName>(
+  eventName: E,
+  handler: DesktopEventHandler<E>
+): (() => void) => Events.On(eventName, (event) => handler(event.data));
+
+export const emitBroadcastEvent = <E extends DesktopEventName>(
+  eventName: E,
+  payload: Events.WailsEventData<E>
+): Promise<boolean> => Events.Emit(eventName, payload);
+
 export const openURL = (url: string | URL): Promise<void> => Browser.OpenURL(url);
 
 export const readClipboardText = (): Promise<string> => Clipboard.Text();
@@ -39,6 +49,9 @@ export const readClipboardText = (): Promise<string> => Clipboard.Text();
 export const writeClipboardText = (text: string): Promise<void> => Clipboard.SetText(text);
 
 export const closeWindow = (): Promise<void> => WailsWindow.Close();
+
+export const focusWindow = (windowName: string): Promise<void> =>
+  WailsWindow.Get(windowName).Focus();
 
 export const openDevTools = (): Promise<void> => WailsWindow.OpenDevTools();
 

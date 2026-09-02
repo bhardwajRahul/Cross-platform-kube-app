@@ -8,6 +8,7 @@
  */
 
 import { useKubeconfig } from '@modules/kubernetes/config/KubeconfigContext';
+import { type TabDragPayload, TabDragProvider } from '@shared/components/tabs/dragCoordinator';
 import type React from 'react';
 import {
   createContext,
@@ -20,7 +21,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import { getContentBounds } from './dockablePanelLayout';
+import { useOptionalPanelLifecycleGuardRegistry } from '@/core/panel-windows/panelLifecycleGuards';
 import type { PanelLayoutStore } from './panelLayoutStore';
 import { createPanelLayoutStore, setActivePanelLayoutStore } from './panelLayoutStore';
 import { PanelLayoutStoreContext } from './panelLayoutStoreContext';
@@ -37,12 +38,7 @@ import {
 } from './tabGroupState';
 import type { GroupKey, PanelRegistration, TabGroupState } from './tabGroupTypes';
 import type { DockPosition } from './useDockablePanelState';
-import {
-  focusPanelById,
-  setPanelFloatingPositionById,
-  setPanelOpenById,
-  setPanelPositionById,
-} from './useDockablePanelState';
+import { focusPanelById, setPanelOpenById, setPanelPositionById } from './useDockablePanelState';
 
 interface DockablePanelContextValue {
   // Tab group state
@@ -62,6 +58,7 @@ interface DockablePanelContextValue {
   // Tab actions
   switchTab: (groupKey: GroupKey, panelId: string) => void;
   closeTab: (panelId: string, activationPreference?: AdjacentTabActivationPreference) => void;
+  commitTabClose: (panelId: string, activationPreference?: AdjacentTabActivationPreference) => void;
   reorderTabInGroup: (groupKey: GroupKey, panelId: string, newIndex: number) => void;
   movePanelBetweenGroups: (panelId: string, targetGroupKey: GroupKey, insertIndex?: number) => void;
   // Move a panel and bring the target container/frontmost panel into focus.
@@ -87,21 +84,19 @@ interface DockablePanelContextValue {
     targetGroupId: string,
     insertIndex: number
   ) => void;
-  // Adapter for the container-level empty-space drop target. Moves a
-  // panel into a brand-new floating group at the cursor position.
-  createFloatingGroupWithPanel: (
-    panelId: string,
-    sourceGroupId: string,
-    cursorPos: { x: number; y: number }
+  createDockableTabDragPayload: (panelId: string, sourceGroupId: string) => TabDragPayload;
+  dropDockableTab: (
+    payload: Extract<TabDragPayload, { kind: 'dockable-tab' }>,
+    targetGroupId: string,
+    insertIndex: number
   ) => void;
-
+  canStartDockableTabDrag: (panelId: string) => boolean;
   // Content registry -- allows the group leader to render other panels' body content.
   panelContentRefsMap: React.MutableRefObject<Map<string, React.MutableRefObject<React.ReactNode>>>;
   notifyContentChange: (groupKey: GroupKey) => void;
   subscribeContentChange: (groupKey: GroupKey, fn: () => void) => () => void;
   // Runtime refs currently shared across panels in this provider.
   groupLeaderByKeyRef: React.MutableRefObject<Map<string, string>>;
-  updateGridTableHoverSuppression: (shouldSuppress: boolean) => void;
 
   // Last-focused group -- tracks which panel group was most recently interacted with,
   // so new panels (e.g. object tabs) can open in the same group.
@@ -116,6 +111,20 @@ interface DockablePanelContextValue {
 
   // Fan out applyObjectPanelLayoutDefaults to every cluster's store.
   applyLayoutDefaultsAcrossClusters: () => void;
+  // Move a native panel group to the requested owner dock before it remounts.
+  dockPanelGroup: (
+    clusterId: string,
+    panelIds: readonly string[],
+    activePanelId: string,
+    targetPosition: 'right' | 'bottom',
+    insertIndex?: number
+  ) => void;
+  // Remove a group transferred to a native window while retaining its layout state.
+  detachPanelGroup: (clusterId: string, panelIds: readonly string[]) => void;
+  // Remove closed native-panel layout and group state from its owning cluster.
+  discardPanelLayouts: (clusterId: string, panelIds: readonly string[]) => void;
+  requestGroupMove?: (groupKey: GroupKey, targetPosition: DockPosition) => boolean;
+  nativeWindowMode: boolean;
 }
 
 const DockablePanelContext = createContext<DockablePanelContextValue | null>(null);
@@ -246,9 +255,46 @@ export const useDockablePanelHost = (): HTMLElement | null => {
 
 interface DockablePanelProviderProps {
   children: React.ReactNode;
+  initialTabGroups?: TabGroupState;
+  onGroupMoveRequest?: (
+    group: { groupKey: GroupKey; tabs: string[]; activeTab: string | null },
+    targetPosition: DockPosition
+  ) => boolean | undefined;
+  onTabCloseRequest?: (panelId: string) => void;
+  nativeWindowMode?: boolean;
+  tabDragIdentity?: {
+    windowName: string;
+    ownerWindowName: string;
+    clusterId: string;
+    nativeGroupId?: string;
+    getTabSnapshot: (
+      panelId: string
+    ) => Extract<TabDragPayload, { kind: 'dockable-tab' }>['tab'] | undefined;
+  };
+  onExternalTabDrop?: (
+    payload: Extract<TabDragPayload, { kind: 'dockable-tab' }>,
+    targetGroupId: string,
+    insertIndex: number
+  ) => void;
+  onTabTearOff?: (
+    payload: Extract<TabDragPayload, { kind: 'dockable-tab' }>,
+    cursor: { x: number; y: number }
+  ) => void;
+  canStartTabDrag?: (panelId: string) => boolean;
 }
 
-export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({ children }) => {
+export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({
+  children,
+  initialTabGroups,
+  onGroupMoveRequest,
+  onTabCloseRequest,
+  nativeWindowMode = false,
+  tabDragIdentity,
+  onExternalTabDrop,
+  onTabTearOff,
+  canStartTabDrag,
+}) => {
+  const lifecycleGuards = useOptionalPanelLifecycleGuardRegistry();
   // Per-cluster panel layout stores. Each open cluster gets its own
   // PanelLayoutStore that holds BOTH per-panel state and tabGroups for
   // that cluster. The active store mirrors selectedClusterId. Cluster
@@ -256,14 +302,17 @@ export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({ ch
   const { selectedClusterId, selectedClusterIds } = useKubeconfig();
   const storesRef = useRef<Map<string, PanelLayoutStore>>(new Map());
 
-  const getOrCreateStoreForCluster = useCallback((clusterKey: string): PanelLayoutStore => {
-    let store = storesRef.current.get(clusterKey);
-    if (!store) {
-      store = createPanelLayoutStore();
-      storesRef.current.set(clusterKey, store);
-    }
-    return store;
-  }, []);
+  const getOrCreateStoreForCluster = useCallback(
+    (clusterKey: string): PanelLayoutStore => {
+      let store = storesRef.current.get(clusterKey);
+      if (!store) {
+        store = createPanelLayoutStore(initialTabGroups);
+        storesRef.current.set(clusterKey, store);
+      }
+      return store;
+    },
+    [initialTabGroups]
+  );
 
   // CRITICAL: activeStore is computed in render via useMemo, NOT via
   // useState + useLayoutEffect. The useState approach has a one-render
@@ -343,10 +392,6 @@ export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({ ch
   // Keep both state (for rendering) and a ref (for same-tick reads in callbacks).
   const [lastFocusedGroupKey, setLastFocusedGroupKeyState] = useState<GroupKey | null>(null);
   const lastFocusedGroupKeyRef = useRef<GroupKey | null>(null);
-  // When a tab is moved to a *new* floating group, the final group key
-  // is only known after tabGroups updates. Track the moved panel id so we
-  // can resolve and store the focused floating group in an effect.
-  const pendingFocusPanelIdRef = useRef<string | null>(null);
   const setLastFocusedGroupKeyValue = useCallback((key: GroupKey | null) => {
     if (lastFocusedGroupKeyRef.current === key) {
       return;
@@ -475,19 +520,6 @@ export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({ ch
     [activeStore, setLastFocusedGroupKey]
   );
 
-  useLayoutEffect(() => {
-    const pendingPanelId = pendingFocusPanelIdRef.current;
-    if (!pendingPanelId) {
-      return;
-    }
-    const resolvedGroupKey = getGroupForPanel(tabGroups, pendingPanelId);
-    if (!resolvedGroupKey) {
-      return;
-    }
-    pendingFocusPanelIdRef.current = null;
-    setLastFocusedGroupKey(resolvedGroupKey);
-  }, [tabGroups, setLastFocusedGroupKey]);
-
   // -----------------------------------------------------------------------
   // registerPanel stores panel metadata only.
   // Group membership is handled by explicit tab-group actions.
@@ -550,9 +582,9 @@ export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({ ch
   );
 
   // -----------------------------------------------------------------------
-  // closeTab -- removes a panel from its group AND fires onClose callback.
+  // commitTabClose -- applies an already-authorized local close.
   // -----------------------------------------------------------------------
-  const closeTab = useCallback(
+  const commitTabClose = useCallback(
     (panelId: string, activationPreference: AdjacentTabActivationPreference = 'right') => {
       const registration = panelRegistrationsRef.current.get(panelId);
       const currentTabGroups = activeStore.getTabGroups();
@@ -593,6 +625,25 @@ export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({ ch
   );
 
   // -----------------------------------------------------------------------
+  // closeTab -- validates close intent and lets a native owner authorize it.
+  // -----------------------------------------------------------------------
+  const closeTab = useCallback(
+    (panelId: string, activationPreference: AdjacentTabActivationPreference = 'right') => {
+      const blocker = lifecycleGuards?.firstBlocker([panelId]);
+      if (blocker) {
+        blocker.focus();
+        return;
+      }
+      if (nativeWindowMode && onTabCloseRequest) {
+        onTabCloseRequest(panelId);
+        return;
+      }
+      commitTabClose(panelId, activationPreference);
+    },
+    [commitTabClose, lifecycleGuards, nativeWindowMode, onTabCloseRequest]
+  );
+
+  // -----------------------------------------------------------------------
   // reorderTabInGroup -- move a tab to a new index within the same group.
   // -----------------------------------------------------------------------
   const reorderTabInGroup = useCallback(
@@ -607,25 +658,38 @@ export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({ ch
   // -----------------------------------------------------------------------
   const movePanelBetweenGroups = useCallback(
     (panelId: string, targetGroupKey: GroupKey, insertIndex?: number) => {
+      if (targetGroupKey === 'floating') {
+        if (!onGroupMoveRequest) {
+          return;
+        }
+        const sourceGroupKey = getGroupForPanel(activeStore.getTabGroups(), panelId);
+        const sourceGroup = sourceGroupKey
+          ? getGroupTabs(activeStore.getTabGroups(), sourceGroupKey)
+          : null;
+        if (sourceGroupKey && sourceGroup) {
+          onGroupMoveRequest(
+            {
+              groupKey: sourceGroupKey,
+              tabs: sourceGroup.tabs,
+              activeTab: sourceGroup.activeTab,
+            },
+            'floating'
+          );
+        }
+        return;
+      }
       activeStore.setTabGroups((prev) =>
         movePanelToGroup(prev, panelId, targetGroupKey, insertIndex)
       );
 
-      if (targetGroupKey === 'floating') {
-        // New floating group id is generated during the tabGroups update;
-        // resolve it in the layout effect above.
-        pendingFocusPanelIdRef.current = panelId;
-      } else {
-        pendingFocusPanelIdRef.current = null;
-        setLastFocusedGroupKey(targetGroupKey);
-      }
+      setLastFocusedGroupKey(targetGroupKey);
 
       // Keep panel-state position aligned with tab-group destination.
       const targetPosition: DockPosition =
         targetGroupKey === 'right' || targetGroupKey === 'bottom' ? targetGroupKey : 'floating';
       setPanelPositionById(panelId, targetPosition);
     },
-    [activeStore, setLastFocusedGroupKey]
+    [activeStore, onGroupMoveRequest, setLastFocusedGroupKey]
   );
 
   // -----------------------------------------------------------------------
@@ -680,26 +744,59 @@ export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({ ch
     [activeStore, reorderTabInGroup, movePanelBetweenGroups]
   );
 
-  // -----------------------------------------------------------------------
-  // createFloatingGroupWithPanel -- adapter called by the container-level
-  // empty-space drop target. Wraps the existing movePanelBetweenGroups +
-  // setPanelFloatingPositionById calls so a drop outside any tab bar
-  // spawns a brand-new floating group positioned at the cursor. Preserves
-  // the legacy "undock by dragging away from the source bar" feature,
-  // now keyed on an explicit drop event rather than a cursor-distance
-  // gesture. `_sourceGroupId` is accepted for API symmetry but unused —
-  // `movePanelBetweenGroups` resolves the source internally.
-  // -----------------------------------------------------------------------
-  const createFloatingGroupWithPanel = useCallback(
-    (panelId: string, _sourceGroupId: string, cursorPos: { x: number; y: number }) => {
-      movePanelBetweenGroups(panelId, 'floating');
-      const contentBounds = getContentBounds();
-      setPanelFloatingPositionById(panelId, {
-        x: cursorPos.x - contentBounds.left,
-        y: cursorPos.y - contentBounds.top,
-      });
+  const createDockableTabDragPayload = useCallback(
+    (panelId: string, sourceGroupId: string): TabDragPayload => ({
+      kind: 'dockable-tab',
+      panelId,
+      sourceGroupId,
+      sourceWindowName: tabDragIdentity?.windowName,
+      sourceWindowGroupId: tabDragIdentity?.nativeGroupId ?? sourceGroupId,
+      ownerWindowName: tabDragIdentity?.ownerWindowName,
+      clusterId: tabDragIdentity?.clusterId,
+      tab: tabDragIdentity?.getTabSnapshot(panelId),
+    }),
+    [tabDragIdentity]
+  );
+
+  const dropDockableTab = useCallback(
+    (
+      payload: Extract<TabDragPayload, { kind: 'dockable-tab' }>,
+      targetGroupId: string,
+      insertIndex: number
+    ) => {
+      const isExternal =
+        !!payload.sourceWindowName &&
+        !!tabDragIdentity?.windowName &&
+        payload.sourceWindowName !== tabDragIdentity.windowName;
+      if (!isExternal) {
+        movePanel(payload.panelId, payload.sourceGroupId, targetGroupId, insertIndex);
+        return;
+      }
+      if (
+        !onExternalTabDrop ||
+        payload.ownerWindowName !== tabDragIdentity.ownerWindowName ||
+        payload.clusterId !== tabDragIdentity.clusterId ||
+        !payload.tab
+      ) {
+        return;
+      }
+      onExternalTabDrop(payload, targetGroupId, insertIndex);
     },
-    [movePanelBetweenGroups]
+    [movePanel, onExternalTabDrop, tabDragIdentity]
+  );
+
+  const canStartDockableTabDrag = useCallback(
+    (panelId: string) => canStartTabDrag?.(panelId) ?? true,
+    [canStartTabDrag]
+  );
+
+  const handleTabTearOff = useCallback(
+    (payload: TabDragPayload, cursor: { x: number; y: number }) => {
+      if (payload.kind === 'dockable-tab') {
+        onTabTearOff?.(payload, cursor);
+      }
+    },
+    [onTabTearOff]
   );
 
   // -----------------------------------------------------------------------
@@ -740,25 +837,6 @@ export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({ ch
   // Shared runtime refs for panel-level coordination inside this provider.
   // -----------------------------------------------------------------------
   const groupLeaderByKeyRef = useRef(new Map<string, string>());
-  const hoverSuppressionCountRef = useRef(0);
-  const updateGridTableHoverSuppression = useCallback((shouldSuppress: boolean) => {
-    if (typeof document === 'undefined') {
-      return;
-    }
-    if (shouldSuppress) {
-      if (hoverSuppressionCountRef.current === 0) {
-        document.body.classList.add('gridtable-disable-hover');
-      }
-      hoverSuppressionCountRef.current += 1;
-      return;
-    }
-    if (hoverSuppressionCountRef.current > 0) {
-      hoverSuppressionCountRef.current -= 1;
-      if (hoverSuppressionCountRef.current === 0) {
-        document.body.classList.remove('gridtable-disable-hover');
-      }
-    }
-  }, []);
 
   // Fan out applyObjectPanelLayoutDefaults to every cluster's store.
   // Called by Settings.tsx when the user changes the default object
@@ -770,6 +848,81 @@ export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({ ch
     });
   }, []);
 
+  const discardPanelLayouts = useCallback((clusterId: string, panelIds: readonly string[]) => {
+    const store = storesRef.current.get(clusterId);
+    if (!store) {
+      return;
+    }
+    for (const panelId of panelIds) {
+      store.handoffLayoutBeforeClose(panelId);
+      store.clearPanelState(panelId);
+    }
+  }, []);
+
+  const dockPanelGroup = useCallback(
+    (
+      clusterId: string,
+      panelIds: readonly string[],
+      activePanelId: string,
+      targetPosition: 'right' | 'bottom',
+      insertIndex?: number
+    ) => {
+      const store = getOrCreateStoreForCluster(clusterId);
+      const uniquePanelIds = Array.from(new Set(panelIds));
+      for (const panelId of uniquePanelIds) {
+        store.setPanelPositionById(panelId, targetPosition);
+      }
+      store.setTabGroups((previous) => {
+        const next = uniquePanelIds.reduce(
+          (current, panelId, panelIndex) =>
+            addPanelToGroup(
+              current,
+              panelId,
+              targetPosition,
+              insertIndex === undefined ? undefined : insertIndex + panelIndex
+            ),
+          previous
+        );
+        return uniquePanelIds.includes(activePanelId)
+          ? setActiveTab(next, activePanelId, targetPosition)
+          : next;
+      });
+    },
+    [getOrCreateStoreForCluster]
+  );
+
+  const detachPanelGroup = useCallback((clusterId: string, panelIds: readonly string[]) => {
+    const store = storesRef.current.get(clusterId);
+    if (!store) {
+      return;
+    }
+    store.setTabGroups((previous) =>
+      Array.from(new Set(panelIds)).reduce(
+        (current, panelId) => removePanelFromGroup(current, panelId),
+        previous
+      )
+    );
+  }, []);
+
+  const requestGroupMove = useCallback(
+    (groupKey: GroupKey, targetPosition: DockPosition): boolean => {
+      if (!onGroupMoveRequest) {
+        return false;
+      }
+      const group = getGroupTabs(tabGroups, groupKey);
+      if (!group || group.tabs.length === 0) {
+        return false;
+      }
+      return (
+        onGroupMoveRequest(
+          { groupKey, tabs: group.tabs, activeTab: group.activeTab },
+          targetPosition
+        ) !== false
+      );
+    },
+    [onGroupMoveRequest, tabGroups]
+  );
+
   const value: DockablePanelContextValue = useMemo(
     () => ({
       tabGroups,
@@ -780,23 +933,30 @@ export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({ ch
       removePanelFromGroups,
       switchTab,
       closeTab,
+      commitTabClose,
       reorderTabInGroup,
       movePanelBetweenGroups,
       movePanelBetweenGroupsAndFocus,
       dragPreviewRef,
       movePanel,
-      createFloatingGroupWithPanel,
+      createDockableTabDragPayload,
+      dropDockableTab,
+      canStartDockableTabDrag,
       panelContentRefsMap,
       notifyContentChange,
       subscribeContentChange,
       groupLeaderByKeyRef,
-      updateGridTableHoverSuppression,
       lastFocusedGroupKey,
       setLastFocusedGroupKey,
       getPreferredOpenGroupKey,
       getLastFocusedPosition,
       focusPanel,
       applyLayoutDefaultsAcrossClusters,
+      dockPanelGroup,
+      detachPanelGroup,
+      discardPanelLayouts,
+      requestGroupMove,
+      nativeWindowMode,
     }),
     [
       tabGroups,
@@ -807,20 +967,27 @@ export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({ ch
       removePanelFromGroups,
       switchTab,
       closeTab,
+      commitTabClose,
       reorderTabInGroup,
       movePanelBetweenGroups,
       movePanelBetweenGroupsAndFocus,
       movePanel,
-      createFloatingGroupWithPanel,
+      createDockableTabDragPayload,
+      dropDockableTab,
+      canStartDockableTabDrag,
       notifyContentChange,
       subscribeContentChange,
-      updateGridTableHoverSuppression,
       lastFocusedGroupKey,
       setLastFocusedGroupKey,
       getPreferredOpenGroupKey,
       getLastFocusedPosition,
       focusPanel,
       applyLayoutDefaultsAcrossClusters,
+      dockPanelGroup,
+      detachPanelGroup,
+      discardPanelLayouts,
+      requestGroupMove,
+      nativeWindowMode,
     ]
   );
 
@@ -873,19 +1040,21 @@ export const DockablePanelProvider: React.FC<DockablePanelProviderProps> = ({ ch
   return (
     <PanelLayoutStoreContext.Provider value={activeStore}>
       <DockablePanelContext.Provider value={value}>
-        <DockablePanelHostContext.Provider value={hostNode}>
-          {children}
-          {/* Permanently mounted drag preview. The browser screenshots
+        <TabDragProvider onTearOff={handleTabTearOff}>
+          <DockablePanelHostContext.Provider value={hostNode}>
+            {children}
+            {/* Permanently mounted drag preview. The browser screenshots
               this element via setDragImage at dragstart; DockableTabBar's
               per-tab getDragImage callback writes the dragged tab's
               label + kind class into the inner spans before handing the
               element off. Offscreen by default via CSS fallback
               (`transform: translate3d(var(--dockable-tab-drag-x, -9999px), ...)`). */}
-          <div ref={dragPreviewRef} className="dockable-tab-drag-preview" aria-hidden="true">
-            <span className="dockable-tab-drag-preview__kind kind-badge" aria-hidden="true" />
-            <span className="dockable-tab-drag-preview__label" />
-          </div>
-        </DockablePanelHostContext.Provider>
+            <div ref={dragPreviewRef} className="dockable-tab-drag-preview" aria-hidden="true">
+              <span className="dockable-tab-drag-preview__kind kind-badge" aria-hidden="true" />
+              <span className="dockable-tab-drag-preview__label" />
+            </div>
+          </DockablePanelHostContext.Provider>
+        </TabDragProvider>
       </DockablePanelContext.Provider>
     </PanelLayoutStoreContext.Provider>
   );

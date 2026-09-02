@@ -42,18 +42,26 @@ import {
   type ObjectActionData,
   type ObjectActionHandlers,
 } from '@shared/hooks/useObjectActions';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useReducer, useRef, useState } from 'react';
 import {
   getPermissionKey,
   type PermissionMap,
   queryKindPermissions,
   useUserPermissions,
 } from '@/core/capabilities';
+import { usePanelWindowRole } from '@/core/panel-windows/PanelWindowRoleContext';
+import { usePanelLifecycleGuard } from '@/core/panel-windows/panelLifecycleGuards';
 import type { KubernetesObjectReference } from '@/types/view-state';
 import { errorHandler } from '@/utils/errorHandler';
 
 type ObjectActionContext = 'gridtable' | 'object-map' | 'object-panel';
 type ObjectActionReference = ObjectActionData & KubernetesObjectReference;
+
+export const resolveNavigateViewHandler = (
+  explicitHandler: (() => void) | undefined,
+  fallbackHandler: () => void,
+  fallbackAvailable: boolean
+): (() => void) | undefined => explicitHandler ?? (fallbackAvailable ? fallbackHandler : undefined);
 
 interface PerObjectHandlers {
   onCordon?: (object: ObjectActionData) => void;
@@ -244,6 +252,7 @@ interface NavigationHandlerOptions {
   onViewInvolvedObject: ObjectActionControllerOptions['onViewInvolvedObject'];
   openWithObject: ReturnType<typeof useObjectPanel>['openWithObject'];
   navigateToView: ReturnType<typeof useNavigateToView>['navigateToView'];
+  navigateToViewAvailable: boolean;
 }
 
 const buildNavigationHandlers = ({
@@ -254,17 +263,16 @@ const buildNavigationHandlers = ({
   onViewInvolvedObject,
   openWithObject,
   navigateToView,
+  navigateToViewAvailable,
 }: NavigationHandlerOptions): ObjectActionHandlers => {
   const actionObject = object as ObjectActionReference;
   return {
     onOpen: onOpen ? () => onOpen(actionObject) : undefined,
-    onNavigateView: () => {
-      if (onNavigateView) {
-        onNavigateView(actionObject);
-        return;
-      }
-      navigateToView(actionObject);
-    },
+    onNavigateView: resolveNavigateViewHandler(
+      onNavigateView ? () => onNavigateView(actionObject) : undefined,
+      () => navigateToView(actionObject),
+      navigateToViewAvailable
+    ),
     onObjectMap: isObjectMapSupportedKind(object.kind)
       ? () => {
           if (onOpenObjectMap) {
@@ -309,6 +317,7 @@ interface DefaultHandlerSetters {
   setDeleteTarget: (object: ObjectActionData) => void;
   setPortForwardTarget: (target: PortForwardTarget) => void;
   setTriggerTarget: (object: ObjectActionData) => void;
+  executeMutation: (execute: () => Promise<unknown>) => Promise<unknown>;
 }
 
 const buildDefaultActionHandlers = (
@@ -332,12 +341,14 @@ const buildDefaultActionHandlers = (
       }),
     onScaleToZero: () => setters.setScaleConfirmation({ object, replicas: 0 }),
     onResumeFromZero: () =>
-      executeObjectAction({
-        object,
-        action: 'scale',
-        execute: () => runObjectScale(actionTargetFor(object, 'scale'), 1),
-        onAfterAction,
-      }),
+      setters.executeMutation(() =>
+        executeObjectAction({
+          object,
+          action: 'scale',
+          execute: () => runObjectScale(actionTargetFor(object, 'scale'), 1),
+          onAfterAction,
+        })
+      ),
     onDelete: () => setters.setDeleteTarget(object),
     onPortForward: () => {
       try {
@@ -354,12 +365,14 @@ const buildDefaultActionHandlers = (
     onSuspendToggle: () => {
       const isSuspended = object.status === 'Suspended';
       const action = isSuspended ? 'resume' : 'suspend';
-      return executeObjectAction({
-        object,
-        action,
-        execute: () => runCronJobSuspend(actionTargetFor(object, action), !isSuspended),
-        onAfterAction,
-      });
+      return setters.executeMutation(() =>
+        executeObjectAction({
+          object,
+          action,
+          execute: () => runCronJobSuspend(actionTargetFor(object, action), !isSuspended),
+          onAfterAction,
+        })
+      );
     },
   };
 };
@@ -422,8 +435,10 @@ export const useObjectActionController = ({
   onAfterDelete,
 }: ObjectActionControllerOptions) => {
   const permissionMap = useUserPermissions();
-  const { openWithObject } = useObjectPanel();
-  const { navigateToView } = useNavigateToView();
+  const { openWithObject, panelId } = useObjectPanel();
+  const panelWindowRole = usePanelWindowRole();
+  const { available: navigateToViewAvailable, navigateToView } = useNavigateToView();
+  const navigateFallbackAvailable = panelWindowRole === null || navigateToViewAvailable;
   const [restartTarget, setRestartTarget] = useState<ObjectActionData | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ObjectActionData | null>(null);
   const [triggerTarget, setTriggerTarget] = useState<ObjectActionData | null>(null);
@@ -437,6 +452,39 @@ export const useObjectActionController = ({
     value: 1,
     loading: false,
     error: null,
+  });
+  const mutationCountRef = useRef(0);
+  const [, advanceMutationRevision] = useReducer((revision: number) => revision + 1, 0);
+  const executeMutation = useCallback(async <T,>(execute: () => Promise<T>): Promise<T> => {
+    mutationCountRef.current += 1;
+    advanceMutationRevision();
+    try {
+      return await execute();
+    } finally {
+      mutationCountRef.current = Math.max(0, mutationCountRef.current - 1);
+      advanceMutationRevision();
+    }
+  }, []);
+  const setNestedMutationInFlight = useCallback((inFlight: boolean) => {
+    mutationCountRef.current = Math.max(0, mutationCountRef.current + (inFlight ? 1 : -1));
+    advanceMutationRevision();
+  }, []);
+  usePanelLifecycleGuard(panelId, () => {
+    if (!actionLoading && mutationCountRef.current === 0) {
+      return null;
+    }
+    return {
+      reason: 'mutation-in-flight',
+      focus: () => {
+        if (!panelId || typeof document === 'undefined') {
+          return;
+        }
+        const panel = Array.from(document.querySelectorAll<HTMLElement>('[data-panel-id]')).find(
+          (element) => element.dataset.panelId === panelId
+        );
+        panel?.focus();
+      },
+    };
   });
 
   const closeScale = useCallback(() => {
@@ -476,6 +524,7 @@ export const useObjectActionController = ({
           onViewInvolvedObject,
           openWithObject,
           navigateToView,
+          navigateToViewAvailable: navigateFallbackAvailable,
           setters: {
             setRestartTarget,
             setRollbackTarget,
@@ -484,6 +533,7 @@ export const useObjectActionController = ({
             setDeleteTarget,
             setPortForwardTarget,
             setTriggerTarget,
+            executeMutation,
           },
         }),
         permissions,
@@ -504,7 +554,9 @@ export const useObjectActionController = ({
       permissionMap,
       queryMissingPermissions,
       navigateToView,
+      navigateFallbackAvailable,
       useDefaultHandlers,
+      executeMutation,
     ]
   );
 
@@ -514,14 +566,14 @@ export const useObjectActionController = ({
       return;
     }
     try {
-      await runObjectRestart(actionTargetFor(object, 'restart'));
+      await executeMutation(() => runObjectRestart(actionTargetFor(object, 'restart')));
       onAfterAction?.(object, 'restart');
     } catch (error) {
       errorHandler.handle(error, { action: 'restart', kind: object.kind, name: object.name });
     } finally {
       setRestartTarget(null);
     }
-  }, [onAfterAction, restartTarget]);
+  }, [executeMutation, onAfterAction, restartTarget]);
 
   const confirmDelete = useCallback(async () => {
     const object = deleteTarget;
@@ -529,7 +581,7 @@ export const useObjectActionController = ({
       return;
     }
     try {
-      await runObjectDelete(actionTargetFor(object, 'delete'));
+      await executeMutation(() => runObjectDelete(actionTargetFor(object, 'delete')));
       onAfterDelete?.(object);
       onAfterAction?.(object, 'delete');
     } catch (error) {
@@ -537,7 +589,7 @@ export const useObjectActionController = ({
     } finally {
       setDeleteTarget(null);
     }
-  }, [deleteTarget, onAfterAction, onAfterDelete]);
+  }, [deleteTarget, executeMutation, onAfterAction, onAfterDelete]);
 
   const confirmTrigger = useCallback(async () => {
     const object = triggerTarget;
@@ -545,14 +597,14 @@ export const useObjectActionController = ({
       return;
     }
     try {
-      await runCronJobTrigger(actionTargetFor(object, 'trigger'));
+      await executeMutation(() => runCronJobTrigger(actionTargetFor(object, 'trigger')));
       onAfterAction?.(object, 'trigger');
     } catch (error) {
       errorHandler.handle(error, { action: 'trigger', kind: object.kind, name: object.name });
     } finally {
       setTriggerTarget(null);
     }
-  }, [onAfterAction, triggerTarget]);
+  }, [executeMutation, onAfterAction, triggerTarget]);
 
   const applyScaleValue = useCallback(
     async (replicas: number) => {
@@ -562,7 +614,7 @@ export const useObjectActionController = ({
       }
       setScaleState((previous) => ({ ...previous, loading: true, error: null }));
       try {
-        await runObjectScale(actionTargetFor(object, 'scale'), replicas);
+        await executeMutation(() => runObjectScale(actionTargetFor(object, 'scale'), replicas));
         onAfterAction?.(object, 'scale');
         setScaleState({ object: null, value: 1, loading: false, error: null });
       } catch (error) {
@@ -571,7 +623,7 @@ export const useObjectActionController = ({
         errorHandler.handle(error, { action: 'scale', kind: object.kind, name: object.name });
       }
     },
-    [onAfterAction, scaleState.object]
+    [executeMutation, onAfterAction, scaleState.object]
   );
 
   const confirmScale = useCallback(async () => {
@@ -585,14 +637,14 @@ export const useObjectActionController = ({
     }
     const { object, replicas } = confirmation;
     try {
-      await runObjectScale(actionTargetFor(object, 'scale'), replicas);
+      await executeMutation(() => runObjectScale(actionTargetFor(object, 'scale'), replicas));
       onAfterAction?.(object, 'scale');
     } catch (error) {
       errorHandler.handle(error, { action: 'scale', kind: object.kind, name: object.name });
     } finally {
       setScaleConfirmation(null);
     }
-  }, [onAfterAction, scaleConfirmation]);
+  }, [executeMutation, onAfterAction, scaleConfirmation]);
 
   const requestFinalizerRemoval = useCallback(
     (
@@ -613,7 +665,9 @@ export const useObjectActionController = ({
     }
     const { object, finalizer, path } = target;
     try {
-      await runObjectFinalizerRemoval(actionTargetFor(object, 'remove finalizer'), finalizer, path);
+      await executeMutation(() =>
+        runObjectFinalizerRemoval(actionTargetFor(object, 'remove finalizer'), finalizer, path)
+      );
       onAfterAction?.(object, 'removeFinalizer');
     } catch (error) {
       errorHandler.handle(error, {
@@ -624,7 +678,7 @@ export const useObjectActionController = ({
     } finally {
       setFinalizerRemovalTarget(null);
     }
-  }, [finalizerRemovalTarget, onAfterAction]);
+  }, [executeMutation, finalizerRemovalTarget, onAfterAction]);
 
   const confirmation = useMemo(() => {
     if (finalizerRemovalTarget) {
@@ -740,7 +794,11 @@ export const useObjectActionController = ({
             setScaleState((previous) => ({ ...previous, value: clampReplicas(value) }))
           }
         />
-        <PortForwardModal target={portForwardTarget} onClose={() => setPortForwardTarget(null)} />
+        <PortForwardModal
+          target={portForwardTarget}
+          onClose={() => setPortForwardTarget(null)}
+          onMutationChange={setNestedMutationInFlight}
+        />
         {!!(rollbackTarget?.clusterId && rollbackTarget.namespace && rollbackTarget.version) && (
           <RollbackModal
             isOpen={true}
@@ -751,6 +809,7 @@ export const useObjectActionController = ({
             version={rollbackTarget.version}
             name={rollbackTarget.name}
             kind={rollbackTarget.kind}
+            onMutationChange={setNestedMutationInFlight}
           />
         )}
       </>
@@ -765,6 +824,7 @@ export const useObjectActionController = ({
       scaleState.loading,
       scaleState.object,
       scaleState.value,
+      setNestedMutationInFlight,
     ]
   );
 

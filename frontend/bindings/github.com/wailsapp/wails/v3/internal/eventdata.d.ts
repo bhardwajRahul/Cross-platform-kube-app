@@ -8,6 +8,9 @@ import type { Events } from "@wailsio/runtime";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import type * as backend$0 from "../../../../luxury-yacht/app/backend/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import type * as panelwindow$0 from "../../../../luxury-yacht/app/internal/panelwindow/models.js";
 
 declare module "@wailsio/runtime" {
     namespace Events {
@@ -42,9 +45,29 @@ declare module "@wailsio/runtime" {
             "open-cluster": void;
             "open-command-palette": void;
             "open-settings": void;
+            "panel-window:application-quit-preflight-requested": panelwindow$0.ApplicationQuitPreflightRequestedEvent;
+            "panel-window:close-requested": panelwindow$0.WindowCloseRequestedEvent;
+            "panel-window:closed": panelwindow$0.WindowClosedEvent;
+            "panel-window:dock-requested": panelwindow$0.WindowDockRequestedEvent;
+            "panel-window:focus-requested": panelwindow$0.WindowFocusRequestedEvent;
+            "panel-window:guard-requested": panelwindow$0.WindowGuardRequestedEvent;
+            "panel-window:guard-result": panelwindow$0.WindowGuardResultEvent;
+            "panel-window:object-open-authorized": panelwindow$0.ObjectOpenAuthorizedEvent;
+            "panel-window:object-open-requested": panelwindow$0.ObjectOpenRequestEvent;
+            "panel-window:opened": panelwindow$0.WindowOpenedEvent;
+            "panel-window:owner-close-requested": panelwindow$0.OwnerCloseRequestedEvent;
+            "panel-window:snapshot-updated": panelwindow$0.SnapshotUpdatedEvent;
+            "panel-window:tab-close-authorized": panelwindow$0.TabCloseAuthorizedEvent;
+            "panel-window:tab-close-requested": panelwindow$0.TabCloseRequestedEvent;
+            "panel-window:tab-transfer-committed": panelwindow$0.TabTransferCommittedEvent;
+            "panel-window:tab-transfer-failed": panelwindow$0.TabTransferFailedEvent;
+            "panel-window:tab-transfer-insert-requested": panelwindow$0.TabTransferInsertRequestedEvent;
+            "panel-window:tab-transfer-requested": panelwindow$0.TabTransferRequestedEvent;
             "portforward:list": backend$0.PortForwardSession[] | null;
             "portforward:status": backend$0.PortForwardStatusEvent;
             "runtime-operations:list": backend$0.RuntimeOperation[] | null;
+            "settings:appearance-mode-changed": backend$0.AppearanceModeChangedEvent;
+            "settings:preferences-changed": void;
             "toggle-app-logs-panel": void;
             "toggle-diagnostics": void;
             "toggle-object-diff": void;

@@ -496,6 +496,8 @@ export const useViewState = () => {
   return context;
 };
 
+export const useOptionalViewState = () => useContext(ViewStateContext);
+
 /**
  * Internal provider that combines all contexts
  */

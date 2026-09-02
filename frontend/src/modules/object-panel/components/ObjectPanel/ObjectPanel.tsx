@@ -33,12 +33,14 @@ import { useObjectPanelTabs } from '@modules/object-panel/components/ObjectPanel
 import { ObjectPanelContent } from '@modules/object-panel/components/ObjectPanel/ObjectPanelContent';
 import { ObjectPanelHeader } from '@modules/object-panel/components/ObjectPanel/ObjectPanelHeader';
 import { ObjectPanelTabs } from '@modules/object-panel/components/ObjectPanel/ObjectPanelTabs';
+import { resolveObjectPanelOpenTarget } from '@modules/object-panel/components/ObjectPanel/objectPanelOpenTarget';
 import type { ViewType } from '@modules/object-panel/components/ObjectPanel/types';
 import type { ObjectPanelRef } from '@modules/object-panel/objectPanelRef';
 import { getObjectPanelScopes } from '@modules/object-panel/objectPanelRef';
 import { getKindColorClass } from '@shared/utils/kindBadgeColors';
 import type { DockPosition } from '@ui/dockable';
 import { getGroupForPanel, getGroupTabs } from '@ui/dockable/tabGroupState';
+import type { GroupKey } from '@ui/dockable/tabGroupTypes';
 import { buildObjectDetailModel } from './Details/objectDetailModel';
 import { resetObjectPanelScopedDomain } from './hooks/useObjectPanelScopedDomainLifecycle';
 
@@ -50,20 +52,31 @@ interface ObjectPanelProps {
   panelId: string;
   /** The cluster-complete object reference this panel displays. */
   objectRef: ObjectPanelRef;
+  defaultPosition?: DockPosition;
+  defaultGroupKey?: GroupKey;
+  suppressWorkspaceSurface?: boolean;
 }
 
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
-function ObjectPanel({ panelId, objectRef }: Readonly<ObjectPanelProps>) {
+function ObjectPanel({
+  panelId,
+  objectRef,
+  defaultPosition,
+  defaultGroupKey,
+  suppressWorkspaceSurface = false,
+}: Readonly<ObjectPanelProps>) {
   const objectData = objectRef;
   const { closePanel, setObjectPanelActiveTab } = useObjectPanelState();
   const { tabGroups, getPreferredOpenGroupKey } = useDockablePanelContext();
-  const openTargetGroupKey = getPreferredOpenGroupKey(getDefaultObjectPanelPosition());
-  const openTargetPosition: DockPosition =
-    openTargetGroupKey === 'right' || openTargetGroupKey === 'bottom'
-      ? openTargetGroupKey
-      : 'floating';
+  const openTarget = resolveObjectPanelOpenTarget(
+    defaultPosition ?? getDefaultObjectPanelPosition(),
+    defaultGroupKey,
+    getPreferredOpenGroupKey
+  );
+  const openTargetGroupKey = openTarget.groupKey;
+  const openTargetPosition = openTarget.position;
 
   // Determine whether this tab is active within its group (for polling control).
   const groupKey = getGroupForPanel(tabGroups, panelId);
@@ -75,8 +88,8 @@ function ObjectPanel({ panelId, objectRef }: Readonly<ObjectPanelProps>) {
 
   // Close handler removes this panel from the context.
   const close = useCallback(() => {
-    closePanel(panelId);
-  }, [closePanel, panelId]);
+    closePanel(objectRef.clusterId, panelId);
+  }, [closePanel, objectRef.clusterId, panelId]);
 
   // Keep tab labels concise and consistent: object name only.
   const tabTitle = objectData?.name?.trim() || 'Object';
@@ -202,8 +215,8 @@ function ObjectPanel({ panelId, objectRef }: Readonly<ObjectPanelProps>) {
   // doesn't have to know about panel identity. The wrapper is stable
   // across renders.
   const setActiveTab = useCallback(
-    (tab: ViewType) => setObjectPanelActiveTab(panelId, tab),
-    [panelId, setObjectPanelActiveTab]
+    (tab: ViewType) => setObjectPanelActiveTab(objectRef.clusterId, panelId, tab),
+    [objectRef.clusterId, panelId, setObjectPanelActiveTab]
   );
 
   // Get available tabs based on capabilities
@@ -242,9 +255,9 @@ function ObjectPanel({ panelId, objectRef }: Readonly<ObjectPanelProps>) {
 
   const handleTabSelect = useCallback(
     (tab: ViewType) => {
-      setObjectPanelActiveTab(panelId, tab);
+      setObjectPanelActiveTab(objectRef.clusterId, panelId, tab);
     },
-    [panelId, setObjectPanelActiveTab]
+    [objectRef.clusterId, panelId, setObjectPanelActiveTab]
   );
 
   const applyRequestedTab = useCallback(
@@ -257,11 +270,11 @@ function ObjectPanel({ panelId, objectRef }: Readonly<ObjectPanelProps>) {
         return;
       }
       if (activeTab !== requestedTab) {
-        setObjectPanelActiveTab(panelId, requestedTab);
+        setObjectPanelActiveTab(objectRef.clusterId, panelId, requestedTab);
       }
       clearRequestedObjectPanelTab(panelId);
     },
-    [availableTabs, panelId, activeTab, setObjectPanelActiveTab]
+    [availableTabs, panelId, activeTab, objectRef.clusterId, setObjectPanelActiveTab]
   );
 
   useEffect(() => {
@@ -316,6 +329,7 @@ function ObjectPanel({ panelId, objectRef }: Readonly<ObjectPanelProps>) {
         isOpen={isOpen}
         defaultPosition={openTargetPosition}
         defaultGroupKey={openTargetGroupKey}
+        suppressSurface={suppressWorkspaceSurface}
         className="object-panel-dockable"
         tabKindClass={tabKindClass}
         closeActiveTabOnEscape

@@ -35,7 +35,6 @@ import { withLazyBoundary } from '@shared/utils/react/withLazyBoundary';
 import { CommandPalette } from '@ui/command-palette/CommandPalette';
 import { useCommandPaletteCommands } from '@ui/command-palette/CommandPaletteCommands';
 import { getAllPanelStates, useDockablePanelContext } from '@ui/dockable';
-import { useDockablePanelEmptySpaceDropTarget } from '@ui/dockable/DockablePanelContentArea';
 import { usePanelSurfaceCycling } from '@ui/dockable/usePanelSurfaceCycling';
 import { PanelErrorBoundary, RouteErrorBoundary } from '@ui/errors';
 // Content Components
@@ -49,6 +48,7 @@ import ClusterTabs from '@ui/layout/ClusterTabs';
 import { getClusterSelectionPhase } from '@ui/layout/clusterSelectionPhase';
 import { DebugOverlay } from '@ui/layout/DebugOverlay';
 import { IconDebugOverlay } from '@ui/layout/IconDebugOverlay';
+import { resolveObjectPanelMountTarget } from '@ui/layout/objectPanelMountTarget';
 import { useAppDebugShortcuts } from '@ui/layout/useAppDebugShortcuts';
 import type { NamespaceViewType } from '@ui/navigation/types';
 // Auth Failure Overlay
@@ -57,6 +57,7 @@ import { setLastSettingsTab } from '@ui/settings/settingsTabPreference';
 import { eventBus } from '@/core/events';
 import { shouldShowActiveClusterAuthFailure } from '@/core/navigation/workspace';
 import { DiagnosticsPanel } from '@/core/refresh/components/DiagnosticsPanel';
+import { getDefaultObjectPanelPosition } from '@/core/settings/appPreferences';
 import {
   getSidebarWidthFromKey,
   SIDEBAR_MAX_WIDTH,
@@ -282,7 +283,8 @@ export const AppLayout: React.FC = () => {
   const viewState = useViewState();
   const kubeconfig = useKubeconfig();
   const { tabGroups, focusPanel, setLastFocusedGroupKey } = useDockablePanelContext();
-  const { openPanels, closePanel } = useObjectPanelState();
+  const { openPanels, nativeLocations, dockedEdges, pendingNativeOpenPanelIds, closePanel } =
+    useObjectPanelState();
   const commands = useCommandPaletteCommands();
   const contentBodyRef = useRef<HTMLDivElement | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -306,13 +308,6 @@ export const AppLayout: React.FC = () => {
     setLastSettingsTab('kubeconfigs');
     viewState.setIsSettingsOpen(true);
   }, [viewState.setIsSettingsOpen]);
-  // Empty-space drop target for dockable tabs: dropping a tab in empty
-  // content area spawns a new floating group at the cursor. The ref is
-  // merged onto the existing `<main>` element below — no new wrapper,
-  // no `display: contents`. `useTabDropTarget`'s `stopPropagation` in
-  // its drop handler guarantees that drops inside a tab bar's own
-  // drop target never bubble up to this container target.
-  const { ref: emptySpaceDropRef } = useDockablePanelEmptySpaceDropTarget();
   const handleAboutClose = () => {
     viewState.setIsAboutOpen(false);
   };
@@ -375,10 +370,7 @@ export const AppLayout: React.FC = () => {
       <AppHeader />
       <ClusterTabs onOpenCluster={handleOpenCluster} />
 
-      <main
-        ref={emptySpaceDropRef as (el: HTMLElement | null) => void}
-        className={`app-main ${hasActiveClusters ? '' : 'app-main-inactive'}`}
-      >
+      <main className={`app-main ${hasActiveClusters ? '' : 'app-main-inactive'}`}>
         <Sidebar />
         <SidebarResizer viewState={viewState} />
 
@@ -410,15 +402,30 @@ export const AppLayout: React.FC = () => {
         <DiagnosticsPanel isOpen={showDiagnostics} onClose={() => setShowDiagnostics(false)} />
       </PanelErrorBoundary>
 
-      {Array.from(openPanels.entries()).map(([panelId, objectRef]) => (
-        <PanelErrorBoundary
-          key={panelId}
-          onClose={() => closePanel(panelId)}
-          panelName="object-details"
-        >
-          <ObjectPanel panelId={panelId} objectRef={objectRef} />
-        </PanelErrorBoundary>
-      ))}
+      {Array.from(openPanels.entries())
+        .filter(([panelId]) => !nativeLocations.has(panelId))
+        .map(([panelId, objectRef]) => {
+          const mountTarget = resolveObjectPanelMountTarget(
+            dockedEdges.get(panelId),
+            getDefaultObjectPanelPosition(),
+            pendingNativeOpenPanelIds.has(panelId) ? panelId : undefined
+          );
+          return (
+            <PanelErrorBoundary
+              key={panelId}
+              onClose={() => closePanel(objectRef.clusterId, panelId)}
+              panelName="object-details"
+            >
+              <ObjectPanel
+                panelId={panelId}
+                objectRef={objectRef}
+                defaultPosition={mountTarget.position}
+                defaultGroupKey={mountTarget.groupKey}
+                suppressWorkspaceSurface={pendingNativeOpenPanelIds.has(panelId)}
+              />
+            </PanelErrorBoundary>
+          );
+        })}
 
       <PanelErrorBoundary onClose={() => viewState.setIsSettingsOpen(false)} panelName="settings">
         <SettingsModal

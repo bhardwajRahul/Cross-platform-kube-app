@@ -7,7 +7,7 @@
  * table. The query is gated to the active pods tab.
  */
 
-import { useViewState } from '@core/contexts/ViewStateContext';
+import { useOptionalViewState } from '@core/contexts/ViewStateContext';
 import { useNamespace } from '@modules/namespace/contexts/NamespaceContext';
 import { useObjectPanel } from '@modules/object-panel/hooks/useObjectPanel';
 import {
@@ -46,6 +46,7 @@ import {
   buildRequiredObjectReference,
   buildRequiredRelatedObjectReference,
 } from '@shared/utils/objectIdentity';
+import { usePanelWindowRole } from '@/core/panel-windows/PanelWindowRoleContext';
 import { buildObjectPanelPodsScope } from './objectPanelPodsScope';
 
 interface PodsTabProps {
@@ -77,10 +78,11 @@ const workloadNameFromOwner = (pod: PodSnapshotEntry) => {
 
 export const PodsTab: React.FC<PodsTabProps> = ({ isActive }) => {
   const { openWithObject, objectData } = useObjectPanel();
-  const { navigateToView } = useNavigateToView();
+  const { available: navigationAvailable, navigateToView } = useNavigateToView();
   const objectLink = useObjectLink();
-  const viewState = useViewState();
+  const viewState = useOptionalViewState();
   const namespaceContext = useNamespace();
+  const panelWindowRole = usePanelWindowRole();
   // Per-pod staleness comes from the pods query payload's metrics meta, which
   // is scoped to the PANEL OBJECT's cluster (the globally selected cluster can
   // be a different one). The query hook needs `columns`, so the column
@@ -103,7 +105,8 @@ export const PodsTab: React.FC<PodsTabProps> = ({ isActive }) => {
     openWithObject,
     navigateToView,
   });
-  const { open: openPod, navigate: navigatePod } = podIdentity;
+  const { open: openPod, navigate: navigatePodForWorkspace } = podIdentity;
+  const navigatePod = navigationAvailable ? navigatePodForWorkspace : undefined;
   // Ensure pod navigation keeps the active cluster context for object detail scopes.
   const getPodClusterMeta = useCallback(
     (pod: PodSnapshotEntry) => ({
@@ -115,7 +118,7 @@ export const PodsTab: React.FC<PodsTabProps> = ({ isActive }) => {
   const handlePodOpen = openPod;
   const handleNamespaceSelect = useCallback(
     (pod: PodSnapshotEntry) => {
-      if (!pod.ref.namespace) {
+      if (!pod.ref.namespace || !viewState) {
         return;
       }
       // Route namespace clicks to the sidebar selection instead of the object panel.
@@ -215,8 +218,8 @@ export const PodsTab: React.FC<PodsTabProps> = ({ isActive }) => {
       afterColumnKey: 'name',
       accessor: (pod) => pod.ref.namespace,
       onClick: handleNamespaceSelect,
-      isInteractive: (pod) => Boolean(pod.ref.namespace),
-      getClassName: () => 'object-panel-link',
+      isInteractive: (pod) => Boolean(pod.ref.namespace && viewState),
+      getClassName: (pod) => (pod.ref.namespace && viewState ? 'object-panel-link' : undefined),
     });
 
     withNamespace.push(
@@ -262,6 +265,7 @@ export const PodsTab: React.FC<PodsTabProps> = ({ isActive }) => {
     objectLink,
     getPodClusterMeta,
     navigatePod,
+    viewState,
   ]);
 
   const { gridTableProps, favModal, source, queryPayload } = useQueryBackedClusterResourceGridTable<
@@ -280,6 +284,7 @@ export const PodsTab: React.FC<PodsTabProps> = ({ isActive }) => {
     columns,
     objectIdentity: podIdentity,
     diagnosticsLabel: 'Object Panel Pods',
+    showFavoriteToggle: panelWindowRole === null,
     showKindDropdown: false,
     // Object-panel pods are already scoped to one workload/node; the namespace
     // filter UI is not applicable here.

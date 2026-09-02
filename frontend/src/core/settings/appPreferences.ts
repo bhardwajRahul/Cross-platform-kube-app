@@ -26,7 +26,7 @@ import {
   UpdateAppPreferences,
   ValidateThemeClusterPattern,
 } from '@/core/backend-api';
-import { desktopRuntimeAvailable } from '@/core/desktop-runtime';
+import { desktopRuntimeAvailable, emitBroadcastEvent } from '@/core/desktop-runtime';
 import { type AppEvents, eventBus } from '@/core/events';
 import { captureBootstrapError } from '@/core/telemetry/sentry';
 import {
@@ -68,8 +68,6 @@ export interface AppPreferences {
   objectPanelDockedBottomHeight: number;
   objectPanelFloatingWidth: number;
   objectPanelFloatingHeight: number;
-  objectPanelFloatingX: number;
-  objectPanelFloatingY: number;
   paletteHueLight: number;
   paletteSaturationLight: number;
   paletteBrightnessLight: number;
@@ -165,8 +163,6 @@ interface AppSettingsPayload {
   objectPanelDockedBottomHeight?: number;
   objectPanelFloatingWidth?: number;
   objectPanelFloatingHeight?: number;
-  objectPanelFloatingX?: number;
-  objectPanelFloatingY?: number;
   // Migration: old single-value fields.
   paletteHue?: number;
   paletteSaturation?: number;
@@ -189,7 +185,6 @@ const OBJECT_PANEL_DOCKED_RIGHT_MIN_WIDTH = 500;
 const OBJECT_PANEL_DOCKED_BOTTOM_MIN_HEIGHT = 200;
 const OBJECT_PANEL_FLOATING_MIN_WIDTH = 450;
 const OBJECT_PANEL_FLOATING_MIN_HEIGHT = 200;
-const OBJECT_PANEL_FLOATING_MIN_POSITION = 1;
 const OBJECT_PANEL_LAYOUT_MAX = 9999;
 const PALETTE_HUE_MIN = 0;
 const PALETTE_HUE_MAX = 360;
@@ -250,11 +245,9 @@ const DEFAULT_PREFERENCES: AppPreferences = {
   defaultTablePageSize: DEFAULT_TABLE_PAGE_SIZE,
   defaultObjectPanelPosition: 'right',
   objectPanelDockedRightWidth: 600,
-  objectPanelDockedBottomHeight: 400,
-  objectPanelFloatingWidth: 500,
-  objectPanelFloatingHeight: 400,
-  objectPanelFloatingX: 100,
-  objectPanelFloatingY: 100,
+  objectPanelDockedBottomHeight: 600,
+  objectPanelFloatingWidth: 600,
+  objectPanelFloatingHeight: 800,
 };
 
 const createPreferenceMetadata = <K extends AppPreferenceKey>(
@@ -393,16 +386,6 @@ const FALLBACK_PREFERENCE_METADATA: {
   }),
   objectPanelFloatingHeight: createPreferenceMetadata('objectPanelFloatingHeight', 'integer', {
     min: OBJECT_PANEL_FLOATING_MIN_HEIGHT,
-    max: OBJECT_PANEL_LAYOUT_MAX,
-    runtimeSideEffect: false,
-  }),
-  objectPanelFloatingX: createPreferenceMetadata('objectPanelFloatingX', 'integer', {
-    min: OBJECT_PANEL_FLOATING_MIN_POSITION,
-    max: OBJECT_PANEL_LAYOUT_MAX,
-    runtimeSideEffect: false,
-  }),
-  objectPanelFloatingY: createPreferenceMetadata('objectPanelFloatingY', 'integer', {
-    min: OBJECT_PANEL_FLOATING_MIN_POSITION,
     max: OBJECT_PANEL_LAYOUT_MAX,
     runtimeSideEffect: false,
   }),
@@ -610,6 +593,9 @@ const normalizeColorPreferenceValue = (
 
 const normalizeAppearanceMode = (value: string | undefined): AppearanceMode =>
   normalizeEnumPreferenceValue<AppearanceMode>('appearanceMode', value);
+
+const isAppearanceMode = (value: string): value is AppearanceMode =>
+  value === 'light' || value === 'dark' || value === 'system';
 
 const normalizeGridTableMode = (value: string | undefined): GridTablePersistenceMode =>
   normalizeEnumPreferenceValue<GridTablePersistenceMode>('gridTablePersistenceMode', value);
@@ -919,6 +905,17 @@ const optimisticPreferenceUpdate = async (
     restoreLocalStorageSnapshot(previousStorage);
     throw error;
   }
+
+  if (wailsRuntimeAvailable()) {
+    try {
+      await emitBroadcastEvent('settings:preferences-changed', undefined);
+    } catch (error) {
+      reportOperationalError(error, {
+        source: 'AppPreferences',
+        action: 'broadcast-preference-change',
+      });
+    }
+  }
 };
 
 const fireAndForgetPreferenceUpdate = (
@@ -1125,16 +1122,6 @@ export const hydrateAppPreferences = async (options?: {
       backendSettings?.objectPanelFloatingHeight,
       { defaultOnNonPositive: true }
     ),
-    objectPanelFloatingX: normalizeIntegerPreferenceValue(
-      'objectPanelFloatingX',
-      backendSettings?.objectPanelFloatingX,
-      { defaultOnNonPositive: true }
-    ),
-    objectPanelFloatingY: normalizeIntegerPreferenceValue(
-      'objectPanelFloatingY',
-      backendSettings?.objectPanelFloatingY,
-      { defaultOnNonPositive: true }
-    ),
     paletteHueLight: normalizeIntegerPreferenceValue(
       'paletteHueLight',
       backendSettings?.paletteHueLight
@@ -1185,6 +1172,14 @@ export const hydrateAppPreferences = async (options?: {
 
 export const getAppearanceModePreference = (): AppearanceMode => {
   return preferenceCache.appearanceMode;
+};
+
+export const applyBroadcastAppearanceModePreference = (mode: string): void => {
+  if (!isAppearanceMode(mode)) {
+    return;
+  }
+  updatePreferenceCache({ appearanceMode: mode });
+  persistAppearanceModeToLocalStorage(mode);
 };
 
 export const getUseShortResourceNames = (): boolean => {
@@ -1260,8 +1255,6 @@ export interface ObjectPanelLayoutDefaults {
   dockedBottomHeight: number;
   floatingWidth: number;
   floatingHeight: number;
-  floatingX: number;
-  floatingY: number;
 }
 
 export const getObjectPanelLayoutDefaults = (): ObjectPanelLayoutDefaults => ({
@@ -1269,8 +1262,6 @@ export const getObjectPanelLayoutDefaults = (): ObjectPanelLayoutDefaults => ({
   dockedBottomHeight: preferenceCache.objectPanelDockedBottomHeight,
   floatingWidth: preferenceCache.objectPanelFloatingWidth,
   floatingHeight: preferenceCache.objectPanelFloatingHeight,
-  floatingX: preferenceCache.objectPanelFloatingX,
-  floatingY: preferenceCache.objectPanelFloatingY,
 });
 
 // Returns palette tint values for the specified resolved appearance mode.
@@ -1351,6 +1342,16 @@ export const setAppearanceModePreference = async (mode: AppearanceMode): Promise
     persistAppearanceMode: normalized,
   });
   await optimisticPreferenceUpdate(mutation.updates, mutation.changes, mutation.options);
+  if (wailsRuntimeAvailable()) {
+    try {
+      await emitBroadcastEvent('settings:appearance-mode-changed', { mode: normalized });
+    } catch (error) {
+      reportOperationalError(error, {
+        source: 'AppPreferences',
+        action: 'broadcast-appearance-mode',
+      });
+    }
+  }
 };
 
 export const setUseShortResourceNames = async (useShort: boolean): Promise<void> => {
@@ -1502,12 +1503,6 @@ export const setObjectPanelLayoutDefaults = (layout: ObjectPanelLayoutDefaults):
       layout.floatingHeight,
       { defaultOnNonPositive: true }
     ),
-    floatingX: normalizeIntegerPreferenceValue('objectPanelFloatingX', layout.floatingX, {
-      defaultOnNonPositive: true,
-    }),
-    floatingY: normalizeIntegerPreferenceValue('objectPanelFloatingY', layout.floatingY, {
-      defaultOnNonPositive: true,
-    }),
   };
   commitPreferenceMutation('Failed to persist object panel layout defaults:', {
     updates: {
@@ -1515,16 +1510,12 @@ export const setObjectPanelLayoutDefaults = (layout: ObjectPanelLayoutDefaults):
       objectPanelDockedBottomHeight: normalized.dockedBottomHeight,
       objectPanelFloatingWidth: normalized.floatingWidth,
       objectPanelFloatingHeight: normalized.floatingHeight,
-      objectPanelFloatingX: normalized.floatingX,
-      objectPanelFloatingY: normalized.floatingY,
     },
     changes: [
       { key: 'objectPanelDockedRightWidth', value: normalized.dockedRightWidth },
       { key: 'objectPanelDockedBottomHeight', value: normalized.dockedBottomHeight },
       { key: 'objectPanelFloatingWidth', value: normalized.floatingWidth },
       { key: 'objectPanelFloatingHeight', value: normalized.floatingHeight },
-      { key: 'objectPanelFloatingX', value: normalized.floatingX },
-      { key: 'objectPanelFloatingY', value: normalized.floatingY },
     ],
   });
 };

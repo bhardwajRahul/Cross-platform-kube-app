@@ -1,8 +1,8 @@
 /**
  * DockablePanel.tsx
  *
- * A React component that renders a dockable/floatable panel.
- * Handles dragging, resizing, docking, maximizing, and window bounds constraints.
+ * A React component that renders a right- or bottom-docked panel.
+ * Floating is a native-window action owned outside this renderer.
  */
 
 import { getTabbableElements } from '@shared/components/modals/getTabbableElements';
@@ -19,6 +19,7 @@ import React, {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { useOptionalPanelLifecycleGuardRegistry } from '@/core/panel-windows/panelLifecycleGuards';
 import { reportOperationalError } from '@/utils/errorHandler';
 import { DockablePanelControls } from './DockablePanelControls';
 import { DockablePanelHeader } from './DockablePanelHeader';
@@ -69,6 +70,9 @@ interface DockablePanelProps {
 
   // Whether the panel is currently open
   isOpen?: boolean;
+  // Keep registration and tab-group membership alive without mounting a
+  // workspace surface while a native-window transfer is pending.
+  suppressSurface?: boolean;
 
   // Class names for styling
   className?: string;
@@ -215,10 +219,7 @@ const resolvePanelMinimums = (position: DockPosition, constraints: PanelSizeCons
   if (position === 'bottom') {
     return { width: 0, height: constraints.bottom.minHeight };
   }
-  return {
-    width: constraints.floating.minWidth,
-    height: constraints.floating.minHeight,
-  };
+  return { width: constraints.right.minWidth, height: 0 };
 };
 
 const resolveDockFocusTarget = (
@@ -320,17 +321,6 @@ const DockablePanelContent = ({
   });
 };
 
-const FLOATING_RESIZE_ZONES = [
-  { direction: 'n', label: 'top', classSuffix: 'top' },
-  { direction: 's', label: 'bottom', classSuffix: 'bottom' },
-  { direction: 'w', label: 'left', classSuffix: 'left' },
-  { direction: 'e', label: 'right', classSuffix: 'right' },
-  { direction: 'nw', label: 'top left', classSuffix: 'top-left' },
-  { direction: 'ne', label: 'top right', classSuffix: 'top-right' },
-  { direction: 'sw', label: 'bottom left', classSuffix: 'bottom-left' },
-  { direction: 'se', label: 'bottom right', classSuffix: 'bottom-right' },
-] as const;
-
 interface DockableResizeHandlesProps {
   position: DockPosition;
   size: { width: number; height: number };
@@ -381,20 +371,7 @@ const DockableResizeHandles = ({
       />
     );
   }
-  return (
-    <>
-      {FLOATING_RESIZE_ZONES.map(({ direction, label, classSuffix }) => (
-        <button
-          key={direction}
-          type="button"
-          tabIndex={-1}
-          aria-label={`Resize floating panel from ${label}`}
-          className={`dockable-panel__resize-zone dockable-panel__resize-zone--${classSuffix}`}
-          onMouseDown={(event) => onMouseDown(event, direction)}
-        />
-      ))}
-    </>
-  );
+  return null;
 };
 
 interface DockablePanelLeaderProps {
@@ -414,13 +391,12 @@ interface DockablePanelLeaderProps {
   constraints: PanelSizeConstraints;
   size: { width: number; height: number };
   onTabClick: (panelId: string) => void;
-  onHeaderMouseDown: DragResizeControls['handleHeaderMouseDown'];
-  onHeaderKeyDown: DragResizeControls['handleHeaderKeyDown'];
   onDock: (position: DockPosition) => void;
   onToggleMaximize: () => void;
   onClose: () => void;
   onResizeMouseDown: DragResizeControls['handleMouseDownResize'];
   onKeyboardResize: DragResizeControls['handleDockedKeyboardResize'];
+  nativeWindowMode: boolean;
 }
 
 const DockablePanelLeader = (props: DockablePanelLeaderProps) => (
@@ -431,9 +407,6 @@ const DockablePanelLeader = (props: DockablePanelLeaderProps) => (
       activeTab={props.activeTab}
       onTabClick={props.onTabClick}
       groupKey={props.groupKey ?? props.panelId}
-      onMouseDown={props.onHeaderMouseDown}
-      onKeyDown={props.onHeaderKeyDown}
-      moveEnabled={props.position === 'floating' && !props.isMaximized}
       controls={
         <DockablePanelControls
           position={props.position}
@@ -442,6 +415,7 @@ const DockablePanelLeader = (props: DockablePanelLeaderProps) => (
           onDock={props.onDock}
           onToggleMaximize={props.onToggleMaximize}
           onClose={props.onClose}
+          nativeWindowMode={props.nativeWindowMode}
         />
       }
     />
@@ -455,14 +429,16 @@ const DockablePanelLeader = (props: DockablePanelLeaderProps) => (
         {props.children}
       </DockablePanelContent>
     </div>
-    <DockableResizeHandles
-      position={props.position}
-      size={props.size}
-      constraints={props.constraints}
-      isMaximized={props.isMaximized}
-      onMouseDown={props.onResizeMouseDown}
-      onKeyboardResize={props.onKeyboardResize}
-    />
+    {!props.nativeWindowMode && (
+      <DockableResizeHandles
+        position={props.position}
+        size={props.size}
+        constraints={props.constraints}
+        isMaximized={props.isMaximized}
+        onMouseDown={props.onResizeMouseDown}
+        onKeyboardResize={props.onKeyboardResize}
+      />
+    )}
   </>
 );
 
@@ -484,6 +460,7 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
     onMaximizeChange,
     maximizeTargetSelector = '.content-body',
     panelRef: forwardedPanelRef,
+    suppressSurface = false,
   } = props;
   const defaultSize = useMemo(
     () => resolveDefaultPanelSize(defaultSizeOverride?.width, defaultSizeOverride?.height),
@@ -498,6 +475,7 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
     getPanelSizeConstraints(null)
   );
   const panelState = useDockablePanelState(panelId);
+  const lifecycleGuards = useOptionalPanelLifecycleGuardRegistry();
   const {
     registerPanel,
     unregisterPanel,
@@ -511,10 +489,11 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
     notifyContentChange,
     subscribeContentChange,
     groupLeaderByKeyRef,
-    updateGridTableHoverSuppression,
     movePanelBetweenGroupsAndFocus,
     lastFocusedGroupKey,
     setLastFocusedGroupKey,
+    requestGroupMove,
+    nativeWindowMode,
   } = useDockablePanelContext();
   const panelHostNode = useDockablePanelHost();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -543,7 +522,6 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
   }, [panelId, panelContentRefsMap]);
 
   const skipNextControlledSyncRef = useRef(false);
-  const hoverSuppressionRef = useRef(false);
 
   const { isMaximized, maximizedRect, toggleMaximize } = useDockablePanelMaximize({
     panelState,
@@ -554,20 +532,13 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
 
   const resolvedMinimums = resolvePanelMinimums(panelState.position, constraints);
 
-  const {
-    isDragging,
-    isResizing,
-    handleHeaderMouseDown,
-    handleHeaderKeyDown,
-    handleMouseDownResize,
-    handleDockedKeyboardResize,
-  } = useDockablePanelDragResize({
-    panelState,
-    panelRef,
-    safeMinWidth: resolvedMinimums.width,
-    safeMinHeight: resolvedMinimums.height,
-    isMaximized,
-  });
+  const { isResizing, handleMouseDownResize, handleDockedKeyboardResize } =
+    useDockablePanelDragResize({
+      panelState,
+      safeMinWidth: resolvedMinimums.width,
+      safeMinHeight: resolvedMinimums.height,
+      isMaximized,
+    });
 
   // Initialize panel state
   useEffect(() => {
@@ -683,25 +654,6 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
     removePanelFromGroups,
   ]);
 
-  // Manage body class to disable hover effects during floating panel drag.
-  useEffect(() => {
-    const shouldSuppress = panelState.position === 'floating' && isDragging;
-    if (shouldSuppress === hoverSuppressionRef.current) {
-      return;
-    }
-    hoverSuppressionRef.current = shouldSuppress;
-    updateGridTableHoverSuppression(shouldSuppress);
-  }, [isDragging, panelState.position, updateGridTableHoverSuppression]);
-
-  useEffect(() => {
-    return () => {
-      if (hoverSuppressionRef.current) {
-        hoverSuppressionRef.current = false;
-        updateGridTableHoverSuppression(false);
-      }
-    };
-  }, [updateGridTableHoverSuppression]);
-
   // Handle window resize to keep panels within bounds
   useWindowBoundsConstraint(panelState, {
     minWidth: resolvedMinimums.width,
@@ -756,7 +708,7 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
   // Set CSS variables on the shared content container so both the route layout
   // and the portal-mounted dock layer can read the same dock geometry.
   useLayoutEffect(() => {
-    if (!panelState.isOpen || isMaximized || !isGroupLeader) {
+    if (!panelState.isOpen || suppressSurface || isMaximized || !isGroupLeader) {
       return;
     }
     const target = document.querySelector('.content');
@@ -788,6 +740,7 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
     panelState.size.height,
     isMaximized,
     isGroupLeader,
+    suppressSurface,
   ]);
 
   // Content change notification:
@@ -838,6 +791,11 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
 
   // Handle close -- closes all tabs in the group and the panel itself.
   const handleClose = useCallback(() => {
+    const blocker = lifecycleGuards?.firstBlocker(groupInfo?.tabs ?? [panelId]);
+    if (blocker) {
+      blocker.focus();
+      return;
+    }
     // Close every other tab in the group first.
     if (groupInfo) {
       for (const tabId of groupInfo.tabs) {
@@ -852,12 +810,16 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
     }
     panelState.setOpen(false);
     onClose?.();
-  }, [groupInfo, panelId, isControlled, panelState, onClose, closeTab]);
+  }, [groupInfo, panelId, isControlled, lifecycleGuards, panelState, onClose, closeTab]);
 
   // Handle docking changes
   const handleDock = useCallback(
     (position: DockPosition) => {
       if (isMaximized) {
+        return;
+      }
+
+      if (groupKey && requestGroupMove?.(groupKey, position)) {
         return;
       }
 
@@ -869,7 +831,15 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
       );
       movePanelBetweenGroupsAndFocus(activePanelId, position, undefined, focusTargetPanelId);
     },
-    [activePanelId, tabGroups, groupLeaderByKeyRef, movePanelBetweenGroupsAndFocus, isMaximized]
+    [
+      activePanelId,
+      tabGroups,
+      groupLeaderByKeyRef,
+      movePanelBetweenGroupsAndFocus,
+      isMaximized,
+      groupKey,
+      requestGroupMove,
+    ]
   );
 
   const handleEscapeCloseActiveTab = useCallback(() => {
@@ -898,7 +868,7 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
   useKeyboardSurface({
     kind: 'panel',
     rootRef: panelRef,
-    active: panelState.isOpen && isGroupLeader,
+    active: panelState.isOpen && !suppressSurface && isGroupLeader,
     priority: KeyboardScopePriority.OBJECT_PANEL,
     captureWhenActive:
       closeActiveTabOnEscape && (!lastFocusedGroupKey || lastFocusedGroupKey === groupKey),
@@ -933,7 +903,7 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
   }, []);
 
   useEffect(() => {
-    if (!panelState.isOpen || !isGroupLeader) {
+    if (!panelState.isOpen || suppressSurface || !isGroupLeader) {
       restoreSuppressedTabbables();
       return;
     }
@@ -959,20 +929,21 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
       document.removeEventListener('focusin', syncPanelTabbables);
       restoreSuppressedTabbables();
     };
-  }, [isGroupLeader, panelState.isOpen, restoreSuppressedTabbables, suppressPanelTabbables]);
+  }, [
+    isGroupLeader,
+    panelState.isOpen,
+    restoreSuppressedTabbables,
+    suppressPanelTabbables,
+    suppressSurface,
+  ]);
 
   // Memoize panel classes and styles
   const panelClassName = useMemo(() => {
-    const classes = ['dockable-panel', `dockable-panel--${panelState.position}`, className];
+    const renderedPosition = panelState.position === 'floating' ? 'right' : panelState.position;
+    const classes = ['dockable-panel', `dockable-panel--${renderedPosition}`, className];
 
-    if (isDragging) {
-      classes.push('dockable-panel--dragging');
-    }
     if (isResizing) {
       classes.push('dockable-panel--resizing');
-    }
-    if (panelState.position === 'floating') {
-      classes.push('dockable-panel--floating');
     }
     if (isMaximized) {
       classes.push('dockable-panel--maximized');
@@ -990,20 +961,19 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
       classes.push('dockable-panel--inactive');
     }
     return classes.join(' ');
-  }, [
-    panelState.position,
-    className,
-    isDragging,
-    isResizing,
-    isMaximized,
-    groupKey,
-    lastFocusedGroupKey,
-  ]);
+  }, [panelState.position, className, isResizing, isMaximized, groupKey, lastFocusedGroupKey]);
 
   const panelStyle = useMemo<React.CSSProperties>(() => {
     const style: React.CSSProperties & Record<string, string | number> = {
       zIndex: panelState.zIndex,
     };
+    if (nativeWindowMode) {
+      style.inset = '0';
+      style.width = '100%';
+      style.height = '100%';
+      style.transform = 'none';
+      return style;
+    }
     if (isMaximized) {
       if (maximizedRect) {
         style.top = `${maximizedRect.top}px`;
@@ -1020,32 +990,13 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
       style.bottom = 'auto';
       style.transform = 'none';
       style.cursor = 'default';
-      style['--dockable-panel-translate-x'] = '0px';
-      style['--dockable-panel-translate-y'] = '0px';
       return style;
     }
 
     // Clamp dimensions and position to keep the panel within the visible content area.
     const content = getContentBounds();
 
-    if (panelState.position === 'floating') {
-      const maxW = Math.max(constraints.floating.minWidth, content.width);
-      const maxH = Math.max(constraints.floating.minHeight, content.height);
-      const clampedW = Math.min(panelState.size.width, maxW);
-      const clampedH = Math.min(panelState.size.height, maxH);
-      const maxX = Math.max(0, content.width - clampedW);
-      const maxY = Math.max(0, content.height - clampedH);
-      const clampedX = Math.round(Math.max(0, Math.min(panelState.floatingPosition.x, maxX)));
-      const clampedY = Math.round(Math.max(0, Math.min(panelState.floatingPosition.y, maxY)));
-
-      style.width = `${clampedW}px`;
-      style.height = `${clampedH}px`;
-      style.transform = `translate3d(${clampedX}px, ${clampedY}px, 0)`;
-      style.top = 0;
-      style.left = 0;
-      style['--dockable-panel-translate-x'] = `${clampedX}px`;
-      style['--dockable-panel-translate-y'] = `${clampedY}px`;
-    } else if (panelState.position === 'right') {
+    if (panelState.position === 'right' || panelState.position === 'floating') {
       const maxW = Math.max(constraints.right.minWidth, content.width);
       style.width = `${Math.min(panelState.size.width, maxW)}px`;
     } else if (panelState.position === 'bottom') {
@@ -1056,15 +1007,15 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
     return style;
   }, [
     panelState.position,
-    panelState.floatingPosition,
     panelState.size,
     panelState.zIndex,
     isMaximized,
     maximizedRect,
     constraints,
+    nativeWindowMode,
   ]);
 
-  if (!panelState.isOpen) {
+  if (!panelState.isOpen || suppressSurface) {
     return null;
   }
   if (!panelHostNode) {
@@ -1081,7 +1032,7 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
       style={isGroupLeader ? panelStyle : { display: 'none' }}
       role="dialog"
       aria-label={activeTitle}
-      aria-modal={panelState.position === 'floating'}
+      aria-modal={false}
       data-group-key={groupKey ?? undefined}
       data-active-panel-id={activePanelId}
     >
@@ -1102,13 +1053,12 @@ const DockablePanelInner: React.FC<DockablePanelProps> = (props) => {
           constraints={constraints}
           size={panelState.size}
           onTabClick={handleTabClick}
-          onHeaderMouseDown={handleHeaderMouseDown}
-          onHeaderKeyDown={handleHeaderKeyDown}
           onDock={handleDock}
           onToggleMaximize={toggleMaximize}
           onClose={handleClose}
           onResizeMouseDown={handleMouseDownResize}
           onKeyboardResize={handleDockedKeyboardResize}
+          nativeWindowMode={nativeWindowMode}
         >
           {children}
         </DockablePanelLeader>

@@ -26,10 +26,11 @@ export function useAutoRefresh() {
     return unsub;
   }, []);
 
-  // Sync refreshManager when enabled changes
+  // Sync refreshManager when enabled changes without overriding the window's
+  // visibility pause.
   useEffect(() => {
     if (enabled) {
-      refreshManager.resume();
+      resumeAutoRefreshWhenVisible();
     } else {
       refreshManager.pause();
     }
@@ -50,9 +51,18 @@ export function useAutoRefresh() {
  * Initialize auto-refresh state from persisted preferences on app startup.
  * Call this once in App.tsx to ensure refreshManager is paused if disabled.
  */
+function resumeAutoRefreshWhenVisible() {
+  if (typeof document !== 'undefined' && document.hidden) {
+    refreshManager.pause();
+    return;
+  }
+  refreshManager.resume();
+}
+
 export function initializeAutoRefresh() {
-  const enabled = getAutoRefreshEnabled();
-  if (!enabled) {
+  if (getAutoRefreshEnabled()) {
+    resumeAutoRefreshWhenVisible();
+  } else {
     refreshManager.pause();
   }
 }
