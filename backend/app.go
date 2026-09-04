@@ -58,7 +58,7 @@ type ApplicationRuntimeOptions struct {
 	RequestPanelClose          func(string, string, string) error
 	AcknowledgePanelClose      func(string) error
 	AcknowledgeWorkspaceClose  func(string) error
-	RoutePanelCommand          func(string, string) error
+	RoutePanelCommand          func(string, panelwindow.OwnerCommand) error
 	RequestPanelObjectOpen     func(string, panelwindow.ObjectReference, string) error
 	AuthorizePanelObjectOpen   func(string, string, string, panelwindow.ObjectReference, string) error
 	UpdatePanelSnapshot        func(string, panelwindow.GroupSnapshot) error
@@ -108,7 +108,6 @@ func NewApplicationRuntime(wailsApplication *application.App, configured ...Appl
 		DesktopShellBindings{
 			UpdateCheck: updateCheck.check, KubeconfigSearchPaths: kubeconfigSearchPaths.read,
 			CreateWorkspaceWindow:      options.CreateWorkspaceWindow,
-			IsWorkspaceWindow:          isWorkspaceWindow,
 			NativeWindowDescriptor:     options.NativeWindowDescriptor,
 			BeginPanelWindowOpen:       options.BeginPanelWindowOpen,
 			AcknowledgePanelReady:      options.AcknowledgePanelReady,

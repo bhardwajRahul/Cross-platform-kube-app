@@ -3,10 +3,11 @@ import { KeyboardProvider } from '@ui/shortcuts';
 import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApplicationMenuShortcuts } from '@/ui/shortcuts/components/ApplicationMenuShortcuts';
 import AppMenuBar from './AppMenuBar';
 
 const backendMock = vi.hoisted(() => ({
-  executeWorkspaceMenuCommand: vi.fn((_command: unknown) => Promise.resolve()),
+  executeApplicationMenuCommand: vi.fn((_command: unknown) => Promise.resolve()),
 }));
 
 const platformMock = vi.hoisted(() => ({
@@ -19,12 +20,13 @@ const errorMock = vi.hoisted(() => ({
 }));
 
 vi.mock('@/core/backend-api', () => ({
-  ExecuteWorkspaceMenuCommand: backendMock.executeWorkspaceMenuCommand,
+  ExecuteApplicationMenuCommand: backendMock.executeApplicationMenuCommand,
 }));
 
 vi.mock('@/utils/platform', () => ({
   isMacPlatform: platformMock.isMacPlatform,
   isWindowsPlatform: platformMock.isWindowsPlatform,
+  usesCustomWindowFrame: () => !platformMock.isMacPlatform(),
 }));
 
 vi.mock('@/utils/errorHandler', () => ({
@@ -39,8 +41,8 @@ describe('AppMenuBar', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = ReactDOM.createRoot(container);
-    backendMock.executeWorkspaceMenuCommand.mockClear();
-    backendMock.executeWorkspaceMenuCommand.mockResolvedValue(undefined);
+    backendMock.executeApplicationMenuCommand.mockClear();
+    backendMock.executeApplicationMenuCommand.mockResolvedValue(undefined);
     errorMock.reportOperationalError.mockClear();
     platformMock.isWindowsPlatform.mockReturnValue(true);
   });
@@ -54,6 +56,7 @@ describe('AppMenuBar', () => {
     act(() => {
       root.render(
         <KeyboardProvider>
+          <ApplicationMenuShortcuts />
           <AppMenuBar />
         </KeyboardProvider>
       );
@@ -89,8 +92,8 @@ describe('AppMenuBar', () => {
       await Promise.resolve();
     });
 
-    expect(backendMock.executeWorkspaceMenuCommand).toHaveBeenCalledWith(
-      backend.WorkspaceMenuCommand.WorkspaceMenuCommandNewWindow
+    expect(backendMock.executeApplicationMenuCommand).toHaveBeenCalledWith(
+      backend.ApplicationMenuCommand.ApplicationMenuCommandNewWindow
     );
     expect(container.querySelector('[role="menu"]')).toBeNull();
   });
@@ -135,8 +138,8 @@ describe('AppMenuBar', () => {
       await Promise.resolve();
     });
 
-    expect(backendMock.executeWorkspaceMenuCommand).toHaveBeenCalledWith(
-      backend.WorkspaceMenuCommand.WorkspaceMenuCommandNewWindow
+    expect(backendMock.executeApplicationMenuCommand).toHaveBeenCalledWith(
+      backend.ApplicationMenuCommand.ApplicationMenuCommandNewWindow
     );
   });
 
@@ -212,7 +215,7 @@ describe('AppMenuBar', () => {
     const input = document.createElement('input');
     document.body.appendChild(input);
     input.focus();
-    backendMock.executeWorkspaceMenuCommand.mockRejectedValueOnce(new Error('route failed'));
+    backendMock.executeApplicationMenuCommand.mockRejectedValueOnce(new Error('route failed'));
     renderMenu();
 
     const editButton = container.querySelector<HTMLButtonElement>('[aria-label="Edit menu"]');
@@ -227,32 +230,40 @@ describe('AppMenuBar', () => {
 
     expect(document.activeElement).toBe(input);
     expect(errorMock.reportOperationalError).toHaveBeenCalledWith(expect.any(Error), {
-      source: 'AppMenuBar',
+      source: 'ApplicationMenuCommands',
       action: 'execute:copy',
     });
     input.remove();
   });
 
-  it('preserves accelerators that were previously owned by the native desktop menu', async () => {
+  it('dismisses the open menu and restores content focus before an accelerator dispatches', async () => {
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
     renderMenu();
 
-    for (const key of ['n', 'o', 'w', 'q', 'm']) {
-      await act(async () => {
-        document.body.dispatchEvent(
-          new KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true })
-        );
-        await Promise.resolve();
-      });
-    }
+    const fileButton = container.querySelector<HTMLButtonElement>('[aria-label="File menu"]');
+    act(() => {
+      fileButton?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      fileButton?.click();
+    });
+    await act(async () => {
+      container.querySelector<HTMLElement>('[role="menu"]')?.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'n',
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+      await Promise.resolve();
+    });
 
-    expect(
-      backendMock.executeWorkspaceMenuCommand.mock.calls.map(([menuCommand]) => menuCommand)
-    ).toEqual([
-      backend.WorkspaceMenuCommand.WorkspaceMenuCommandNewWindow,
-      backend.WorkspaceMenuCommand.WorkspaceMenuCommandOpenCluster,
-      backend.WorkspaceMenuCommand.WorkspaceMenuCommandClose,
-      backend.WorkspaceMenuCommand.WorkspaceMenuCommandQuit,
-      backend.WorkspaceMenuCommand.WorkspaceMenuCommandMinimise,
-    ]);
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(input);
+    expect(backendMock.executeApplicationMenuCommand).toHaveBeenCalledWith(
+      backend.ApplicationMenuCommand.ApplicationMenuCommandNewWindow
+    );
+    input.remove();
   });
 });

@@ -1,6 +1,7 @@
 import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { backend } from '@/core/backend-api/models';
 import { PanelWindowShortcuts } from './PanelWindowShortcuts';
 
 const mocks = vi.hoisted(() => ({
@@ -10,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   updateSnapshot: vi.fn<(_windowName: string, _snapshot: unknown) => Promise<void>>(
     async () => undefined
   ),
-  routeCommand: vi.fn(async () => undefined),
+  openDevTools: vi.fn(async () => undefined),
   closePanel: vi.fn(),
   closeAll: vi.fn(),
   focusPanel: vi.fn(),
@@ -23,13 +24,24 @@ const mocks = vi.hoisted(() => ({
   failTabTransfer: vi.fn(async () => undefined),
   upsertOwnedPanel: vi.fn(() => 'panel-c'),
   movePanelBetweenGroups: vi.fn(),
+  applicationShortcutsProps: null as null | {
+    enabled: boolean;
+    execute: (command: backend.ApplicationMenuCommand) => void;
+  },
+  backendExecute: vi.fn(),
+  zoomIn: vi.fn(),
+  zoomOut: vi.fn(),
+  zoomReset: vi.fn(),
+  minimiseWindow: vi.fn(async () => undefined),
+  maximiseWindow: vi.fn(async () => undefined),
+  restoreWindow: vi.fn(async () => undefined),
+  toggleMaximise: vi.fn(async () => undefined),
 }));
 
 vi.mock('@/core/panel-windows', () => ({
   acknowledgePanelWindowClose: mocks.acknowledgeClose,
   requestPanelTabClose: mocks.requestTabClose,
   updatePanelWindowSnapshot: mocks.updateSnapshot,
-  routePanelWindowCommand: mocks.routeCommand,
   onPanelTabCloseAuthorized: (handler: (event: never) => void) => {
     mocks.handlers.authorized = handler;
     return () => undefined;
@@ -74,6 +86,30 @@ vi.mock('@/core/desktop-runtime', () => ({
     return () => undefined;
   },
   focusWindow: mocks.focusWindow,
+  openDevTools: mocks.openDevTools,
+  maximiseWindow: mocks.maximiseWindow,
+  minimiseWindow: mocks.minimiseWindow,
+  restoreWindow: mocks.restoreWindow,
+  toggleMaximise: mocks.toggleMaximise,
+}));
+
+vi.mock('@/core/contexts/ZoomContext', () => ({
+  useZoom: () => ({
+    zoomIn: mocks.zoomIn,
+    zoomOut: mocks.zoomOut,
+    resetZoom: mocks.zoomReset,
+  }),
+}));
+
+vi.mock('@/ui/layout/ApplicationMenuCommandContext', () => ({
+  executeBackendApplicationMenuCommand: mocks.backendExecute,
+}));
+
+vi.mock('./ApplicationMenuShortcuts', () => ({
+  ApplicationMenuShortcuts: (props: NonNullable<typeof mocks.applicationShortcutsProps>) => {
+    mocks.applicationShortcutsProps = props;
+    return null;
+  },
 }));
 
 vi.mock('@/modules/object-panel/contexts/ObjectPanelStateContext', () => ({
@@ -149,8 +185,10 @@ describe('PanelWindowShortcuts', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mocks.handlers = {};
     mocks.blocker = null;
     mocks.tabs = ['panel-a', 'panel-b'];
+    mocks.applicationShortcutsProps = null;
     container = document.createElement('div');
     document.body.appendChild(container);
     root = ReactDOM.createRoot(container);
@@ -176,6 +214,97 @@ describe('PanelWindowShortcuts', () => {
     await act(async () => mocks.handlers.authorized?.({ panelId: 'panel-a' } as never));
     expect(mocks.commitTabClose).toHaveBeenCalledWith('panel-a');
     expect(mocks.closePanel).not.toHaveBeenCalled();
+  });
+
+  it('executes panel-local accelerators locally and routes owner commands through the backend', async () => {
+    const execute = mocks.applicationShortcutsProps?.execute;
+    expect(mocks.applicationShortcutsProps?.enabled).toBe(true);
+
+    await act(async () => {
+      execute?.(backend.ApplicationMenuCommand.ApplicationMenuCommandClose);
+      execute?.(backend.ApplicationMenuCommand.ApplicationMenuCommandZoomIn);
+      execute?.(backend.ApplicationMenuCommand.ApplicationMenuCommandSettings);
+      await Promise.resolve();
+    });
+
+    expect(mocks.requestTabClose).toHaveBeenCalledWith('panel-1', 'panel-a');
+    expect(mocks.zoomIn).toHaveBeenCalledOnce();
+    expect(mocks.backendExecute).toHaveBeenCalledWith(
+      backend.ApplicationMenuCommand.ApplicationMenuCommandSettings
+    );
+  });
+
+  it('executes native window commands in the focused panel window', async () => {
+    const execute = mocks.applicationShortcutsProps?.execute;
+
+    await act(async () => {
+      execute?.(backend.ApplicationMenuCommand.ApplicationMenuCommandMinimise);
+      execute?.(backend.ApplicationMenuCommand.ApplicationMenuCommandMaximise);
+      execute?.(backend.ApplicationMenuCommand.ApplicationMenuCommandRestore);
+      execute?.(backend.ApplicationMenuCommand.ApplicationMenuCommandToggleMaximise);
+      await Promise.resolve();
+    });
+
+    expect(mocks.minimiseWindow).toHaveBeenCalledOnce();
+    expect(mocks.maximiseWindow).toHaveBeenCalledOnce();
+    expect(mocks.restoreWindow).toHaveBeenCalledOnce();
+    expect(mocks.toggleMaximise).toHaveBeenCalledOnce();
+    expect(mocks.backendExecute).not.toHaveBeenCalled();
+  });
+
+  it('opens the inspector in the focused panel window', async () => {
+    await act(async () => {
+      mocks.handlers['debug:open-inspector']?.(undefined as never);
+      await Promise.resolve();
+    });
+
+    expect(mocks.openDevTools).toHaveBeenCalledOnce();
+  });
+
+  it('reports an inspector failure without handling it in the owner window', async () => {
+    mocks.openDevTools.mockRejectedValueOnce(new Error('inspector unavailable'));
+
+    await act(async () => {
+      mocks.handlers['debug:open-inspector']?.(undefined as never);
+      await Promise.resolve();
+    });
+
+    expect(mocks.reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ action: 'open-inspector' })
+    );
+  });
+
+  it('does not install accelerators or publish snapshots before native readiness', async () => {
+    await act(async () => root.unmount());
+    mocks.handlers = {};
+    mocks.updateSnapshot.mockClear();
+    root = ReactDOM.createRoot(container);
+
+    await act(async () => {
+      root.render(<PanelWindowShortcuts descriptor={descriptor} ready={false} />);
+      await Promise.resolve();
+    });
+
+    expect(mocks.handlers['menu:close']).toBeUndefined();
+    expect(mocks.handlers['debug:open-inspector']).toBeUndefined();
+    expect(mocks.updateSnapshot).not.toHaveBeenCalled();
+    expect(mocks.applicationShortcutsProps?.enabled).toBe(false);
+  });
+
+  it('reports a rejected active-tab close request', async () => {
+    mocks.requestTabClose.mockRejectedValueOnce(new Error('close unavailable'));
+
+    await act(async () => {
+      mocks.handlers['menu:close']?.(undefined as never);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ action: 'close-active-tab' })
+    );
   });
 
   it('inserts an authorized transferred tab at the requested native-window index', async () => {

@@ -104,23 +104,32 @@ Workspace and panel chrome is platform-adaptive. macOS retains Wails' native
 frame and application menu with a transparent full-size titlebar. Windows and
 Linux use frameless workspace and panel windows; `AppHeader` supplies the drag
 surface and window controls, and workspace headers also render the application
-menu bar. Windows enables Wails' WebView2 non-client region support without
-enabling composition hosting. Composition installs Wails' global native menu
-only on macOS, so the Linux constructor cannot inherit it alongside the
+menu bar. Windows leaves WebView2 non-client region support and composition
+hosting disabled so pointer input reaches Wails' DOM resize-before-drag handler.
+Composition installs Wails' global native menu only on macOS, so the Linux
+constructor cannot inherit it alongside the
 app-rendered menu. The native macOS menu and app-rendered desktop menu use the
-same typed `WorkspaceMenuCommand` dispatcher. Wails injects the calling window
-into the desktop-service context, and the shell rejects an app-rendered
-workspace command when that sender is not a registered workspace.
+same typed `ApplicationMenuCommand` dispatcher. Wails injects the calling window
+into the desktop-service context; application-menu service calls without a sender
+are rejected. Only native menu callbacks may resolve the current window. The
+shell resolves and validates that sender's window identity through the native
+window registry, keeps window-local commands in the sender, and routes workspace-owned commands from a panel to its immutable
+owner. The panel renderer keeps its Windows/Linux application-menu accelerators
+disabled until the panel's native ready acknowledgement.
 
-Resizable frameless windows declare Wails' documented all-edge CSS resize
-contract on the document body. The pinned beta.16 runtime supplies the actual
-edge and corner hit testing and native resize invocation for resizable
-Windows/Linux windows. Because that runtime collapses the eight hit regions to
-four axis cursors, the custom-frame shell projects its result to the matching
+The pinned beta.16 runtime supplies edge and corner hit testing and native
+resize invocation for resizable Windows/Linux windows without a CSS resize
+opt-in. Because that runtime collapses the eight hit regions to four axis cursors,
+the custom-frame shell projects its result to the matching
 directional cursor and keeps that cursor active over descendant controls.
+Column drag cursors use a separate body class so Wails cannot restore an expired
+inline column cursor after a window-edge interaction.
 Linux adds a theme-aware inset outline at the shared header boundary because
 Wails removes GTK window decorations and exposes no Linux shadow option;
-Windows and macOS retain their native decoration behavior.
+Windows and macOS retain their native decoration behavior. The pinned Wails
+GTK3 and GTK4 `setTitle` implementations skip frameless windows, so configured
+Linux workspace and panel titles do not currently reach the window manager;
+this requires a Wails title-setter fix.
 App-owned controls query the native maximise state on mount and after
 maximise/restore actions; a debounced resize sync keeps the label and glyph
 correct when a menu or window manager changes the state.
@@ -163,8 +172,8 @@ callback, or frontend owner and must not gain a second event subscription.
 | Application quit | `application.Options.ShouldQuit` asks every ready workspace to acknowledge one two-phase preflight | Yes | No workspace closes until all ready workspaces have guarded their docked and child panels. Only unanimous approval authorizes normal owner close transactions and the existing once-only persistence flush. | A denial, stale response, or timeout cancels the transaction without partially closing another owner. The most recently focused live workspace supplies geometry. Proof: `main.go`, `internal/appwindow/registry.go`, `frontend/src/core/panel-windows/WorkspacePanelCoordinator.tsx`, and `backend/application_lifecycle.go`. |
 | Service cancellation and shutdown | Wails cancels the service context, then calls `backend.DesktopService.ServiceShutdown`, which delegates to the lifecycle owner | No | Occurs after quit is accepted and after pre-quit persistence | Process-scoped teardown stops auth recovery, runtime operations, kubeconfig watching, and refresh before clearing the application context. Proof: `backend/desktop_service.go`, `backend/application_lifecycle.go`, and the pinned framework's `pkg/application/application.go`. |
 | Initial hidden-window workaround | `windowOptionsForPlatform`; no event | No | macOS/Windows peers start hidden until runtime ready; Linux retains its existing visible-start contract | Applies equally to every `workspace-N` peer. Option mapping proof: `internal/appwindow/registry.go` and `internal/appwindow/registry_test.go`. |
-| Platform window chrome and menus | `windowOptionsForPlatform`, `panelWindowOptionsForPlatform`, and `backend.DesktopShell.ExecuteWorkspaceMenuCommand` | No | The native menu is created before windows for macOS. Windows/Linux windows are frameless and render controls in `AppHeader`; workspace windows additionally render `AppMenuBar`. | macOS owns the application menu and native traffic lights. Windows/Linux install no native window menu. App-rendered menu calls carry Wails sender identity and are accepted only from a registered workspace; native and app-rendered items share the typed dispatcher. Proof: `internal/appwindow/registry.go`, `backend/workspace_menu_commands.go`, `frontend/src/ui/layout/AppMenuBar.tsx`, `frontend/src/ui/layout/AppHeader.tsx`, and their focused tests. |
-| Workspace zoom accelerators | Native macOS menu accelerators and frontend Windows/Linux shortcuts both reach the shared zoom events | No | The frontend zoom context remains the action owner | Menu commands target the calling workspace and carry Wails sender identity; no shutdown work. Proof: `backend/menu.go`, `backend/workspace_menu_commands.go`, and `frontend/src/core/contexts/ZoomContext.tsx`. |
+| Platform window chrome and menus | `windowOptionsForPlatform`, `panelWindowOptionsForPlatform`, renderer application-menu command owners, and `backend.DesktopShell.ExecuteApplicationMenuCommand` | No | The native menu is created before windows for macOS. Windows/Linux windows are frameless and render controls in `AppHeader`; workspace windows additionally render `AppMenuBar`. The panel renderer keeps its Windows/Linux application-menu accelerators disabled until the panel's native ready acknowledgement. | macOS owns the application menu and native traffic lights. Windows/Linux install no native window menu. Renderer-owned UI commands execute locally, panel-to-owner commands carry authenticated Wails sender identity through the typed owner-command boundary, and process/native-window commands use the backend dispatcher. Proof: `internal/appwindow/registry.go`, `internal/panelwindow/owner_command.go`, `backend/application_menu_commands.go`, `frontend/src/ui/layout/workspaceApplicationMenuCommands.ts`, `frontend/src/ui/shortcuts/components/panelApplicationMenuCommands.ts`, and their focused tests. |
+| Window-local zoom accelerators | Native macOS menu accelerators and frontend Windows/Linux shortcuts both reach the renderer-local zoom owner | No | The frontend zoom context remains the action owner in each renderer | Windows/Linux dispatch directly to the focused renderer. Native macOS menu callbacks target the authenticated calling workspace or panel and emit the matching zoom event. Proof: `backend/menu.go`, `backend/application_menu_commands.go`, `frontend/src/ui/shortcuts/components/PanelWindowShortcuts.tsx`, and `frontend/src/core/contexts/ZoomContext.tsx`. |
 
 ## Native panel-window ownership and transfers
 

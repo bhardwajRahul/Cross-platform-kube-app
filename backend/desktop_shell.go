@@ -47,7 +47,6 @@ type DesktopShellBindings struct {
 	UpdateCheck                func() error
 	KubeconfigSearchPaths      func() ([]string, error)
 	CreateWorkspaceWindow      func()
-	IsWorkspaceWindow          func(string) bool
 	NativeWindowDescriptor     func(string) (panelwindow.NativeDescriptor, error)
 	BeginPanelWindowOpen       func(panelwindow.GroupSnapshot) (panelwindow.WindowDescriptor, error)
 	AcknowledgePanelReady      func(string, string) (panelwindow.WindowDescriptor, error)
@@ -58,7 +57,7 @@ type DesktopShellBindings struct {
 	RequestPanelClose          func(string, string, string) error
 	AcknowledgePanelClose      func(string) error
 	AcknowledgeWorkspaceClose  func(string) error
-	RoutePanelCommand          func(string, string) error
+	RoutePanelCommand          func(string, panelwindow.OwnerCommand) error
 	RequestPanelObjectOpen     func(string, panelwindow.ObjectReference, string) error
 	AuthorizePanelObjectOpen   func(string, string, string, panelwindow.ObjectReference, string) error
 	UpdatePanelSnapshot        func(string, panelwindow.GroupSnapshot) error
@@ -81,7 +80,6 @@ type DesktopShell struct {
 	logger                     *Logger
 	menu                       *application.Menu
 	createWorkspaceWindow      func()
-	isWorkspaceWindow          func(string) bool
 	nativeWindowDescriptor     func(string) (panelwindow.NativeDescriptor, error)
 	beginPanelWindowOpen       func(panelwindow.GroupSnapshot) (panelwindow.WindowDescriptor, error)
 	acknowledgePanelReady      func(string, string) (panelwindow.WindowDescriptor, error)
@@ -92,7 +90,7 @@ type DesktopShell struct {
 	requestPanelClose          func(string, string, string) error
 	acknowledgePanelClose      func(string) error
 	acknowledgeWorkspaceClose  func(string) error
-	routePanelCommand          func(string, string) error
+	routePanelCommand          func(string, panelwindow.OwnerCommand) error
 	requestPanelObjectOpen     func(string, panelwindow.ObjectReference, string) error
 	authorizePanelObjectOpen   func(string, string, string, panelwindow.ObjectReference, string) error
 	updatePanelSnapshot        func(string, panelwindow.GroupSnapshot) error
@@ -110,6 +108,7 @@ type DesktopShell struct {
 	openFileDialog             func(*application.OpenFileDialogOptions) (string, error)
 	saveFileDialog             func(*application.SaveFileDialogOptions) (string, error)
 	windowGeometry             func() (WindowGeometry, error)
+	currentWindow              func() application.Window
 	openApplicationURL         func(string) error
 	quitApplication            func()
 	checkForUpdates            func() error
@@ -131,11 +130,13 @@ func NewDesktopShell(
 		logger:             logger,
 		sidebarVisible:     true,
 	}
+	if wailsApplication != nil {
+		shell.currentWindow = wailsApplication.Window.Current
+	}
 	if len(bindings) > 0 {
 		shell.checkForUpdates = bindings[0].UpdateCheck
 		shell.kubeconfigSearchPaths = bindings[0].KubeconfigSearchPaths
 		shell.createWorkspaceWindow = bindings[0].CreateWorkspaceWindow
-		shell.isWorkspaceWindow = bindings[0].IsWorkspaceWindow
 		shell.nativeWindowDescriptor = bindings[0].NativeWindowDescriptor
 		shell.beginPanelWindowOpen = bindings[0].BeginPanelWindowOpen
 		shell.acknowledgePanelReady = bindings[0].AcknowledgePanelReady
@@ -260,7 +261,11 @@ func (s *DesktopShell) showAboutAndCheckForUpdates() {
 		return
 	}
 	s.ShowAbout()
-	if s.checkForUpdates == nil {
+	s.checkForUpdatesInBackground()
+}
+
+func (s *DesktopShell) checkForUpdatesInBackground() {
+	if s == nil || s.checkForUpdates == nil {
 		return
 	}
 	go func() {

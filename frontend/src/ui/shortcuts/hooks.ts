@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useMemo, useRef } from 'react';
-import type { ShortcutModifiers } from '@/types/shortcuts';
+import type { ShortcutModifiers, ShortcutScope } from '@/types/shortcuts';
 import { useKeyboardContext } from './context';
 
 const normalizeModifiers = (modifiers?: ShortcutModifiers): ShortcutModifiers | undefined => {
@@ -33,7 +33,10 @@ interface UseShortcutOptions {
   description?: string;
   category?: string;
   enabled?: boolean;
+  discoverable?: boolean;
   priority?: number;
+  scope?: ShortcutScope;
+  applicationMenuCommand?: string;
 }
 
 /**
@@ -65,7 +68,18 @@ interface UseShortcutOptions {
  * });
  */
 export function useShortcut(options: UseShortcutOptions) {
-  const { key, handler, modifiers, description = '', category, enabled = true, priority } = options;
+  const {
+    key,
+    handler,
+    modifiers,
+    description = '',
+    category,
+    enabled = true,
+    discoverable,
+    priority,
+    scope,
+    applicationMenuCommand,
+  } = options;
 
   const { registerShortcut, unregisterShortcut } = useKeyboardContext();
   const shortcutIdRef = useRef<string | null>(null);
@@ -97,6 +111,9 @@ export function useShortcut(options: UseShortcutOptions) {
       description,
       category,
       enabled,
+      discoverable,
+      scope,
+      applicationMenuCommand,
     });
 
     shortcutIdRef.current = id;
@@ -112,10 +129,13 @@ export function useShortcut(options: UseShortcutOptions) {
     description,
     category,
     enabled,
+    discoverable,
+    applicationMenuCommand,
     registerShortcut,
     unregisterShortcut,
     normalizedModifiers,
     priority,
+    scope,
   ]);
 }
 
@@ -131,7 +151,10 @@ export function useShortcut(options: UseShortcutOptions) {
  */
 export function useShortcuts(
   shortcuts: Array<Omit<UseShortcutOptions, 'priority'>>,
-  commonOptions?: Pick<UseShortcutOptions, 'priority' | 'category' | 'enabled'>
+  commonOptions?: Pick<
+    UseShortcutOptions,
+    'priority' | 'category' | 'enabled' | 'discoverable' | 'scope'
+  >
 ) {
   const { registerShortcut, unregisterShortcut } = useKeyboardContext();
   const handlerRefs = useRef<Array<UseShortcutOptions['handler']>>([]);
@@ -185,6 +208,9 @@ export function useShortcuts(
         description: merged.description || '',
         category: merged.category,
         enabled: merged.enabled ?? true,
+        discoverable: merged.discoverable,
+        scope: merged.scope,
+        applicationMenuCommand: merged.applicationMenuCommand,
       });
     });
 

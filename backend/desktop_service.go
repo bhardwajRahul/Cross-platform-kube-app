@@ -143,7 +143,7 @@ type AppLogCommands interface {
 
 // DesktopShellCommands is the frontend command surface owned by DesktopShell.
 type DesktopShellCommands interface {
-	ExecuteWorkspaceMenuCommand(string, WorkspaceMenuCommand) error
+	ExecuteApplicationMenuCommand(string, ApplicationMenuCommand) error
 	OpenKubeconfigSearchPathDialog() (string, error)
 	SaveCsvFile(string, string) (CatalogQueryCSVExport, error)
 	SetAppLogsPanelVisible(bool)
@@ -162,7 +162,6 @@ type PanelWindowCommands interface {
 	RequestPanelWindowClose(string, string, string) error
 	AcknowledgePanelWindowClose(string) error
 	AcknowledgeWorkspaceWindowClose(string) error
-	RoutePanelWindowCommand(string, string) error
 	RequestPanelObjectOpen(string, panelwindow.ObjectReference, string) error
 	AuthorizePanelObjectOpen(string, string, string, panelwindow.ObjectReference, string) error
 	UpdatePanelWindowSnapshot(string, panelwindow.GroupSnapshot) error
@@ -595,9 +594,9 @@ func (s *DesktopService) OpenKubeconfigSearchPathDialog() (string, error) {
 	return s.desktopShell.OpenKubeconfigSearchPathDialog()
 }
 
-func (s *DesktopService) ExecuteWorkspaceMenuCommand(
+func (s *DesktopService) ExecuteApplicationMenuCommand(
 	ctx context.Context,
-	command WorkspaceMenuCommand,
+	command ApplicationMenuCommand,
 ) error {
 	windowName := ""
 	if ctx != nil {
@@ -605,7 +604,10 @@ func (s *DesktopService) ExecuteWorkspaceMenuCommand(
 			windowName = caller.Name()
 		}
 	}
-	return s.desktopShell.ExecuteWorkspaceMenuCommand(windowName, command)
+	if windowName == "" {
+		return fmt.Errorf("application menu command requires a Wails sender")
+	}
+	return s.desktopShell.ExecuteApplicationMenuCommand(windowName, command)
 }
 
 func (s *DesktopService) SaveCsvFile(defaultFilename, content string) (CatalogQueryCSVExport, error) {
@@ -719,13 +721,6 @@ func (s *DesktopService) AcknowledgeWorkspaceWindowClose(ctx context.Context, ow
 		return err
 	}
 	return s.panelWindows.AcknowledgeWorkspaceWindowClose(ownerWindowName)
-}
-
-func (s *DesktopService) RoutePanelWindowCommand(ctx context.Context, windowName, eventName string) error {
-	if err := validatePanelCommandCaller(ctx, windowName); err != nil {
-		return err
-	}
-	return s.panelWindows.RoutePanelWindowCommand(windowName, eventName)
 }
 
 func (s *DesktopService) RequestPanelObjectOpen(ctx context.Context, windowName string, ref panelwindow.ObjectReference, activeView string) error {
