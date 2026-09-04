@@ -1,6 +1,7 @@
 package appwindow
 
 import (
+	"runtime"
 	"testing"
 	"time"
 
@@ -51,12 +52,30 @@ func TestOptionsPreserveTheSharedPeerContract(t *testing.T) {
 	nativeMenu := application.NewMenu()
 
 	for _, test := range []struct {
-		goos               string
-		wantBackgroundType application.BackgroundType
+		goos                       string
+		wantBackgroundType         application.BackgroundType
+		wantApplicationMenu        bool
+		wantFrameless              bool
+		wantWindowsMenuOff         bool
+		wantNonClientRegionSupport bool
 	}{
-		{goos: "darwin", wantBackgroundType: application.BackgroundTypeTransparent},
-		{goos: "windows", wantBackgroundType: application.BackgroundTypeSolid},
-		{goos: "linux", wantBackgroundType: application.BackgroundTypeTransparent},
+		{
+			goos:                "darwin",
+			wantBackgroundType:  application.BackgroundTypeTransparent,
+			wantApplicationMenu: true,
+		},
+		{
+			goos:                       "windows",
+			wantBackgroundType:         application.BackgroundTypeSolid,
+			wantFrameless:              true,
+			wantWindowsMenuOff:         true,
+			wantNonClientRegionSupport: true,
+		},
+		{
+			goos:               "linux",
+			wantBackgroundType: application.BackgroundTypeTransparent,
+			wantFrameless:      true,
+		},
 	} {
 		t.Run(test.goos, func(t *testing.T) {
 			options := windowOptionsForPlatform("workspace-7", nativeMenu, test.goos)
@@ -69,6 +88,7 @@ func TestOptionsPreserveTheSharedPeerContract(t *testing.T) {
 			require.Equal(t, 600, options.MinHeight)
 			require.Zero(t, options.MaxWidth)
 			require.Zero(t, options.MaxHeight)
+			require.False(t, options.DisableResize)
 			require.Equal(t, "/", options.URL)
 			require.Equal(t, application.NewRGB(30, 30, 30), options.BackgroundColour)
 			require.Equal(t, test.wantBackgroundType, options.BackgroundType)
@@ -77,8 +97,16 @@ func TestOptionsPreserveTheSharedPeerContract(t *testing.T) {
 			require.True(t, options.Mac.TitleBar.HideTitle)
 			require.True(t, options.Mac.TitleBar.HideToolbarSeparator)
 			require.Equal(t, application.SystemDefault, options.Windows.Theme)
-			require.Same(t, nativeMenu, options.Linux.Menu)
-			require.True(t, options.UseApplicationMenu)
+			require.Nil(t, options.Linux.Menu)
+			require.Equal(t, test.wantFrameless, options.Frameless)
+			require.Equal(t, test.wantApplicationMenu, options.UseApplicationMenu)
+			require.Equal(t, test.wantWindowsMenuOff, options.Windows.DisableMenu)
+			require.Equal(
+				t, test.wantNonClientRegionSupport,
+				options.Windows.NonClientRegionSupport,
+			)
+			require.False(t, options.Windows.DisableFramelessWindowDecorations)
+			require.False(t, options.Windows.WebView2CompositionHosting)
 			require.Equal(t, 1.0, options.Zoom)
 			require.False(t, options.ZoomControlEnabled)
 			require.Equal(t, test.goos != "linux", options.Hidden)
@@ -86,16 +114,23 @@ func TestOptionsPreserveTheSharedPeerContract(t *testing.T) {
 	}
 }
 
-func TestPanelOptionsUseSharedEntryAndPlatformNativeFrame(t *testing.T) {
+func TestPanelOptionsUseSharedEntryAndPlatformWindowChrome(t *testing.T) {
 	for _, test := range []struct {
-		goos                string
-		wantTitle           string
-		wantApplicationMenu bool
-		wantWindowsMenuOff  bool
+		goos                       string
+		wantTitle                  string
+		wantApplicationMenu        bool
+		wantFrameless              bool
+		wantWindowsMenuOff         bool
+		wantNonClientRegionSupport bool
 	}{
 		{goos: "darwin", wantApplicationMenu: true},
-		{goos: "windows", wantWindowsMenuOff: true},
-		{goos: "linux", wantTitle: " "},
+		{
+			goos:                       "windows",
+			wantFrameless:              true,
+			wantWindowsMenuOff:         true,
+			wantNonClientRegionSupport: true,
+		},
+		{goos: "linux", wantTitle: " ", wantFrameless: true},
 	} {
 		t.Run(test.goos, func(t *testing.T) {
 			options := panelWindowOptionsForPlatform("panel-7", test.goos, nil)
@@ -110,7 +145,7 @@ func TestPanelOptionsUseSharedEntryAndPlatformNativeFrame(t *testing.T) {
 			require.True(t, options.Hidden)
 			require.False(t, options.AlwaysOnTop)
 			require.False(t, options.DisableResize)
-			require.False(t, options.Frameless)
+			require.Equal(t, test.wantFrameless, options.Frameless)
 			require.True(t, options.Mac.TitleBar.AppearsTransparent)
 			require.True(t, options.Mac.TitleBar.FullSizeContent)
 			require.True(t, options.Mac.TitleBar.HideTitle)
@@ -121,6 +156,13 @@ func TestPanelOptionsUseSharedEntryAndPlatformNativeFrame(t *testing.T) {
 			require.Nil(t, options.Linux.Menu)
 			require.Equal(t, test.wantApplicationMenu, options.UseApplicationMenu)
 			require.Equal(t, test.wantWindowsMenuOff, options.Windows.DisableMenu)
+			require.Equal(
+				t,
+				test.wantNonClientRegionSupport,
+				options.Windows.NonClientRegionSupport,
+			)
+			require.False(t, options.Windows.DisableFramelessWindowDecorations)
+			require.False(t, options.Windows.WebView2CompositionHosting)
 		})
 	}
 }
@@ -368,7 +410,7 @@ func TestRegistryCreatesPanelOutsideWorkspaceLifecycleAccounting(t *testing.T) {
 	require.Equal(t, 1, registry.Count())
 }
 
-func TestRegistryBeginsHiddenPanelTransferWithOrdinaryWindowOptions(t *testing.T) {
+func TestRegistryBeginsHiddenPanelTransferWithPlatformWindowOptions(t *testing.T) {
 	wailsApp := application.New(application.Options{})
 	registry := NewRegistry(wailsApp, nil, nil)
 	owner := registry.Create(true)
@@ -398,7 +440,8 @@ func TestRegistryBeginsHiddenPanelTransferWithOrdinaryWindowOptions(t *testing.T
 	require.True(t, createdOptions.Hidden)
 	require.False(t, createdOptions.AlwaysOnTop)
 	require.False(t, createdOptions.DisableResize)
-	require.False(t, createdOptions.Frameless)
+	require.Equal(t, runtime.GOOS != "darwin", createdOptions.Frameless)
+	require.Equal(t, runtime.GOOS == "windows", createdOptions.Windows.NonClientRegionSupport)
 	require.True(t, createdOptions.Mac.TitleBar.FullSizeContent)
 	require.NotNil(t, configuredWindow)
 	require.Equal(t, descriptor.WindowName, configuredWindow.Name())

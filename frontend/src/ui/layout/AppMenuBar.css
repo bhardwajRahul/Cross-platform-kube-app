@@ -1,0 +1,88 @@
+.app-menu-bar {
+  position: relative;
+  display: flex;
+  align-self: stretch;
+  align-items: stretch;
+  flex-shrink: 0;
+  z-index: var(--z-index-app-menu);
+  --wails-draggable: no-drag;
+  app-region: no-drag;
+  margin-top: 0.2rem;
+}
+
+.app-menu-section {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+
+.app-menu-trigger {
+  padding: 0 var(--spacing-sm);
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-normal);
+  --wails-draggable: no-drag;
+  app-region: no-drag;
+}
+
+.app-menu-trigger:hover {
+  background: var(--color-bg);
+}
+
+.app-menu-trigger--open {
+  background: var(--color-bg);
+}
+
+.app-menu-trigger:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.app-menu-dropdown {
+  position: absolute;
+  top: 100%;
+  left: calc(-1 * var(--border-width));
+  min-width: 220px;
+  padding: var(--spacing-xs) 0;
+  border: var(--border-width) solid var(--dropdown-menu-border);
+  background: var(--dropdown-menu-bg);
+  box-shadow: var(--dropdown-menu-shadow);
+  color: var(--color-text);
+  outline: none;
+  z-index: var(--z-index-context-menu);
+}
+
+.app-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-xl);
+  padding: var(--spacing-xs) var(--spacing-md);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--font-size-normal);
+  text-align: left;
+}
+
+.app-menu-item:hover,
+.app-menu-item--focused {
+  background: var(--color-bg-tertiary);
+}
+
+.app-menu-item-shortcut {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.app-menu-separator {
+  height: 1px;
+  margin: var(--spacing-xs) 0;
+  border: 0;
+  background: var(--color-border);
+}

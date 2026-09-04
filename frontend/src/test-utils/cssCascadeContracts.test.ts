@@ -16,6 +16,8 @@ afterEach(() => {
     style.remove();
   });
   document.body.innerHTML = '';
+  document.body.style.cursor = '';
+  delete document.body.dataset.windowResizeCursor;
 });
 
 describe('strict CSS cascade contracts', () => {
@@ -245,6 +247,15 @@ describe('strict CSS cascade contracts', () => {
     expect(window.getComputedStyle(button as HTMLButtonElement).textTransform).toBe('uppercase');
   });
 
+  it('keeps GridTable filters outside the right-docked panel paint area', () => {
+    const gridTableCSS = readProjectFile('styles/components/gridtables.css');
+    const filterContainer = gridTableCSS.match(
+      /\.content-body \.gridtable-filter-container \{([\s\S]*?)\}/
+    )?.[1];
+
+    expect(filterContainer).toContain('margin-right: var(--dock-right-offset, 0px)');
+  });
+
   it('uses appearance-mode tokens for custom-column action hover states', () => {
     const gridTableCSS = readProjectFile('styles/components/gridtables.css');
     const editHover = gridTableCSS.match(
@@ -264,6 +275,7 @@ describe('strict CSS cascade contracts', () => {
       ['src/modules/object-panel/components/ObjectPanel/Shell/ShellTab.css', 0],
       ['src/ui/dockable/DockablePanel.css', 0],
       ['src/ui/layout/Sidebar.css', 0],
+      ['src/ui/layout/windowResizeCursor.css', 1],
       ['styles/utilities/motion.css', 0],
     ] as const;
 
@@ -271,6 +283,110 @@ describe('strict CSS cascade contracts', () => {
       const declarations = readProjectFile(path).match(/!important\b/g) ?? [];
       expect(declarations, path).toHaveLength(expectedCount);
     }
+  });
+
+  it('keeps frameless window drag regions out of every header control surface', () => {
+    const appHeaderCSS = readProjectFile('src/ui/layout/AppHeader.css');
+    const appMenuCSS = readProjectFile('src/ui/layout/AppMenuBar.css');
+    const customFrame = appHeaderCSS.match(/\.app-header--custom-frame \{([\s\S]*?)\}/)?.[1];
+    const headerControls = appHeaderCSS.match(/\.app-header-controls \{([\s\S]*?)\}/)?.[1];
+    const windowControls = appHeaderCSS.match(/\.app-header-window-controls \{([\s\S]*?)\}/)?.[1];
+    const windowControl = appHeaderCSS.match(/\.app-header-window-control \{([\s\S]*?)\}/)?.[1];
+    const menuBar = appMenuCSS.match(/\.app-menu-bar \{([\s\S]*?)\}/)?.[1];
+
+    expect(customFrame).toContain('app-region: drag');
+    expect(headerControls).toContain('--wails-draggable: no-drag');
+    expect(headerControls).toContain('app-region: no-drag');
+    expect(windowControls).toContain('--wails-draggable: no-drag');
+    expect(windowControls).toContain('app-region: no-drag');
+    expect(windowControl).toContain('--wails-draggable: no-drag');
+    expect(windowControl).toContain('app-region: no-drag');
+    expect(menuBar).toContain('--wails-draggable: no-drag');
+    expect(menuBar).toContain('app-region: no-drag');
+  });
+
+  it('declares the documented Wails resize contract for resizable frameless windows', () => {
+    const globalsCSS = readProjectFile('styles/base/globals.css');
+    const body = globalsCSS.match(/body \{([\s\S]*?)\}/)?.[1];
+
+    expect(body).toContain('--wails-resize: all');
+  });
+
+  it('keeps the Linux window outline fixed above app content without intercepting input', () => {
+    const appHeaderCSS = readProjectFile('src/ui/layout/AppHeader.css');
+    const linuxOutline = appHeaderCSS.match(/\.app-header--linux::after \{([\s\S]*?)\}/)?.[1];
+
+    expect(linuxOutline).toContain('content: ""');
+    expect(linuxOutline).toContain('position: fixed');
+    expect(linuxOutline).toContain('inset: 0');
+    expect(linuxOutline).toContain('z-index: var(--z-index-topmost)');
+    expect(linuxOutline).toContain('pointer-events: none');
+    expect(linuxOutline).toContain(
+      'box-shadow: inset 0 0 0 var(--border-width) var(--color-border)'
+    );
+    expect(appHeaderCSS).not.toContain('.app-header--custom-frame::after');
+    expect(appHeaderCSS).not.toContain('.app-header--mac::after');
+  });
+
+  it('keeps the native directional resize cursor above descendant cursor rules', () => {
+    const windowResizeCursorCSS = readProjectFile('src/ui/layout/windowResizeCursor.css');
+    const directionalCursors = [
+      'n-resize',
+      'ne-resize',
+      'e-resize',
+      'se-resize',
+      's-resize',
+      'sw-resize',
+      'w-resize',
+      'nw-resize',
+    ] as const;
+
+    for (const cursor of directionalCursors) {
+      expect(windowResizeCursorCSS).toContain(
+        `body[data-window-resize-cursor="${cursor}"] {\n  --window-resize-cursor: ${cursor};\n}`
+      );
+    }
+    expect(windowResizeCursorCSS).toContain('body[data-window-resize-cursor] * {');
+    expect(windowResizeCursorCSS).toContain('cursor: var(--window-resize-cursor) !important;');
+  });
+
+  it('presents frameless window actions as compact app toolbar controls', () => {
+    const appHeaderCSS = readProjectFile('src/ui/layout/AppHeader.css');
+    const windowControls = appHeaderCSS.match(/\.app-header-window-controls \{([\s\S]*?)\}/)?.[1];
+    const windowControl = appHeaderCSS.match(/\.app-header-window-control \{([\s\S]*?)\}/)?.[1];
+    const glyph = appHeaderCSS.match(/\.app-header-window-control-glyph \{([\s\S]*?)\}/)?.[1];
+
+    expect(windowControls).toContain('align-items: center');
+    expect(windowControls).toContain('gap: var(--border-radius-xs)');
+    expect(windowControls).toContain('padding-left: var(--spacing-sm)');
+    expect(windowControl).toContain('width: var(--app-header-window-control-size)');
+    expect(windowControl).toContain('height: var(--app-header-window-control-size)');
+    expect(windowControl).toContain('border-radius: var(--border-radius-sm)');
+    expect(glyph).toContain('width: var(--app-header-window-control-icon-size)');
+    expect(glyph).toContain('height: var(--app-header-window-control-icon-size)');
+    expect(appHeaderCSS).not.toContain('.app-header-window-control--close:hover');
+  });
+
+  it('highlights only the active menu title and uses the menu item text size', () => {
+    const appMenuCSS = readProjectFile('src/ui/layout/AppMenuBar.css');
+    const trigger = appMenuCSS.match(/\.app-menu-trigger \{([\s\S]*?)\}/)?.[1];
+    const openTrigger = appMenuCSS.match(/\.app-menu-trigger--open \{([\s\S]*?)\}/)?.[1];
+
+    expect(trigger).toContain('font-size: var(--font-size-normal)');
+    expect(openTrigger).toContain('background: var(--color-bg)');
+    expect(appMenuCSS).not.toContain('var(--hover-bg)');
+  });
+
+  it('keeps the workspace menu above main chrome and below blocking modals', () => {
+    const appMenuCSS = readProjectFile('src/ui/layout/AppMenuBar.css');
+    const elevationCSS = readProjectFile('styles/tokens/elevation.css');
+    const menuBar = appMenuCSS.match(/\.app-menu-bar \{([\s\S]*?)\}/)?.[1];
+    const tokenValue = (name: string) =>
+      Number(elevationCSS.match(new RegExp(`--${name}:\\s*(\\d+)`))?.[1]);
+
+    expect(menuBar).toContain('z-index: var(--z-index-app-menu)');
+    expect(tokenValue('z-index-panel')).toBeLessThan(tokenValue('z-index-app-menu'));
+    expect(tokenValue('z-index-app-menu')).toBeLessThan(tokenValue('z-index-modal-backdrop'));
   });
 
   it('gives the reduced-motion rule app-root specificity', () => {
