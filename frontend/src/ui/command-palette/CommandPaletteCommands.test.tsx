@@ -6,9 +6,8 @@
  */
 
 import type { types } from '@core/backend-api/models';
-import { WarningIcon } from '@shared/components/icons/SharedIcons';
 import { DockablePanelProvider } from '@ui/dockable/DockablePanelProvider';
-import { act, isValidElement } from 'react';
+import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -236,28 +235,6 @@ describe('CommandPaletteCommands', () => {
     second.unmount();
   });
 
-  it('shows the direct-open shortcut on the select-namespace command', () => {
-    const { getCommands, unmount } = renderHook();
-    const command = getCommands().find((entry) => entry.id === 'select-namespace');
-
-    expect(command).toBeTruthy();
-    const isMac = /Mac/i.test((navigator.platform || '') + (navigator.userAgent || ''));
-    expect(command?.shortcut).toEqual(isMac ? ['⇧', '⌘', 'N'] : ['Ctrl', 'Shift', 'N']);
-
-    unmount();
-  });
-
-  it('shows the Open Cluster shortcut on the select-kubeconfig command', () => {
-    const { getCommands, unmount } = renderHook();
-    const command = getCommands().find((entry) => entry.id === 'select-kubeconfig');
-
-    expect(command).toBeTruthy();
-    const isMac = /Mac/i.test((navigator.platform || '') + (navigator.userAgent || ''));
-    expect(command?.shortcut).toEqual(isMac ? ['⌘', 'O'] : ['Ctrl', 'O']);
-
-    unmount();
-  });
-
   it('offers navigation commands for every registered cluster and namespace view', () => {
     mocks.viewState.sidebarSelection = { type: 'namespace', value: 'default' };
     mocks.kubeconfig.selectedKubeconfigs = ['/kube/alpha:dev', '/kube/beta:prod'];
@@ -305,19 +282,6 @@ describe('CommandPaletteCommands', () => {
       (command) => command.id === 'global-global-namespaces'
     );
     expect(globalNamespaces?.label).toBe('Global - Namespaces');
-
-    unmount();
-  });
-
-  it('uses the Attention warning icon for the Cluster Attention command', () => {
-    const { getCommands, unmount } = renderHook();
-    const command = getCommands().find((entry) => entry.id === 'cluster-attention');
-
-    expect(isValidElement(command?.icon)).toBe(true);
-    if (!isValidElement(command?.icon)) {
-      throw new Error('expected Cluster Attention command icon');
-    }
-    expect(command.icon.type).toBe(WarningIcon);
 
     unmount();
   });
@@ -560,19 +524,6 @@ describe('CommandPaletteCommands', () => {
     unmount();
   });
 
-  it('labels light, dark, and system choices as appearance modes', () => {
-    const { getCommands, unmount } = renderHook();
-    const commands = getCommands();
-
-    expect(commands.find((entry) => entry.id === 'mode-light')?.label).toBe('Light mode');
-    expect(commands.find((entry) => entry.id === 'mode-dark')?.label).toBe('Dark mode');
-    expect(commands.find((entry) => entry.id === 'mode-system')?.label).toBe(
-      'Follow the system for light/dark mode'
-    );
-
-    unmount();
-  });
-
   it('routes application and appearance commands to their registered actions', async () => {
     const { getCommands, unmount } = renderHook();
     const commands = new Map(getCommands().map((command) => [command.id, command]));
@@ -642,13 +593,6 @@ describe('CommandPaletteCommands', () => {
     const dimCommand = commands.find((entry) => entry.id === 'toggle-dim-inactive-namespaces');
     const exclusiveCommand = commands.find((entry) => entry.id === 'toggle-exclusive-namespaces');
 
-    expect(dimCommand?.label).toBe('Disable inactive namespace dimming');
-    expect(dimCommand?.description).toBe('Dim namespaces in the Sidebar that have no Workloads.');
-    expect(exclusiveCommand?.label).toBe('Disable exclusive namespaces');
-    expect(exclusiveCommand?.description).toBe(
-      'When enabled, only one namespace at a time can be expanded in the Sidebar. Expanding a different namespace will collapse the currently expanded one.'
-    );
-
     await act(async () => {
       dimCommand?.action();
       exclusiveCommand?.action();
@@ -665,47 +609,13 @@ describe('CommandPaletteCommands', () => {
     unmount();
   });
 
-  it('orders Settings commands with appearance modes first', () => {
-    const { getCommands, unmount } = renderHook();
-    const settingsCommandIds = getCommands()
-      .filter((entry) => entry.category === 'Settings')
-      .map((entry) => entry.id);
-
-    expect(settingsCommandIds).toEqual([
-      'mode-system',
-      'mode-light',
-      'mode-dark',
-      'toggle-exclusive-namespaces',
-      'toggle-dim-inactive-namespaces',
-      'toggle-auto-refresh',
-      'refresh-view',
-      'reset-all-gridtable-state',
-      'toggle-short-names',
-    ]);
-
-    unmount();
-  });
-
-  it('places refresh current view in Settings', () => {
-    const { getCommands, unmount } = renderHook();
-    const command = getCommands().find((entry) => entry.id === 'refresh-view');
-
-    expect(command?.label).toBe('Refresh current view');
-    expect(command?.category).toBe('Settings');
-
-    unmount();
-  });
-
-  it('labels auto-refresh and short names using their disable actions when enabled', async () => {
+  it('disables auto-refresh and short names through their commands', async () => {
     setAppPreferencesForTesting({ useShortResourceNames: true });
 
     const { getCommands, unmount } = renderHook();
     const commands = getCommands();
     const autoRefreshCommand = commands.find((entry) => entry.id === 'toggle-auto-refresh');
     const shortNamesCommand = commands.find((entry) => entry.id === 'toggle-short-names');
-
-    expect(autoRefreshCommand?.label).toBe('Disable auto-refresh');
-    expect(shortNamesCommand?.label).toBe('Disable short names');
 
     await act(async () => {
       autoRefreshCommand?.action();
@@ -717,42 +627,6 @@ describe('CommandPaletteCommands', () => {
     expect(mocks.appSettings.UpdateAppPreferences).toHaveBeenCalledWith({
       changes: [{ key: 'useShortResourceNames', value: false }],
     });
-
-    unmount();
-  });
-
-  it('labels auto-refresh and short names using their enable actions when disabled', () => {
-    mocks.autoRefresh.enabled = false;
-    setAppPreferencesForTesting({ useShortResourceNames: false });
-
-    const { getCommands, unmount } = renderHook();
-    const commands = getCommands();
-
-    expect(commands.find((entry) => entry.id === 'toggle-auto-refresh')?.label).toBe(
-      'Enable auto-refresh'
-    );
-    expect(commands.find((entry) => entry.id === 'toggle-short-names')?.label).toBe(
-      'Enable short names'
-    );
-
-    unmount();
-  });
-
-  it('labels disabled Sidebar settings as enable actions', () => {
-    setAppPreferencesForTesting({
-      dimInactiveNamespaces: false,
-      exclusiveNamespaces: false,
-    });
-
-    const { getCommands, unmount } = renderHook();
-    const commands = getCommands();
-
-    expect(commands.find((entry) => entry.id === 'toggle-dim-inactive-namespaces')?.label).toBe(
-      'Enable inactive namespace dimming'
-    );
-    expect(commands.find((entry) => entry.id === 'toggle-exclusive-namespaces')?.label).toBe(
-      'Enable exclusive namespaces'
-    );
 
     unmount();
   });

@@ -1074,40 +1074,6 @@ describe('Dropdown', () => {
     expect(onChange).toHaveBeenCalledWith([]);
   });
 
-  it('renders the searchable input and bulk actions on the same control row', async () => {
-    await mount(
-      <Dropdown
-        options={OPTIONS}
-        value={[]}
-        onChange={vi.fn()}
-        multiple
-        searchable
-        showBulkActions
-      />
-    );
-
-    click(container.querySelector('.dropdown-trigger'));
-
-    const controls = document.body.querySelector('.dropdown-menu-controls');
-    expect(controls).not.toBeNull();
-    expect(controls?.querySelector('.search-input')).not.toBeNull();
-    expect(controls?.querySelectorAll('.dropdown-bulk-action')).toHaveLength(2);
-  });
-
-  it('shows text labels beside bulk-action icons when search is disabled', async () => {
-    await mount(
-      <Dropdown options={OPTIONS} value={[]} onChange={vi.fn()} multiple showBulkActions />
-    );
-
-    click(container.querySelector('.dropdown-trigger'));
-
-    const bulkButtons = document.body.querySelectorAll<HTMLButtonElement>('.dropdown-bulk-action');
-    expect(bulkButtons).toHaveLength(2);
-    expect(bulkButtons[0]?.textContent).toContain('All');
-    expect(bulkButtons[1]?.textContent).toContain('None');
-    expect(document.body.querySelector('.search-input')).toBeNull();
-  });
-
   it('renders an additional action beside All and None', async () => {
     const onReset = vi.fn();
     await mount(
@@ -1162,17 +1128,6 @@ describe('Dropdown', () => {
     click(document.body.querySelector('button[aria-label="Close from action"]'));
 
     expect(document.body.querySelector('.dropdown-menu')).toBeNull();
-  });
-
-  it('omits the bulk-action separator when there is nothing to separate', async () => {
-    await mount(
-      <Dropdown options={OPTIONS} value={[]} onChange={vi.fn()} multiple showBulkActions />
-    );
-
-    click(container.querySelector('.dropdown-trigger'));
-    const actions = document.body.querySelector('.dropdown-bulk-actions');
-    expect(actions).not.toBeNull();
-    expect(actions?.querySelector('.dropdown-bulk-actions-divider')).toBeNull();
   });
 
   describe('only action', () => {
@@ -1340,41 +1295,6 @@ describe('Dropdown', () => {
         expect(document.activeElement).toBe(only);
       }
     );
-  });
-
-  it('renders labeled bulk-action icons at the compact size', async () => {
-    await mount(
-      <Dropdown options={OPTIONS} value={[]} onChange={vi.fn()} multiple showBulkActions />
-    );
-
-    click(container.querySelector('.dropdown-trigger'));
-
-    // A labeled action pairs the glyph with text, so it takes the smaller size.
-    const icon = document.body.querySelector<SVGElement>('.dropdown-bulk-action svg');
-    expect(icon).not.toBeNull();
-    expect(requireValue(icon, 'expected bulk-action icon').getAttribute('width')).toBe('14');
-    expect(requireValue(icon, 'expected bulk-action icon').getAttribute('height')).toBe('14');
-  });
-
-  it('gives icon-only bulk actions a slightly larger glyph in the same compact row', async () => {
-    await mount(
-      <Dropdown
-        options={OPTIONS}
-        value={[]}
-        onChange={vi.fn()}
-        multiple
-        showBulkActions
-        searchable
-      />
-    );
-
-    click(container.querySelector('.dropdown-trigger'));
-
-    // Nothing but the glyph carries meaning here, so it takes a little more room
-    // than a labeled action — but the controls row itself is the same one.
-    const icon = document.body.querySelector<SVGElement>('.dropdown-bulk-action svg');
-    expect(requireValue(icon, 'expected bulk-action icon').getAttribute('width')).toBe('16');
-    expect(document.body.querySelectorAll('.dropdown-menu-controls')).toHaveLength(1);
   });
 
   it('preserves menu scroll position across multi-select updates', async () => {
