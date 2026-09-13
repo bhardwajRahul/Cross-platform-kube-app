@@ -25,11 +25,52 @@ one retained workspace per open cluster.
 - Foreground-cluster blocking overlays must not cover Global views. Each Global
   row owns and presents its originating cluster's lifecycle/auth state.
 
+## Cluster Sidebar Organization
+
+Overview, Attention, Browse, and Events are direct cluster links. The independently
+collapsible Resources group contains Config, Namespaces, Nodes, RBAC, and Storage,
+in that order.
+The Extensions group contains CRDs and Custom Resources, followed by discovered
+resource families in this order: Cert Manager, External Secrets, Karpenter.
+Both groups start collapsed.
+
+`viewRegistry.ts` owns the ordered view descriptors and their required
+`sidebarGroup` placement. Filter resource families using active-cluster discovery
+before grouping the available views. Sidebar groups use local disclosure state
+and the existing keyboard navigation surface; target parsing accepts only the
+registered group IDs. Grouping does not change stable view IDs or the ordering
+of route updates before entering the Cluster view. Command-palette and favorite
+view choices continue to consume the same ordered descriptors.
+
+## Namespace Sidebar Organization
+
+Each namespace begins with Workloads, Browse, Map, and Events as direct links.
+Resources contains Autoscaling, Config, Helm, Network, Quotas, RBAC, and Storage,
+in that order. Extensions contains Custom Resources, Argo CD,
+Cert Manager, External Secrets, and Prometheus Operator, with resource families
+filtered by active-cluster discovery. Apply the existing All Namespaces support
+filter before grouping, so Map remains available only for individual namespaces.
+
+Both scopes use `SIDEBAR_VIEW_GROUPS` and the shared `SidebarViewGroup` renderer.
+Keep compact row spacing and omit separators. Namespace Resources and Extensions
+start collapsed. Namespace group disclosure is independent for each
+cluster-qualified namespace key and survives collapsing its
+parent namespace. Keyboard group targets carry that namespace key and group ID.
+When a subgroup expands, the namespace scroll owner rechecks the full namespace
+group after the expansion animation.
+
+Navigation to a grouped view reveals its Resources or Extensions category and,
+for namespace views, its parent namespace. This includes repeated Alt-click
+navigation to the same view after manually collapsing its category or namespace.
+Both scopes share the disclosure policy and resolve the group from the available
+view descriptors, preserving active-cluster discovery gates. Fresh selection
+requests reveal the destination; unrelated data refreshes preserve manual collapse.
+
 ## Cluster Attention Routing
 
 Cluster Overview is the cluster-level landing surface for health and capacity.
 Cluster Attention is the inventory of objects that currently warrant operator
-action. It appears between Overview and Resources and is scoped to exactly one
+action. It appears immediately after Overview and is scoped to exactly one
 cluster.
 
 Overview pod-health and restart signals open Cluster Attention with `Kind = Pod`

@@ -74,6 +74,18 @@ Keyboard access does not authorize adding visible controls or changing spacing
 and layout. Before editing, distinguish the requested interaction from a proposed
 UI change; preserve the existing appearance unless that change was requested.
 
+When grouping existing navigation rows, preserve their density. Do not add group
+margins or separators unless selected by the user. Inspect spacing at wrapper
+boundaries: an overflow container can prevent a child's margin from collapsing,
+so a header's bottom margin and its first row's top margin can stack. Use the
+shared group styles to keep the intended gap consistent across scopes.
+
+Grouping navigation links also changes reveal behavior. Exercise an object link's
+Alt-click through the real navigation and sidebar state owners, including a repeat
+after collapsing the currently selected category or namespace. Reveal every parent
+of the destination, preserve unrelated groups, and keep manual collapse stable
+across data refreshes. Use the discovered view descriptors for group membership.
+
 ## Treating a passing automated gate as task completion
 
 The gate covers its configured checks. It does not establish that every requested
@@ -396,6 +408,20 @@ creates and removes temporary trees while those tests enumerate frontend files.
 
 ## Resource-family integration
 
+- New resource families are peer views. Follow the existing per-view component
+  lifecycle in cluster, namespace, and all-namespaces routing while using the
+  shared ResourceInventoryTable/GridTable infrastructure. A shared data adapter
+  does not require retaining the same view instance across families. Compare
+  navigation cleanup as well as table appearance; pending actions must remain
+  owned by the view that opened them. Explain any shared-table limitation before
+  introducing a different implementation pattern.
+- Exercise switching families through the shared catalog, hydration, and table
+  replay cache. Clear structural scope state before commit; an effect-only clear
+  can cache the preceding family's rows under the new identity. Retain hydrated
+  fields for matching current objects during refresh, but reject another UID.
+- During a warm catalog resync, query between individual kind collections. Rows,
+  counts, and facets must retain the published catalog until replacement is ready;
+  verify actual deletions after publication and progressive rows on cold startup.
 - Keep an optional family filter in every catalog scope transformation, including
   normalization, metadata queries, continuation signatures, pages, and exports.
   A view-only filter does not constrain server counts or later pages.

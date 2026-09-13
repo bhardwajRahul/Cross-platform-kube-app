@@ -68,7 +68,9 @@ const { mocks } = vi.hoisted(() => ({
   },
 }));
 
-const familyState = vi.hoisted(() => ({ families: [] as string[] }));
+const familyState = vi.hoisted(() => ({
+  families: {} as { cluster?: string[]; namespaced?: string[] },
+}));
 vi.mock('@/core/data-access', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/core/data-access')>()),
   useRefreshDomainHandle: () => ({
@@ -182,7 +184,7 @@ const renderHook = () => {
 
 describe('CommandPaletteCommands', () => {
   beforeEach(() => {
-    familyState.families = [];
+    familyState.families = {};
     mocks.kubeconfig.kubeconfigs = [];
     mocks.kubeconfig.selectedKubeconfigs = [];
     mocks.kubeconfig.selectedKubeconfig = '';
@@ -226,7 +228,7 @@ describe('CommandPaletteCommands', () => {
     const first = renderHook();
     expect(first.getCommands().some((entry) => entry.id === 'cluster-karpenter')).toBe(false);
     first.unmount();
-    familyState.families = ['karpenter'];
+    familyState.families = { cluster: ['karpenter'] };
     const second = renderHook();
     const command = second.getCommands().find((entry) => entry.id === 'cluster-karpenter');
     expect(command).toBeDefined();
@@ -253,27 +255,27 @@ describe('CommandPaletteCommands', () => {
       'global-fleet',
       'global-global-namespaces',
       'cluster-attention',
-      'cluster-namespaces',
       'cluster-browse',
       'cluster-events',
-      'cluster-nodes',
       'cluster-config',
+      'cluster-namespaces',
+      'cluster-nodes',
+      'cluster-rbac',
       'cluster-storage',
       'cluster-crds',
       'cluster-custom',
-      'cluster-rbac',
+      'namespace-workloads',
       'namespace-browse',
       'namespace-map',
       'namespace-events',
-      'namespace-workloads',
       'namespace-autoscaling',
-      'namespace-helm',
       'namespace-config',
+      'namespace-helm',
       'namespace-network',
-      'namespace-storage',
-      'namespace-custom',
       'namespace-quotas',
       'namespace-rbac',
+      'namespace-storage',
+      'namespace-custom',
     ]);
 
     const globalClusters = getCommands().find((command) => command.id === 'global-fleet');
