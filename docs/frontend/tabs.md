@@ -31,7 +31,9 @@ also use the shared drag coordinator.
 - Use close callbacks only when the consumer owns close lifecycle.
 - Keep keyboard navigation on the WAI-ARIA manual activation pattern.
 - Arrows move the roving focus stop without activating a tab. Tab then reaches
-  that tab's existing Close button. Focus reveals the Close control.
+  that tab's existing Close button. Hover or keyboard focus reveals the Close
+  control; opening or focusing a tab with the mouse does not reveal it after
+  the pointer leaves.
 - The Close button is a sibling of the element with `role="tab"`, inside a
   shared visual shell. This keeps their names and roles separate in accessibility
   trees. Consumers that enumerate tab controls use the shell as their boundary;
