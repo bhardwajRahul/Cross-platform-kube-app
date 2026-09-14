@@ -39,22 +39,68 @@ separate groups, with long values allowed to wrap.
   including Kubernetes milli-byte quantities.
 - Compare CPU values using whole cores when both values are whole CPUs; otherwise
   use millicores for both. Apply this to total/allocatable and total/limit pairs.
-- For NodePool CPU and memory with configured limits, show `usage / limit (n%)`.
-  Calculate the percentage from parsed source quantities before display rounding,
-  using up to one decimal place. Keep values over 100% visible. Omit the percentage
-  when usage is unavailable or the limit is zero; without a limit, show usage alone.
-- Show `n of n` (allocatable, then total) when the displayed values differ; when
-  they match, show only the allocatable number. For other resource limits with no
-  allocatable value, show `n (limit n)`; otherwise show the total alone. Do not add
-  legends.
+- The Capacity section is one small table for every Karpenter kind: one row per
+  resource, a **Capacity** column always, an **Allocatable** column before it when
+  the object reports allocatable (NodeClaims), and **Limit** and **Used** columns
+  after it when limits are configured (NodePools). A cell with no source value
+  shows `-`. The table hugs its content rather than the panel width, and its first
+  column matches the panel's label column. Do not add legends.
+- **Used** is capacity divided by limit for CPU and memory only, calculated from
+  parsed source quantities before display rounding, using up to one decimal place.
+  Keep values over 100% visible, and use the warning text color strictly above 80%,
+  the same rule as the table Usage column. Omit the value when capacity is
+  unavailable or the limit is zero.
 - Keep the header **Capacity**. The explanation tooltip belongs to the claim
   overview; pools and overlays do not supply it.
 - Order resources as CPU, memory, storage, nodes, pods, pod-eni, hugepages, then
   other resources alphabetically. Display `ephemeral-storage` as `storage` and
   `vpc.amazonaws.com/pod-eni` as `pod-eni`; retain hugepage size suffixes.
 
+## Karpenter condition progress
+
+NodeClaims and NodePools open with their condition progress instead of a
+trailing Conditions section. A progress track lists condition types in
+Karpenter's order; a `True` condition is a completed step, `False` is a failed
+step, and `Unknown` or missing is pending. The earliest incomplete step that
+carries a reason or message is shown under the steps as the blocking
+explanation; later steps' messages are not repeated. A track renders only once
+one of its prerequisite conditions is reported, so an object that reports just
+the rolled-up `Ready` keeps that condition as a chip. Conditions outside every
+rendered track stay `StatusChip`s: Drifted and DisruptionReason use the warning
+variant when `True`, Consolidatable uses info when `True`, and all three are
+healthy when `False`; other conditions keep the default `True`=healthy,
+`False`=unhealthy, otherwise warning.
+
+- NodePool **Readiness**: ValidationSucceeded, NodeClassReady, Ready.
+  NodeRegistrationHealthy and any other condition stay chips.
+- NodeClaim **Provisioning**: Launched, Registered, Initialized, Ready.
+  **Termination** appears only when a termination condition exists and lists
+  Drained, VolumesDetached, InstanceTerminating.
+
+## Karpenter NodePool overview
+
+A pool reads top-down as readiness, source, provisioned capacity against limits,
+then scheduling and disruption policy: Readiness and remaining condition chips,
+NodeClass / Weight / Replicas rows, the Capacity table with Limit and Used
+columns, then the Scheduling, Disruption and Lifecycle sections. No Conditions
+section trails the pool view.
+
+## Karpenter NodeClaim overview
+
+A claim reads top-down as lifecycle, ownership, outcome, then capacity:
+
+- Provisioning and Termination progress follow the Status row, then the
+  remaining condition chips.
+- NodePool, NodeClass and Node remain link rows. **Instance** composes the
+  instance type, a capacity-type chip, and zone · architecture on one row,
+  followed by Provider ID and Image ID in monospace. Requirements, taints and
+  the expiry/grace-period **Lifecycle** section are unchanged.
+- No Conditions or Provider sections trail the claim view.
+
 The owning implementations are
 [KarpenterSections.tsx](../../frontend/src/modules/object-panel/components/ObjectPanel/Details/Overview/KarpenterSections.tsx),
+[KarpenterProgress.tsx](../../frontend/src/modules/object-panel/components/ObjectPanel/Details/Overview/KarpenterProgress.tsx),
+the shared [capacity formatter](../../frontend/src/modules/object-panel/components/ObjectPanel/Details/Overview/karpenterCapacityFormat.ts),
 the [overview descriptor](../../frontend/src/modules/object-panel/components/ObjectPanel/Details/Overview/descriptors/karpenter.tsx)
 and [column factory](../../frontend/src/modules/cluster/components/karpenterColumns.tsx).
 
@@ -88,13 +134,26 @@ destinations, resource permissions, roles and sync windows. Conditions use the
 shared StatusChip with backend presentation. Values remain selectable. Raw Helm
 values and project JWT token metadata stay out of these display projections.
 
-Status and conditions lead the detail content. Source cards show target revisions;
-deployed revisions remain a labelled group alongside them because the facts do
-not identify which source was compared for each revision. ApplicationSet template
-identity, sources, sync policy, and management are peer sections. AppProject access rules are grouped
-by source access, destination, resource scope, role, and sync window. Repeated
-entries have titles, and policy lists and messages have labels and full-width
-content. Operation timestamps use the shared local date formatter.
+Argo CD overviews use the shared operator primitives. An Application opens with
+Health (chip, with the health message beneath it), Sync, **Last Sync** (the last
+operation's phase chip with its backend `phasePresentation`, started/finished
+timestamps from the shared local date formatter, and the operation message) and
+Conditions, then Project, Destination (name or resolved name with the server
+beside it, or the server alone), Namespace, ApplicationSet and Managed Resources
+as rows. Source cards are titled by name, else chart, else the repository's last
+path segment, with the path as meta and the target revision as the tag; the
+repository URL, chart (when the title is a name) and ref are rows inside.
+Deployed revisions remain a labelled row alongside them because the facts do not
+identify which source was compared for each revision. Sync policy is one
+`Automated Sync` row (`Disabled`, or `Enabled` followed by the active
+prune / self heal / allow empty flags) plus sync options; Applications always
+show it, templates only when a policy is set. ApplicationSet template identity
+(template name, project, destination, namespace, Go template) is a row block,
+generators are one-line cards (type, repository, revision), and template sources,
+template sync policy and management are peer sections. AppProject access rules are
+grouped by source access rows, destination cards (name or server, namespace,
+server), resource-permission cards with Allowed/Denied rows, role cards, and
+sync-window cards (kind, schedule · duration, time zone).
 
 ApplicationSet owner references preserve their source GVK and the Application's
 namespace. Project names remain plain text: Applications can live outside the
@@ -152,10 +211,24 @@ version. Details separate target selectors, scrape endpoints, rule groups and
 expressions, instance settings, and resource selection. Empty selectors and
 missing selectors retain distinct API semantics. Numeric ports and expressions
 are projected as display strings without changing source objects. Zero counts
-and replica settings remain visible. Config objects without status have no
-inferred health; CRD configuration does not establish live scrape health or
-whether an alert is firing. Endpoint authentication and remote-write credentials
-are excluded from these projections.
+and replica settings remain visible. ServiceMonitor, PodMonitor and
+PrometheusRule define no status in the API, so the backend projects none for
+them: the table Status cell shows the placeholder and the details panel has no
+Status row (a pending deletion still reports Terminating). CRD configuration does
+not establish live scrape health or whether an alert is firing. Endpoint
+authentication and remote-write credentials are excluded from these projections.
+
+ServiceMonitor and PodMonitor details use label/value rows for **Targets**: the
+selector row is labeled **Services** or **Pods** by kind (an empty selector reads
+`All`), **Namespaces** resolves the empty namespace selector to the object's own
+namespace as `<name> (same namespace)`, lists `matchNames`, or reads
+`All namespaces`; job label, sample/target limits (zero stays visible) and
+target/pod target labels follow. Each scrape endpoint is one card: the title is
+the named port, or the numeric `targetPort`/`portNumber` with that field name as
+the card meta; scheme and path appear in the meta only when set (defaults are not
+invented); interval and timeout form the right-aligned `every … · timeout …` tag;
+only the remaining set fields (a numeric target port alongside a named port,
+honor labels, honor timestamps) render as rows inside the card.
 
 The shared operator overview uses the existing Overview and StatusChip patterns,
 selectable values, titled repeated entries, and full-width messages. It adds no

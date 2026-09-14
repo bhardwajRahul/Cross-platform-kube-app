@@ -35,4 +35,4 @@
 
 - Sidebar categories have been reorganized, with new Resources and Extensions categories.
   - Resources contains built-in resource objects, organized by subcategories as before.
-  - CRDs and custom resources, including the new CRDs mentioned above, have been moved into the Extensions category.
+  - Extensions contains CRDs and custom resources, including the new CRDs mentioned above.
