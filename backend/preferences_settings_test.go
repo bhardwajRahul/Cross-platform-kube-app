@@ -471,6 +471,50 @@ func TestAppSetDimInactiveNamespacesPersists(t *testing.T) {
 	require.Contains(t, last.Message, "Dim inactive namespaces changed to: false")
 }
 
+func TestSidebarGroupExpansionPersistsIndependentlyWithoutLogging(t *testing.T) {
+	setTestConfigEnv(t)
+	logger := NewLogger(20)
+	preferences := NewPreferencesService(nil, nil, logger)
+	keys := []string{"sidebarClusterResourcesExpanded", "sidebarClusterExtensionsExpanded", "sidebarNamespaceResourcesExpanded", "sidebarNamespaceExtensionsExpanded"}
+	read := func(owner *PreferencesService) map[string]any {
+		t.Helper()
+		schema, err := owner.GetAppSettingsSchema()
+		require.NoError(t, err)
+		values := make(map[string]any)
+		for _, preference := range schema.Preferences {
+			values[preference.Key] = preference.CurrentValue
+		}
+		return values
+	}
+	for _, key := range keys {
+		require.Equal(t, false, read(preferences)[key], key)
+	}
+	for _, key := range keys {
+		require.NoError(t, updatePreference(preferences, key, true))
+	}
+	require.NoError(t, updatePreference(preferences, keys[0], false))
+	require.NoError(t, updatePreference(preferences, keys[3], false))
+	values := read(NewPreferencesService(nil, nil, nil))
+	require.Equal(t, false, values[keys[0]])
+	require.Equal(t, true, values[keys[1]])
+	require.Equal(t, true, values[keys[2]])
+	require.Equal(t, false, values[keys[3]])
+	require.Empty(t, logger.GetEntries(), "sidebar disclosure must persist without creating application logs")
+}
+
+func TestAppPreferenceBatchKeepsOtherLogsWithSidebarChanges(t *testing.T) {
+	setTestConfigEnv(t)
+	logger := NewLogger(20)
+	preferences := NewPreferencesService(nil, nil, logger)
+	require.NoError(t, updatePreferences(preferences,
+		AppPreferenceChange{Key: appPreferenceSidebarClusterResourcesExpanded, Value: true},
+		AppPreferenceChange{Key: appPreferenceUseShortResourceNames, Value: true},
+		AppPreferenceChange{Key: appPreferenceSidebarNamespaceExtensionsExpanded, Value: true},
+		AppPreferenceChange{Key: appPreferenceObjectPanelFloatingWidth, Value: 800},
+	))
+	require.Len(t, logger.GetEntries(), 2, "both named and generic logs must survive a batch containing sidebar changes")
+}
+
 func TestAppSetExclusiveNamespacesPersists(t *testing.T) {
 	setTestConfigEnv(t)
 	app := newSettingsEffectsTestFixture(t)

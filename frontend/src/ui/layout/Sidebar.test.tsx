@@ -512,7 +512,39 @@ describe('Sidebar', () => {
     expect(viewStateMock.setActiveClusterView).toHaveBeenLastCalledWith('crds');
   });
 
-  it('keeps namespace groups independent, retains disclosure state, and routes keyboard selection', () => {
+  it('navigates to Helm between External Secrets and Prometheus Operator inside Extensions', () => {
+    discoveredFamilies.byCluster['cluster-a'] = {
+      namespaced: ['cert-manager', 'external-secrets', 'prometheus'],
+    };
+    renderSidebar();
+    const find = (kind: string, attribute = '') =>
+      requireValue(
+        container?.querySelector<HTMLButtonElement>(
+          `[data-sidebar-target-namespace="${namespaceKey('default')}"]` +
+            `[data-sidebar-target-kind="${kind}"]${attribute}`
+        ),
+        `expected ${kind} ${attribute}`
+      );
+    const group = (id: string) =>
+      find('namespace-group-toggle', `[data-sidebar-target-id="${id}"]`);
+    const view = (id: string) => find('namespace-view', `[data-sidebar-target-view="${id}"]`);
+    act(() => find('namespace-toggle').click());
+    act(() => group('resources').click());
+    expect(container?.querySelector('[data-sidebar-target-view="helm"]')).toBeNull();
+    act(() => group('extensions').click());
+    act(() => view('external-secrets').focus());
+    pressKey('ArrowDown');
+    expect(document.activeElement).toBe(view('helm'));
+    pressKey('Enter');
+    expect(viewStateMock.setActiveNamespaceTab).toHaveBeenLastCalledWith('helm');
+    expect(namespaceState.setSelectedNamespace).toHaveBeenLastCalledWith('default', 'cluster-a');
+    pressKey('ArrowDown');
+    expect(document.activeElement).toBe(view('prometheus'));
+    act(() => group('extensions').click());
+    expect(container?.querySelector('[data-sidebar-target-view="helm"]')).toBeNull();
+  });
+
+  it('shares namespace group state across namespaces and clusters and routes keyboard selection', () => {
     setAppPreferencesForTesting({ exclusiveNamespaces: false });
     discoveredFamilies.byCluster['cluster-a'] = { namespaced: ['argocd'] };
     const defaultNamespace = requireValue(
@@ -555,7 +587,7 @@ describe('Sidebar', () => {
     act(() => resources.focus());
     pressKey(' ');
     expect(view('default', 'autoscaling')).not.toBeNull();
-    expect(view('other', 'autoscaling')).toBeNull();
+    expect(view('other', 'autoscaling')).not.toBeNull();
     expect(view('default', 'argocd')).toBeNull();
     pressKey('ArrowDown');
     expect(document.activeElement).toBe(view('default', 'autoscaling'));
@@ -569,7 +601,7 @@ describe('Sidebar', () => {
     pressKey('Enter');
     expect(view('default', 'custom')).not.toBeNull();
     expect(view('default', 'argocd')).not.toBeNull();
-    expect(view('other', 'custom')).toBeNull();
+    expect(view('other', 'custom')).not.toBeNull();
     for (const id of ['workloads', 'browse', 'events']) {
       act(() => requireValue(view('default', id), `expected direct view ${id}`).click());
       expect(viewStateMock.setActiveNamespaceTab).toHaveBeenLastCalledWith(id);
@@ -583,13 +615,38 @@ describe('Sidebar', () => {
     kubeconfigState.selectedClusterId = 'cluster-b';
     renderSidebar();
     act(() => namespace('default').click());
-    expect(group('default', 'resources').getAttribute('aria-expanded')).toBe('false');
-    expect(group('default', 'extensions').getAttribute('aria-expanded')).toBe('false');
+    expect(group('default', 'resources').getAttribute('aria-expanded')).toBe('true');
+    expect(group('default', 'extensions').getAttribute('aria-expanded')).toBe('true');
     expect(view('default', 'workloads')).not.toBeNull();
-    expect(view('default', 'autoscaling')).toBeNull();
-    act(() => group('default', 'extensions').click());
+    expect(view('default', 'autoscaling')).not.toBeNull();
     expect(view('default', 'custom')).not.toBeNull();
     expect(view('default', 'argocd')).toBeNull();
+  });
+
+  it('restores separate cluster and namespace group states when the sidebar remounts', () => {
+    renderSidebar();
+    const find = (kind: string, id?: string) =>
+      requireValue(
+        container?.querySelector<HTMLButtonElement>(
+          `[data-sidebar-target-kind="${kind}"]${id ? `[data-sidebar-target-id="${id}"]` : ''}`
+        ),
+        `expected ${kind} ${id ?? ''}`
+      );
+    act(() => find('namespace-toggle').click());
+    act(() => find('cluster-toggle', 'resources').click());
+    act(() => find('cluster-toggle', 'extensions').click());
+    act(() => find('cluster-toggle', 'extensions').click());
+    act(() => find('namespace-group-toggle', 'extensions').click());
+
+    act(() => root?.unmount());
+    root = ReactDOM.createRoot(requireValue(container, 'expected container'));
+    kubeconfigState.selectedClusterId = 'cluster-b';
+    renderSidebar();
+    act(() => find('namespace-toggle').click());
+    expect(find('cluster-toggle', 'resources').getAttribute('aria-expanded')).toBe('true');
+    expect(find('cluster-toggle', 'extensions').getAttribute('aria-expanded')).toBe('false');
+    expect(find('namespace-group-toggle', 'resources').getAttribute('aria-expanded')).toBe('false');
+    expect(find('namespace-group-toggle', 'extensions').getAttribute('aria-expanded')).toBe('true');
   });
 
   it('presents cross-cluster views under the Global scope instead of Cluster resources', () => {
