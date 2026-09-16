@@ -9,6 +9,7 @@ package capabilities
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -111,7 +112,11 @@ func (s *Service) Evaluate(ctx context.Context, checks []ReviewAttributes) ([]Ch
 
 	batch := newCapabilityEvaluationBatch(s, checks, results, limiter)
 	batch.run(ctx, s.resolveWorkerCount(len(checks)))
-	batch.reportReviewFailures()
+	// HTTP cancellation can return a sibling's failure as its cause instead of
+	// context.Canceled. Use the batch context to avoid reporting that cascade.
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		batch.reportReviewFailures()
+	}
 	batch.reportMetrics()
 
 	if err := ctx.Err(); err != nil {

@@ -434,6 +434,78 @@ func TestEvaluateHandlesAPIError(t *testing.T) {
 	}
 }
 
+func TestEvaluateCancellationAndDeadlineReporting(t *testing.T) {
+	tests := []struct {
+		name        string
+		context     func() (context.Context, context.CancelFunc)
+		wantError   error
+		wantReports int
+	}{
+		{
+			name: "cancellation is not reported",
+			context: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx, cancel
+			},
+			wantError: context.Canceled,
+		},
+		{
+			name: "deadline remains reportable",
+			context: func() (context.Context, context.CancelFunc) {
+				return context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			},
+			wantError:   context.DeadlineExceeded,
+			wantReports: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := fake.NewClientset()
+			client.PrependReactor("create", "selfsubjectaccessreviews", func(action cgotesting.Action) (bool, runtime.Object, error) {
+				review := action.(cgotesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
+				review.Status.Allowed = true
+				return true, review, nil
+			})
+			logger := &captureLogger{}
+			service := NewService(Dependencies{Common: common.Dependencies{KubernetesClient: client, Logger: logger}})
+			checks := []ReviewAttributes{{
+				ID: "list-deployments",
+				Attributes: &authorizationv1.ResourceAttributes{
+					Group: "apps", Version: "v1", Resource: "deployments", Verb: "list",
+				},
+			}}
+			ctx, cancel := tt.context()
+			defer cancel()
+
+			results, err := service.Evaluate(ctx, checks)
+			if !errors.Is(err, tt.wantError) {
+				t.Fatalf("Evaluate error = %v, want %v", err, tt.wantError)
+			}
+			if len(results) != 1 || results[0].Allowed || results[0].Error == "" {
+				t.Fatalf("interrupted review must retain its failed result: %+v", results)
+			}
+			if len(client.Actions()) != 0 {
+				t.Fatal("interrupted review must not reach the Kubernetes API")
+			}
+			if len(logger.errors) != tt.wantReports {
+				t.Fatalf("error reports = %d, want %d", len(logger.errors), tt.wantReports)
+			}
+			if tt.wantReports > 0 && !errors.Is(logger.cause, tt.wantError) {
+				t.Fatalf("reported cause = %v, want %v", logger.cause, tt.wantError)
+			}
+
+			results, err = service.Evaluate(context.Background(), checks)
+			if err != nil || len(results) != 1 || !results[0].Allowed {
+				t.Fatalf("a later active request must succeed: results=%+v error=%v", results, err)
+			}
+			if len(logger.errors) != tt.wantReports {
+				t.Fatal("successful retry must not produce another error report")
+			}
+		})
+	}
+}
+
 func TestEvaluateRetriesTransientAuthorizationError(t *testing.T) {
 	client := fake.NewClientset()
 	calls := 0

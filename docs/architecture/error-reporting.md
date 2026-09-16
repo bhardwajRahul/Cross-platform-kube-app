@@ -327,6 +327,10 @@ poller shut down — and must not be reported as a failure.
   through the structured path. Prefer it over formatting an error into
   `Logger.Error` so new resource kinds inherit cancellation handling and retain
   typed Kubernetes status data.
+- Capability batches inspect their context before reporting review failures.
+  A canceled HTTP request can carry a sibling task's failure as its cause, so
+  checking the returned error alone does not identify cancellation. Batch
+  metrics and returned results remain available; deadlines remain reportable.
 - The metrics poller treats demand-shutdown cancellation as an expected
   lifecycle event and logs intermediate retries as warnings. Metrics API absence
   is a warning rather than an exception. Other failures retain the original
