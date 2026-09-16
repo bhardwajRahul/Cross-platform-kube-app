@@ -27,6 +27,20 @@ Do not add aliases or parallel registration tables, and never hand-edit either
 generated file. Change the authored entry, keyed backend/frontend callback when
 needed, DTO registry, and parity tests together, then run `go generate ./backend`.
 
+## Transport boundary
+
+`backend/refresh/api/` owns mount-relative handlers published atomically through
+the same-origin Wails service route `/api/v2`. Resource and container-log
+protocols use the named Wails JSON streams `refresh-resources` and
+`refresh-container-logs`, not HTTP upgrade or event-stream routes. Preserve
+early-unready responses, cluster scoping, complete identity, RBAC, request
+validation, ordered publication/replacement, and teardown. Do not add a loopback
+listener, runtime base-URL bridge, CORS layer, raw browser WebSocket,
+EventSource, or fallback transport.
+
+For domain or payload changes, use the
+[domain wiring reference](../../.agents/skills/refresh-subsystem/references/domain-wiring.md).
+
 ## Scope and identity
 
 Every API scope names exactly one cluster:

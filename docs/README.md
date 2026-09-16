@@ -13,6 +13,22 @@ Durable docs should answer:
 Do not use durable docs for implementation inventories, current UI walkthroughs,
 completed phase plans, or test lists that can be discovered with `rg`.
 
+Use the matching question below. Within a long document, read its shared
+invariants and the sections selected by the task. Follow links only when the
+changed producer/consumer path needs that contract; links are not a recursive
+reading checklist.
+
+## Reading a section
+
+A Markdown fragment names a heading; it does not limit a file read. For a link
+such as `gridtable-columns.md#column-definitions`, list headings with
+`rg -n '^#{1,6} ' docs/frontend/gridtable-columns.md`. Find the target heading and
+the next heading at the same or higher level, then use `sed -n 'START,ENDp'` with
+the start line through the line before that next heading (or EOF) to read only
+that section, including its subsections. Read shared invariants when first
+entering the subsystem; expand only for affected contracts. Small documents can
+be read in full.
+
 ## Architecture Contracts
 
 | Question | Start here |
@@ -27,6 +43,7 @@ completed phase plans, or test lists that can be discovered with `rg`.
 | What owns object refs, status, facts, and links? | [architecture/shared-resource-model.md](architecture/shared-resource-model.md) |
 | How is per-kind behavior declared and dispatched, and where does the kind vocabulary live? | [architecture/resource-kind-registry.md](architecture/resource-kind-registry.md) |
 | Where should cross-layer contracts live? | [architecture/shared-contracts.md](architecture/shared-contracts.md) |
+| Who owns settings schema, preference persistence, rollback, and runtime effects? | [architecture/app-preferences.md](architecture/app-preferences.md) |
 | How should frontend reads reach backend data? | [architecture/data-access.md](architecture/data-access.md) |
 | How do permission gates and action capabilities work? | [architecture/permissions.md](architecture/permissions.md) |
 | How are auth failures represented and recovered? | [architecture/auth.md](architecture/auth.md) |
@@ -56,6 +73,7 @@ completed phase plans, or test lists that can be discovered with `rg`.
 
 | Question | Start here |
 | --- | --- |
+| What must Claude Code prepare before a production edit? | [workflows/impact-analysis.md](workflows/impact-analysis.md) |
 | Which recurring implementation mistakes must agents prevent? | [workflows/common-mistakes.md](workflows/common-mistakes.md) |
 | Which tests are worth adding or retaining? | [workflows/testing.md](workflows/testing.md) |
 | How does the object map work? | [workflows/object-map.md](workflows/object-map.md) |
@@ -81,6 +99,14 @@ completed phase plans, or test lists that can be discovered with `rg`.
 
 - Keep each durable doc under roughly 150 lines unless the extra detail prevents
   repeated mistakes.
+- Keep entry rules and skill bodies focused on shared invariants and task
+  routing. Put substantial conditional procedures in the owning doc/reference;
+  add a route block when it selects a meaningful subset or redirects to another
+  file, not merely to repeat the document's headings.
+- Run `mise exec -- wails3 task qc:docs` after changing Markdown links or
+  headings. It checks local link targets and heading anchors in versioned and
+  untracked, non-ignored Markdown; external URLs, code-span paths, and dynamic
+  release-template destinations are excluded.
 - Prefer links to owning code over copied implementation detail.
 - Delete completed or stale plans instead of indexing them here.
 - Put temporary implementation plans in `docs/plans/` only while they are active.

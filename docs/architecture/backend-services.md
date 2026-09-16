@@ -144,21 +144,9 @@ counts.
 
 ## Settings effects
 
-`PreferencesService` persists and publishes an immutable settings snapshot only
-after releasing its lock. `SettingsEffectDispatcher` then pushes six effects to
-their owners:
-
-| Effect | Target owner |
-| --- | --- |
-| Error-reporting enablement | `ErrorReportingService` |
-| Kubernetes client QPS/burst | `ClusterRuntimeManager` |
-| SSRR fetch concurrency | `PermissionFetchPolicy` |
-| Per-scope container-log limit | `ContainerLogsSelectionPolicy` |
-| Global container-log limit | `RefreshCoordinator` |
-| Metrics refresh interval | `RefreshCoordinator` |
-
-These sinks are write-only: they must not read Preferences, call another effect
-owner, or acquire a settings or refresh lock while holding a leaf-policy lock.
+`PreferencesService` owns validation and persistence. Runtime changes cross
+write-only sinks; the [app preferences contract](app-preferences.md#loading-and-runtime-effects)
+owns effect targets, lock ordering, publication, and failure handling.
 
 ## Placing new behavior
 

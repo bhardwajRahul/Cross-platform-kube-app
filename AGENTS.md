@@ -110,7 +110,8 @@ source contract is unclear.
   non-documentation work, run
   `mise exec -- wails3 task qc:prerelease`, then inspect the worktree because the gate
   may format files. Report exact failures. Documentation/comment-only work is
-  exempt and must at least pass `git diff --check`.
+  exempt and must at least pass `git diff --check`; Markdown guidance changes
+  also run `mise exec -- wails3 task qc:docs`.
 - Rendered Wails UI validation uses the standalone Playwright MCP when
   available. Start the app with `mise exec -- wails3 dev`, use the emitted URL,
   and exercise relevant loading, error, empty, populated, navigation, and
@@ -118,6 +119,9 @@ source contract is unclear.
 
 ## Routing and documentation
 
+- Apply root and scoped `AGENTS.md` guidance already in context. Before working
+  in a scope whose instructions are missing, read its `AGENTS.md` once; do not
+  assume every agent runtime injects it or reread instructions already loaded.
 - Use `.agents/README.md` only for broad, ambiguous, or cross-layer routing;
   narrow tasks should open the matching skill or owning doc directly.
 - Use `docs/README.md` when ownership is unclear. Freshness work starts with

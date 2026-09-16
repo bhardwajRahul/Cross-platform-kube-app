@@ -80,6 +80,14 @@ Typed refresh rows are enrichments. They are not competing identity systems.
 
 ## Ownership
 
+`backend/objectcatalog.Service` / `Summary` are owned per cluster by
+`RefreshCoordinator` in `backend/refresh_object_catalog.go`. Browse snapshots
+use the `catalog` domain in `backend/refresh/snapshot/catalog.go`. GVK/GVR
+resolution belongs to `backend/objectcatalog/identity.go`;
+`backend/resources/common/resource_identity.go` is only the shared resolver
+interface/result contract. Do not add parallel resolver tables or kind-only
+fallbacks outside the catalog.
+
 - Catalog service and identity store: `backend/objectcatalog`
 - Built-in and discovery-backed GVK/GVR resolution:
   `backend/objectcatalog/identity.go`
