@@ -35,7 +35,8 @@ func sharedTestComposition(t *testing.T) *applicationComposition {
 }
 
 func testSingleInstanceID() string {
-	return fmt.Sprintf("%s.test.%d", applicationProductIdentifier, os.Getpid())
+	// D-Bus name components cannot start with a digit.
+	return fmt.Sprintf("%s.test.p%d", applicationProductIdentifier, os.Getpid())
 }
 
 func TestNativeApplicationMenuIsInstalledOnlyOnDarwin(t *testing.T) {

@@ -41,7 +41,8 @@ jobs:
           echo "🟣 Run backend vet"
           wails3 task qc:vet
           echo "🟣 Run backend tests"
-          wails3 task test:backend
+          # Wails' Linux single-instance check requires a session bus.
+          dbus-run-session -- wails3 task test:backend
           echo "🟣 Run frontend lint"
           wails3 task qc:lint
           echo "🟣 Run frontend typecheck"
