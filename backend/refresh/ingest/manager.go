@@ -2,7 +2,7 @@
  * backend/refresh/ingest/manager.go
  *
  * IngestManager owns the owned-reflector ingestion path for one cluster: a
- * ProjectingStore + ProjectingReflector per built-in streamed kind, replacing
+ * ProjectingStore + client-go reflector per built-in streamed kind, replacing
  * what the typed SharedInformerFactory does today — but holding ONLY projected
  * stream Summaries, never the typed object. It is generic over the kind registry:
  * it loops kindregistry.StreamDescriptors(), and the only per-group code is the
@@ -21,6 +21,7 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -140,7 +141,7 @@ type ingestLaunchEntry struct {
 type ingestPart struct {
 	namespace string
 	lw        cache.ListerWatcher
-	reflector *ProjectingReflector
+	reflector *cache.Reflector
 	view      *StorePartitionView
 
 	// resumeRV, when set (RestoreStores, before Start), makes Start attempt a
@@ -170,7 +171,7 @@ func (e *entry) allPartsSkipped() bool {
 	return true
 }
 
-// IngestManager owns one ProjectingStore + ProjectingReflector per built-in
+// IngestManager owns one ProjectingStore + client-go reflector per built-in
 // streamed kind for a single cluster. The stores hold projected stream Summaries
 // (the StreamRow output), never the typed objects the reflector decodes.
 type IngestManager struct {
@@ -268,7 +269,7 @@ func (m *IngestManager) partitionNamespaces(gvr schema.GroupVersionResource) []s
 // whose GVK the scheme cannot instantiate, so a nil Gateway client or an unknown
 // kind never panics or blocks the rest.
 func (m *IngestManager) addDescriptor(desc streamspec.Descriptor) {
-	gvr := schema.GroupVersionResource{Group: desc.Group, Version: desc.Version, Resource: desc.Resource}
+	gvr := desc.GVR()
 	gvk := schema.GroupVersionKind{Group: desc.Group, Version: desc.Version, Kind: desc.Kind}
 
 	restClient, ok := m.restClientFor(desc.Group, desc.Version)
@@ -303,17 +304,7 @@ func (m *IngestManager) installReflector(e *entry, gvr schema.GroupVersionResour
 		// informers do. The process-wide startup transport policy currently disables
 		// WatchList before any reflector is constructed.
 		wrapped := cache.ToListWatcherWithWatchListSemantics(lw, restClient)
-		name := gvk.String()
-		if namespace != "" {
-			name += " ns=" + namespace
-		}
-		view := e.store.PartitionView(namespace)
-		e.parts = append(e.parts, &ingestPart{
-			namespace: namespace,
-			lw:        wrapped,
-			reflector: NewProjectingReflector(name, wrapped, example, view, resyncDisabled),
-			view:      view,
-		})
+		e.addPartition(gvk, namespace, wrapped, example)
 	}
 	m.entries[gvr] = e
 }
@@ -383,27 +374,31 @@ func (m *IngestManager) RegisterDynamicCatalogReflector(gvr schema.GroupVersionR
 		namespaces = append([]string(nil), m.scope...)
 	}
 	for _, namespace := range namespaces {
-		name := gvk.String()
-		if namespace != "" {
-			name += " ns=" + namespace
-		}
-		view := e.store.PartitionView(namespace)
-		lw := dynamicListWatch(m.dynamic, gvr, namespace)
-		e.parts = append(e.parts, &ingestPart{
-			namespace: namespace,
-			lw:        lw,
-			reflector: NewProjectingReflector(name, lw, example, view, resyncDisabled),
-			view:      view,
-		})
+		e.addPartition(gvk, namespace, dynamicListWatch(m.dynamic, gvr, namespace), example)
 	}
 	e.store.SetExpectedPartitions(namespaces)
 	m.entries[gvr] = e
 	ctx, cancel := context.WithCancel(lifecycle.Context(m.runDone))
 	e.cancel = cancel
 	for _, part := range e.parts {
-		go part.reflector.Run(ctx)
+		go part.reflector.Run(ctx.Done())
 	}
 	return true
+}
+
+// addPartition gives typed and dynamic reflectors the same partition-local store view.
+func (e *entry) addPartition(gvk schema.GroupVersionKind, namespace string, lw cache.ListerWatcher, example apiruntime.Object) {
+	name := gvk.String()
+	if namespace != "" {
+		name += " ns=" + namespace
+	}
+	view := e.store.PartitionView(namespace)
+	e.parts = append(e.parts, &ingestPart{
+		namespace: namespace,
+		lw:        lw,
+		reflector: cache.NewNamedReflector(name, lw, example, view, resyncDisabled),
+		view:      view,
+	})
 }
 
 // StopReflectorFor stops and evicts the reflector for gvr — the teardown half of the
@@ -503,15 +498,9 @@ func projectionFor(meta streamrows.ClusterMeta, e *entry) ProjectFunc {
 func metaObjectOf(obj interface{}) (metav1.Object, error) {
 	m, ok := obj.(metav1.Object)
 	if !ok {
-		return nil, &notMetaObjectError{obj: obj}
+		return nil, errors.New("ingest: reflector decoded an object that is not a metav1.Object")
 	}
 	return m, nil
-}
-
-type notMetaObjectError struct{ obj interface{} }
-
-func (e *notMetaObjectError) Error() string {
-	return "ingest: reflector decoded an object that is not a metav1.Object"
 }
 
 // restClientFor maps a descriptor's API group/version to the matching typed group
@@ -654,7 +643,7 @@ func launchIngestEntry(runCtx context.Context, launch ingestLaunchEntry, filter 
 		// Resume from a persisted resourceVersion when one was set (the store was
 		// restored full from disk); otherwise — the default — this is exactly
 		// part.reflector.Run.
-		go runWithResume(runCtx, part.lw, part.view, part.resumeRV, func() { part.reflector.Run(runCtx) })
+		go runWithResume(runCtx, part.lw, part.view, part.resumeRV, func() { part.reflector.Run(runCtx.Done()) })
 	}
 }
 
@@ -705,6 +694,14 @@ func (m *IngestManager) SetResumeResourceVersion(gvr schema.GroupVersionResource
 	return false
 }
 
+// Snapshot entry ownership before calling stores or projectors: those calls must
+// run outside the manager's leaf lock. Store pointers never change after registration.
+func (m *IngestManager) entriesSnapshot() map[schema.GroupVersionResource]*entry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.entries)
+}
+
 // registerGobTypes gob-registers the concrete Bundle-half types every entry projects, by
 // projecting each entry's example object through its store projection and registering each
 // non-nil half. The ingest package cannot import those types (they live in consumer packages
@@ -713,13 +710,7 @@ func (m *IngestManager) SetResumeResourceVersion(gvr schema.GroupVersionResource
 // zero-object projection panics or whose type conflicts is simply left unregistered, so its
 // SpillBundles fails and it falls back to a full sync — never a crash.
 func (m *IngestManager) registerGobTypes() {
-	m.mu.Lock()
-	entries := make([]*entry, 0, len(m.entries))
-	for _, e := range m.entries {
-		entries = append(entries, e)
-	}
-	m.mu.Unlock()
-	for _, e := range entries {
+	for _, e := range m.entriesSnapshot() {
 		registerEntryGobTypes(e)
 	}
 }
@@ -761,23 +752,13 @@ func (m *IngestManager) SpillStores(dir string) error {
 		return fmt.Errorf("ingest: spill mkdir %q: %w", dir, err)
 	}
 	m.registerGobTypes()
-	m.mu.Lock()
-	type gvrEntry struct {
-		gvr schema.GroupVersionResource
-		e   *entry
-	}
-	entries := make([]gvrEntry, 0, len(m.entries))
-	for gvr, e := range m.entries {
-		entries = append(entries, gvrEntry{gvr: gvr, e: e})
-	}
-	m.mu.Unlock()
 	var errs []error
-	for _, ge := range entries {
-		if ge.e.onDemand.Load() {
+	for gvr, e := range m.entriesSnapshot() {
+		if e.onDemand.Load() {
 			continue
 		}
-		if err := ge.e.store.SpillBundles(filepath.Join(dir, ingestSpillFileName(ge.gvr))); err != nil {
-			errs = append(errs, fmt.Errorf("spill %s: %w", ge.gvr, err))
+		if err := e.store.SpillBundles(filepath.Join(dir, ingestSpillFileName(gvr))); err != nil {
+			errs = append(errs, fmt.Errorf("spill %s: %w", gvr, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -843,13 +824,7 @@ func (m *IngestManager) Stop() {
 // blocks on it before starting the metrics poller, wedge metrics too. The deadline
 // degrade mirrors the informer factory's stateSettled (issue #225).
 func (m *IngestManager) HasSynced() bool {
-	m.mu.Lock()
-	entries := make([]*entry, 0, len(m.entries))
-	for _, e := range m.entries {
-		entries = append(entries, e)
-	}
-	m.mu.Unlock()
-	for _, e := range entries {
+	for _, e := range m.entriesSnapshot() {
 		if e.onDemand.Load() {
 			// On-demand dynamic reflectors are added after the cluster is already serving;
 			// they must not gate (or un-settle) the whole-manager readiness the metrics
@@ -961,10 +936,8 @@ func (m *IngestManager) RegisterObjectMapProjector(gvr schema.GroupVersionResour
 // manager has no entry for gvr. It must be called before Start so no mutation is
 // missed. Reports whether an entry was found.
 func (m *IngestManager) AddSink(gvr schema.GroupVersionResource, sink Sink) bool {
-	m.mu.Lock()
-	e, ok := m.entries[gvr]
-	m.mu.Unlock()
-	if !ok {
+	store := m.StoreFor(gvr)
+	if store == nil {
 		return false
 	}
 	// Outside the manager lock: the store call acquires the store's write lock, and a
@@ -972,9 +945,9 @@ func (m *IngestManager) AddSink(gvr schema.GroupVersionResource, sink Sink) bool
 	// sink does) — holding both wedged the whole ingest layer (ABBA deadlock, see
 	// TestSinkRegistrationDoesNotDeadlockWithSinkManagerCallback). The manager mutex
 	// is a leaf lock: it guards the entries map only and is never held across a store
-	// call. e.store is set once at entry construction and never reassigned, so the
+	// call. The store is set once at entry construction and never reassigned, so its
 	// pointer stays valid after unlock.
-	e.store.AddSink(sink)
+	store.AddSink(sink)
 	return true
 }
 
@@ -984,14 +957,12 @@ func (m *IngestManager) AddSink(gvr schema.GroupVersionResource, sink Sink) bool
 // entry for gvr. It must be called before Start so no mutation is missed. Reports whether
 // an entry was found.
 func (m *IngestManager) AddBundleSink(gvr schema.GroupVersionResource, sink BundleSink) bool {
-	m.mu.Lock()
-	e, ok := m.entries[gvr]
-	m.mu.Unlock()
-	if !ok {
+	store := m.StoreFor(gvr)
+	if store == nil {
 		return false
 	}
 	// Store call outside the manager lock — see AddSink for the leaf-lock rule.
-	e.store.AddBundleSink(sink)
+	store.AddBundleSink(sink)
 	return true
 }
 
@@ -1001,17 +972,15 @@ func (m *IngestManager) AddBundleSink(gvr schema.GroupVersionResource, sink Bund
 // It must be called before Start so no mutation is missed. Reports whether an entry
 // was found.
 func (m *IngestManager) AddCatalogSink(gvr schema.GroupVersionResource, sink Sink) bool {
-	m.mu.Lock()
-	e, ok := m.entries[gvr]
-	m.mu.Unlock()
-	if !ok {
+	store := m.StoreFor(gvr)
+	if store == nil {
 		return false
 	}
 	// Store call outside the manager lock — see AddSink for the leaf-lock rule. This
 	// is the wrapper that wedged production: the catalog registers its sinks right
 	// after a failed initial sync, racing the pods reflector's initial Replace whose
 	// bundle sink calls back into the manager (goroutines-20260701-152259 dump).
-	e.store.AddCatalogSink(sink)
+	store.AddCatalogSink(sink)
 	return true
 }
 
@@ -1209,7 +1178,7 @@ func (m *IngestManager) PermissionSkippedFor(gvr schema.GroupVersionResource) bo
 
 // resyncDisabled documents that ingest reflectors run with no periodic resync:
 // the store is always current, and a relist only happens on watch expiry/error.
-// It exists so the 0 passed to NewProjectingReflector reads as a deliberate
+// It exists so the 0 passed to cache.NewNamedReflector reads as a deliberate
 // choice rather than a magic number.
 const resyncDisabled = time.Duration(0)
 
@@ -1225,16 +1194,10 @@ func (m *IngestManager) InitialSyncDurations() map[schema.GroupVersionResource]t
 	if startedAt.IsZero() {
 		return nil
 	}
-	m.mu.Lock()
-	stores := make(map[schema.GroupVersionResource]*ProjectingStore, len(m.entries))
-	for gvr, e := range m.entries {
-		stores[gvr] = e.store
-	}
-	m.mu.Unlock()
-	// Leaf-lock rule: store reads happen outside m.mu.
-	out := make(map[schema.GroupVersionResource]time.Duration, len(stores))
-	for gvr, store := range stores {
-		if syncedAt := store.SyncedAt(); !syncedAt.IsZero() && syncedAt.After(startedAt) {
+	entries := m.entriesSnapshot()
+	out := make(map[schema.GroupVersionResource]time.Duration, len(entries))
+	for gvr, e := range entries {
+		if syncedAt := e.store.SyncedAt(); !syncedAt.IsZero() && syncedAt.After(startedAt) {
 			out[gvr] = syncedAt.Sub(startedAt)
 		}
 	}

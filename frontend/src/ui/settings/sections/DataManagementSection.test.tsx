@@ -1,6 +1,7 @@
 import { act } from 'react';
 import * as ReactDOM from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eventBus } from '@/core/events';
 import { requireValue } from '@/test-utils/requireValue';
 import DataManagementSection from './DataManagementSection';
 
@@ -12,6 +13,7 @@ const backendMocks = vi.hoisted(() => ({
 }));
 
 const preferenceMocks = vi.hoisted(() => ({
+  enabled: false,
   hydrateAppPreferences: vi.fn(),
   setErrorReportingEnabled: vi.fn(),
 }));
@@ -29,7 +31,7 @@ vi.mock('@/core/persistence/favorites', () => ({
   hydrateFavorites: (...args: unknown[]) => favoritesMocks.hydrateFavorites(...args),
 }));
 vi.mock('@/core/settings/appPreferences', () => ({
-  getErrorReportingEnabled: () => false,
+  getErrorReportingEnabled: () => preferenceMocks.enabled,
   hydrateAppPreferences: (...args: unknown[]) => preferenceMocks.hydrateAppPreferences(...args),
   setErrorReportingEnabled: (...args: unknown[]) =>
     preferenceMocks.setErrorReportingEnabled(...args),
@@ -47,10 +49,14 @@ describe('DataManagementSection', () => {
   let root: ReactDOM.Root;
 
   beforeEach(async () => {
+    preferenceMocks.enabled = false;
     preferenceMocks.hydrateAppPreferences.mockReset();
     preferenceMocks.hydrateAppPreferences.mockResolvedValue({ errorReportingEnabled: false });
     preferenceMocks.setErrorReportingEnabled.mockReset();
-    preferenceMocks.setErrorReportingEnabled.mockResolvedValue(undefined);
+    preferenceMocks.setErrorReportingEnabled.mockImplementation(async (value: boolean) => {
+      preferenceMocks.enabled = value;
+      eventBus.emit('settings:error-reporting', value);
+    });
     favoritesMocks.hydrateFavorites.mockReset();
     favoritesMocks.hydrateFavorites.mockResolvedValue([]);
     errorHandlerMocks.handle.mockReset();
@@ -166,6 +172,48 @@ describe('DataManagementSection', () => {
     expect(favoritesMocks.hydrateFavorites).not.toHaveBeenCalled();
     expect(container.querySelector('[role="status"]')).toBeNull();
   });
+
+  it.each([
+    ['Settings', preferenceMocks.hydrateAppPreferences, 'importSettings'],
+    ['Favorites', favoritesMocks.hydrateFavorites, 'importFavorites'],
+  ] as const)(
+    'keeps operations blocked during %s rehydration and recovers after failure',
+    async (kind, hydrate, action) => {
+      let rejectHydration: ((error: Error) => void) | undefined;
+      hydrate.mockReturnValueOnce(
+        new Promise((_resolve, reject) => {
+          rejectHydration = reject;
+        })
+      );
+      await act(async () => {
+        findButton(container, `Import ${kind}`).click();
+      });
+
+      const buttons = [
+        'Export Settings',
+        'Import Settings',
+        'Export Favorites',
+        'Import Favorites',
+      ].map((label) => findButton(container, label));
+      expect(buttons.every((button) => button.disabled)).toBe(true);
+      await act(async () => {
+        findButton(container, 'Export Settings').click();
+      });
+      expect(backendMocks.ExportSettings).not.toHaveBeenCalled();
+      expect(container.querySelector('[role="status"]')).toBeNull();
+
+      const error = new Error('rehydration failed');
+      await act(async () => {
+        requireValue(rejectHydration, 'expected pending hydration')(error);
+      });
+      expect(errorHandlerMocks.handle).toHaveBeenCalledWith(error, { action });
+      expect(buttons.every((button) => !button.disabled)).toBe(true);
+      await act(async () => {
+        findButton(container, 'Export Settings').click();
+      });
+      expect(backendMocks.ExportSettings).toHaveBeenCalledOnce();
+    }
+  );
 
   it('routes export errors through the shared error handler', async () => {
     const error = new Error('export failed');

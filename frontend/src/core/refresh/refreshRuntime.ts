@@ -547,7 +547,6 @@ const MULTI_ACTIVE_SCOPE_DOMAINS = new Set<RefreshDomain>([
 export class ClusterRefreshRuntime {
   readonly clusterId: string;
   private readonly scopedStates = new Map<string, ScopedRefreshState>();
-  private readonly knownDomains = new Set<RefreshDomain>();
   private authState: ClusterAuthState = { status: 'available' };
   constructor(clusterId: string) {
     this.clusterId = clusterId;
@@ -600,12 +599,7 @@ export class ClusterRefreshRuntime {
     return { previous: state.activation, next };
   }
 
-  markDomainKnown(domain: RefreshDomain): void {
-    this.knownDomains.add(domain);
-  }
-
   deleteDomain(domain: RefreshDomain): void {
-    this.knownDomains.delete(domain);
     Array.from(this.scopedStates.entries()).forEach(([key, state]) => {
       if (state.domain === domain) {
         this.scopedStates.delete(key);
@@ -651,7 +645,6 @@ export class ClusterRefreshRuntime {
     scope: string,
     enabled: boolean
   ): RuntimeScopeStateChange {
-    this.knownDomains.add(domain);
     const { previous, next } = this.applyActivationEvent(domain, scope, {
       type: enabled ? 'enabled' : 'disabled',
     });
@@ -712,7 +705,6 @@ export class ClusterRefreshRuntime {
     scope: string,
     demand: RefreshDemand = 'snapshot'
   ): { count: number; firstLease: boolean; activationChanged: boolean } {
-    this.knownDomains.add(domain);
     const before = this.getScopeState(domain, scope).activation;
     const previousTotal = totalDemand(demandsFor(before));
     const { next } = this.applyActivationEvent(domain, scope, {
@@ -997,9 +989,11 @@ export class ClusterRefreshRuntime {
     return this.getScopeState(domain, scope).stream.connection.status !== 'inactive';
   }
 
-  getStreamingLifecycleKeys(): string[] {
-    return Array.from(this.scopedStates.entries()).flatMap(([key, state]) =>
-      state.stream.connection.status === 'inactive' ? [] : [key]
+  getStreamingScopes(): Array<{ domain: RefreshDomain; scope: string }> {
+    return Array.from(this.scopedStates.values()).flatMap((state) =>
+      state.stream.connection.status === 'inactive' || state.scope === undefined
+        ? []
+        : [{ domain: state.domain, scope: state.scope }]
     );
   }
 
@@ -1174,7 +1168,6 @@ export class ClusterRefreshRuntime {
 
   resetAllState(): void {
     this.scopedStates.clear();
-    this.knownDomains.clear();
     this.authState = { status: 'available' };
   }
 }

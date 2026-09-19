@@ -20,14 +20,16 @@ import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useEventBus } from '@/core/events';
-import { fetchSnapshot } from '@/core/refresh/client';
-import { buildClusterScope } from '@/core/refresh/clusterScope';
-import type { CatalogItem, CatalogSnapshotPayload } from '@/core/refresh/types';
+import type { CatalogItem } from '@/core/refresh/types';
 import { useShortNames } from '@/hooks/useShortNames';
-import { reportOperationalError } from '@/utils/errorHandler';
 import { aliasToKindMap, canonicalKinds, getDisplayKind } from '@/utils/kindAliasMap';
 import { isMacPlatform } from '@/utils/platform';
 import type { Command } from './CommandPaletteCommands';
+import {
+  CATALOG_RESULT_LIMIT,
+  type CatalogStats,
+  usePaletteCatalogSearch,
+} from './usePaletteCatalogSearch';
 import './CommandPalette.css';
 
 interface CommandPaletteProps {
@@ -46,10 +48,29 @@ const CATEGORY_ORDER = [
   'General', // Fallback for any uncategorized commands
 ];
 
-const CATALOG_RESULT_LIMIT = 20;
-const CATALOG_SEARCH_DEBOUNCE_MS = 200;
+type PaletteNavigationKey = 'ArrowDown' | 'ArrowUp' | 'PageDown' | 'PageUp' | 'Home' | 'End';
 
-const normalizeKindClass = (value: string) => getKindColorClass(value);
+const getPaletteSelectionIndex = (
+  key: PaletteNavigationKey,
+  currentIndex: number,
+  lastIndex: number,
+  pageSize: number
+): number => {
+  switch (key) {
+    case 'ArrowDown':
+      return currentIndex < lastIndex ? currentIndex + 1 : 0;
+    case 'ArrowUp':
+      return currentIndex > 0 ? currentIndex - 1 : lastIndex;
+    case 'PageDown':
+      return Math.min(lastIndex, currentIndex + pageSize);
+    case 'PageUp':
+      return Math.max(0, currentIndex - pageSize);
+    case 'Home':
+      return 0;
+    case 'End':
+      return lastIndex;
+  }
+};
 
 export interface ParsedQueryTokens {
   kindTokens: string[];
@@ -129,7 +150,6 @@ type CatalogDisplayEntry = {
 };
 
 type ScoredCatalogEntry = CatalogDisplayEntry & { score: number };
-type CatalogStats = { total: number; truncated: boolean } | null;
 
 interface CatalogSearchFields {
   namespace: string;
@@ -196,7 +216,7 @@ const scoreCatalogEntry = (
   return {
     item,
     kindLabel: getDisplayKind(item.ref.kind, useShortResourceNames),
-    kindClass: normalizeKindClass(item.ref.kind),
+    kindClass: getKindColorClass(item.ref.kind),
     displayName: item.ref.namespace ? `${item.ref.namespace}/${item.ref.name}` : item.ref.name,
     score:
       kindScore + otherScore + (tokens.kindTokens.length + tokens.otherTokens.length === 0 ? 5 : 0),
@@ -269,20 +289,22 @@ interface ResultRowInteractionProps {
   updateSelection: (index: number) => void;
 }
 
-interface CommandResultRowProps extends ResultRowInteractionProps {
-  command: Command;
+interface PaletteResultRowProps extends ResultRowInteractionProps {
+  item: PaletteItem;
   executePaletteItem: (item: PaletteItem) => void;
+  children: React.ReactNode;
 }
 
-const CommandResultRow = ({
-  command,
+const PaletteResultRow = ({
+  item,
   currentIndex,
   selectedIndex,
   itemRefs,
   mouseSelectionArmedRef,
   updateSelection,
   executePaletteItem,
-}: CommandResultRowProps) => {
+  children,
+}: Readonly<PaletteResultRowProps>) => {
   const isSelected = currentIndex === selectedIndex;
   return (
     <ListboxOptionButton
@@ -292,21 +314,32 @@ const CommandResultRow = ({
       className={`command-palette-item ${isSelected ? 'selected' : ''}`}
       id={`command-palette-option-${currentIndex}`}
       selected={isSelected}
-      onClick={() => executePaletteItem({ type: 'command', command })}
+      onClick={() => executePaletteItem(item)}
       onMouseEnter={() => {
         if (mouseSelectionArmedRef.current) {
           updateSelection(currentIndex);
         }
       }}
     >
-      <CommandResultIcon icon={command.icon} />
-      <div className="command-palette-item-content">
-        <div className="command-palette-item-label">{command.renderLabel ?? command.label}</div>
-      </div>
-      <CommandShortcut shortcut={command.shortcut} />
+      {children}
     </ListboxOptionButton>
   );
 };
+
+interface CommandResultRowProps extends ResultRowInteractionProps {
+  command: Command;
+  executePaletteItem: (item: PaletteItem) => void;
+}
+
+const CommandResultRow = ({ command, ...interaction }: Readonly<CommandResultRowProps>) => (
+  <PaletteResultRow {...interaction} item={{ type: 'command', command }}>
+    <CommandResultIcon icon={command.icon} />
+    <div className="command-palette-item-content">
+      <div className="command-palette-item-label">{command.renderLabel ?? command.label}</div>
+    </div>
+    <CommandShortcut shortcut={command.shortcut} />
+  </PaletteResultRow>
+);
 
 interface CommandGroupsProps extends Omit<ResultRowInteractionProps, 'currentIndex'> {
   groupedCommands: Array<[string, Command[]]>;
@@ -341,40 +374,16 @@ interface CatalogResultRowProps extends ResultRowInteractionProps {
   executePaletteItem: (item: PaletteItem) => void;
 }
 
-const CatalogResultRow = ({
-  entry,
-  currentIndex,
-  selectedIndex,
-  itemRefs,
-  mouseSelectionArmedRef,
-  updateSelection,
-  executePaletteItem,
-}: CatalogResultRowProps) => {
-  const isSelected = currentIndex === selectedIndex;
-  return (
-    <ListboxOptionButton
-      ref={(element) => {
-        itemRefs.current[currentIndex] = element;
-      }}
-      className={`command-palette-item ${isSelected ? 'selected' : ''}`}
-      id={`command-palette-option-${currentIndex}`}
-      selected={isSelected}
-      onClick={() => executePaletteItem({ type: 'catalog', item: entry.item })}
-      onMouseEnter={() => {
-        if (mouseSelectionArmedRef.current) {
-          updateSelection(currentIndex);
-        }
-      }}
-    >
-      <div className="command-palette-item-content">
-        <div className="command-palette-item-label catalog">
-          <span className={`kind-badge ${entry.kindClass}`}>{entry.kindLabel}</span>
-          <span className="command-palette-item-name">{entry.displayName}</span>
-        </div>
+const CatalogResultRow = ({ entry, ...interaction }: Readonly<CatalogResultRowProps>) => (
+  <PaletteResultRow {...interaction} item={{ type: 'catalog', item: entry.item }}>
+    <div className="command-palette-item-content">
+      <div className="command-palette-item-label catalog">
+        <span className={`kind-badge ${entry.kindClass}`}>{entry.kindLabel}</span>
+        <span className="command-palette-item-name">{entry.displayName}</span>
       </div>
-    </ListboxOptionButton>
-  );
-};
+    </div>
+  </PaletteResultRow>
+);
 
 interface CatalogGroupProps extends Omit<ResultRowInteractionProps, 'currentIndex'> {
   entries: CatalogDisplayEntry[];
@@ -465,11 +474,6 @@ export const CommandPalette = memo(function CommandPaletteComponent({
   const [selectMode, setSelectMode] = useState<PaletteSelectMode>('none');
   const [hideCursor, setHideCursor] = useState(false);
   const [mouseSelectionArmed, setMouseSelectionArmed] = useState(false);
-  const [catalogResults, setCatalogResults] = useState<CatalogItem[]>([]);
-  const [catalogStats, setCatalogStats] = useState<CatalogStats>(null);
-  const [catalogLoading, setCatalogLoading] = useState(false);
-  const catalogAbortRef = useRef<AbortController | null>(null);
-  const catalogDebounceRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDialogElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -532,7 +536,8 @@ export const CommandPalette = memo(function CommandPaletteComponent({
     filteredCommands.forEach((command) => {
       const category = command.category || 'General';
       const existing = groups.get(category) || [];
-      groups.set(category, [...existing, command]);
+      existing.push(command);
+      groups.set(category, existing);
     });
 
     // Sort categories according to CATEGORY_ORDER
@@ -558,115 +563,17 @@ export const CommandPalette = memo(function CommandPaletteComponent({
     });
   }, [filteredCommands]);
 
-  const showCatalogSearch = useMemo(
-    () => isOpen && selectMode === 'none' && searchQuery.trim().length > 0,
-    [isOpen, selectMode, searchQuery]
-  );
-
-  useEffect(() => {
-    if (catalogDebounceRef.current !== null) {
-      window.clearTimeout(catalogDebounceRef.current);
-      catalogDebounceRef.current = null;
-    }
-    if (catalogAbortRef.current) {
-      catalogAbortRef.current.abort();
-      catalogAbortRef.current = null;
-    }
-
-    if (!showCatalogSearch) {
-      setCatalogResults([]);
-      setCatalogStats(null);
-      setCatalogLoading(false);
-      return;
-    }
-
-    const query = searchQuery.trim();
-    if (query.length === 0) {
-      setCatalogResults([]);
-      setCatalogStats(null);
-      setCatalogLoading(false);
-      return;
-    }
-
-    const activeClusterId = (selectedClusterId ?? '').trim();
-    if (!activeClusterId) {
-      setCatalogResults([]);
-      setCatalogStats(null);
-      setCatalogLoading(false);
-      return;
-    }
-
-    setCatalogResults([]);
-    setCatalogStats(null);
-
-    setCatalogLoading(true);
-
-    const timeoutId = window.setTimeout(() => {
-      const controller = new AbortController();
-      catalogAbortRef.current = controller;
-
-      const params = new URLSearchParams();
-      params.set('limit', String(CATALOG_RESULT_LIMIT));
-      parsedTokens.kindTokens.forEach((kind) => {
-        params.append('kind', kind);
-      });
-      const primarySearchTerm = parsedTokens.otherTokens[0];
-      if (primarySearchTerm) {
-        params.set('search', primarySearchTerm);
-      } else if (!parsedTokens.kindTokens.length) {
-        params.set('search', query);
-      }
-
-      const scope = buildClusterScope(activeClusterId, params.toString());
-
-      fetchSnapshot<CatalogSnapshotPayload>('catalog', {
-        scope,
-        signal: controller.signal,
-      })
-        .then((result) => {
-          if (!result.snapshot) {
-            setCatalogResults([]);
-            setCatalogStats(null);
-            return;
-          }
-          const payload = result.snapshot.payload;
-          const items = payload.items ?? [];
-          setCatalogResults(items);
-          setCatalogStats({
-            total: payload.total,
-            truncated: payload.total > items.length,
-          });
-        })
-        .catch((error) => {
-          if (error?.name === 'AbortError') {
-            return;
-          }
-          reportOperationalError(error, { source: 'CommandPalette', action: 'searchCatalog' });
-          setCatalogResults([]);
-          setCatalogStats(null);
-        })
-        .finally(() => {
-          if (catalogAbortRef.current === controller) {
-            catalogAbortRef.current = null;
-          }
-          setCatalogLoading(false);
-        });
-    }, CATALOG_SEARCH_DEBOUNCE_MS);
-
-    catalogDebounceRef.current = timeoutId;
-
-    return () => {
-      if (catalogDebounceRef.current !== null) {
-        window.clearTimeout(catalogDebounceRef.current);
-        catalogDebounceRef.current = null;
-      }
-      if (catalogAbortRef.current) {
-        catalogAbortRef.current.abort();
-        catalogAbortRef.current = null;
-      }
-      setCatalogLoading(false);
-    };
-  }, [showCatalogSearch, searchQuery, parsedTokens, selectedClusterId]);
+  const showCatalogSearch = isOpen && selectMode === 'none' && searchQuery.trim().length > 0;
+  const {
+    items: catalogResults,
+    stats: catalogStats,
+    loading: catalogLoading,
+  } = usePaletteCatalogSearch({
+    enabled: showCatalogSearch,
+    clusterId: selectedClusterId,
+    query: searchQuery,
+    tokens: parsedTokens,
+  });
 
   const catalogDisplayItems = useMemo<CatalogDisplayEntry[]>(() => {
     if (!showCatalogSearch) {
@@ -717,9 +624,7 @@ export const CommandPalette = memo(function CommandPaletteComponent({
   }, [groupedCommands]);
   const catalogBaseIndex = commandIndexMap.size;
 
-  // Reset state when opening
-  const open = useCallback(() => {
-    setIsOpen(true);
+  const resetPalette = useCallback(() => {
     setSearchQuery('');
     setSelectedIndex(0);
     selectedIndexRef.current = 0;
@@ -728,26 +633,17 @@ export const CommandPalette = memo(function CommandPaletteComponent({
     setSelectMode('none');
     openedDirectlyRef.current = false;
     setHideCursor(false);
-    setCatalogResults([]);
-    setCatalogStats(null);
-    setCatalogLoading(false);
   }, []);
 
-  // Close and reset
+  const open = useCallback(() => {
+    setIsOpen(true);
+    resetPalette();
+  }, [resetPalette]);
+
   const close = useCallback(() => {
     setIsOpen(false);
-    setSearchQuery('');
-    setSelectedIndex(0);
-    selectedIndexRef.current = 0;
-    mouseSelectionArmedRef.current = false;
-    setMouseSelectionArmed(false);
-    setSelectMode('none');
-    openedDirectlyRef.current = false;
-    setHideCursor(false);
-    setCatalogResults([]);
-    setCatalogStats(null);
-    setCatalogLoading(false);
-  }, []);
+    resetPalette();
+  }, [resetPalette]);
 
   // Switch the open palette into a selection sub-mode with a clean query and
   // selection.
@@ -811,67 +707,20 @@ export const CommandPalette = memo(function CommandPaletteComponent({
     return 10;
   }, []);
 
-  const selectNext = useCallback(() => {
-    if (paletteItemCount === 0) {
-      return false;
-    }
-    markKeyboardNavigation();
-    const nextIndex =
-      selectedIndexRef.current < paletteItemCount - 1 ? selectedIndexRef.current + 1 : 0;
-    updateSelection(nextIndex);
-    return true;
-  }, [paletteItemCount, markKeyboardNavigation, updateSelection]);
-
-  const selectPrevious = useCallback(() => {
-    if (paletteItemCount === 0) {
-      return false;
-    }
-    markKeyboardNavigation();
-    const previousIndex =
-      selectedIndexRef.current > 0 ? selectedIndexRef.current - 1 : paletteItemCount - 1;
-    updateSelection(previousIndex);
-    return true;
-  }, [paletteItemCount, markKeyboardNavigation, updateSelection]);
-
-  const pageDown = useCallback(() => {
-    if (paletteItemCount === 0) {
-      return false;
-    }
-    markKeyboardNavigation();
-    const pageSize = getPageSize();
-    const nextIndex = Math.min(paletteItemCount - 1, selectedIndexRef.current + pageSize);
-    updateSelection(nextIndex);
-    return true;
-  }, [paletteItemCount, markKeyboardNavigation, getPageSize, updateSelection]);
-
-  const pageUp = useCallback(() => {
-    if (paletteItemCount === 0) {
-      return false;
-    }
-    markKeyboardNavigation();
-    const pageSize = getPageSize();
-    const nextIndex = Math.max(0, selectedIndexRef.current - pageSize);
-    updateSelection(nextIndex);
-    return true;
-  }, [paletteItemCount, markKeyboardNavigation, getPageSize, updateSelection]);
-
-  const goHome = useCallback(() => {
-    if (paletteItemCount === 0) {
-      return false;
-    }
-    markKeyboardNavigation();
-    updateSelection(0);
-    return true;
-  }, [paletteItemCount, markKeyboardNavigation, updateSelection]);
-
-  const goEnd = useCallback(() => {
-    if (paletteItemCount === 0) {
-      return false;
-    }
-    markKeyboardNavigation();
-    updateSelection(paletteItemCount - 1);
-    return true;
-  }, [paletteItemCount, markKeyboardNavigation, updateSelection]);
+  const moveSelection = useCallback(
+    (key: PaletteNavigationKey) => {
+      if (paletteItemCount === 0) {
+        return false;
+      }
+      markKeyboardNavigation();
+      const pageSize = key === 'PageDown' || key === 'PageUp' ? getPageSize() : 0;
+      updateSelection(
+        getPaletteSelectionIndex(key, selectedIndexRef.current, paletteItemCount - 1, pageSize)
+      );
+      return true;
+    },
+    [paletteItemCount, markKeyboardNavigation, getPageSize, updateSelection]
+  );
 
   const activateSelection = useCallback(() => {
     if (paletteItemCount === 0) {
@@ -907,6 +756,66 @@ export const CommandPalette = memo(function CommandPaletteComponent({
     return true;
   }, [isOpen, selectMode, close, updateSelection]);
 
+  const paletteShortcuts = [
+    {
+      key: 'ArrowDown',
+      handler: () => moveSelection('ArrowDown'),
+      description: 'Highlight next result',
+      helpOrder: 30,
+      enabled: isOpen,
+    },
+    {
+      key: 'ArrowUp',
+      handler: () => moveSelection('ArrowUp'),
+      description: 'Highlight previous result',
+      helpOrder: 31,
+      enabled: isOpen,
+    },
+    {
+      key: 'PageDown',
+      handler: () => moveSelection('PageDown'),
+      description: 'Page down',
+      helpOrder: 50,
+      enabled: isOpen,
+    },
+    {
+      key: 'PageUp',
+      handler: () => moveSelection('PageUp'),
+      description: 'Page up',
+      helpOrder: 51,
+      enabled: isOpen,
+    },
+    {
+      key: 'Home',
+      handler: () => moveSelection('Home'),
+      description: 'Jump to first result',
+      helpOrder: 40,
+      enabled: isOpen,
+    },
+    {
+      key: 'End',
+      handler: () => moveSelection('End'),
+      description: 'Jump to last result',
+      helpOrder: 41,
+      enabled: isOpen,
+    },
+    {
+      key: 'Enter',
+      handler: activateSelection,
+      description: 'Execute selection',
+      helpOrder: 60,
+      enabled: isOpen,
+    },
+    {
+      key: 'Escape',
+      handler: handleEscapeShortcut,
+      description: 'Close command palette',
+      category: 'Windows & Panels',
+      helpOrder: 41,
+      enabled: isOpen,
+    },
+  ];
+
   useModalFocusTrap({
     ref: containerRef,
     disabled: !isOpen,
@@ -915,95 +824,15 @@ export const CommandPalette = memo(function CommandPaletteComponent({
       if (event.metaKey || event.ctrlKey || event.altKey) {
         return false;
       }
-
-      switch (event.key) {
-        case 'ArrowDown':
-          return selectNext();
-        case 'ArrowUp':
-          return selectPrevious();
-        case 'PageDown':
-          return pageDown();
-        case 'PageUp':
-          return pageUp();
-        case 'Home':
-          return goHome();
-        case 'End':
-          return goEnd();
-        case 'Enter':
-          return activateSelection();
-        case 'Escape':
-          return handleEscapeShortcut();
-        default:
-          return false;
-      }
+      const shortcut = paletteShortcuts.find((entry) => entry.key === event.key);
+      return shortcut?.handler() ?? false;
     },
   });
 
-  useShortcuts(
-    [
-      {
-        key: 'ArrowDown',
-        handler: selectNext,
-        description: 'Highlight next result',
-        helpOrder: 30,
-        enabled: isOpen,
-      },
-      {
-        key: 'ArrowUp',
-        handler: selectPrevious,
-        description: 'Highlight previous result',
-        helpOrder: 31,
-        enabled: isOpen,
-      },
-      {
-        key: 'PageDown',
-        handler: pageDown,
-        description: 'Page down',
-        helpOrder: 50,
-        enabled: isOpen,
-      },
-      {
-        key: 'PageUp',
-        handler: pageUp,
-        description: 'Page up',
-        helpOrder: 51,
-        enabled: isOpen,
-      },
-      {
-        key: 'Home',
-        handler: goHome,
-        description: 'Jump to first result',
-        helpOrder: 40,
-        enabled: isOpen,
-      },
-      {
-        key: 'End',
-        handler: goEnd,
-        description: 'Jump to last result',
-        helpOrder: 41,
-        enabled: isOpen,
-      },
-      {
-        key: 'Enter',
-        handler: activateSelection,
-        description: 'Execute selection',
-        helpOrder: 60,
-        enabled: isOpen,
-      },
-      {
-        key: 'Escape',
-        handler: handleEscapeShortcut,
-        description: 'Close command palette',
-        category: 'Windows & Panels',
-        helpOrder: 41,
-        enabled: isOpen,
-      },
-    ],
-    {
-      priority: KeyboardShortcutPriority.COMMAND_PALETTE,
-      category: 'Search',
-    }
-  );
+  useShortcuts(paletteShortcuts, {
+    priority: KeyboardShortcutPriority.COMMAND_PALETTE,
+    category: 'Search',
+  });
 
   const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {

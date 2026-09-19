@@ -37,33 +37,12 @@ export const splitClusterScope = (value: string): { prefix: string; scope: strin
 };
 
 /**
- * Rebuilds a UID-to-index map from an array of catalog items.
- */
-export const rebuildIndexByUID = (items: CatalogItem[]): Map<string, number> => {
-  const next = new Map<string, number>();
-  items.forEach((item, index) => {
-    if (item.ref.uid) {
-      next.set(item.ref.uid, index);
-    }
-  });
-  return next;
-};
-
-/**
- * Result of deduplication by UID.
- */
-export type DedupeResult = {
-  items: CatalogItem[];
-  indexByUid: Map<string, number>;
-};
-
-/**
  * Deduplicates catalog items by UID, keeping the last occurrence.
  * Items without a UID are kept as-is.
  */
-const dedupeByUID = (incoming: CatalogItem[]): DedupeResult => {
+const dedupeByUID = (incoming: CatalogItem[]): CatalogItem[] => {
   if (incoming.length === 0) {
-    return { items: [], indexByUid: new Map() };
+    return [];
   }
 
   const indexByUid = new Map<string, number>();
@@ -87,7 +66,7 @@ const dedupeByUID = (incoming: CatalogItem[]): DedupeResult => {
     items[existingIndex] = item;
   }
 
-  return { items, indexByUid };
+  return items;
 };
 
 /**
@@ -104,7 +83,7 @@ export type UpsertResult = {
  * while still reflecting additions, deletions, reordering, and updates.
  */
 export const reconcileByUID = (current: CatalogItem[], incoming: CatalogItem[]): UpsertResult => {
-  const { items: dedupedIncoming } = dedupeByUID(incoming);
+  const dedupedIncoming = dedupeByUID(incoming);
   if (dedupedIncoming.length === 0) {
     return current.length === 0
       ? { nextItems: current, changed: false }
@@ -187,48 +166,37 @@ export const buildCatalogScope = (params: BuildCatalogScopeParams): string => {
 
   // Sort multi-value params to keep the scope string stable across renders/hydration.
   // This avoids accidental refresh loops caused by reordered equivalent arrays.
-  params.kinds
-    .map((kind) => kind.trim())
-    .filter(Boolean)
-    .sort(compareUtf16Strings)
-    .forEach((kind) => {
-      query.append('kind', kind);
-    });
+  const facets = [
+    ['kind', params.kinds],
+    ['apiGroup', params.apiGroups ?? []],
+    ['namespace', params.namespaces],
+    ['scopeNamespace', params.scopeNamespaces ?? []],
+  ] as const;
+  for (const [key, values] of facets) {
+    values
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .sort(compareUtf16Strings)
+      .forEach((value) => {
+        query.append(key, value);
+      });
+  }
 
-  (params.apiGroups ?? [])
-    .map((group) => group.trim())
-    .filter(Boolean)
-    .sort(compareUtf16Strings)
-    .forEach((group) => {
-      query.append('apiGroup', group);
-    });
+  appendCatalogPageAddress(query, params);
 
-  params.namespaces
-    .map((namespace) => namespace.trim())
-    .filter(Boolean)
-    .sort(compareUtf16Strings)
-    .forEach((namespace) => {
-      // GridTable uses '' as the synthetic "cluster-scoped" namespace option.
-      // The backend catalog already understands cluster scope when namespace is omitted.
-      query.append('namespace', namespace);
-    });
+  return query.toString();
+};
 
-  (params.scopeNamespaces ?? [])
-    .map((namespace) => namespace.trim())
-    .filter(Boolean)
-    .sort(compareUtf16Strings)
-    .forEach((namespace) => {
-      query.append('scopeNamespace', namespace);
-    });
-
+const appendCatalogPageAddress = (
+  query: URLSearchParams,
+  params: BuildCatalogScopeParams
+): void => {
   const continueToken = params.continueToken?.trim();
   if (continueToken) {
     query.set('continue', continueToken);
   } else if (typeof params.startRank === 'number' && params.startRank >= 0) {
     query.set('startRank', String(params.startRank));
   }
-
-  return query.toString();
 };
 
 /**

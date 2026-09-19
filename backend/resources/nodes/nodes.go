@@ -101,14 +101,7 @@ func (s *Service) setUnschedulable(ctx context.Context, nodeName string, unsched
 
 // Drain evicts or deletes pods on the node according to the provided options.
 func (s *Service) Drain(ctx context.Context, nodeName string, options restypes.DrainNodeOptions) (err error) {
-	if err := ValidateDrainOptions(options); err != nil {
-		return err
-	}
-	store, err := s.requireDrainStore()
-	if err != nil {
-		return err
-	}
-	job, err := store.StartDrainForClusterIfIdle(nodeName, options, s.deps.ClusterID, s.deps.ClusterName)
+	job, err := s.prepareDrainJob(nodeName, options)
 	if err != nil {
 		return err
 	}
@@ -118,17 +111,11 @@ func (s *Service) Drain(ctx context.Context, nodeName string, options restypes.D
 
 // StartDrainWithCompletion starts a drain job and invokes onComplete after the job exits.
 func (s *Service) StartDrainWithCompletion(ctx context.Context, nodeName string, options restypes.DrainNodeOptions, onComplete func(string)) (*nodemaintenance.DrainJob, error) {
-	if err := ValidateDrainOptions(options); err != nil {
-		return nil, err
-	}
-	store, err := s.requireDrainStore()
+	job, err := s.prepareDrainJob(nodeName, options)
 	if err != nil {
 		return nil, err
 	}
-	job, err := store.StartDrainForClusterIfIdle(nodeName, options, s.deps.ClusterID, s.deps.ClusterName)
-	if err != nil {
-		return nil, err
-	}
+	store := s.drainStore
 
 	ctx, cancel := context.WithCancel(ctx)
 	store.RegisterCancel(job.ID, cancel)
@@ -143,6 +130,17 @@ func (s *Service) StartDrainWithCompletion(ctx context.Context, nodeName string,
 	}()
 
 	return job, nil
+}
+
+func (s *Service) prepareDrainJob(nodeName string, options restypes.DrainNodeOptions) (*nodemaintenance.DrainJob, error) {
+	if err := ValidateDrainOptions(options); err != nil {
+		return nil, err
+	}
+	store, err := s.requireDrainStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.StartDrainForClusterIfIdle(nodeName, options, s.deps.ClusterID, s.deps.ClusterName)
 }
 
 func (s *Service) requireDrainStore() (*nodemaintenance.Store, error) {
@@ -438,12 +436,11 @@ func nodePodFieldSelector(nodeName string) string {
 
 func (s *Service) buildNodeDetails(node *corev1.Node, pods []corev1.Pod, nodeMetrics corev1.ResourceList) *NodeDetails {
 	model := BuildResourceModel(s.deps.ClusterID, node)
-	nodeFacts := BuildFacts(node)
 	podProjection := nodePodProjection{}
 	for _, pod := range pods {
 		podProjection.add(s.deps.ClusterID, pod)
 	}
-	details := newNodeDetails(node, model, nodeFacts, podProjection)
+	details := newNodeDetails(node, model, podProjection)
 	details.Conditions = projectNodeConditions(node.Status.Conditions)
 	details.Taints = projectNodeTaints(node.Spec.Taints)
 	details.Roles = deriveNodeRoles(node.Labels)
@@ -508,11 +505,11 @@ func addCPUAndMemory(resources corev1.ResourceList, cpuTotal, memoryTotal *int64
 	}
 }
 
-func newNodeDetails(node *corev1.Node, model resourcemodel.ResourceModel, nodeFacts Facts, pods nodePodProjection) *NodeDetails {
+func newNodeDetails(node *corev1.Node, model resourcemodel.ResourceModel, pods nodePodProjection) *NodeDetails {
 	return &NodeDetails{
 		Name:             node.Name,
 		StatusProjection: restypes.NewStatusProjection(model.Status),
-		Unschedulable:    nodeFacts.Unschedulable,
+		Unschedulable:    node.Spec.Unschedulable,
 		Architecture:     node.Status.NodeInfo.Architecture,
 		OS:               node.Status.NodeInfo.OperatingSystem,
 		OSImage:          node.Status.NodeInfo.OSImage,

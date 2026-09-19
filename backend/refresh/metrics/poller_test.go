@@ -10,9 +10,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/util/flowcontrol"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
@@ -586,6 +588,29 @@ func TestPollerRefreshCapturesSampleTimestamps(t *testing.T) {
 	require.Equal(t, podStamp, poller.LatestPodUsage()["default/api-0"].Timestamp)
 }
 
+func TestUsageProjectionPreservesSparseSamplesAndContainerTotals(t *testing.T) {
+	stamp := metav1.NewTime(time.Unix(1700000000, 0))
+	usage := corev1.ResourceList{
+		corev1.ResourceCPU:              resource.MustParse("125m"),
+		corev1.ResourceMemory:           resource.MustParse("2Mi"),
+		corev1.ResourceEphemeralStorage: resource.MustParse("1Gi"),
+	}
+	nodes := nodeUsageFromMetrics([]metricsv1beta1.NodeMetrics{
+		{ObjectMeta: metav1.ObjectMeta{Name: "empty"}, Timestamp: stamp},
+		{ObjectMeta: metav1.ObjectMeta{Name: "busy"}, Timestamp: stamp, Usage: usage},
+	})
+	require.Equal(t, NodeUsage{Timestamp: stamp.Time}, nodes["empty"])
+	require.Equal(t, NodeUsage{CPUUsageMilli: 125, MemoryUsageBytes: 2 * 1024 * 1024, Timestamp: stamp.Time}, nodes["busy"])
+	pods := podUsageFromMetrics([]metricsv1beta1.PodMetrics{{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "pod"},
+		Timestamp:  stamp,
+		Containers: []metricsv1beta1.ContainerMetrics{
+			{Usage: usage}, {}, {Usage: usage},
+		},
+	}})
+	require.Equal(t, PodUsage{CPUUsageMilli: 250, MemoryUsageBytes: 4 * 1024 * 1024, Timestamp: stamp.Time}, pods["team/pod"])
+}
+
 func TestJitterDurationHandlesNonPositiveFactor(t *testing.T) {
 	base := time.Second
 	if got := jitterDuration(base, 0); got != base {
@@ -615,8 +640,7 @@ func TestLatestUsageReturnsCopies(t *testing.T) {
 func TestDisabledPollerMetadata(t *testing.T) {
 	t.Helper()
 
-	recorder := telemetry.NewRecorder()
-	poller := NewDisabledPoller(recorder, "")
+	poller := NewDisabledPoller("")
 
 	require.NoError(t, poller.Start(context.Background()))
 	require.NoError(t, poller.Stop(context.Background()))
@@ -633,7 +657,7 @@ func TestDisabledPollerMetadata(t *testing.T) {
 	// serve-time grace period never clears LastError.
 	require.True(t, meta.Disabled)
 
-	custom := NewDisabledPoller(nil, "cluster has no metrics API")
+	custom := NewDisabledPoller("cluster has no metrics API")
 	require.Equal(t, "cluster has no metrics API", custom.Metadata().LastError)
 	require.True(t, custom.Metadata().Disabled)
 }
@@ -682,5 +706,53 @@ func TestUnscopedPollerKeepsClusterWidePodList(t *testing.T) {
 	}
 	if len(namespaces) != 1 || namespaces[0] != "" {
 		t.Fatalf("unscoped poller must issue exactly one cluster-wide list, got %v", namespaces)
+	}
+}
+
+// Both metric APIs use the same retry policy while preserving pod namespace scope.
+func TestMetricsListRetryPolicy(t *testing.T) {
+	for _, resource := range []string{"nodes", "pods"} {
+		for _, scenario := range []string{"recovery", "exhaustion", "unavailable"} {
+			t.Run(resource+"/"+scenario, func(t *testing.T) {
+				poller := NewPoller(nil, nil, time.Second, nil)
+				poller.maxRetry = 2
+				poller.jitterFactor = 0
+				client := metricsfake.NewSimpleClientset()
+				attempts := 0
+				transient := errors.New("temporary metrics failure")
+				client.PrependReactor("list", resource, func(action k8stesting.Action) (bool, runtime.Object, error) {
+					attempts++
+					if resource == "pods" {
+						require.Equal(t, "team-a", action.GetNamespace())
+					} else {
+						require.Empty(t, action.GetNamespace())
+					}
+					if scenario == "unavailable" {
+						return true, nil, apierrors.NewNotFound(schema.GroupResource{Group: "metrics.k8s.io", Resource: resource}, "")
+					}
+					if attempts == 1 || scenario == "exhaustion" {
+						return true, nil, transient
+					}
+					return false, nil, nil
+				})
+				var err error
+				if resource == "nodes" {
+					_, err = poller.listNodeMetricsWithRetry(context.Background(), client)
+				} else {
+					_, err = poller.listPodMetricsInNamespaceWithRetry(context.Background(), client, "team-a")
+				}
+				switch scenario {
+				case "recovery":
+					require.NoError(t, err)
+					require.Equal(t, 2, attempts)
+				case "exhaustion":
+					require.ErrorIs(t, err, transient)
+					require.Equal(t, 2, attempts)
+				case "unavailable":
+					require.ErrorIs(t, err, errMetricsAPIUnavailable)
+					require.Equal(t, 1, attempts)
+				}
+			})
+		}
 	}
 }

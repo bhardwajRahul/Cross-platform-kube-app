@@ -7,7 +7,7 @@
  */
 
 import type React from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import './DiagnosticsPanel.css';
 import {
   resetGridTablePerformanceDiagnostics,
@@ -16,25 +16,17 @@ import {
 import { type TabDescriptor, Tabs } from '@shared/components/tabs';
 import { DockablePanel } from '@ui/dockable';
 import { useShortcut } from '@ui/shortcuts';
-import { errorHandler } from '@utils/errorHandler';
 import { useCapabilityDiagnostics, useUserPermissions } from '@/core/capabilities';
 import { useViewState } from '@/core/contexts/ViewStateContext';
 import { useBrokerReadDiagnostics } from '@/core/read-diagnostics';
 import { parseClusterScopeList, stripClusterScope } from '@/core/refresh/clusterScope';
 import { useKubeconfig } from '@/modules/kubernetes/config/KubeconfigContext';
 import { useNamespace } from '@/modules/namespace/contexts/NamespaceContext';
-import {
-  fetchKubernetesAPIClientDiagnostics,
-  fetchSelectionDiagnostics,
-  fetchTelemetrySummary,
-  type KubernetesAPIClientDiagnostics,
-  type NormalizedTelemetrySummary,
-  type SelectionDiagnostics,
-} from '../client';
+import type { NormalizedTelemetrySummary } from '../client';
 import { refreshOrchestrator } from '../orchestrator';
 import { refreshManager } from '../RefreshManager';
 import { isResourceStreamDomain as isResourceTableDomain } from '../resourceStreamViews';
-import { type DomainSnapshotState, useRefreshScopedDomainEntries, useRefreshState } from '../store';
+import { type DomainSnapshotState, useRefreshState } from '../store';
 import { resourceStreamManager } from '../streaming/resourceStreamManager';
 import type {
   ContainerLogsSnapshotPayload,
@@ -67,7 +59,6 @@ import {
   formatLastUpdated,
   getScopedFeaturesForView,
   PAUSE_POLLING_WHEN_STREAMING_DOMAINS,
-  PRIORITY_DOMAINS,
   resolveDomainNamespace,
   STALE_THRESHOLD_MS,
   STREAM_MODE_BY_NAME,
@@ -92,6 +83,7 @@ import { ClusterDataTable } from './diagnostics/TableClusterData';
 import { ConnectionsTable } from './diagnostics/TableConnections';
 import { EffectivePermissionsTable } from './diagnostics/TableEffectivePermissions';
 import { KubernetesAPIClientsTable } from './diagnostics/TableKubernetesAPIClients';
+import { useDiagnosticsPolling } from './diagnostics/useDiagnosticsPolling';
 
 // Re-export for backwards compatibility
 export { resolveDomainNamespace } from './diagnostics';
@@ -631,13 +623,9 @@ const resolveDomainCount = (
 };
 
 interface DiagnosticsCountDetails {
-  count: number;
   countDisplay: string;
   countTooltip?: string;
   countClassName?: string;
-  warnings: string[];
-  truncated: boolean;
-  totalItems?: number;
 }
 
 const filteredWarnings = (state: DomainSnapshotState<unknown>): string[] =>
@@ -655,14 +643,10 @@ const buildDiagnosticsCountDetails = (
     warnings.push(`Showing most recent ${count} of ${totalItems} ${itemLabel}`);
   }
   return {
-    count,
     countDisplay:
       truncated && totalItems !== undefined ? `${count} / ${totalItems}` : String(count),
     countTooltip: warnings.length > 0 ? warnings.join('\n') : undefined,
     countClassName: warnings.length > 0 ? 'diagnostics-count-warning' : undefined,
-    warnings,
-    truncated,
-    totalItems,
   };
 };
 
@@ -674,13 +658,9 @@ const buildCatalogCountDetails = (
   const count = state.stats?.totalItems ?? dataTotal;
   const warnings = filteredWarnings(state);
   return {
-    count,
     countDisplay: String(count),
     countTooltip: warnings.length > 0 ? warnings.join('\n') : undefined,
     countClassName: warnings.length > 0 ? 'diagnostics-count-warning' : undefined,
-    warnings,
-    truncated: false,
-    totalItems: count,
   };
 };
 
@@ -752,43 +732,6 @@ const resolveStreamActive = (
 
 const isTimestampStale = (timestamp: number | undefined): boolean =>
   timestamp ? Date.now() - timestamp > STALE_THRESHOLD_MS : false;
-
-const resolveSnapshotTelemetryStatus = (
-  telemetrySummary: NormalizedTelemetrySummary | null,
-  telemetryInfo: SnapshotTelemetryEntry | undefined
-): string => {
-  if (!telemetrySummary) {
-    return '—';
-  }
-  if (!telemetryInfo) {
-    return 'No data';
-  }
-  return telemetryInfo.lastStatus === 'error'
-    ? `Error (${telemetryInfo.failureCount})`
-    : `Success (${telemetryInfo.successCount})`;
-};
-
-const resolveStreamTelemetryStatus = (
-  isResourceStreamDomain: boolean,
-  streamTelemetry: TelemetryStreamStatus | undefined
-): string | null => {
-  if (!isResourceStreamDomain || !streamTelemetry) {
-    return null;
-  }
-  if (streamTelemetry.errorCount > 0) {
-    return `Stream Error (${streamTelemetry.errorCount})`;
-  }
-  return streamTelemetry.droppedMessages > 0
-    ? `Stream Dropped (${streamTelemetry.droppedMessages})`
-    : 'Stream OK';
-};
-
-const resolveStreamHealthStatus = (streamHealth: StreamHealthSummary | null): string | null => {
-  if (!streamHealth) {
-    return null;
-  }
-  return streamHealth.reason === 'inactive' ? 'Stream inactive' : `Stream ${streamHealth.status}`;
-};
 
 const appendResourceStreamTelemetryTooltip = (
   parts: string[],
@@ -871,7 +814,7 @@ interface DomainTelemetryDetails {
   lastUpdated: number | undefined;
   telemetryLastUpdatedInfo: ReturnType<typeof formatLastUpdated> | null;
   combinedError: string;
-  telemetryStatus: string;
+
   telemetryTooltip?: string;
   streamDropped: number;
   telemetrySuccess?: number;
@@ -904,13 +847,6 @@ const buildDomainTelemetryDetails = (params: {
     lastUpdated: combinedLastUpdated > 0 ? combinedLastUpdated : undefined,
     telemetryLastUpdatedInfo: resolveTelemetryLastUpdated(streamLastEvent, telemetryInfo),
     combinedError: resolveTelemetryError(telemetryLastError, state.error),
-    telemetryStatus: [
-      resolveSnapshotTelemetryStatus(telemetrySummary, telemetryInfo),
-      resolveStreamTelemetryStatus(isResourceStreamDomain, streamTelemetry),
-      resolveStreamHealthStatus(streamHealth),
-    ]
-      .filter(Boolean)
-      .join(' • '),
     telemetryTooltip: buildTelemetryTooltip({
       telemetryLastError,
       isResourceStreamDomain,
@@ -983,9 +919,6 @@ const buildDomainMetricsDetails = (state: DomainSnapshotState<unknown>, hasMetri
   const successCount = metricsInfo?.successCount ?? (hasMetrics ? 0 : undefined);
   const failureCount = metricsInfo?.failureCount ?? (hasMetrics ? 0 : undefined);
   return {
-    metricsInfo,
-    successCount,
-    failureCount,
     metricsStatus: resolveMetricsStatus(metricsInfo, hasMetrics, successCount, failureCount),
     metricsTooltip: resolveMetricsTooltip(metricsInfo, hasMetrics, successCount, failureCount),
   };
@@ -1094,13 +1027,10 @@ const buildPodDiagnosticsRow = (
     dropped: state.droppedAutoRefreshes,
     stale: lastUpdated ? Date.now() - lastUpdated > STALE_THRESHOLD_MS : false,
     error: state.error ?? '—',
-    telemetryStatus: [state.status, streamHealth ? `Stream ${streamHealth.status}` : null]
-      .filter(Boolean)
-      .join(' • '),
     telemetryTooltip: buildPodTelemetryTooltip(state.error, streamHealth),
     metricsStatus: 'N/A',
     metricsTooltip: 'Pod usage is joined onto the pods rows at serve',
-    hasMetrics: false,
+
     ...countDetails,
     namespace: resolveDomainNamespace('pods', scope),
     scope: scopeDetails.display,
@@ -1209,16 +1139,14 @@ const buildContainerLogsDiagnosticsRow = (
     dropped: state.droppedAutoRefreshes,
     stale: false,
     error: state.error ?? '—',
-    telemetryStatus: state.status,
+
     telemetryTooltip: state.error ?? undefined,
     metricsStatus: '—',
     metricsTooltip: 'Streaming domain',
-    metricsStale: false,
-    metricsSuccess: undefined,
-    metricsFailure: undefined,
+
     telemetrySuccess: undefined,
     telemetryFailure: undefined,
-    hasMetrics: false,
+
     ...countDetails,
     namespace: identity.namespaceLabel,
     scope: scopeDetails.display,
@@ -1269,17 +1197,14 @@ const buildObjectPanelDiagnosticsRow = (
     dropped: state.droppedAutoRefreshes,
     stale: false,
     error: state.error ?? '—',
-    telemetryStatus: state.status,
+
     telemetryTooltip: state.error ?? undefined,
     metricsStatus: '—',
     metricsTooltip: 'Polling domain',
-    metricsStale: false,
-    metricsSuccess: undefined,
-    metricsFailure: undefined,
+
     telemetrySuccess: undefined,
     telemetryFailure: undefined,
-    hasMetrics: false,
-    count: 0,
+
     countDisplay: '—',
     namespace: identity.namespaceLabel,
     scope: scopeDetails.display,
@@ -1329,161 +1254,67 @@ const splitCapabilityRows = (
   return { currentCapabilityRows, previousCapabilityRows };
 };
 
+const EMPTY_SCOPE_ENTRIES: Array<[string, DomainSnapshotState<unknown>]> = [];
+const DOMAIN_DIAGNOSTIC_SCOPES: Array<{
+  domain: RefreshDomain;
+  label: string;
+  hasMetrics?: boolean;
+}> = [
+  { domain: 'namespaces', label: 'Namespaces' },
+  { domain: 'cluster-overview', label: 'Cluster Overview', hasMetrics: true },
+  { domain: 'nodes', label: 'Nodes', hasMetrics: true },
+  { domain: 'cluster-config', label: 'Cluster Config' },
+  { domain: 'cluster-crds', label: 'Cluster CRDs' },
+  { domain: 'cluster-custom', label: 'Cluster Custom' },
+  { domain: 'cluster-events', label: 'Cluster Events' },
+  { domain: 'object-maintenance', label: 'ObjPanel - Maintenance' },
+  { domain: 'catalog', label: 'Browse Catalog' },
+  { domain: 'catalog-diff', label: 'Diff Catalog' },
+  { domain: 'cluster-rbac', label: 'Cluster RBAC' },
+  { domain: 'cluster-storage', label: 'Cluster Storage' },
+  { domain: 'namespace-workloads', label: 'Workloads', hasMetrics: true },
+  { domain: 'namespace-autoscaling', label: 'NS Autoscaling' },
+  { domain: 'namespace-config', label: 'NS Config' },
+  { domain: 'namespace-custom', label: 'NS Custom' },
+  { domain: 'namespace-events', label: 'NS Events' },
+  { domain: 'namespace-helm', label: 'NS Helm' },
+  { domain: 'namespace-network', label: 'NS Network' },
+  { domain: 'namespace-quotas', label: 'NS Quotas' },
+  { domain: 'namespace-rbac', label: 'NS RBAC' },
+  { domain: 'namespace-storage', label: 'NS Storage' },
+];
+
 export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isOpen }) => {
   const [activeTab, setActiveTab] = useState<DiagnosticsTabId>('k8s-api');
   const gridTablePerformanceRows = useGridTablePerformanceDiagnostics();
   const brokerReadDiagnostics = useBrokerReadDiagnostics();
-  const refreshState = useRefreshState();
-  // Scoped domains — read all scope entries for diagnostics.
-  const objectMaintenanceScopeEntries = useRefreshScopedDomainEntries('object-maintenance');
-  const namespaceScopeEntries = useRefreshScopedDomainEntries('namespaces');
-  const clusterOverviewScopeEntries = useRefreshScopedDomainEntries('cluster-overview');
-  const nodeScopeEntries = useRefreshScopedDomainEntries('nodes');
-  const clusterConfigScopeEntries = useRefreshScopedDomainEntries('cluster-config');
-  const clusterCRDScopeEntries = useRefreshScopedDomainEntries('cluster-crds');
-  const clusterCustomScopeEntries = useRefreshScopedDomainEntries('cluster-custom');
-  const clusterRBACScopeEntries = useRefreshScopedDomainEntries('cluster-rbac');
-  const clusterStorageScopeEntries = useRefreshScopedDomainEntries('cluster-storage');
-  const clusterEventsScopeEntries = useRefreshScopedDomainEntries('cluster-events');
-  const catalogScopeEntries = useRefreshScopedDomainEntries('catalog');
-  const catalogDiffScopeEntries = useRefreshScopedDomainEntries('catalog-diff');
-  const namespaceWorkloadsScopeEntries = useRefreshScopedDomainEntries('namespace-workloads');
-  const namespaceAutoscalingScopeEntries = useRefreshScopedDomainEntries('namespace-autoscaling');
-  const namespaceConfigScopeEntries = useRefreshScopedDomainEntries('namespace-config');
-  const namespaceCustomScopeEntries = useRefreshScopedDomainEntries('namespace-custom');
-  const namespaceEventsScopeEntries = useRefreshScopedDomainEntries('namespace-events');
-  const namespaceHelmScopeEntries = useRefreshScopedDomainEntries('namespace-helm');
-  const namespaceNetworkScopeEntries = useRefreshScopedDomainEntries('namespace-network');
-  const namespaceQuotasScopeEntries = useRefreshScopedDomainEntries('namespace-quotas');
-  const namespaceRBACScopeEntries = useRefreshScopedDomainEntries('namespace-rbac');
-  const namespaceStorageScopeEntries = useRefreshScopedDomainEntries('namespace-storage');
-  const podScopeEntries = useRefreshScopedDomainEntries('pods');
-  const containerLogsScopeEntries = useRefreshScopedDomainEntries('container-logs');
-  // Object panel scoped domains – visible only while the object panel is open.
-  const objectDetailsScopeEntries = useRefreshScopedDomainEntries('object-details');
-  const objectEventsScopeEntries = useRefreshScopedDomainEntries('object-events');
-  const objectYamlScopeEntries = useRefreshScopedDomainEntries('object-yaml');
-  const objectHelmManifestScopeEntries = useRefreshScopedDomainEntries('object-helm-manifest');
-  const objectHelmValuesScopeEntries = useRefreshScopedDomainEntries('object-helm-values');
+  const refreshState = useRefreshState(isOpen);
+  const { scopedDomainEntries } = refreshState;
+  const catalogScopeEntries = scopedDomainEntries.catalog ?? EMPTY_SCOPE_ENTRIES;
+  const podScopeEntries = scopedDomainEntries.pods ?? EMPTY_SCOPE_ENTRIES;
+  const containerLogsScopeEntries = scopedDomainEntries['container-logs'] ?? EMPTY_SCOPE_ENTRIES;
+  const objectDetailsScopeEntries = scopedDomainEntries['object-details'] ?? EMPTY_SCOPE_ENTRIES;
+  const objectEventsScopeEntries = scopedDomainEntries['object-events'] ?? EMPTY_SCOPE_ENTRIES;
+  const objectYamlScopeEntries = scopedDomainEntries['object-yaml'] ?? EMPTY_SCOPE_ENTRIES;
+  const objectHelmManifestScopeEntries =
+    scopedDomainEntries['object-helm-manifest'] ?? EMPTY_SCOPE_ENTRIES;
+  const objectHelmValuesScopeEntries =
+    scopedDomainEntries['object-helm-values'] ?? EMPTY_SCOPE_ENTRIES;
 
-  const [telemetrySummary, setTelemetrySummary] = useState<NormalizedTelemetrySummary | null>(null);
-  const [telemetryError, setTelemetryError] = useState<string | null>(null);
-  const [selectionDiagnostics, setSelectionDiagnostics] = useState<SelectionDiagnostics | null>(
-    null
-  );
-  const [selectionDiagnosticsError, setSelectionDiagnosticsError] = useState<string | null>(null);
-  const [kubernetesAPIDiagnostics, setKubernetesAPIDiagnostics] = useState<
-    KubernetesAPIClientDiagnostics[]
-  >([]);
-  const [kubernetesAPIDiagnosticsError, setKubernetesAPIDiagnosticsError] = useState<string | null>(
-    null
-  );
+  const {
+    telemetrySummary,
+    telemetryError,
+    selectionDiagnostics,
+    selectionDiagnosticsError,
+    kubernetesAPIDiagnostics,
+    kubernetesAPIDiagnosticsError,
+  } = useDiagnosticsPolling(isOpen);
   const permissionMap = useUserPermissions();
   const capabilityDiagnostics = useCapabilityDiagnostics();
   const { viewType, activeClusterTab, activeNamespaceTab } = useViewState();
   const { selectedNamespace } = useNamespace();
   const { selectedClusterId, getClusterMeta } = useKubeconfig();
   const [diagnosticsClock, setDiagnosticsClock] = useState(() => Date.now());
-  const reportedDiagnosticsFailuresRef = useRef(new Map<string, string>());
-
-  useEffect(() => {
-    if (!isOpen) {
-      reportedDiagnosticsFailuresRef.current.clear();
-      setTelemetrySummary(null);
-      setTelemetryError(null);
-      setSelectionDiagnostics(null);
-      setSelectionDiagnosticsError(null);
-      setKubernetesAPIDiagnostics([]);
-      setKubernetesAPIDiagnosticsError(null);
-      return;
-    }
-
-    let cancelled = false;
-
-    const presentDiagnosticsFailure = (
-      key: string,
-      reason: unknown,
-      action: string,
-      fallbackMessage: string
-    ): string => {
-      const previouslyReportedMessage = reportedDiagnosticsFailuresRef.current.get(key);
-      if (previouslyReportedMessage !== undefined) {
-        return previouslyReportedMessage;
-      }
-      const error = reason instanceof Error ? reason : new Error(fallbackMessage);
-      const details = errorHandler.handleInline(error, {
-        action,
-        source: 'DiagnosticsPanel',
-      });
-      reportedDiagnosticsFailuresRef.current.set(key, details.message);
-      return details.message;
-    };
-
-    const loadDiagnostics = async () => {
-      const [telemetryResult, selectionResult, kubernetesAPIResult] = await Promise.allSettled([
-        fetchTelemetrySummary(),
-        fetchSelectionDiagnostics(),
-        fetchKubernetesAPIClientDiagnostics(),
-      ]);
-
-      if (cancelled) {
-        return;
-      }
-
-      if (telemetryResult.status === 'fulfilled') {
-        reportedDiagnosticsFailuresRef.current.delete('telemetry');
-        setTelemetrySummary(telemetryResult.value);
-        setTelemetryError(null);
-      } else {
-        setTelemetryError(
-          presentDiagnosticsFailure(
-            'telemetry',
-            telemetryResult.reason,
-            'loadTelemetryDiagnostics',
-            'Failed to load telemetry'
-          )
-        );
-      }
-
-      if (selectionResult.status === 'fulfilled') {
-        reportedDiagnosticsFailuresRef.current.delete('selection');
-        setSelectionDiagnostics(selectionResult.value);
-        setSelectionDiagnosticsError(null);
-      } else {
-        setSelectionDiagnosticsError(
-          presentDiagnosticsFailure(
-            'selection',
-            selectionResult.reason,
-            'loadSelectionDiagnostics',
-            'Failed to load selection diagnostics'
-          )
-        );
-      }
-
-      if (kubernetesAPIResult.status === 'fulfilled') {
-        reportedDiagnosticsFailuresRef.current.delete('kubernetes-api');
-        setKubernetesAPIDiagnostics(kubernetesAPIResult.value);
-        setKubernetesAPIDiagnosticsError(null);
-      } else {
-        setKubernetesAPIDiagnosticsError(
-          presentDiagnosticsFailure(
-            'kubernetes-api',
-            kubernetesAPIResult.reason,
-            'loadKubernetesAPIDiagnostics',
-            'Failed to load Kubernetes API client diagnostics'
-          )
-        );
-      }
-    };
-
-    void loadDiagnostics();
-    const intervalId = window.setInterval(loadDiagnostics, 5000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -1501,169 +1332,32 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
 
   const domainScopedStates = useMemo(
     () =>
-      [
-        {
-          domain: 'namespaces' as RefreshDomain,
-          label: 'Namespaces',
-          entries: namespaceScopeEntries,
-        },
-        {
-          domain: 'cluster-overview' as RefreshDomain,
-          label: 'Cluster Overview',
-          hasMetrics: true,
-          entries: clusterOverviewScopeEntries,
-        },
-        {
-          domain: 'nodes' as RefreshDomain,
-          label: 'Nodes',
-          hasMetrics: true,
-          entries: nodeScopeEntries,
-        },
-        {
-          domain: 'cluster-config' as RefreshDomain,
-          label: 'Cluster Config',
-          entries: clusterConfigScopeEntries,
-        },
-        {
-          domain: 'cluster-crds' as RefreshDomain,
-          label: 'Cluster CRDs',
-          entries: clusterCRDScopeEntries,
-        },
-        {
-          domain: 'cluster-custom' as RefreshDomain,
-          label: 'Cluster Custom',
-          entries: clusterCustomScopeEntries,
-        },
-        {
-          domain: 'cluster-events' as RefreshDomain,
-          label: 'Cluster Events',
-          entries: clusterEventsScopeEntries,
-        },
-        {
-          domain: 'object-maintenance' as RefreshDomain,
-          label: 'ObjPanel - Maintenance',
-          entries: objectMaintenanceScopeEntries,
-        },
-        {
-          domain: 'catalog' as RefreshDomain,
-          label: 'Browse Catalog',
-          entries: catalogScopeEntries,
-        },
-        {
-          domain: 'catalog-diff' as RefreshDomain,
-          label: 'Diff Catalog',
-          entries: catalogDiffScopeEntries,
-        },
-        {
-          domain: 'cluster-rbac' as RefreshDomain,
-          label: 'Cluster RBAC',
-          entries: clusterRBACScopeEntries,
-        },
-        {
-          domain: 'cluster-storage' as RefreshDomain,
-          label: 'Cluster Storage',
-          entries: clusterStorageScopeEntries,
-        },
-        {
-          domain: 'namespace-workloads' as RefreshDomain,
-          label: 'Workloads',
-          hasMetrics: true,
-          entries: namespaceWorkloadsScopeEntries,
-        },
-        {
-          domain: 'namespace-autoscaling' as RefreshDomain,
-          label: 'NS Autoscaling',
-          entries: namespaceAutoscalingScopeEntries,
-        },
-        {
-          domain: 'namespace-config' as RefreshDomain,
-          label: 'NS Config',
-          entries: namespaceConfigScopeEntries,
-        },
-        {
-          domain: 'namespace-custom' as RefreshDomain,
-          label: 'NS Custom',
-          entries: namespaceCustomScopeEntries,
-        },
-        {
-          domain: 'namespace-events' as RefreshDomain,
-          label: 'NS Events',
-          entries: namespaceEventsScopeEntries,
-        },
-        {
-          domain: 'namespace-helm' as RefreshDomain,
-          label: 'NS Helm',
-          entries: namespaceHelmScopeEntries,
-        },
-        {
-          domain: 'namespace-network' as RefreshDomain,
-          label: 'NS Network',
-          entries: namespaceNetworkScopeEntries,
-        },
-        {
-          domain: 'namespace-quotas' as RefreshDomain,
-          label: 'NS Quotas',
-          entries: namespaceQuotasScopeEntries,
-        },
-        {
-          domain: 'namespace-rbac' as RefreshDomain,
-          label: 'NS RBAC',
-          entries: namespaceRBACScopeEntries,
-        },
-        {
-          domain: 'namespace-storage' as RefreshDomain,
-          label: 'NS Storage',
-          entries: namespaceStorageScopeEntries,
-        },
-      ].flatMap(({ domain, label, hasMetrics, entries }) =>
-        entries.map(([scopeKey, state]) => {
-          const resolvedScope = state.scope?.trim() ? state.scope : scopeKey;
+      DOMAIN_DIAGNOSTIC_SCOPES.flatMap(({ domain, label, hasMetrics }) =>
+        (scopedDomainEntries[domain] ?? EMPTY_SCOPE_ENTRIES).map(([scopeKey, state]) => {
+          const scope = state.scope?.trim() ? state.scope : scopeKey;
           return {
             domain,
             label,
             hasMetrics: Boolean(hasMetrics),
-            state: resolvedScope === state.scope ? state : { ...state, scope: resolvedScope },
+            state: scope === state.scope ? state : { ...state, scope },
           };
         })
       ),
-    [
-      objectMaintenanceScopeEntries,
-      namespaceScopeEntries,
-      clusterOverviewScopeEntries,
-      nodeScopeEntries,
-      clusterConfigScopeEntries,
-      clusterCRDScopeEntries,
-      clusterCustomScopeEntries,
-      clusterEventsScopeEntries,
-      clusterRBACScopeEntries,
-      clusterStorageScopeEntries,
-      catalogScopeEntries,
-      catalogDiffScopeEntries,
-      namespaceWorkloadsScopeEntries,
-      namespaceAutoscalingScopeEntries,
-      namespaceConfigScopeEntries,
-      namespaceEventsScopeEntries,
-      namespaceCustomScopeEntries,
-      namespaceHelmScopeEntries,
-      namespaceNetworkScopeEntries,
-      namespaceQuotasScopeEntries,
-      namespaceRBACScopeEntries,
-      namespaceStorageScopeEntries,
-    ]
+    [scopedDomainEntries]
   );
 
-  const resourceStreamStats = resourceStreamManager.getTelemetrySummary();
+  const resourceStreamStats = isOpen
+    ? resourceStreamManager.getTelemetrySummary()
+    : { resyncCount: 0, fallbackCount: 0 };
   // Per-(cluster, domain) resync/fallback stats for the per-domain Streams rows.
-  const resourceStreamStatsByClusterDomain =
-    resourceStreamManager.getTelemetrySummaryByClusterDomain();
+  const resourceStreamStatsByClusterDomain = isOpen
+    ? resourceStreamManager.getTelemetrySummaryByClusterDomain()
+    : {};
   const rows = useMemo<DiagnosticsRow[]>(() => {
-    const prioritySet = new Set(PRIORITY_DOMAINS);
-
     const baseRows = domainScopedStates
       .filter(({ domain, state }) => !isTransientResourceTableQueryScope(domain, state.scope))
       .map<DiagnosticsRow>(({ domain, state, label, hasMetrics }) => {
         const effectiveScope = state.scope;
-        const hasMetricsFlag = hasMetrics;
         const scopeDetails = resolveScopeDetails(effectiveScope, selectedClusterId, getClusterMeta);
         const roleDetails = resolveScopeRole(domain, effectiveScope);
         const telemetryDetails = buildDomainTelemetryDetails({
@@ -1674,7 +1368,7 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
           telemetrySummary,
           resourceStreamStats,
         });
-        const metricsDetails = buildDomainMetricsDetails(state, hasMetricsFlag);
+        const metricsDetails = buildDomainMetricsDetails(state, hasMetrics);
 
         const data = asRecord(state.data);
         const countDetails = resolveDiagnosticsCountDetails(domain, state, data);
@@ -1685,8 +1379,6 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
         );
         const namespaceLabel = resolveDomainNamespace(domain, effectiveScope);
 
-        const version =
-          state.version !== null && state.version !== undefined ? String(state.version) : '—';
         const pollingDetails = resolvePollingDetails({
           domain,
           refresherName,
@@ -1716,7 +1408,7 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
           domain,
           label,
           status: state.status,
-          version,
+          version: stateVersion(state),
           interval: intervalLabel,
           lastUpdated:
             telemetryDetails.telemetryLastUpdatedInfo?.display ?? lastUpdatedInfo.display,
@@ -1725,18 +1417,16 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
           dropped: state.droppedAutoRefreshes + telemetryDetails.streamDropped,
           stale: isTimestampStale(telemetryDetails.lastUpdated),
           error: telemetryDetails.combinedError,
-          telemetryStatus: telemetryDetails.telemetryStatus,
+
           telemetryTooltip: telemetryDetails.telemetryTooltip,
           metricsStatus: metricsDetails.metricsStatus,
           metricsTooltip: metricsDetails.metricsTooltip,
-          metricsStale: metricsDetails.metricsInfo?.stale,
-          metricsSuccess: metricsDetails.successCount,
-          metricsFailure: metricsDetails.failureCount,
+
           duration: telemetryDetails.durationLabel,
           syncWait: telemetryDetails.syncWaitLabel,
           telemetrySuccess: telemetryDetails.telemetrySuccess,
           telemetryFailure: telemetryDetails.telemetryFailure,
-          hasMetrics: hasMetricsFlag,
+
           ...countDetails,
           namespace: namespaceLabel,
           scope: scopeDetails.display,
@@ -1756,8 +1446,6 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
     const scopedRowContext = { selectedClusterId, getClusterMeta };
     const podRows = podScopeEntries.map((entry) => buildPodDiagnosticsRow(entry, scopedRowContext));
 
-    const orderedPodRows = podRows.sort((a, b) => a.label.localeCompare(b.label));
-
     const logRows = containerLogsScopeEntries.map((entry) => {
       const scope = entry[1].scope ?? entry[0];
       return buildContainerLogsDiagnosticsRow(
@@ -1765,8 +1453,6 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
         resolveContainerLogsRowContext(scope, scopedRowContext, telemetrySummary?.streams)
       );
     });
-
-    const orderedLogRows = logRows.sort((a, b) => a.label.localeCompare(b.label));
 
     // Build rows for object panel scoped domains (details, events, yaml, helm).
     const buildObjectPanelRows = (
@@ -1800,23 +1486,11 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
       objectHelmValuesScopeEntries
     );
 
-    const priorityRows = baseRows.filter((row) => prioritySet.has(row.domain));
-    const remainingRows = baseRows.filter(
-      (row) =>
-        !prioritySet.has(row.domain) && row.domain !== 'pods' && row.domain !== 'container-logs'
-    );
-
-    // Keep configured priority order while preserving every scoped row per domain.
-    const sortedPriorityRows = PRIORITY_DOMAINS.flatMap((domain) =>
-      priorityRows.filter((row) => row.domain === domain)
-    );
-
     // Sort all rows alphabetically by the Domain label.
     const sortedRows = [
-      ...sortedPriorityRows,
-      ...orderedPodRows,
-      ...orderedLogRows,
-      ...remainingRows,
+      ...baseRows,
+      ...podRows,
+      ...logRows,
       ...objectDetailsRows,
       ...objectEventsRows,
       ...objectYamlRows,
@@ -2006,7 +1680,6 @@ export const DiagnosticsPanel: React.FC<DiagnosticsPanelProps> = ({ onClose, isO
     <GridTablePerformance
       onReset={resetGridTablePerformanceDiagnostics}
       rows={gridTablePerformanceRows}
-      summary="Rolling GridTable measurements for the instrumented large-data views."
     />
   );
 

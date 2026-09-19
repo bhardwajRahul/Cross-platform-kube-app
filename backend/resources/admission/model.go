@@ -21,9 +21,8 @@ const apiGroup = "admissionregistration.k8s.io"
 
 // BuildMutatingResourceModel builds the MutatingWebhookConfiguration resource model.
 func BuildMutatingResourceModel(clusterID string, config *admissionregistrationv1.MutatingWebhookConfiguration) resourcemodel.ResourceModel {
-	facts := BuildMutatingFacts(clusterID, config)
-	status := statusPresentation(config.ObjectMeta, len(facts.Webhooks))
-	return resourcemodel.KubernetesResourceModel(clusterID, MutatingIdentity, config.ObjectMeta, status, resourcemodel.ResourceFacts{})
+	status := statusPresentation(config.ObjectMeta, len(config.Webhooks))
+	return resourcemodel.KubernetesResourceModel(clusterID, MutatingIdentity, config.ObjectMeta, status)
 }
 
 // BuildMutatingFacts extracts the MutatingWebhookConfiguration facts.
@@ -42,9 +41,8 @@ func BuildMutatingFacts(clusterID string, config *admissionregistrationv1.Mutati
 
 // BuildValidatingResourceModel builds the ValidatingWebhookConfiguration resource model.
 func BuildValidatingResourceModel(clusterID string, config *admissionregistrationv1.ValidatingWebhookConfiguration) resourcemodel.ResourceModel {
-	facts := BuildValidatingFacts(clusterID, config)
-	status := statusPresentation(config.ObjectMeta, len(facts.Webhooks))
-	return resourcemodel.KubernetesResourceModel(clusterID, ValidatingIdentity, config.ObjectMeta, status, resourcemodel.ResourceFacts{})
+	status := statusPresentation(config.ObjectMeta, len(config.Webhooks))
+	return resourcemodel.KubernetesResourceModel(clusterID, ValidatingIdentity, config.ObjectMeta, status)
 }
 
 // BuildValidatingFacts extracts the ValidatingWebhookConfiguration facts.

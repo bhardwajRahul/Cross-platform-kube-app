@@ -15,7 +15,6 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 	gatewayversioned "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned"
 	gatewayinformers "sigs.k8s.io/gateway-api/pkg/client/informers/externalversions"
@@ -331,17 +330,12 @@ func (m *ClusterRuntimeManager) applyKubernetesClientRateLimits(qps, burst int) 
 	m.kubernetesBurst = burst
 	m.rateLimitMu.Unlock()
 
-	m.clusterClientsMu.Lock()
-	clients := make([]*clusterClients, 0, len(m.clusterClients))
-	for _, item := range m.clusterClients {
-		if item != nil {
-			clients = append(clients, item)
-		}
-	}
-	m.clusterClientsMu.Unlock()
-
+	clients := m.snapshotClusterClients()
 	registry := m.ensureKubernetesAPIMetricsRegistry()
 	for _, item := range clients {
+		if item == nil {
+			continue
+		}
 		if item.rateLimiter != nil {
 			item.rateLimiter.Set(qps, burst)
 		}
@@ -417,7 +411,6 @@ func (a *ClusterRuntimeManager) buildClusterClientsWithManager(
 		gatewayClient:          dependencies.gatewayClient,
 		gatewayInformerFactory: dependencies.gatewayInformerFactory,
 		gatewayAPIPresence:     dependencies.gatewayAPIPresence,
-		gatewayVersionResolver: dependencies.gatewayAPIPresence,
 		apiextensionsClient:    dependencies.apiextensionsClient,
 		dynamicClient:          dependencies.dynamicClient,
 		metricsClient:          dependencies.metricsClient,
@@ -566,17 +559,10 @@ func (m *ClusterRuntimeManager) createClusterAuthManager(meta ClusterMeta) *auth
 	})
 }
 
-// the transport for auth state tracking.
+// buildRestConfigForSelection loads the selected config and attaches the cluster's
+// rate limiter, diagnostics, and auth-aware transport.
 func (a *ClusterRuntimeManager) buildRestConfigForSelection(selection kubeconfigSelection, meta ClusterMeta, clusterAuthMgr *authstate.Manager) (*rest.Config, error) {
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	loadingRules.ExplicitPath = selection.Path
-	overrides := &clientcmd.ConfigOverrides{}
-	if selection.Context != "" {
-		overrides.CurrentContext = selection.Context
-	}
-
-	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides)
-	config, err := clientConfig.ClientConfig()
+	config, err := loadSelectionRESTConfig(selection)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build config from %s: %w", selection.Path, err)
 	}

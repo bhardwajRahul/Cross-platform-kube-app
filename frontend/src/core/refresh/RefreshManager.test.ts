@@ -92,6 +92,38 @@ describe('RefreshManager manual refresh flow', () => {
     expect(refreshManager.getState(TEST_REFRESHER)?.status).toBe('disabled');
   });
 
+  it.each([false, true])(
+    'settles timed-out subscribers without overwriting a successful sibling (%s)',
+    async (withSuccessfulSibling) => {
+      let finishLate!: () => void;
+      let callbackSignal!: AbortSignal;
+      callback.mockImplementationOnce((_isManual: boolean, signal: AbortSignal) => {
+        callbackSignal = signal;
+        return new Promise<void>((resolve) => {
+          finishLate = resolve;
+        });
+      });
+      if (withSuccessfulSibling) {
+        refreshManager.subscribe(TEST_REFRESHER, vi.fn());
+      }
+      const refresh = refreshManager.triggerManualRefresh(TEST_REFRESHER);
+      expect(callbackSignal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await refresh;
+
+      expect(callbackSignal.aborted).toBe(true);
+      const state = refreshManager.getState(TEST_REFRESHER);
+      expect(state?.consecutiveErrors).toBe(withSuccessfulSibling ? 0 : 1);
+      expect(state?.error?.message ?? null).toBe(
+        withSuccessfulSibling ? null : 'Refresh timeout after 2 seconds'
+      );
+      finishLate();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(refreshManager.getState(TEST_REFRESHER)).toEqual(state);
+    }
+  );
+
   it('cancels a manual cooldown when an already-disabled refresher is disabled again', async () => {
     await refreshManager.triggerManualRefresh(TEST_REFRESHER);
     expect(refreshManager.getState(TEST_REFRESHER)?.status).toBe('cooldown');
@@ -642,6 +674,48 @@ describe('RefreshManager global controls', () => {
     expect(refreshManager.getState(intervalName)?.status).toBe('disabled');
 
     refreshManager.unregister(intervalName);
+  });
+
+  it('preserves cooldown and subscribers when cadence changes without forcing a refresh', async () => {
+    vi.useFakeTimers();
+    const name = 'object-cadence-cooldown-test' as RefresherName;
+    const subscriber = vi.fn();
+    refreshManager.register({
+      name,
+      interval: 800,
+      cooldown: 500,
+      timeout: 2,
+      enabled: false,
+    });
+    refreshManager.subscribe(name, subscriber);
+    try {
+      refreshManager.enable(name);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(subscriber).toHaveBeenCalledTimes(1);
+      expect(refreshManager.getState(name)?.status).toBe('cooldown');
+
+      refreshManager.updateInterval(name, 100);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(subscriber).toHaveBeenCalledTimes(1);
+      expect(refreshManager.getState(name)?.status).toBe('cooldown');
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(subscriber).toHaveBeenCalledTimes(2);
+      expect(subscriber.mock.calls[1][0]).toBe(false);
+
+      refreshManager.pause(name);
+      refreshManager.updateInterval(name, 50);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(subscriber).toHaveBeenCalledTimes(2);
+      refreshManager.resume(name);
+      await vi.advanceTimersByTimeAsync(49);
+      expect(subscriber).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(subscriber).toHaveBeenCalledTimes(3);
+    } finally {
+      refreshManager.unregister(name);
+      vi.useRealTimers();
+    }
   });
 
   it('updates interval timers when cadence changes', () => {

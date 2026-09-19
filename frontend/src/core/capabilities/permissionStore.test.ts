@@ -26,10 +26,12 @@ import { POD_PERMISSIONS, WORKLOAD_PERMISSIONS } from './permissionSpecs';
 import {
   __resetForTests,
   getPermissionKey,
+  getPermissionQueryDiagnosticsSnapshot,
   getUserPermissionMap,
   initializePermissionStore,
   makePermissionStatus,
   queryClusterPermissions,
+  queryKindPermissions,
   queryNamespacesPermissions,
   resetPermissionStore,
   setActivePermissionCluster,
@@ -85,6 +87,32 @@ const mockSuccessfulQueryPermissions = (): void => {
 // ---------------------------------------------------------------------------
 
 describe('getPermissionKey', () => {
+  it('keeps case-distinct cluster grants separate through batching and lookup', async () => {
+    mockSuccessfulQueryPermissions();
+    hoisted.readQueryPermissions.mockImplementation(async (queries: QueryPayloadItem[]) => ({
+      results: queries.map((query) => ({
+        ...query,
+        allowed: query.clusterId === 'config:Production',
+        source: 'ssrr',
+        reason: '',
+        error: '',
+      })),
+    }));
+    await queryNamespacesPermissions(
+      [
+        { clusterId: 'config:Production', namespace: 'default' },
+        { clusterId: 'config:production', namespace: 'default' },
+      ],
+      { specLists: [POD_PERMISSIONS] }
+    );
+    const key = (clusterId: string) =>
+      getPermissionKey('Pod', 'delete', 'default', null, clusterId, '', 'v1');
+    expect(getUserPermissionMap().get(key('config:Production'))?.allowed).toBe(true);
+    expect(getUserPermissionMap().get(key('config:production'))?.allowed).toBe(false);
+    const payload = hoisted.readQueryPermissions.mock.calls[0][0] as QueryPayloadItem[];
+    expect(payload.every((item) => item.group === '' && item.version === 'v1')).toBe(true);
+  });
+
   it('auto-resolves built-in GVK for kind-only callers so the key matches the spec-emit path', () => {
     // Deployment is apps/v1 — the builtin lookup table populates the
     // group/version segment even when the caller doesn't pass them
@@ -327,7 +355,7 @@ describe('queryNamespacesPermissions', () => {
       error: 'Error: permission transport failed',
       descriptor: {
         clusterId: 'cluster-1',
-        group: null,
+        group: '',
         version: 'v1',
         resourceKind: 'Pod',
         namespace: 'team-a',
@@ -523,6 +551,95 @@ describe('queryClusterPermissions', () => {
   });
 });
 
+describe('permission store reset ownership', () => {
+  it('does not start staggered namespace refreshes after reset', async () => {
+    vi.useFakeTimers();
+    try {
+      mockSuccessfulQueryPermissions();
+      initializePermissionStore('cluster-a');
+      await vi.advanceTimersByTimeAsync(0);
+      await queryNamespacesPermissions(
+        [
+          { clusterId: 'cluster-a', namespace: 'alpha' },
+          { clusterId: 'cluster-a', namespace: 'beta' },
+        ],
+        { specLists: [POD_PERMISSIONS] }
+      );
+      hoisted.readQueryPermissions.mockClear();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(
+        hoisted.readQueryPermissions.mock.calls.some(([queries]) =>
+          (queries as QueryPayloadItem[]).some((query) => query.namespace === 'alpha')
+        )
+      ).toBe(true);
+      const callsBeforeReset = hoisted.readQueryPermissions.mock.calls.length;
+      resetPermissionStore();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(hoisted.readQueryPermissions).toHaveBeenCalledTimes(callsBeforeReset);
+      expect(getUserPermissionMap().size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['namespace', 'cluster', 'kind'] as const)(
+    'ignores a completed %s query from before reset while a replacement is pending',
+    async (kind) => {
+      mockSuccessfulQueryPermissions();
+      const completions: Array<{
+        queries: QueryPayloadItem[];
+        resolve: (response: QueryPermissionsResponse) => void;
+      }> = [];
+      hoisted.readQueryPermissions.mockImplementation(
+        (queries: QueryPayloadItem[]) =>
+          new Promise<QueryPermissionsResponse>((resolve) => {
+            completions.push({ queries, resolve });
+          })
+      );
+      const start = () => {
+        if (kind === 'namespace') {
+          return queryNamespacesPermissions([{ clusterId: 'cluster-a', namespace: 'default' }], {
+            specLists: [POD_PERMISSIONS],
+          });
+        }
+        if (kind === 'cluster') {
+          return queryClusterPermissions('cluster-a');
+        }
+        return queryKindPermissions('Pod', 'default', 'cluster-a', '', 'v1');
+      };
+      const complete = (index: number, allowed: boolean) => {
+        const { queries, resolve } = completions[index];
+        resolve({
+          results: queries.map((query) => ({
+            ...query,
+            allowed,
+            source: 'ssar',
+            reason: '',
+            error: '',
+          })),
+        });
+      };
+      const first = start();
+      await vi.waitFor(() => expect(completions).toHaveLength(1));
+      resetPermissionStore();
+      expect(getUserPermissionMap().size).toBe(0);
+      const replacement = start();
+      await vi.waitFor(() => expect(completions).toHaveLength(2));
+      const key = completions[1].queries[0].id;
+      expect(getUserPermissionMap().get(key)?.pending).toBe(true);
+      complete(0, true);
+      await first;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(getUserPermissionMap().get(key)).toMatchObject({ allowed: false, pending: true });
+      complete(1, false);
+      await replacement;
+      await vi.waitFor(() =>
+        expect(getUserPermissionMap().get(key)).toMatchObject({ allowed: false, pending: false })
+      );
+    }
+  );
+});
+
 describe('permission store notifications', () => {
   it('notifies permission subscribers asynchronously', async () => {
     vi.useFakeTimers();
@@ -627,5 +744,146 @@ describe('setActivePermissionCluster', () => {
 
     expect(getUserPermissionMap().size).toBe(0);
     expect(hoisted.readQueryPermissions).not.toHaveBeenCalled();
+  });
+});
+
+describe('permission query completion contracts', () => {
+  it('keeps overlapping namespace checks pending until each feature batch completes', async () => {
+    mockSuccessfulQueryPermissions();
+    const finish: Array<() => void> = [];
+    hoisted.readQueryPermissions.mockImplementation(
+      (queries: QueryPayloadItem[]) =>
+        new Promise((resolve) => {
+          finish.push(() =>
+            resolve({
+              results: queries.map((query) => ({
+                ...query,
+                allowed: true,
+                source: 'ssar',
+                reason: '',
+                error: '',
+              })),
+              diagnostics: [
+                {
+                  key: 'cluster-1|team-a',
+                  clusterId: 'cluster-1',
+                  namespace: 'team-a',
+                  method: 'ssar',
+                  ssrrIncomplete: true,
+                  ssrrRuleCount: 3,
+                  ssarFallbackCount: queries.length,
+                  checkCount: queries.length,
+                },
+              ],
+            })
+          );
+        })
+    );
+    const targets = [{ clusterId: 'cluster-1', namespace: 'team-a' }];
+    const pods = queryNamespacesPermissions(targets, { specLists: [POD_PERMISSIONS] });
+    const workloads = queryNamespacesPermissions(targets, { specLists: [WORKLOAD_PERMISSIONS] });
+    expect(finish).toHaveLength(2);
+    const workloadChecks = hoisted.readQueryPermissions.mock.calls[1][0].length;
+
+    finish[0]();
+    await pods;
+    expect(getPermissionQueryDiagnosticsSnapshot()).toEqual([
+      expect.objectContaining({
+        pendingCount: workloadChecks,
+        inFlightCount: workloadChecks,
+        method: 'ssar',
+        ssrrIncomplete: true,
+        ssrrRuleCount: 3,
+        lastResult: 'success',
+      }),
+    ]);
+    finish[1]();
+    await workloads;
+    expect(getPermissionQueryDiagnosticsSnapshot()).toEqual([
+      expect.objectContaining({
+        pendingCount: 0,
+        inFlightCount: 0,
+        inFlightStartedAt: undefined,
+        ssarFallbackCount: workloadChecks,
+        consecutiveFailureCount: 0,
+      }),
+    ]);
+  });
+
+  it('preserves cluster identity and failure state when a cluster permission read rejects', async () => {
+    mockSuccessfulQueryPermissions();
+    hoisted.readQueryPermissions.mockRejectedValue(new Error('offline'));
+    queryClusterPermissions('cluster-1');
+    const key = getPermissionKey('Node', 'list', null, null, 'cluster-1');
+    await vi.waitFor(() => expect(getUserPermissionMap().get(key)?.pending).toBe(false));
+    expect(getUserPermissionMap().get(key)).toMatchObject({
+      allowed: false,
+      source: 'error',
+      error: 'Error: offline',
+      descriptor: { clusterId: 'cluster-1', group: '', version: 'v1', namespace: null },
+    });
+    expect(getPermissionQueryDiagnosticsSnapshot()).toEqual([
+      expect.objectContaining({
+        key: 'cluster-1|__cluster__',
+        pendingCount: 0,
+        inFlightCount: 0,
+        method: 'ssar',
+        lastResult: 'error',
+        consecutiveFailureCount: 1,
+      }),
+    ]);
+  });
+
+  it('retains custom-kind identity and denial reasons without sharing freshness across API groups', async () => {
+    mockSuccessfulQueryPermissions();
+    hoisted.readQueryPermissions.mockImplementation(async (queries: QueryPayloadItem[]) => ({
+      results: queries.map((query) => ({
+        ...query,
+        allowed: false,
+        source: 'denied',
+        reason: 'RBAC denied',
+        error: '',
+      })),
+    }));
+    const queryKind = (group: string) =>
+      queryKindPermissions('Widget', 'team-a', 'cluster-1', group, 'v1');
+    const key = getPermissionKey(
+      'Widget',
+      'delete',
+      'team-a',
+      null,
+      'cluster-1',
+      'first.example',
+      'v1'
+    );
+    queryKind('first.example');
+    await vi.waitFor(() => expect(getUserPermissionMap().get(key)?.pending).toBe(false));
+    expect(getUserPermissionMap().get(key)).toMatchObject({
+      allowed: false,
+      reason: 'RBAC denied',
+      error: null,
+      feature: PERMISSION_FEATURES.namespaceCustom,
+      descriptor: {
+        clusterId: 'cluster-1',
+        group: 'first.example',
+        version: 'v1',
+        namespace: 'team-a',
+      },
+    });
+    queryKind('first.example');
+    queryKind('second.example');
+    await vi.waitFor(() => expect(hoisted.readQueryPermissions).toHaveBeenCalledTimes(2));
+  });
+
+  it('clears pending custom-kind checks after transport failure and retains their retry interval', async () => {
+    mockSuccessfulQueryPermissions();
+    hoisted.readQueryPermissions.mockRejectedValue(new Error('offline'));
+    const key = getPermissionKey('Widget', 'patch', null, null, 'cluster-1', 'example.io', 'v1');
+    const query = () => queryKindPermissions('Widget', null, 'cluster-1', 'example.io', 'v1');
+    query();
+    expect(getUserPermissionMap().get(key)?.pending).toBe(true);
+    await vi.waitFor(() => expect(getUserPermissionMap().has(key)).toBe(false));
+    query();
+    expect(hoisted.readQueryPermissions).toHaveBeenCalledTimes(1);
   });
 });

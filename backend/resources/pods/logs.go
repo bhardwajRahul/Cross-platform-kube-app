@@ -217,6 +217,9 @@ func (s *Service) resolveLogTarget(req types.ContainerLogsFetchRequest) (resolve
 	if identity.Namespace == "" {
 		return resolvedLogTarget{}, fmt.Errorf("logs require a namespaced object scope")
 	}
+	if err := containerlogs.ValidateTargetGVK(identity.GVK); err != nil {
+		return resolvedLogTarget{}, err
+	}
 	kind := strings.ToLower(strings.TrimSpace(identity.GVK.Kind))
 	if kind == "" {
 		return resolvedLogTarget{}, fmt.Errorf("object kind missing in scope %q", req.Scope)
@@ -380,7 +383,7 @@ func (s *Service) fetchContainerLogs(ctx context.Context, target containerlogs.S
 	pods := s.deps.KubernetesClient.CoreV1().Pods(target.Namespace)
 	stream, err := containerLogsStreamFunc(pods, ctx, target.PodName, logOptions)
 	if err != nil {
-		if containerLogStreamUnavailable(err) {
+		if containerlogs.IsUnavailable(err) {
 			return []types.ContainerLogsEntry{}, nil
 		}
 		return nil, fmt.Errorf("failed to get container logs stream: %w", err)
@@ -410,16 +413,6 @@ func (s *Service) fetchContainerLogs(ctx context.Context, target containerlogs.S
 	}
 
 	return entries, nil
-}
-
-func containerLogStreamUnavailable(err error) bool {
-	errText := err.Error()
-	return strings.Contains(errText, "waiting to start") ||
-		strings.Contains(errText, "container not found") ||
-		(strings.Contains(errText, "previous terminated container") && strings.Contains(errText, "not found")) ||
-		strings.Contains(errText, "is not valid for pod") ||
-		strings.Contains(errText, "ContainerCreating") ||
-		strings.Contains(errText, "PodInitializing")
 }
 
 func splitContainerLogLine(line string) (string, string) {

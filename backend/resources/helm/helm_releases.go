@@ -20,24 +20,15 @@ import (
 	"gopkg.in/yaml.v2"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/release"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ReleaseDetails returns detailed information about a Helm release.
 func (s *Service) ReleaseDetails(ctx context.Context, namespace, name string) (*HelmReleaseDetails, error) {
-	if err := s.ensureClient(); err != nil {
-		return nil, err
-	}
-
-	settings := s.helmSettings()
-	actionConfig, err := s.initActionConfig(settings, namespace)
+	actionConfig, release, err := s.getRelease(namespace, name)
 	if err != nil {
 		return nil, err
-	}
-
-	client := action.NewGet(actionConfig)
-	release, err := client.Run(name)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get release %s: %w", name, err)
 	}
 
 	historyClient := action.NewHistory(actionConfig)
@@ -47,12 +38,11 @@ func (s *Service) ReleaseDetails(ctx context.Context, namespace, name string) (*
 	}
 
 	resources := s.extractResourcesFromManifest(ctx, release.Manifest, namespace)
-	resourceLinks := s.extractResourceLinksFromManifest(ctx, release.Manifest, namespace)
 	opts := resourcemodel.ResourceModelBuildOptions{
-		Materialization: resourcemodel.MaterializeSummaryFacts | resourcemodel.MaterializeRelationshipFacts | resourcemodel.MaterializeDetailFacts,
+		Materialization: resourcemodel.MaterializeSummaryFacts | resourcemodel.MaterializeDetailFacts,
 	}
-	model := BuildResourceModel(s.deps.Common.ClusterID, release, namespace, resourceLinks, history, opts)
-	facts := BuildFacts(release, resourceLinks, history, opts)
+	model := BuildResourceModel(s.deps.Common.ClusterID, release, namespace)
+	facts := BuildFacts(release, history, opts)
 
 	details := &HelmReleaseDetails{
 		Kind:             "helmrelease",
@@ -63,7 +53,7 @@ func (s *Service) ReleaseDetails(ctx context.Context, namespace, name string) (*
 		AppVersion:       facts.AppVersion,
 		StatusProjection: types.NewStatusProjection(model.Status),
 		Revision:         facts.Revision,
-		Updated:          helmUpdatedAge(facts),
+		Updated:          helmUpdatedAge(facts.Updated),
 		Description:      facts.Description,
 		Notes:            facts.Notes,
 		Values:           release.Config,
@@ -72,13 +62,10 @@ func (s *Service) ReleaseDetails(ctx context.Context, namespace, name string) (*
 	}
 
 	for _, h := range facts.History {
-		status := statusPresentation(Facts{
-			RawStatus:   h.Status,
-			Description: h.Description,
-		})
+		status := statusPresentation(h.Status, h.Description)
 		details.History = append(details.History, HelmRevision{
 			Revision:         h.Revision,
-			Updated:          helmRevisionUpdatedAge(h),
+			Updated:          helmUpdatedAge(h.Updated),
 			StatusProjection: types.NewStatusProjection(status),
 			Chart:            h.Chart,
 			AppVersion:       h.AppVersion,
@@ -95,20 +82,9 @@ func (s *Service) ReleaseDetails(ctx context.Context, namespace, name string) (*
 
 // ReleaseManifest returns the rendered manifest for a Helm release.
 func (s *Service) ReleaseManifest(namespace, name string) (string, error) {
-	if err := s.ensureClient(); err != nil {
-		return "", err
-	}
-
-	settings := s.helmSettings()
-	actionConfig, err := s.initActionConfig(settings, namespace)
+	_, release, err := s.getRelease(namespace, name)
 	if err != nil {
 		return "", err
-	}
-
-	client := action.NewGet(actionConfig)
-	release, err := client.Run(name)
-	if err != nil {
-		return "", fmt.Errorf("failed to get release %s: %w", name, err)
 	}
 
 	return release.Manifest, nil
@@ -116,20 +92,9 @@ func (s *Service) ReleaseManifest(namespace, name string) (string, error) {
 
 // ReleaseValues returns chart defaults, merged values, and user overrides for a Helm release.
 func (s *Service) ReleaseValues(namespace, name string) (map[string]interface{}, error) {
-	if err := s.ensureClient(); err != nil {
-		return nil, err
-	}
-
-	settings := s.helmSettings()
-	actionConfig, err := s.initActionConfig(settings, namespace)
+	actionConfig, release, err := s.getRelease(namespace, name)
 	if err != nil {
 		return nil, err
-	}
-
-	getClient := action.NewGet(actionConfig)
-	release, err := getClient.Run(name)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get release %s: %w", name, err)
 	}
 
 	defaults := release.Chart.Values
@@ -153,6 +118,23 @@ func (s *Service) ReleaseValues(namespace, name string) (map[string]interface{},
 		"allValues":     mergedValues,
 		"userValues":    userValues,
 	}, nil
+}
+
+// getRelease keeps the client, configuration, and release-read policy shared by
+// the object panel's detail, manifest, and values reads.
+func (s *Service) getRelease(namespace, name string) (*action.Configuration, *release.Release, error) {
+	if err := s.ensureClient(); err != nil {
+		return nil, nil, err
+	}
+	actionConfig, err := s.initActionConfig(s.helmSettings(), namespace)
+	if err != nil {
+		return nil, nil, err
+	}
+	value, err := action.NewGet(actionConfig).Run(name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get release %s: %w", name, err)
+	}
+	return actionConfig, value, nil
 }
 
 // DeleteRelease removes a Helm release.
@@ -327,22 +309,8 @@ func (resources *manifestResourceAccumulator) addResource(ctx context.Context, o
 }
 
 func extractNameNamespace(obj map[string]interface{}, defaultNamespace string) (string, string, bool) {
-	metadataRaw, ok := obj["metadata"]
+	metadata, ok := toStringMap(obj["metadata"])
 	if !ok {
-		return "", defaultNamespace, false
-	}
-
-	metadata := make(map[string]interface{})
-	switch m := metadataRaw.(type) {
-	case map[string]interface{}:
-		metadata = m
-	case map[interface{}]interface{}:
-		for k, v := range m {
-			if keyStr, ok := k.(string); ok {
-				metadata[keyStr] = v
-			}
-		}
-	default:
 		return "", defaultNamespace, false
 	}
 
@@ -375,37 +343,11 @@ func toStringMap(value interface{}) (map[string]interface{}, bool) {
 	}
 }
 
-func (s *Service) extractResourceLinksFromManifest(ctx context.Context, manifest, defaultNamespace string) []resourcemodel.ResourceLink {
-	resources := s.extractResourcesFromManifest(ctx, manifest, defaultNamespace)
-	if len(resources) == 0 {
-		return nil
-	}
-	links := make([]resourcemodel.ResourceLink, 0, len(resources))
-	for _, resource := range resources {
-		link := resourcemodel.BuildHelmManifestResourceLinkWithNamespaceSourceAndResolver(
-			ctx,
-			s.deps.Common.ResourceResolver,
-			s.deps.Common.ClusterID, resourcemodel.HelmManifestResource{APIVersion: resource.APIVersion, Kind: resource.Kind, Namespace: resource.Namespace, Name: resource.Name, NamespaceExplicit: resource.Scope == string(resourcemodel.ResourceScopeNamespaced)})
-
-		if link.Ref != nil || link.Display != nil {
-			links = append(links, link)
-		}
-	}
-	return links
-}
-
-func helmUpdatedAge(facts Facts) string {
-	if facts.Updated == nil || facts.Updated.IsZero() {
+func helmUpdatedAge(updated *metav1.Time) string {
+	if updated == nil || updated.IsZero() {
 		return ""
 	}
-	return common.FormatAge(facts.Updated.Time)
-}
-
-func helmRevisionUpdatedAge(facts HelmRevisionFacts) string {
-	if facts.Updated == nil || facts.Updated.IsZero() {
-		return ""
-	}
-	return common.FormatAge(facts.Updated.Time)
+	return common.FormatAge(updated.Time)
 }
 
 func (s *Service) logDebug(msg string) {

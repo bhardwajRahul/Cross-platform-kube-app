@@ -13,6 +13,11 @@ import * as ReactDOM from 'react-dom/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetAppPreferencesCacheForTesting } from '@/core/settings/appPreferences';
 import { requireValue } from '@/test-utils/requireValue';
+import {
+  buildPersistedStateForSave,
+  type GridTableFilterPersistenceOptions,
+  savePersistedState,
+} from './gridTablePersistence';
 import { setGridTablePersistenceMode } from './gridTablePersistenceSettings';
 import { useGridTablePersistence } from './useGridTablePersistence';
 
@@ -60,9 +65,6 @@ describe('useGridTablePersistence', () => {
     { key: 'age', header: 'Age', render: (row) => row.id },
   ];
 
-  const data: { id: string }[] = [{ id: 'a' }];
-  const keyExtractor = (row: { id: string }) => row.id;
-
   const Harness: React.FC<{ namespace: string }> = ({ namespace }) => {
     const result = useGridTablePersistence({
       viewId: 'namespace-pods',
@@ -70,8 +72,7 @@ describe('useGridTablePersistence', () => {
       namespace,
       isNamespaceScoped: namespace !== 'all-namespaces',
       columns,
-      data,
-      keyExtractor,
+
       filterOptions: { isNamespaceScoped: namespace !== 'all-namespaces' },
     });
 
@@ -123,6 +124,50 @@ describe('useGridTablePersistence', () => {
     });
     container.remove();
   });
+
+  it.each([
+    ['Browse', () => ({ kinds: [], namespaces: [], queryFacets: { apiGroups: [] } })],
+    ['namespace summary', () => ({ clusters: ['cluster-a', 'cluster-b'] })],
+  ] satisfies [string, () => GridTableFilterPersistenceOptions][])(
+    'saves a column choice while %s refreshes with inline array options',
+    async (_view, buildFilterOptions) => {
+      const actual =
+        await vi.importActual<typeof import('./gridTablePersistence')>('./gridTablePersistence');
+      vi.mocked(buildPersistedStateForSave).mockImplementation(actual.buildPersistedStateForSave);
+      vi.mocked(savePersistedState).mockClear();
+      vi.useFakeTimers();
+      const root = ReactDOM.createRoot(document.createElement('div'));
+      const Probe = ({ rows }: { rows: { id: string }[] }) => {
+        // A live table republishes rows and inline filter options on every refresh.
+        const params = {
+          viewId: 'live-table',
+          clusterIdentity: 'cluster-a',
+          isNamespaceScoped: false,
+          columns,
+          filterOptions: buildFilterOptions(),
+        };
+        latestState = useGridTablePersistence(params);
+        return <span>{rows[0]?.id}</span>;
+      };
+      try {
+        await act(async () => root.render(<Probe rows={[{ id: 'a' }]} />));
+        expect(getLatestState().hydrated).toBe(true);
+        await act(async () => getLatestState().setColumnVisibility({ age: false }));
+        for (let tick = 0; tick < 3; tick++) {
+          await act(async () => vi.advanceTimersByTimeAsync(100));
+          await act(async () => root.render(<Probe rows={[{ id: `row-${tick}` }]} />));
+        }
+        expect(savePersistedState).toHaveBeenCalledWith(
+          'key:clusterhash:live-table:',
+          expect.objectContaining({ columnVisibility: { age: false } })
+        );
+      } finally {
+        await act(async () => root.unmount());
+        vi.useRealTimers();
+        vi.mocked(buildPersistedStateForSave).mockImplementation(() => null);
+      }
+    }
+  );
 
   it('persists and scopes column visibility per namespace', async () => {
     stateMap['key:clusterhash:namespace-pods:team-a'] = {

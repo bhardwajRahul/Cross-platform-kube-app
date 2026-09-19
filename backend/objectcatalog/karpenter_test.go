@@ -15,7 +15,7 @@ func TestKarpenterQueryRetainsFamilyAcrossFiltersAndPages(t *testing.T) {
 		{Ref: resourcemodel.ResourceRef{ClusterID: "a", Group: "other.io", Version: "v1", Kind: "NodePool", Resource: "nodepools", Name: "other", UID: "other"}, Scope: ScopeCluster},
 		{Ref: resourcemodel.ResourceRef{ClusterID: "a", Group: "karpenter.sh", Version: "v1", Kind: "Unexpected", Resource: "unexpected", Namespace: "ns", Name: "namespaced", UID: "ns"}, Scope: ScopeNamespace},
 	}
-	svc.publishStreamingState([]*summaryChunk{{items: rows}}, map[string]bool{"NodePool": false, "EC2NodeClass": false, "Unexpected": true}, map[string]struct{}{"ns": {}}, nil, true)
+	svc.publishCatalogRowsForTest(rows, map[string]bool{"NodePool": false, "EC2NodeClass": false, "Unexpected": true}, map[string]struct{}{"ns": {}}, nil, true)
 	opts := QueryOptions{ResourceFamily: "karpenter", Limit: 1}
 	first := svc.Query(opts)
 	require.Equal(t, 2, first.TotalItems)
@@ -46,7 +46,7 @@ func TestDiscoveredFamiliesDoNotDependOnObjectsOrListPermission(t *testing.T) {
 	svc := NewService(Dependencies{}, nil)
 	require.Empty(t, svc.DiscoveredResourceFamilies())
 	// Discovery identity is published before RBAC filtering and collection.
-	svc.identity.replaceDiscovered([]resourceDescriptor{
+	svc.identity.replaceDiscovered([]Descriptor{
 		builtinDescriptor("karpenter.sh", "v1", "NodePool", "nodepools", false),
 		builtinDescriptor("karpenter.azure.com", "v1beta1", "AKSNodeClass", "aksnodeclasses", false),
 		builtinDescriptor("other.io", "v1", "NodePool", "nodepools", false),

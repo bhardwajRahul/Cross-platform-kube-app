@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/luxury-yacht/app/backend/internal/appupdates"
-	"github.com/luxury-yacht/app/backend/internal/logsources"
 	"github.com/luxury-yacht/app/internal/updateidentity"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/updater"
@@ -95,25 +94,12 @@ func (u *UpdateCoordinator) getUpdateInfo() *UpdateInfo {
 }
 
 func updateInfoFromSnapshot(snapshot appupdates.Snapshot) *UpdateInfo {
-	info := &UpdateInfo{
-		Status:            snapshot.Status,
-		CurrentVersion:    snapshot.CurrentVersion,
-		AvailableVersion:  snapshot.AvailableVersion,
-		ReleaseName:       snapshot.ReleaseName,
-		PublishedAt:       snapshot.PublishedAt,
-		ReleaseNotes:      snapshot.ReleaseNotes,
-		CanCheck:          snapshot.CanCheck,
-		CanInstall:        snapshot.CanInstall,
-		Distribution:      snapshot.Distribution,
-		EligibilityReason: snapshot.EligibilityReason,
-		RecoveryTarget:    snapshot.RecoveryTarget,
-		Error:             snapshot.Error,
-	}
+	info := UpdateInfo(snapshot)
 	if snapshot.ProgressPercent != nil {
 		progress := *snapshot.ProgressPercent
 		info.ProgressPercent = &progress
 	}
-	return info
+	return &info
 }
 
 // CheckForUpdates performs only release discovery. Download and restart remain
@@ -124,20 +110,6 @@ func (u *UpdateCoordinator) CheckForUpdates() (*UpdateInfo, error) {
 	}
 	snapshot, err := u.coordinator.Check(u.operationContext())
 	return updateInfoFromSnapshot(snapshot), err
-}
-
-// showAboutAndCheckForUpdates gives native menu users immediate feedback while
-// keeping the provider request off the platform menu callback.
-func (u *UpdateCoordinator) showAboutAndCheckForUpdates() {
-	if u == nil {
-		return
-	}
-	u.shell.ShowAbout()
-	go func() {
-		if _, err := u.CheckForUpdates(); err != nil && u.logger != nil {
-			u.logger.Warn(fmt.Sprintf("Application update check failed: %v", err), logsources.App)
-		}
-	}()
 }
 
 // DownloadApplicationUpdate downloads, verifies, and prepares the exact

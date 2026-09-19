@@ -146,6 +146,7 @@ describe('parseQueryTokens', () => {
 
 const openWithObjectMock = vi.fn();
 const fetchSnapshotMock = vi.fn();
+let selectedClusterId = 'alpha:ctx';
 let registeredGlobalShortcuts: Array<{
   key: string;
   modifiers?: Record<string, boolean>;
@@ -163,7 +164,7 @@ vi.mock('@modules/object-panel/hooks/useObjectPanel', () => ({
 }));
 
 vi.mock('@modules/kubernetes/config/KubeconfigContext', () => ({
-  useKubeconfig: () => ({ selectedClusterId: 'alpha:ctx' }),
+  useKubeconfig: () => ({ selectedClusterId }),
 }));
 
 vi.mock('@hooks/useShortNames', () => ({
@@ -204,7 +205,6 @@ vi.mock('@ui/shortcuts', () => ({
     hasActiveBlockingSurface: vi.fn(() => false),
     registerSurface: vi.fn(),
     unregisterSurface: vi.fn(),
-    updateSurface: vi.fn(),
     dispatchNativeAction: vi.fn(() => false),
   }),
   useSearchShortcutTarget: () => undefined,
@@ -286,6 +286,7 @@ describe('CommandPalette component behaviour', () => {
     registeredPaletteShortcuts = [];
     wailsEventHandlers.clear();
     fetchSnapshotMock.mockReset();
+    selectedClusterId = 'alpha:ctx';
     openWithObjectMock.mockReset();
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -680,6 +681,98 @@ describe('CommandPalette component behaviour', () => {
     expect(document.querySelector('.command-palette')).not.toBeNull();
   });
 
+  it.each(['resolve', 'reject'] as const)(
+    'keeps the current cluster search pending when an obsolete search %ss',
+    async (settlement) => {
+      vi.useFakeTimers();
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      let resolveOld!: (value: unknown) => void;
+      let rejectOld!: (reason: Error) => void;
+      let resolveCurrent!: (value: unknown) => void;
+      fetchSnapshotMock
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve, reject) => {
+              resolveOld = resolve;
+              rejectOld = reject;
+            })
+        )
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveCurrent = resolve;
+            })
+        );
+      await renderPalette([]);
+      await openPalette();
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+          queryInput(),
+          'pod'
+        );
+        queryInput().dispatchEvent(new InputEvent('input', { bubbles: true }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      selectedClusterId = 'beta:ctx';
+      await renderPalette([]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(fetchSnapshotMock.mock.calls[1][1].scope).toContain('beta:ctx|');
+      await act(async () => {
+        if (settlement === 'resolve') {
+          resolveOld({
+            snapshot: {
+              payload: {
+                items: [
+                  createCatalogItem({
+                    ref: {
+                      clusterId: 'alpha:ctx',
+                      uid: 'old',
+                      name: 'old-pod',
+                      kind: 'Pod',
+                    },
+                  }),
+                ],
+                total: 1,
+              },
+            },
+          });
+        } else {
+          rejectOld(new Error('obsolete search failed'));
+        }
+      });
+      expect(document.querySelector('.command-palette-loading')).not.toBeNull();
+      expect(queryItems()).toHaveLength(0);
+      expect(errors).not.toHaveBeenCalled();
+      await act(async () => {
+        resolveCurrent({
+          snapshot: {
+            payload: {
+              items: [
+                createCatalogItem({
+                  ref: {
+                    clusterId: 'beta:ctx',
+                    uid: 'current',
+                    name: 'current-pod',
+                    kind: 'Pod',
+                  },
+                }),
+              ],
+              total: 1,
+            },
+          },
+        });
+      });
+      expect(document.querySelector('.command-palette-loading')).toBeNull();
+      expect(queryItems()).toHaveLength(1);
+      expect(queryItems()[0].textContent).toContain('current-pod');
+      errors.mockRestore();
+    }
+  );
+
   it('debounces catalog searches and renders truncated results', async () => {
     const catalogItem = createCatalogItem({
       ref: {
@@ -787,6 +880,41 @@ describe('CommandPalette component behaviour', () => {
     await openPalette();
 
     expect(document.querySelector('.command-palette')).not.toBeNull();
+  });
+
+  it('wraps arrows, clamps pages, and resets selection when reopened', async () => {
+    const commands: Command[] = Array.from({ length: 3 }, (_, index) => ({
+      id: `cmd-${index}`,
+      label: `Command ${index + 1}`,
+      category: 'Application',
+      action: vi.fn(),
+    }));
+    await renderPalette(commands);
+    await openPalette();
+    const selectedIndex = () =>
+      queryItems().findIndex((item) => item.getAttribute('aria-selected') === 'true');
+
+    for (const [key, expected] of [
+      ['ArrowUp', 2],
+      ['ArrowDown', 0],
+      ['ArrowDown', 1],
+      ['PageDown', 2],
+      ['PageDown', 2],
+      ['PageUp', 0],
+      ['PageUp', 0],
+      ['End', 2],
+      ['Home', 0],
+      ['End', 2],
+    ] as const) {
+      await triggerShortcut(key);
+      expect(selectedIndex(), key).toBe(expected);
+    }
+    await triggerShortcut('Escape');
+    await openPalette();
+    expect(selectedIndex()).toBe(0);
+    expect(document.querySelector('.command-palette')?.classList.contains('hide-cursor')).toBe(
+      false
+    );
   });
 
   it('supports page navigation shortcuts and hides cursor until mouse movement', async () => {

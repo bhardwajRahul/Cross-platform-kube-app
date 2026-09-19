@@ -7,12 +7,9 @@
 
 import type { EdgeData, Graph, GraphData, NodeData } from '@antv/g6';
 import { objectMapG6EdgeState, objectMapG6NodeState } from './objectMapG6Data';
+import { findObjectMapG6Edge } from './objectMapG6RendererOptions';
 import type { ObjectMapLayout } from './objectMapLayout';
 import type { ObjectMapSelectionState } from './objectMapRendererTypes';
-import { isObjectMapEdgeDimmedBySelection } from './objectMapSelection';
-
-const findEdge = (layout: ObjectMapLayout, id: string) =>
-  layout.edges.find((edge) => edge.id === id) ?? null;
 
 const graphNodes = (data: GraphData): NodeData[] => data.nodes ?? [];
 const graphEdges = (data: GraphData): EdgeData[] => data.edges ?? [];
@@ -83,6 +80,67 @@ const objectMapPathChanged = (previous?: unknown, next?: unknown): boolean => {
   });
 };
 
+const fieldsChanged = <T extends object>(
+  previous: T,
+  next: T,
+  fields: readonly (keyof T)[]
+): boolean => fields.some((field) => previous[field] !== next[field]);
+
+const NODE_STYLE_FIELDS = [
+  'x',
+  'y',
+  'fill',
+  'stroke',
+  'lineWidth',
+  'radius',
+  'opacity',
+  'cardDetailLevel',
+  'cardKindBadgeText',
+  'cardKindBadgeFill',
+  'cardKindBadgeTextFill',
+  'cardKindBadgeStroke',
+  'cardKindBadgeBorderWidth',
+  'cardKindBadgeRadius',
+  'cardKindBadgeFontSize',
+  'cardKindBadgeFontWeight',
+  'cardKindBadgeLetterSpacing',
+  'cardKindBadgePaddingX',
+  'cardKindBadgePaddingY',
+  'cardBackgroundOpacity',
+  'cardForegroundOpacity',
+  'cardCollapseBadgeText',
+  'cardCollapseBadgeFill',
+  'cardCollapseBadgeTextFill',
+  'cardCollapseBadgeStroke',
+  'cardNameText',
+  'cardNamespaceText',
+  'cardAgeText',
+  'cardStatusText',
+  'cardStatusReason',
+  'cardStatusFill',
+  'cardStatusStroke',
+  'cardFontFamily',
+  'cardNameFill',
+  'cardNamespaceFill',
+  'cardAgeFill',
+] as const satisfies readonly (keyof NonNullable<NodeData['style']>)[];
+
+const EDGE_STYLE_FIELDS = [
+  'stroke',
+  'lineWidth',
+  'opacity',
+  'objectMapEdgeDetailLevel',
+] as const satisfies readonly (keyof NonNullable<EdgeData['style']>)[];
+
+const EDGE_DATA_FIELDS = [
+  'label',
+  'type',
+  'tracedBy',
+  'midX',
+  'midY',
+  'path',
+] as const satisfies readonly (keyof NonNullable<EdgeData['data']>)[];
+
 const nodeChanged = (previous: NodeData, next: NodeData): boolean => {
   const previousStyle = previous.style ?? {};
   const nextStyle = next.style ?? {};
@@ -94,43 +152,8 @@ const nodeChanged = (previous: NodeData, next: NodeData): boolean => {
     (previousSize[0] !== nextSize[0] || previousSize[1] !== nextSize[1]);
   return (
     previous.type !== next.type ||
-    previousStyle.x !== nextStyle.x ||
-    previousStyle.y !== nextStyle.y ||
-    sizeChanged ||
-    previousStyle.fill !== nextStyle.fill ||
-    previousStyle.stroke !== nextStyle.stroke ||
-    previousStyle.lineWidth !== nextStyle.lineWidth ||
-    previousStyle.radius !== nextStyle.radius ||
-    previousStyle.opacity !== nextStyle.opacity ||
-    previousStyle.cardDetailLevel !== nextStyle.cardDetailLevel ||
-    previousStyle.cardKindBadgeText !== nextStyle.cardKindBadgeText ||
-    previousStyle.cardKindBadgeFill !== nextStyle.cardKindBadgeFill ||
-    previousStyle.cardKindBadgeTextFill !== nextStyle.cardKindBadgeTextFill ||
-    previousStyle.cardKindBadgeStroke !== nextStyle.cardKindBadgeStroke ||
-    previousStyle.cardKindBadgeBorderWidth !== nextStyle.cardKindBadgeBorderWidth ||
-    previousStyle.cardKindBadgeRadius !== nextStyle.cardKindBadgeRadius ||
-    previousStyle.cardKindBadgeFontSize !== nextStyle.cardKindBadgeFontSize ||
-    previousStyle.cardKindBadgeFontWeight !== nextStyle.cardKindBadgeFontWeight ||
-    previousStyle.cardKindBadgeLetterSpacing !== nextStyle.cardKindBadgeLetterSpacing ||
-    previousStyle.cardKindBadgePaddingX !== nextStyle.cardKindBadgePaddingX ||
-    previousStyle.cardKindBadgePaddingY !== nextStyle.cardKindBadgePaddingY ||
-    previousStyle.cardBackgroundOpacity !== nextStyle.cardBackgroundOpacity ||
-    previousStyle.cardForegroundOpacity !== nextStyle.cardForegroundOpacity ||
-    previousStyle.cardCollapseBadgeText !== nextStyle.cardCollapseBadgeText ||
-    previousStyle.cardCollapseBadgeFill !== nextStyle.cardCollapseBadgeFill ||
-    previousStyle.cardCollapseBadgeTextFill !== nextStyle.cardCollapseBadgeTextFill ||
-    previousStyle.cardCollapseBadgeStroke !== nextStyle.cardCollapseBadgeStroke ||
-    previousStyle.cardNameText !== nextStyle.cardNameText ||
-    previousStyle.cardNamespaceText !== nextStyle.cardNamespaceText ||
-    previousStyle.cardAgeText !== nextStyle.cardAgeText ||
-    previousStyle.cardStatusText !== nextStyle.cardStatusText ||
-    previousStyle.cardStatusReason !== nextStyle.cardStatusReason ||
-    previousStyle.cardStatusFill !== nextStyle.cardStatusFill ||
-    previousStyle.cardStatusStroke !== nextStyle.cardStatusStroke ||
-    previousStyle.cardFontFamily !== nextStyle.cardFontFamily ||
-    previousStyle.cardNameFill !== nextStyle.cardNameFill ||
-    previousStyle.cardNamespaceFill !== nextStyle.cardNamespaceFill ||
-    previousStyle.cardAgeFill !== nextStyle.cardAgeFill
+    fieldsChanged(previousStyle, nextStyle, NODE_STYLE_FIELDS) ||
+    sizeChanged
   );
 };
 
@@ -140,19 +163,11 @@ const edgeChanged = (previous: EdgeData, next: EdgeData): boolean => {
   return (
     previous.source !== next.source ||
     previous.target !== next.target ||
-    previousStyle.stroke !== nextStyle.stroke ||
-    previousStyle.lineWidth !== nextStyle.lineWidth ||
-    previousStyle.opacity !== nextStyle.opacity ||
-    previousStyle.objectMapEdgeDetailLevel !== nextStyle.objectMapEdgeDetailLevel ||
+    fieldsChanged(previousStyle, nextStyle, EDGE_STYLE_FIELDS) ||
     objectMapPathChanged(previousStyle.objectMapPath, nextStyle.objectMapPath) ||
     lineDashChanged(previousStyle.lineDash, nextStyle.lineDash) ||
-    previous.data?.label !== next.data?.label ||
-    previous.data?.type !== next.data?.type ||
-    previous.data?.tracedBy !== next.data?.tracedBy ||
-    JSON.stringify(previous.data?.filteredPath) !== JSON.stringify(next.data?.filteredPath) ||
-    previous.data?.midX !== next.data?.midX ||
-    previous.data?.midY !== next.data?.midY ||
-    previous.data?.path !== next.data?.path
+    fieldsChanged(previous.data ?? {}, next.data ?? {}, EDGE_DATA_FIELDS) ||
+    JSON.stringify(previous.data?.filteredPath) !== JSON.stringify(next.data?.filteredPath)
   );
 };
 
@@ -233,22 +248,12 @@ export const applySelectionState = async (
     return;
   }
   const states: Record<string, string[]> = {};
-  const hoveredEdge = hoveredEdgeId ? findEdge(layout, hoveredEdgeId) : null;
-  // A hovered edge the new selection dims loses its hover highlight; hover
-  // visuals and tooltips are reserved for paths related to the selection.
-  const showHover =
-    hoveredEdge !== null && !isObjectMapEdgeDimmedBySelection(selectionState, hoveredEdge.id);
-  const hoveredNodeIds = new Set(
-    showHover && hoveredEdge ? [hoveredEdge.sourceId, hoveredEdge.targetId] : []
-  );
+  const hoveredEdge = hoveredEdgeId ? findObjectMapG6Edge(layout, hoveredEdgeId) : null;
   layout.nodes.forEach((node) => {
-    const nodeStates = objectMapG6NodeState(node, selectionState);
-    states[node.id] = hoveredNodeIds.has(node.id) ? [...nodeStates, 'edgeHovered'] : nodeStates;
+    states[node.id] = objectMapG6NodeState(node, selectionState, hoveredEdge);
   });
   layout.edges.forEach((edge) => {
-    const edgeStates = objectMapG6EdgeState(edge, selectionState);
-    states[edge.id] =
-      edge.id === hoveredEdgeId && showHover ? [...edgeStates, 'hovered'] : edgeStates;
+    states[edge.id] = objectMapG6EdgeState(edge, selectionState, hoveredEdge?.id);
   });
   if (graph.destroyed) {
     return;
@@ -256,11 +261,63 @@ export const applySelectionState = async (
   await graph.setElementState(states, false);
 };
 
-interface ApplySlot<T> {
-  version: number;
-  applying: boolean;
-  latest: T | null;
-}
+// Each run owns its completion. Clearing a slot releases that ownership before
+// a replacement graph starts, even if the old G6 promise is still settling.
+const createGraphApplySlot = <T>(
+  getGraph: () => Graph | null,
+  isReady: () => boolean,
+  apply: (graph: Graph, value: T, isCurrent: () => boolean) => Promise<void>,
+  onError?: (error: unknown) => void
+) => {
+  let latest: T | null = null;
+  let activeRun: object | null = null;
+
+  const flush = () => {
+    const graph = getGraph();
+    if (!graph || graph.destroyed || !isReady() || activeRun || !latest) {
+      return;
+    }
+    const run = {};
+    activeRun = run;
+    const isCurrent = () => activeRun === run && getGraph() === graph && !graph.destroyed;
+    const applyPending = async () => {
+      while (latest && isCurrent() && isReady()) {
+        const value = latest;
+        latest = null;
+        await apply(graph, value, isCurrent);
+      }
+    };
+    void applyPending()
+      .catch((error) => {
+        if (isCurrent()) {
+          onError?.(error);
+        }
+      })
+      .finally(() => {
+        if (activeRun === run) {
+          activeRun = null;
+          flush();
+        }
+      });
+  };
+
+  return {
+    flush,
+    hasPending: () => latest !== null,
+    schedule: (value: T) => {
+      const graph = getGraph();
+      if (!graph || graph.destroyed) {
+        return;
+      }
+      latest = value;
+      flush();
+    },
+    clear: () => {
+      latest = null;
+      activeRun = null;
+    },
+  };
+};
 
 const objectMapApplyTimingNow = (): number =>
   typeof performance === 'undefined' ? Date.now() : performance.now();
@@ -322,173 +379,81 @@ export const createObjectMapG6ApplyQueue = ({
 }: ObjectMapG6ApplyQueueOptions): ObjectMapG6ApplyQueue => {
   let graphReady = false;
   let renderedData: GraphData | null = null;
-  const selectionApply: ApplySlot<{
+  const selectionApply = createGraphApplySlot<{
     layout: ObjectMapLayout;
     selectionState: ObjectMapSelectionState;
-  }> = {
-    version: 0,
-    applying: false,
-    latest: null,
-  };
-  // The dragged node id is captured when the payload is scheduled, not when it
-  // is applied: applies settle asynchronously, so a drag can end before its
-  // final payload applies and an apply-time read would wrongly re-enable
-  // viewport preservation against that payload.
-  const dataApply: ApplySlot<{ data: GraphData; draggedNodeId: string | null }> = {
-    version: 0,
-    applying: false,
-    latest: null,
-  };
+  }>(
+    getGraph,
+    () => graphReady,
+    async (graph, latest, isCurrent) => {
+      const startedAt = objectMapApplyTimingNow();
+      await applySelectionStateFn(graph, latest.layout, latest.selectionState, getHoveredEdgeId());
+      if (isCurrent()) {
+        onSelectionStateTiming?.({
+          durationMs: objectMapApplyTimingNow() - startedAt,
+          nodes: latest.layout.nodes.length,
+          edges: latest.layout.edges.length,
+        });
+      }
+    },
+    onSelectionStateError
+  );
 
   const scheduleSelectionState = (
-    nextLayout: ObjectMapLayout,
-    nextSelectionState: ObjectMapSelectionState
-  ) => {
-    const graph = getGraph();
-    if (!graph || graph.destroyed) {
-      return;
-    }
-    if (!graphReady) {
-      selectionApply.latest = {
-        layout: nextLayout,
-        selectionState: nextSelectionState,
-      };
-      return;
-    }
+    layout: ObjectMapLayout,
+    selectionState: ObjectMapSelectionState
+  ) => selectionApply.schedule({ layout, selectionState });
 
-    selectionApply.version += 1;
-    selectionApply.latest = { layout: nextLayout, selectionState: nextSelectionState };
-    if (selectionApply.applying) {
-      return;
-    }
-    selectionApply.applying = true;
-
-    const run = async () => {
-      try {
-        while (selectionApply.latest && !graph.destroyed) {
-          const requestedVersion = selectionApply.version;
-          const latest = selectionApply.latest;
-          selectionApply.latest = null;
-          const startedAt = objectMapApplyTimingNow();
-          await applySelectionStateFn(
-            graph,
-            latest.layout,
-            latest.selectionState,
-            getHoveredEdgeId()
-          );
-          onSelectionStateTiming?.({
-            durationMs: objectMapApplyTimingNow() - startedAt,
-            nodes: latest.layout.nodes.length,
-            edges: latest.layout.edges.length,
-          });
-          if (selectionApply.version === requestedVersion) {
-            break;
-          }
-        }
-      } catch (error) {
-        if (getGraph() === graph && !graph.destroyed) {
-          onSelectionStateError?.(error);
-        }
-      } finally {
-        selectionApply.applying = false;
-        if (selectionApply.latest && graphReady && !graph.destroyed) {
-          scheduleSelectionState(
-            selectionApply.latest.layout,
-            selectionApply.latest.selectionState
-          );
-        }
+  const dataApply = createGraphApplySlot<{ data: GraphData; draggedNodeId: string | null }>(
+    getGraph,
+    () => graphReady,
+    async (graph, latest, isCurrent) => {
+      const startedAt = objectMapApplyTimingNow();
+      const mode = renderedData ? 'update' : 'initial-render';
+      if (renderedData) {
+        await applyGraphDataFn(graph, renderedData, latest.data, {
+          preserveViewportNodeId: getPreserveViewportNodeId(),
+          draggedNodeId: latest.draggedNodeId,
+        });
+      } else {
+        graph.setData(latest.data);
+        await graph.render();
       }
-    };
-    void run();
-  };
-
-  const scheduleGraphDataRecord = (record: { data: GraphData; draggedNodeId: string | null }) => {
-    const graph = getGraph();
-    if (!graph || graph.destroyed) {
-      return;
-    }
-    dataApply.version += 1;
-    dataApply.latest = record;
-    if (!graphReady) {
-      return;
-    }
-    if (dataApply.applying) {
-      return;
-    }
-    dataApply.applying = true;
-
-    const run = async () => {
-      try {
-        while (dataApply.latest && !graph.destroyed) {
-          const requestedVersion = dataApply.version;
-          const latest = dataApply.latest;
-          dataApply.latest = null;
-          const startedAt = objectMapApplyTimingNow();
-          let mode: ObjectMapG6GraphDataTiming['mode'] = 'update';
-          if (renderedData) {
-            await applyGraphDataFn(graph, renderedData, latest.data, {
-              preserveViewportNodeId: getPreserveViewportNodeId(),
-              draggedNodeId: latest.draggedNodeId,
-            });
-          } else {
-            mode = 'initial-render';
-            graph.setData(latest.data);
-            await graph.render();
-          }
-          onGraphDataTiming?.({
-            durationMs: objectMapApplyTimingNow() - startedAt,
-            mode,
-            nodes: latest.data.nodes?.length ?? 0,
-            edges: latest.data.edges?.length ?? 0,
-          });
-          if (graph.destroyed) {
-            return;
-          }
-          renderedData = latest.data;
-          scheduleSelectionState(getCurrentLayout(), getCurrentSelectionState());
-          if (dataApply.version === requestedVersion) {
-            break;
-          }
-        }
-      } catch (error) {
-        if (getGraph() === graph && !graph.destroyed) {
-          onGraphDataError?.(error);
-        }
-      } finally {
-        dataApply.applying = false;
-        if (dataApply.latest && graphReady && !graph.destroyed) {
-          scheduleGraphDataRecord(dataApply.latest);
-        }
+      if (!isCurrent()) {
+        return;
       }
-    };
-    void run();
-  };
+      onGraphDataTiming?.({
+        durationMs: objectMapApplyTimingNow() - startedAt,
+        mode,
+        nodes: latest.data.nodes?.length ?? 0,
+        edges: latest.data.edges?.length ?? 0,
+      });
+      renderedData = latest.data;
+      scheduleSelectionState(getCurrentLayout(), getCurrentSelectionState());
+    },
+    onGraphDataError
+  );
 
-  const scheduleGraphData = (nextData: GraphData) => {
-    scheduleGraphDataRecord({ data: nextData, draggedNodeId: getDraggedNodeId?.() ?? null });
+  // Capture the drag with its payload: the gesture can end before this update
+  // applies, and reading it then would wrongly restore viewport preservation.
+  const scheduleGraphData = (data: GraphData) => {
+    dataApply.schedule({ data, draggedNodeId: getDraggedNodeId?.() ?? null });
   };
 
   const setReady = (ready: boolean) => {
     graphReady = ready;
-    if (!graphReady) {
-      return;
-    }
-    if (dataApply.latest) {
-      scheduleGraphDataRecord(dataApply.latest);
-      return;
-    }
-    if (selectionApply.latest) {
-      scheduleSelectionState(selectionApply.latest.layout, selectionApply.latest.selectionState);
+    if (dataApply.hasPending()) {
+      dataApply.flush();
+    } else {
+      selectionApply.flush();
     }
   };
 
   const clear = () => {
     graphReady = false;
     renderedData = null;
-    selectionApply.latest = null;
-    selectionApply.applying = false;
-    dataApply.latest = null;
-    dataApply.applying = false;
+    selectionApply.clear();
+    dataApply.clear();
   };
 
   return {

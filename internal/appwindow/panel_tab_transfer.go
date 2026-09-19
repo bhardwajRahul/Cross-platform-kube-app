@@ -242,6 +242,10 @@ func (r *Registry) FailPanelTabTransfer(callerWindowName, transferID string) err
 func (r *Registry) removePanelTabTransfer(transferID string) *panelTabTransfer {
 	r.tabTransferMu.Lock()
 	defer r.tabTransferMu.Unlock()
+	return r.removePanelTabTransferLocked(transferID)
+}
+
+func (r *Registry) removePanelTabTransferLocked(transferID string) *panelTabTransfer {
 	transfer := r.pendingTabTransfers[transferID]
 	if transfer == nil {
 		return nil
@@ -270,12 +274,9 @@ func (r *Registry) commitPanelTabTransfer(transferID string) {
 		r.failPanelTabTransfer(transferID, err.Error())
 		return
 	}
-	delete(r.pendingTabTransfers, transferID)
-	if transfer.timeout != nil {
-		transfer.timeout.Stop()
-	}
+	r.removePanelTabTransferLocked(transferID)
 	r.tabTransferMu.Unlock()
-	r.emitPanelTabTransferEvent(request, panelwindow.TabTransferCommittedEventName, panelwindow.TabTransferCommittedEvent{Request: request}, true)
+	r.emitPanelTabTransferEvent(request, panelwindow.TabTransferCommittedEventName, panelwindow.TabTransferCommittedEvent{Request: request})
 }
 
 func (r *Registry) moveTransferredPanel(request panelwindow.TabTransferRequest, targetWindowName string) error {
@@ -310,7 +311,6 @@ func (r *Registry) failPanelTabTransfer(transferID, reason string) {
 		transfer.request,
 		panelwindow.TabTransferFailedEventName,
 		event,
-		true,
 	)
 }
 
@@ -400,19 +400,10 @@ func (r *Registry) emitPanelTabTransferEvent(
 	request panelwindow.TabTransferRequest,
 	eventName string,
 	payload any,
-	includeTarget bool,
 ) {
-	targets := []string{request.SourceWindowName}
-	if includeTarget && request.TargetWindowName != "" {
-		targets = append(targets, request.TargetWindowName)
-	}
-	emitted := make(map[string]struct{}, len(targets))
-	for _, target := range targets {
-		if _, duplicate := emitted[target]; duplicate {
-			continue
-		}
-		emitted[target] = struct{}{}
-		r.emitWindowEvent(target, eventName, payload)
+	r.emitWindowEvent(request.SourceWindowName, eventName, payload)
+	if request.TargetWindowName != "" && request.TargetWindowName != request.SourceWindowName {
+		r.emitWindowEvent(request.TargetWindowName, eventName, payload)
 	}
 }
 

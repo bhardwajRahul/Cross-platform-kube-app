@@ -134,7 +134,6 @@ vi.mock('@ui/dockable', () => ({
   }) => React.createElement('div', { ref: panelRef }, children),
 }));
 
-const domainStateMap: Record<string, DomainSnapshotState<unknown>> = {};
 const scopedEntriesMap: Record<string, Array<[string, DomainSnapshotState<unknown>]>> = {};
 let refreshState: { pendingRequests: number } = { pendingRequests: 0 };
 
@@ -188,8 +187,7 @@ vi.mock('../store', async () => {
   const actual = await vi.importActual<typeof import('../store')>('../store');
   return {
     ...actual,
-    useRefreshScopedDomainEntries: (domain: string) => scopedEntriesMap[domain] ?? [],
-    useRefreshState: () => refreshState,
+    useRefreshState: () => ({ ...refreshState, scopedDomainEntries: scopedEntriesMap }),
   };
 });
 
@@ -211,10 +209,6 @@ const getPermissionKeySafe = (
   return getPermissionKeyRef(resourceKind, verb, namespace, subresource);
 };
 
-const setDomainState = (domain: string, state: DomainSnapshotState<unknown>) => {
-  domainStateMap[domain] = state;
-};
-
 const setScopedEntries = (
   domain: string,
   entries: Array<[string, DomainSnapshotState<unknown>]>
@@ -223,9 +217,6 @@ const setScopedEntries = (
 };
 
 const resetDomainStates = () => {
-  Object.keys(domainStateMap).forEach((key) => {
-    delete domainStateMap[key];
-  });
   Object.keys(scopedEntriesMap).forEach((key) => {
     delete scopedEntriesMap[key];
   });
@@ -1360,16 +1351,6 @@ describe('DiagnosticsPanel component', () => {
       lastError: 'context canceled',
     });
 
-    const catalogState = createReadyState({
-      firstBatchLatencyMs: 900,
-    });
-    catalogState.stats = {
-      itemCount: 0,
-      buildDurationMs: 0,
-      timeToFirstRowMs: 450,
-    };
-    setDomainState('catalog', catalogState);
-
     scopedEntriesMap['container-logs'] = [
       [
         'cluster-a|default:apps/v1:deployment:web',
@@ -1923,6 +1904,126 @@ describe('DiagnosticsPanel component', () => {
     expect(metricsPrimary?.textContent).toBe('Idle');
 
     await rendered.unmount();
+  });
+
+  test('keeps one diagnostics cycle in flight so slow reads cannot overtake newer results', async () => {
+    vi.useFakeTimers();
+    let finish!: (summary: TelemetrySummary) => void;
+    fetchTelemetrySummaryMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const latest = makeTelemetrySummary();
+    latest.metrics.successCount = 23;
+    fetchTelemetrySummaryMock.mockResolvedValue(latest);
+    const { DiagnosticsPanel } = await import('./DiagnosticsPanel');
+    const rendered = await renderDiagnosticsPanel(DiagnosticsPanel);
+    try {
+      await selectClusterDataTab(rendered.container);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(fetchTelemetrySummaryMock).toHaveBeenCalledTimes(1);
+      expect(fetchSelectionDiagnosticsMock).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        finish(makeTelemetrySummary());
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(fetchTelemetrySummaryMock).toHaveBeenCalledTimes(2);
+      expect(rendered.container.textContent).toContain('23 polls');
+    } finally {
+      await rendered.unmount();
+    }
+  });
+
+  test('retains successful diagnostics and reports each failure only until that source recovers', async () => {
+    vi.useFakeTimers();
+    const summary = makeTelemetrySummary();
+    summary.metrics.successCount = 17;
+    fetchTelemetrySummaryMock.mockResolvedValue(summary);
+    const { DiagnosticsPanel } = await import('./DiagnosticsPanel');
+    const rendered = await renderDiagnosticsPanel(DiagnosticsPanel);
+    await selectClusterDataTab(rendered.container);
+    expect(rendered.container.textContent).toContain('17 polls');
+
+    const failSources = () => {
+      fetchTelemetrySummaryMock.mockRejectedValue(new Error('telemetry unavailable'));
+      fetchSelectionDiagnosticsMock.mockRejectedValue(new Error('selection unavailable'));
+      fetchKubernetesAPIClientDiagnosticsMock.mockRejectedValue(
+        new Error('API diagnostics unavailable')
+      );
+    };
+    const poll = async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+    };
+    failSources();
+    await poll();
+    expect(handleInlineMock).toHaveBeenCalledTimes(3);
+    expect(rendered.container.textContent).toContain('17 polls');
+    await poll();
+    expect(handleInlineMock).toHaveBeenCalledTimes(3);
+
+    // Recovery is per source: telemetry can report its next failure while the
+    // two continuously failing sources retain their existing reports.
+    fetchTelemetrySummaryMock.mockResolvedValue(summary);
+    await poll();
+    failSources();
+    await poll();
+    expect(handleInlineMock).toHaveBeenCalledTimes(4);
+    expect(handleInlineMock).toHaveBeenLastCalledWith(expect.any(Error), {
+      action: 'loadTelemetryDiagnostics',
+      source: 'DiagnosticsPanel',
+    });
+    await rendered.unmount();
+  });
+
+  test('ignores diagnostics failures that arrive after the panel closes', async () => {
+    vi.useFakeTimers();
+    let rejectTelemetry!: (reason: Error) => void;
+    fetchTelemetrySummaryMock.mockReturnValue(
+      new Promise((_, reject) => {
+        rejectTelemetry = reject;
+      })
+    );
+    const { DiagnosticsPanel } = await import('./DiagnosticsPanel');
+    const rendered = await renderDiagnosticsPanel(DiagnosticsPanel);
+    await rendered.rerender({ isOpen: false });
+    await act(async () => {
+      rejectTelemetry(new Error('late failure'));
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(handleInlineMock).not.toHaveBeenCalled();
+    expect(fetchTelemetrySummaryMock).toHaveBeenCalledTimes(1);
+    fetchTelemetrySummaryMock.mockResolvedValue(makeTelemetrySummary());
+    await rendered.rerender({ isOpen: true });
+    expect(fetchTelemetrySummaryMock).toHaveBeenCalledTimes(2);
+    await rendered.unmount();
+  });
+
+  test('does not scan resource streams while diagnostics is closed', async () => {
+    const summarySpy = vi.spyOn(resourceStreamManager, 'getTelemetrySummary');
+    const domainSpy = vi.spyOn(resourceStreamManager, 'getTelemetrySummaryByClusterDomain');
+    fetchTelemetrySummaryMock.mockResolvedValue(makeTelemetrySummary());
+    const { DiagnosticsPanel } = await import('./DiagnosticsPanel');
+    const rendered = await renderDiagnosticsPanel(DiagnosticsPanel, { isOpen: false });
+    try {
+      expect(summarySpy).not.toHaveBeenCalled();
+      expect(domainSpy).not.toHaveBeenCalled();
+      await rendered.rerender({ isOpen: true });
+      expect(summarySpy).toHaveBeenCalled();
+      expect(domainSpy).toHaveBeenCalled();
+    } finally {
+      await rendered.unmount();
+      summarySpy.mockRestore();
+      domainSpy.mockRestore();
+    }
   });
 
   test('shows warning summaries when telemetry fetch fails', async () => {

@@ -5,11 +5,10 @@
  * Runtime storage is delegated to the active panel layout store.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import {
   type DockPosition,
   getActivePanelLayoutStore,
-  type PanelCloseReason,
   type PanelLayoutState,
 } from './panelLayoutStore';
 import { usePanelLayoutStoreContext } from './panelLayoutStoreContext';
@@ -20,7 +19,7 @@ interface InitializeOptions {
   isOpen?: boolean;
 }
 
-export type { DockPosition, PanelCloseReason };
+export type { DockPosition };
 
 /**
  * Bring a panel to the front by bumping its z-index.
@@ -28,27 +27,6 @@ export type { DockPosition, PanelCloseReason };
  */
 export function focusPanelById(panelId: string) {
   getActivePanelLayoutStore().focusPanelById(panelId);
-}
-
-/**
- * Set a panel's dock position by ID.
- */
-export function setPanelPositionById(panelId: string, position: DockPosition) {
-  getActivePanelLayoutStore().setPanelPositionById(panelId, position);
-}
-
-/**
- * Set a panel's open state by ID.
- */
-export function setPanelOpenById(panelId: string, isOpen: boolean) {
-  getActivePanelLayoutStore().setPanelOpenById(panelId, isOpen);
-}
-
-/**
- * Copy layout-related fields from one panel to another.
- */
-export function copyPanelLayoutState(sourcePanelId: string, targetPanelId: string) {
-  getActivePanelLayoutStore().copyPanelLayoutState(sourcePanelId, targetPanelId);
 }
 
 /**
@@ -62,63 +40,22 @@ export function handoffLayoutBeforeClose(panelId: string) {
   getActivePanelLayoutStore().handoffLayoutBeforeClose(panelId);
 }
 
-export function setGroupLeader(groupKey: string, panelId: string) {
-  getActivePanelLayoutStore().setGroupLeader(groupKey, panelId);
-}
-
-export function clearGroupLeader(groupKey: string) {
-  getActivePanelLayoutStore().clearGroupLeader(groupKey);
-}
-
-export function registerPanelCloseHandler(
-  panelId: string,
-  handler: (reason: PanelCloseReason) => void
-) {
-  getActivePanelLayoutStore().registerPanelCloseHandler(panelId, handler);
-}
-
-export function unregisterPanelCloseHandler(
-  panelId: string,
-  handler: (reason: PanelCloseReason) => void
-) {
-  getActivePanelLayoutStore().unregisterPanelCloseHandler(panelId, handler);
-}
-
 export function useDockablePanelState(panelId: string) {
   const store = usePanelLayoutStoreContext();
-  const [localState, setLocalState] = useState<PanelLayoutState>(() =>
-    store.getInitialState(panelId)
+  const subscribe = useCallback(
+    (listener: () => void) => store.subscribe(panelId, listener),
+    [panelId, store]
   );
-
-  useEffect(() => {
-    setLocalState(store.getInitialState(panelId));
-
-    const unsubscribe = store.subscribe(panelId, () => {
-      const newState = store.getState(panelId);
-      if (!newState) {
-        return;
-      }
-      setLocalState((prevState) => {
-        const hasChanged =
-          prevState.position !== newState.position ||
-          prevState.isMaximized !== newState.isMaximized ||
-          prevState.isOpen !== newState.isOpen ||
-          prevState.rightSize.width !== newState.rightSize.width ||
-          prevState.rightSize.height !== newState.rightSize.height ||
-          prevState.bottomSize.width !== newState.bottomSize.width ||
-          prevState.bottomSize.height !== newState.bottomSize.height ||
-          prevState.isInitialized !== newState.isInitialized ||
-          prevState.zIndex !== newState.zIndex;
-
-        if (hasChanged) {
-          return { ...newState };
-        }
-        return prevState;
-      });
-    });
-
-    return unsubscribe;
+  // Keep the latest layout for this observer's identity. Closing can evict it
+  // before unmount, and reverting to mount defaults would reinitialize the panel.
+  const getSnapshot = useMemo(() => {
+    let lastSnapshot = store.getInitialState(panelId);
+    return () => {
+      lastSnapshot = store.getState(panelId) ?? lastSnapshot;
+      return lastSnapshot;
+    };
   }, [panelId, store]);
+  const localState = useSyncExternalStore(subscribe, getSnapshot);
 
   const initialize = useCallback(
     (options: InitializeOptions) => {
@@ -167,8 +104,6 @@ export function useDockablePanelState(panelId: string) {
       const updates: Partial<PanelLayoutState> = {};
       switch (localState.position) {
         case 'floating':
-          updates.rightSize = { width: size.width, height: localState.rightSize.height };
-          break;
         case 'right':
           updates.rightSize = { width: size.width, height: localState.rightSize.height };
           break;
@@ -180,19 +115,6 @@ export function useDockablePanelState(panelId: string) {
     },
     [panelId, localState.position, localState.rightSize.height, localState.bottomSize.width, store]
   );
-
-  const getCurrentSize = useCallback(() => {
-    switch (localState.position) {
-      case 'floating':
-        return localState.rightSize;
-      case 'right':
-        return localState.rightSize;
-      case 'bottom':
-        return localState.bottomSize;
-      default:
-        return localState.rightSize;
-    }
-  }, [localState.position, localState.rightSize, localState.bottomSize]);
 
   const setOpen = useCallback(
     (isOpen: boolean) => {
@@ -231,7 +153,7 @@ export function useDockablePanelState(panelId: string) {
   return useMemo(
     () => ({
       position: localState.position,
-      size: getCurrentSize(),
+      size: localState.position === 'bottom' ? localState.bottomSize : localState.rightSize,
       rightSize: localState.rightSize,
       bottomSize: localState.bottomSize,
       isMaximized: localState.isMaximized,
@@ -247,18 +169,7 @@ export function useDockablePanelState(panelId: string) {
       focus,
       reset,
     }),
-    [
-      localState,
-      getCurrentSize,
-      initialize,
-      setPosition,
-      setSize,
-      setOpen,
-      setMaximized,
-      toggle,
-      focus,
-      reset,
-    ]
+    [localState, initialize, setPosition, setSize, setOpen, setMaximized, toggle, focus, reset]
   );
 }
 

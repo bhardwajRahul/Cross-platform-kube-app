@@ -3,21 +3,10 @@ package resourcemodel
 import (
 	"math"
 
-	"github.com/luxury-yacht/app/backend/resourcekind"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
-
-func PolicyResourceModel(
-	clusterID string,
-	identity resourcekind.Identity,
-	meta metav1.ObjectMeta,
-	status ResourceStatusPresentation,
-	facts ResourceFacts,
-) ResourceModel {
-	return KubernetesResourceModel(clusterID, identity, meta, status, facts)
-}
 
 func NewIntOrStringFacts(value intstr.IntOrString) IntOrStringFacts {
 	facts := IntOrStringFacts{
@@ -57,6 +46,18 @@ func QuantityMapFacts(values corev1.ResourceList) ResourceQuantityMapFacts {
 	result := make(ResourceQuantityMapFacts, len(values))
 	for name, quantity := range values {
 		result[string(name)] = quantity.DeepCopy()
+	}
+	return result
+}
+
+// QuantityMapStrings projects canonical quantities for detail DTOs. Empty maps stay nil.
+func QuantityMapStrings(values ResourceQuantityMapFacts) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		result[key] = value.String()
 	}
 	return result
 }

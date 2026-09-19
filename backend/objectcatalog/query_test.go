@@ -12,7 +12,6 @@ import (
 
 	"github.com/luxury-yacht/app/backend/resourcemodel"
 	"github.com/luxury-yacht/app/backend/resources/common"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 type fakeCatalogQueryStore struct {
@@ -124,11 +123,9 @@ func TestCatalogEngineFacetsApplyDependentFiltersToMaintainedRows(t *testing.T) 
 func TestServiceQueryStreamsWithoutFullCache(t *testing.T) {
 	svc := NewService(Dependencies{}, nil)
 
-	chunk := &summaryChunk{
-		items: []Summary{
-			{Ref: resourcemodel.ResourceRef{Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "demo-pod", UID: "uid-1"}, Scope: ScopeNamespace},
-			{Ref: resourcemodel.ResourceRef{Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "kube-system", Name: "controller", UID: "uid-2"}, Scope: ScopeNamespace},
-		},
+	chunk := []Summary{
+		{Ref: resourcemodel.ResourceRef{Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "demo-pod", UID: "uid-1"}, Scope: ScopeNamespace},
+		{Ref: resourcemodel.ResourceRef{Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "kube-system", Name: "controller", UID: "uid-2"}, Scope: ScopeNamespace},
 	}
 
 	kindSet := map[string]bool{"Pod": true} // true = namespaced
@@ -137,7 +134,7 @@ func TestServiceQueryStreamsWithoutFullCache(t *testing.T) {
 		{Group: "", Version: "v1", Resource: "pods", Kind: "Pod", Scope: ScopeNamespace, Namespaced: true},
 	}
 
-	svc.publishStreamingState([]*summaryChunk{chunk}, kindSet, namespaceSet, descriptors, false)
+	svc.publishCatalogRowsForTest(chunk, kindSet, namespaceSet, descriptors, false)
 
 	result := svc.Query(QueryOptions{Limit: 1})
 	if len(result.Items) != 1 {
@@ -173,8 +170,8 @@ func TestServiceQueryIndexRebuiltAfterLaterPublish(t *testing.T) {
 	kindSet := map[string]bool{"Pod": true}
 	namespaceSet := map[string]struct{}{"default": {}}
 
-	svc.publishStreamingState(
-		[]*summaryChunk{{items: []Summary{podSummary("alpha")}}},
+	svc.publishCatalogRowsForTest(
+		[]Summary{podSummary("alpha")},
 		kindSet, namespaceSet, nil, true,
 	)
 	first := svc.Query(QueryOptions{Limit: 10, Namespaces: []string{"default"}})
@@ -182,8 +179,8 @@ func TestServiceQueryIndexRebuiltAfterLaterPublish(t *testing.T) {
 		t.Fatalf("expected one item before the second publish, got %d", len(first.Items))
 	}
 
-	svc.publishStreamingState(
-		[]*summaryChunk{{items: []Summary{podSummary("alpha"), podSummary("beta")}}},
+	svc.publishCatalogRowsForTest(
+		[]Summary{podSummary("alpha"), podSummary("beta")},
 		kindSet, namespaceSet, nil, true,
 	)
 	second := svc.Query(QueryOptions{Limit: 10, Namespaces: []string{"default"}})
@@ -225,8 +222,8 @@ func TestQueryNoMatchKindFilterReturnsEmptyResult(t *testing.T) {
 			name: "published chunks",
 			svc: func() *Service {
 				svc := NewService(Dependencies{Common: common.Dependencies{}, ClusterID: "cluster-a"}, nil)
-				svc.publishStreamingState(
-					[]*summaryChunk{{items: []Summary{pod, service}}},
+				svc.publishCatalogRowsForTest(
+					[]Summary{pod, service},
 					map[string]bool{"Pod": true, "Service": true},
 					map[string]struct{}{"default": {}},
 					[]Descriptor{
@@ -241,8 +238,8 @@ func TestQueryNoMatchKindFilterReturnsEmptyResult(t *testing.T) {
 		{
 			name: "snapshot items",
 			svc: func() *Service {
-				podDesc := resourceDescriptor{
-					GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+				podDesc := Descriptor{
+
 					Namespaced: true,
 					Kind:       "Pod",
 					Group:      "",
@@ -250,8 +247,8 @@ func TestQueryNoMatchKindFilterReturnsEmptyResult(t *testing.T) {
 					Resource:   "pods",
 					Scope:      ScopeNamespace,
 				}
-				serviceDesc := resourceDescriptor{
-					GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"},
+				serviceDesc := Descriptor{
+
 					Namespaced: true,
 					Kind:       "Service",
 					Group:      "",
@@ -264,9 +261,9 @@ func TestQueryNoMatchKindFilterReturnsEmptyResult(t *testing.T) {
 					catalogKey(podDesc, pod.Ref.Namespace, pod.Ref.Name):             pod,
 					catalogKey(serviceDesc, service.Ref.Namespace, service.Ref.Name): service,
 				}
-				svc.resources = map[string]resourceDescriptor{
-					podDesc.GVR.String():     podDesc,
-					serviceDesc.GVR.String(): serviceDesc,
+				svc.resources = map[string]Descriptor{
+					podDesc.GVR().String():     podDesc,
+					serviceDesc.GVR().String(): serviceDesc,
 				}
 				return svc
 			}(),
@@ -293,8 +290,8 @@ func TestCatalogPreviousPageWithDeletedPredecessorsInvalidatesCursor(t *testing.
 		return Summary{Ref: resourcemodel.ResourceRef{Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: name, UID: "uid-" + name}, Scope: ScopeNamespace}
 	}
 	publish := func(items []Summary) {
-		svc.publishStreamingState(
-			[]*summaryChunk{{items: items}},
+		svc.publishCatalogRowsForTest(
+			items,
 			map[string]bool{"Pod": true},
 			map[string]struct{}{"default": {}},
 			nil,
@@ -333,11 +330,11 @@ func TestCatalogAgeSortMatchesTypedTableConvention(t *testing.T) {
 	summary := func(name, created string) Summary {
 		return Summary{Ref: resourcemodel.ResourceRef{Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: name, UID: "uid-" + name}, CreationTimestamp: created, Scope: ScopeNamespace}
 	}
-	svc.publishStreamingState(
-		[]*summaryChunk{{items: []Summary{
+	svc.publishCatalogRowsForTest(
+		[]Summary{
 			summary("old", "2020-01-01T00:00:00Z"),
 			summary("new", "2026-01-01T00:00:00Z"),
-		}}},
+		},
 		map[string]bool{"Pod": true},
 		map[string]struct{}{"default": {}},
 		nil,
@@ -357,19 +354,17 @@ func TestCatalogAgeSortMatchesTypedTableConvention(t *testing.T) {
 
 func TestQueryReportsUnfilteredScopeTotal(t *testing.T) {
 	svc := NewService(Dependencies{}, nil)
-	chunk := &summaryChunk{
-		items: []Summary{
-			{Ref: resourcemodel.ResourceRef{Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "alpha", UID: "uid-1"}, Scope: ScopeNamespace},
-			{Ref: resourcemodel.ResourceRef{Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "beta", UID: "uid-2"}, Scope: ScopeNamespace},
-			{Ref: resourcemodel.ResourceRef{Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "kube-system", Name: "gamma", UID: "uid-3"}, Scope: ScopeNamespace},
-		},
+	chunk := []Summary{
+		{Ref: resourcemodel.ResourceRef{Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "alpha", UID: "uid-1"}, Scope: ScopeNamespace},
+		{Ref: resourcemodel.ResourceRef{Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "beta", UID: "uid-2"}, Scope: ScopeNamespace},
+		{Ref: resourcemodel.ResourceRef{Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "kube-system", Name: "gamma", UID: "uid-3"}, Scope: ScopeNamespace},
 	}
 	kindSet := map[string]bool{"Pod": true}
 	namespaceSet := map[string]struct{}{"default": {}, "kube-system": {}}
 	descriptors := []Descriptor{
 		{Group: "", Version: "v1", Resource: "pods", Kind: "Pod", Scope: ScopeNamespace, Namespaced: true},
 	}
-	svc.publishStreamingState([]*summaryChunk{chunk}, kindSet, namespaceSet, descriptors, false)
+	svc.publishCatalogRowsForTest(chunk, kindSet, namespaceSet, descriptors, false)
 
 	// A search narrows to 1 row, but the unfiltered scope total is all 3 ("of M").
 	filtered := svc.Query(QueryOptions{Limit: 10, Search: "alpha"})
@@ -389,14 +384,14 @@ func TestQueryReportsUnfilteredScopeTotal(t *testing.T) {
 
 func TestQueryUnfilteredTotalStaysInsideStructuralScope(t *testing.T) {
 	svc := NewService(Dependencies{}, nil)
-	chunk := &summaryChunk{items: []Summary{
+	chunk := []Summary{
 		{Ref: resourcemodel.ResourceRef{Group: "apiregistration.k8s.io", Version: "v1", Kind: "APIService", Resource: "apiservices", Name: "v1.apps", UID: "uid-1"}, Scope: ScopeCluster},
 		{Ref: resourcemodel.ResourceRef{Version: "v1", Kind: "Node", Resource: "nodes", Name: "node-a", UID: "uid-2"}, Scope: ScopeCluster},
 		{Ref: resourcemodel.ResourceRef{Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "pod-a", UID: "uid-3"}, Scope: ScopeNamespace},
 		{Ref: resourcemodel.ResourceRef{Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "kube-system", Name: "pod-b", UID: "uid-4"}, Scope: ScopeNamespace},
-	}}
-	svc.publishStreamingState(
-		[]*summaryChunk{chunk},
+	}
+	svc.publishCatalogRowsForTest(
+		chunk,
 		map[string]bool{"APIService": true, "Node": true, "Pod": true},
 		map[string]struct{}{"default": {}, "kube-system": {}},
 		nil,
@@ -442,8 +437,8 @@ func TestQueryUnfilteredTotalStaysInsideStructuralScope(t *testing.T) {
 func TestQueryFiltersAndPagination(t *testing.T) {
 	svc := NewService(Dependencies{Common: common.Dependencies{}}, nil)
 
-	podDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+	podDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Pod",
 		Group:      "",
@@ -451,8 +446,8 @@ func TestQueryFiltersAndPagination(t *testing.T) {
 		Resource:   "pods",
 		Scope:      ScopeNamespace,
 	}
-	deployDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"},
+	deployDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Deployment",
 		Group:      "apps",
@@ -467,9 +462,9 @@ func TestQueryFiltersAndPagination(t *testing.T) {
 		catalogKey(podDesc, "kube-system", "pod-b"):   {Ref: resourcemodel.ResourceRef{Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "kube-system", Name: "pod-b"}, Scope: ScopeNamespace},
 		catalogKey(deployDesc, "default", "deploy-a"): {Ref: resourcemodel.ResourceRef{Group: "apps", Version: "v1", Kind: "Deployment", Resource: "deployments", Namespace: "default", Name: "deploy-a"}, Scope: ScopeNamespace},
 	}
-	svc.resources = map[string]resourceDescriptor{
-		podDesc.GVR.String():    podDesc,
-		deployDesc.GVR.String(): deployDesc,
+	svc.resources = map[string]Descriptor{
+		podDesc.GVR().String():    podDesc,
+		deployDesc.GVR().String(): deployDesc,
 	}
 	svc.mu.Unlock()
 
@@ -515,8 +510,8 @@ func TestQueryFiltersAndPagination(t *testing.T) {
 func TestQueryCustomOnlyExcludesBuiltins(t *testing.T) {
 	svc := NewService(Dependencies{Common: common.Dependencies{}, ClusterID: "cluster-a"}, nil)
 
-	podDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+	podDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Pod",
 		Group:      "",
@@ -524,8 +519,8 @@ func TestQueryCustomOnlyExcludesBuiltins(t *testing.T) {
 		Resource:   "pods",
 		Scope:      ScopeNamespace,
 	}
-	widgetDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"},
+	widgetDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Widget",
 		Group:      "example.com",
@@ -539,9 +534,9 @@ func TestQueryCustomOnlyExcludesBuiltins(t *testing.T) {
 		catalogKey(podDesc, "default", "pod-a"):       {Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "pod-a", UID: "uid-pod"}, Scope: ScopeNamespace},
 		catalogKey(widgetDesc, "default", "widget-a"): {Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Group: "example.com", Version: "v1", Kind: "Widget", Resource: "widgets", Namespace: "default", Name: "widget-a", UID: "uid-widget"}, Scope: ScopeNamespace},
 	}
-	svc.resources = map[string]resourceDescriptor{
-		podDesc.GVR.String():    podDesc,
-		widgetDesc.GVR.String(): widgetDesc,
+	svc.resources = map[string]Descriptor{
+		podDesc.GVR().String():    podDesc,
+		widgetDesc.GVR().String(): widgetDesc,
 	}
 	svc.mu.Unlock()
 
@@ -562,8 +557,8 @@ func TestQueryCustomOnlyExcludesBuiltins(t *testing.T) {
 
 func TestQueryKeysetCursorContinuesAcrossLiveInsertBeforeAnchor(t *testing.T) {
 	svc := NewService(Dependencies{Common: common.Dependencies{}, ClusterID: "cluster-a"}, nil)
-	podDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+	podDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Pod",
 		Group:      "",
@@ -577,8 +572,8 @@ func TestQueryKeysetCursorContinuesAcrossLiveInsertBeforeAnchor(t *testing.T) {
 		catalogKey(podDesc, "default", "b"): {Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "b", UID: "uid-b"}, Scope: ScopeNamespace},
 		catalogKey(podDesc, "default", "c"): {Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "c", UID: "uid-c"}, Scope: ScopeNamespace},
 	}
-	svc.resources = map[string]resourceDescriptor{
-		podDesc.GVR.String(): podDesc,
+	svc.resources = map[string]Descriptor{
+		podDesc.GVR().String(): podDesc,
 	}
 	svc.mu.Unlock()
 
@@ -610,8 +605,8 @@ func TestQueryRejectsIncompatibleCursor(t *testing.T) {
 
 func TestQueryBackendSortsByRequestedFieldAndDirection(t *testing.T) {
 	svc := NewService(Dependencies{Common: common.Dependencies{}, ClusterID: "cluster-a"}, nil)
-	podDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+	podDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Pod",
 		Group:      "",
@@ -625,8 +620,8 @@ func TestQueryBackendSortsByRequestedFieldAndDirection(t *testing.T) {
 	for _, name := range []string{"alpha", "charlie", "bravo"} {
 		svc.items[catalogKey(podDesc, "default", name)] = Summary{Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: name, UID: "uid-" + name}, Scope: ScopeNamespace}
 	}
-	svc.resources = map[string]resourceDescriptor{
-		podDesc.GVR.String(): podDesc,
+	svc.resources = map[string]Descriptor{
+		podDesc.GVR().String(): podDesc,
 	}
 	svc.mu.Unlock()
 	svc.rebuildCacheFromItems(cloneSummaryMap(svc.items), svc.Descriptors())
@@ -679,8 +674,8 @@ func TestCatalogQueryRejectsRemovedBrowseStatusSort(t *testing.T) {
 
 func TestQueryCachedAndUncachedPathsUseSameOrdering(t *testing.T) {
 	svc := NewService(Dependencies{Common: common.Dependencies{}, ClusterID: "cluster-a"}, nil)
-	podDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+	podDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Pod",
 		Group:      "",
@@ -704,8 +699,8 @@ func TestQueryCachedAndUncachedPathsUseSameOrdering(t *testing.T) {
 			Scope: ScopeNamespace,
 		}
 	}
-	svc.resources = map[string]resourceDescriptor{
-		podDesc.GVR.String(): podDesc,
+	svc.resources = map[string]Descriptor{
+		podDesc.GVR().String(): podDesc,
 	}
 	svc.mu.Unlock()
 
@@ -726,8 +721,8 @@ func TestQueryCachedAndUncachedPathsUseSameOrdering(t *testing.T) {
 
 func TestQueryUsesGVKAndNamespaceFilterContract(t *testing.T) {
 	svc := NewService(Dependencies{Common: common.Dependencies{}, ClusterID: "cluster-a"}, nil)
-	deployDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"},
+	deployDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Deployment",
 		Group:      "apps",
@@ -735,8 +730,8 @@ func TestQueryUsesGVKAndNamespaceFilterContract(t *testing.T) {
 		Resource:   "deployments",
 		Scope:      ScopeNamespace,
 	}
-	podDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+	podDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Pod",
 		Group:      "",
@@ -751,9 +746,9 @@ func TestQueryUsesGVKAndNamespaceFilterContract(t *testing.T) {
 		catalogKey(deployDesc, "team-b", "deploy-b"): {Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Group: "apps", Version: "v1", Kind: "Deployment", Resource: "deployments", Namespace: "team-b", Name: "deploy-b", UID: "uid-deploy-b"}, Scope: ScopeNamespace},
 		catalogKey(podDesc, "team-a", "pod-a"):       {Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "team-a", Name: "pod-a", UID: "uid-pod-a"}, Scope: ScopeNamespace},
 	}
-	svc.resources = map[string]resourceDescriptor{
-		deployDesc.GVR.String(): deployDesc,
-		podDesc.GVR.String():    podDesc,
+	svc.resources = map[string]Descriptor{
+		deployDesc.GVR().String(): deployDesc,
+		podDesc.GVR().String():    podDesc,
 	}
 	svc.mu.Unlock()
 	svc.rebuildCacheFromItems(cloneSummaryMap(svc.items), svc.Descriptors())
@@ -779,8 +774,8 @@ func TestQueryUsesGVKAndNamespaceFilterContract(t *testing.T) {
 }
 
 func TestQueryRejectsCursorFromDifferentCluster(t *testing.T) {
-	podDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+	podDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Pod",
 		Group:      "",
@@ -795,8 +790,8 @@ func TestQueryRejectsCursorFromDifferentCluster(t *testing.T) {
 		catalogKey(podDesc, "default", "a"): {Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "a", UID: "uid-a"}, Scope: ScopeNamespace},
 		catalogKey(podDesc, "default", "b"): {Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "b", UID: "uid-b"}, Scope: ScopeNamespace},
 	}
-	source.resources = map[string]resourceDescriptor{
-		podDesc.GVR.String(): podDesc,
+	source.resources = map[string]Descriptor{
+		podDesc.GVR().String(): podDesc,
 	}
 	source.mu.Unlock()
 
@@ -808,8 +803,8 @@ func TestQueryRejectsCursorFromDifferentCluster(t *testing.T) {
 	target := NewService(Dependencies{Common: common.Dependencies{}, ClusterID: "cluster-b"}, nil)
 	target.mu.Lock()
 	target.items = cloneSummaryMap(source.items)
-	target.resources = map[string]resourceDescriptor{
-		podDesc.GVR.String(): podDesc,
+	target.resources = map[string]Descriptor{
+		podDesc.GVR().String(): podDesc,
 	}
 	target.mu.Unlock()
 
@@ -827,15 +822,13 @@ func TestQueryMarksTotalsAndFacetsApproximateAboveBudget(t *testing.T) {
 	})
 
 	svc := NewService(Dependencies{Common: common.Dependencies{}, ClusterID: "cluster-a"}, nil)
-	chunk := &summaryChunk{
-		items: []Summary{
-			{Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "a", UID: "uid-a"}, Scope: ScopeNamespace},
-			{Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "b", UID: "uid-b"}, Scope: ScopeNamespace},
-			{Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "c", UID: "uid-c"}, Scope: ScopeNamespace},
-		},
+	chunk := []Summary{
+		{Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "a", UID: "uid-a"}, Scope: ScopeNamespace},
+		{Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "b", UID: "uid-b"}, Scope: ScopeNamespace},
+		{Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "c", UID: "uid-c"}, Scope: ScopeNamespace},
 	}
-	svc.publishStreamingState(
-		[]*summaryChunk{chunk},
+	svc.publishCatalogRowsForTest(
+		chunk,
 		map[string]bool{"Pod": true},
 		map[string]struct{}{"default": {}},
 		[]Descriptor{{Version: "v1", Resource: "pods", Kind: "Pod", Scope: ScopeNamespace, Namespaced: true}},
@@ -856,8 +849,8 @@ func TestQueryMarksTotalsAndFacetsApproximateAboveBudget(t *testing.T) {
 
 func TestQueryPreviousCursorReturnsReverseWindow(t *testing.T) {
 	svc := NewService(Dependencies{Common: common.Dependencies{}, ClusterID: "cluster-a"}, nil)
-	podDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+	podDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Pod",
 		Group:      "",
@@ -871,8 +864,8 @@ func TestQueryPreviousCursorReturnsReverseWindow(t *testing.T) {
 	for _, name := range []string{"a", "b", "c"} {
 		svc.items[catalogKey(podDesc, "default", name)] = Summary{Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: name, UID: "uid-" + name}, Scope: ScopeNamespace}
 	}
-	svc.resources = map[string]resourceDescriptor{
-		podDesc.GVR.String(): podDesc,
+	svc.resources = map[string]Descriptor{
+		podDesc.GVR().String(): podDesc,
 	}
 	svc.mu.Unlock()
 
@@ -899,8 +892,8 @@ func TestQueryPreviousCursorReturnsReverseWindow(t *testing.T) {
 
 func TestQueryRejectsCursorWithMismatchedSortContract(t *testing.T) {
 	svc := NewService(Dependencies{Common: common.Dependencies{}, ClusterID: "cluster-a"}, nil)
-	podDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+	podDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Pod",
 		Group:      "",
@@ -913,8 +906,8 @@ func TestQueryRejectsCursorWithMismatchedSortContract(t *testing.T) {
 		catalogKey(podDesc, "default", "a"): {Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "a", UID: "uid-a"}, Scope: ScopeNamespace},
 		catalogKey(podDesc, "default", "b"): {Ref: resourcemodel.ResourceRef{ClusterID: "cluster-a", Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "b", UID: "uid-b"}, Scope: ScopeNamespace},
 	}
-	svc.resources = map[string]resourceDescriptor{
-		podDesc.GVR.String(): podDesc,
+	svc.resources = map[string]Descriptor{
+		podDesc.GVR().String(): podDesc,
 	}
 	svc.mu.Unlock()
 
@@ -934,8 +927,8 @@ func TestQueryRejectsCursorWithMismatchedSortContract(t *testing.T) {
 }
 
 func TestQueryNamespaceClusterFiltering(t *testing.T) {
-	clusterDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"},
+	clusterDesc := Descriptor{
+
 		Namespaced: false,
 		Kind:       "CustomResourceDefinition",
 		Group:      "apiextensions.k8s.io",
@@ -943,8 +936,8 @@ func TestQueryNamespaceClusterFiltering(t *testing.T) {
 		Resource:   "customresourcedefinitions",
 		Scope:      ScopeCluster,
 	}
-	namespacedDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"},
+	namespacedDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Service",
 		Group:      "",
@@ -959,9 +952,9 @@ func TestQueryNamespaceClusterFiltering(t *testing.T) {
 		catalogKey(clusterDesc, "", "crd.one"):           {Ref: resourcemodel.ResourceRef{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition", Resource: "customresourcedefinitions", Name: "crd.one"}, Scope: ScopeCluster},
 		catalogKey(namespacedDesc, "default", "svc-one"): {Ref: resourcemodel.ResourceRef{Group: "", Version: "v1", Kind: "Service", Resource: "services", Namespace: "default", Name: "svc-one"}, Scope: ScopeNamespace},
 	}
-	svc.resources = map[string]resourceDescriptor{
-		clusterDesc.GVR.String():    clusterDesc,
-		namespacedDesc.GVR.String(): namespacedDesc,
+	svc.resources = map[string]Descriptor{
+		clusterDesc.GVR().String():    clusterDesc,
+		namespacedDesc.GVR().String(): namespacedDesc,
 	}
 	svc.mu.Unlock()
 
@@ -995,8 +988,8 @@ func TestQueryNamespaceClusterFiltering(t *testing.T) {
 }
 
 func TestQueryNamespaceClusterFilteringUsesCachedIndex(t *testing.T) {
-	clusterDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"},
+	clusterDesc := Descriptor{
+
 		Namespaced: false,
 		Kind:       "CustomResourceDefinition",
 		Group:      "apiextensions.k8s.io",
@@ -1004,8 +997,8 @@ func TestQueryNamespaceClusterFilteringUsesCachedIndex(t *testing.T) {
 		Resource:   "customresourcedefinitions",
 		Scope:      ScopeCluster,
 	}
-	namespacedDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"},
+	namespacedDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Service",
 		Group:      "",
@@ -1021,8 +1014,8 @@ func TestQueryNamespaceClusterFilteringUsesCachedIndex(t *testing.T) {
 	svc := NewService(Dependencies{Common: common.Dependencies{}}, nil)
 	svc.mu.Lock()
 	svc.catalogIndex.rebuildCacheFromItems(items, []Descriptor{
-		exportDescriptor(clusterDesc),
-		exportDescriptor(namespacedDesc),
+		clusterDesc,
+		namespacedDesc,
 	})
 	svc.mu.Unlock()
 
@@ -1046,8 +1039,8 @@ func TestQueryNamespaceClusterFilteringUsesCachedIndex(t *testing.T) {
 
 func TestQuerySearchFilter(t *testing.T) {
 	svc := NewService(Dependencies{Common: common.Dependencies{}}, nil)
-	podDesc := resourceDescriptor{
-		GVR:        schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+	podDesc := Descriptor{
+
 		Namespaced: true,
 		Kind:       "Pod",
 		Group:      "",
@@ -1061,8 +1054,8 @@ func TestQuerySearchFilter(t *testing.T) {
 		catalogKey(podDesc, "default", "catalog-api"):    {Ref: resourcemodel.ResourceRef{Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "catalog-api"}, Scope: ScopeNamespace},
 		catalogKey(podDesc, "default", "metrics-writer"): {Ref: resourcemodel.ResourceRef{Group: "", Version: "v1", Kind: "Pod", Resource: "pods", Namespace: "default", Name: "metrics-writer"}, Scope: ScopeNamespace},
 	}
-	svc.resources = map[string]resourceDescriptor{
-		podDesc.GVR.String(): podDesc,
+	svc.resources = map[string]Descriptor{
+		podDesc.GVR().String(): podDesc,
 	}
 	svc.mu.Unlock()
 

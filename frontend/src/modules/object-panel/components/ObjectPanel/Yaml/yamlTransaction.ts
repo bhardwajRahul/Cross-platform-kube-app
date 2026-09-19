@@ -59,8 +59,9 @@ export type RecentVerifiedSemanticEntry = {
 
 type ManualYamlOverride = {
   yaml: string;
-  resourceVersion: string | null;
 };
+
+type YamlEditBaseline = { identity: ObjectIdentity; yaml: string };
 
 // A save held back by the ownership warning. The dialog is modal, so the
 // captured validated payload cannot go stale while it is open.
@@ -77,7 +78,6 @@ export interface UseYamlTransactionArgs {
   canEdit: boolean;
   clusterId: string | null | undefined;
   yamlContent: string;
-  showManagedFields: boolean;
   prepareVisibleDraftYaml: (rawYaml: string) => string;
 }
 
@@ -91,7 +91,6 @@ export interface UseYamlTransactionResult {
   setProtectedEditMessage: (message: string | null) => void;
   isSaving: boolean;
   effectiveYamlContent: string;
-  effectiveIdentity: ObjectIdentity | null;
   hasRemoteDrift: boolean;
   driftForced: boolean;
   backendDriftCurrentYaml: string | null;
@@ -264,7 +263,7 @@ type PreparedYamlMerge = {
   latestIdentity: ObjectIdentity;
 };
 
-const resolveMergedObjectIdentity = (
+const resolveYamlIdentity = (
   normalizedLatestYaml: string,
   effectiveIdentity: ObjectIdentity,
   resourceVersion: string | null | undefined
@@ -296,7 +295,7 @@ const prepareYamlMerge = (
     normalizedLatestYaml,
     preparedLatestYaml: prepareVisibleDraftYaml(normalizedLatestYaml),
     mergedDraftYaml: prepareVisibleDraftYaml(normalizeYamlString(mergeResult.mergedYAML)),
-    latestIdentity: resolveMergedObjectIdentity(
+    latestIdentity: resolveYamlIdentity(
       normalizedLatestYaml,
       effectiveIdentity,
       mergeResult.resourceVersion
@@ -396,7 +395,6 @@ const prepareSaveRequest = ({
   isSaving,
   effectiveIdentity,
   draftYaml,
-  baselineResourceVersion,
   baselineMergeYaml,
   sourceYaml,
   prepareVisibleDraftYaml,
@@ -405,7 +403,6 @@ const prepareSaveRequest = ({
   isSaving: boolean;
   effectiveIdentity: ObjectIdentity | null;
   draftYaml: string;
-  baselineResourceVersion: string | null;
   baselineMergeYaml: string;
   sourceYaml: string;
   prepareVisibleDraftYaml: (rawYaml: string) => string;
@@ -416,7 +413,7 @@ const prepareSaveRequest = ({
   if (!effectiveIdentity) {
     return { kind: 'identity-error' };
   }
-  const validation = validateYamlDraft(draftYaml, effectiveIdentity, baselineResourceVersion);
+  const validation = validateYamlDraft(draftYaml, effectiveIdentity);
   if (!validation.isValid) {
     return { kind: 'validation-error', message: validation.message };
   }
@@ -496,19 +493,17 @@ export const useYamlTransaction = ({
   canEdit,
   clusterId,
   yamlContent,
-  showManagedFields,
   prepareVisibleDraftYaml,
 }: UseYamlTransactionArgs): UseYamlTransactionResult => {
   const [isEditing, setIsEditing] = useState(false);
+  // Live snapshot adoption must not replace edits; only editor actions own the draft.
   const [draftYaml, setDraftYaml] = useState('');
   const [lintError, setLintError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionDetails, setActionDetails] = useState<string[]>([]);
   const [protectedEditMessage, setProtectedEditMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [baselineIdentity, setBaselineIdentity] = useState<ObjectIdentity | null>(null);
-  const [baselineResourceVersion, setBaselineResourceVersion] = useState<string | null>(null);
-  const [baselineMergeYaml, setBaselineMergeYaml] = useState('');
+  const [editBaseline, setEditBaseline] = useState<YamlEditBaseline | null>(null);
   const [hasRemoteDrift, setHasRemoteDrift] = useState(false);
   const [driftForced, setDriftForced] = useState(false);
   const [backendDriftCurrentYaml, setBackendDriftCurrentYaml] = useState<string | null>(null);
@@ -524,9 +519,6 @@ export const useYamlTransaction = ({
   const [hasServerYamlError, setHasServerYamlError] = useState(false);
 
   const recentVerifiedSemanticYamlsRef = useRef<RecentVerifiedSemanticEntry[]>([]);
-  const previousShowManagedRef = useRef(showManagedFields);
-  const previousOverrideYamlRef = useRef(manualYamlOverride?.yaml ?? null);
-  const skipNextOverrideDraftSyncRef = useRef(false);
   const previousScopeRef = useRef(scope);
 
   const resolvedClusterId = clusterId?.trim() ?? '';
@@ -535,6 +527,9 @@ export const useYamlTransaction = ({
     () => parseObjectIdentity(effectiveYamlContent),
     [effectiveYamlContent]
   );
+  const baselineIdentity = editBaseline?.identity ?? null;
+  const baselineResourceVersion = baselineIdentity?.resourceVersion ?? null;
+  const baselineMergeYaml = editBaseline?.yaml ?? '';
   const effectiveIdentity = baselineIdentity ?? latestObjectIdentity ?? objectIdentity ?? null;
 
   useEffect(() => {
@@ -655,58 +650,20 @@ export const useYamlTransaction = ({
       const latestYamlRaw =
         latestYamlResult.status === 'executed' ? (latestYamlResult.data ?? '') : '';
       const normalizedYaml = normalizeYamlString(latestYamlRaw);
-      const parsedIdentity = parseObjectIdentity(normalizedYaml);
-      const resolvedIdentity: ObjectIdentity = parsedIdentity
-        ? {
-            ...parsedIdentity,
-            resourceVersion: parsedIdentity.resourceVersion ?? identity.resourceVersion ?? null,
-          }
-        : {
-            apiVersion: identity.apiVersion,
-            kind: identity.kind,
-            name: identity.name,
-            namespace: identity.namespace ?? null,
-            uid: identity.uid ?? null,
-            resourceVersion: identity.resourceVersion ?? null,
-          };
+      const resolvedIdentity = resolveYamlIdentity(
+        normalizedYaml,
+        identity,
+        identity.resourceVersion
+      );
 
       setLatestObjectIdentity(resolvedIdentity);
       setManualYamlOverride({
         yaml: normalizedYaml,
-        resourceVersion: resolvedIdentity.resourceVersion,
       });
       return { latestIdentity: resolvedIdentity, normalizedYaml };
     },
     [resolvedClusterId]
   );
-
-  useEffect(() => {
-    if (!isEditing) {
-      previousShowManagedRef.current = showManagedFields;
-      previousOverrideYamlRef.current = manualYamlOverride?.yaml ?? null;
-      return;
-    }
-    const showChanged = previousShowManagedRef.current !== showManagedFields;
-    const overrideYaml = manualYamlOverride?.yaml ?? null;
-    const overrideChanged = previousOverrideYamlRef.current !== overrideYaml;
-    previousShowManagedRef.current = showManagedFields;
-    previousOverrideYamlRef.current = overrideYaml;
-    if (skipNextOverrideDraftSyncRef.current && overrideChanged && !showChanged) {
-      skipNextOverrideDraftSyncRef.current = false;
-      return;
-    }
-    if (!overrideChanged) {
-      return;
-    }
-    const sourceYaml = manualYamlOverride?.yaml ?? effectiveYamlContent ?? '';
-    setDraftYaml(prepareVisibleDraftYaml(sourceYaml));
-  }, [
-    effectiveYamlContent,
-    isEditing,
-    manualYamlOverride,
-    prepareVisibleDraftYaml,
-    showManagedFields,
-  ]);
 
   useEffect(() => {
     if (!isEditing) {
@@ -743,27 +700,17 @@ export const useYamlTransaction = ({
     const timeout = window.setTimeout(() => {
       const validation = validateYamlDraft(
         draftYaml,
-        baselineIdentity ?? latestObjectIdentity ?? objectIdentity ?? null,
-        baselineResourceVersion
+        baselineIdentity ?? latestObjectIdentity ?? objectIdentity ?? null
       );
       setLintError(validation.isValid ? null : validation.message);
     }, LINT_DEBOUNCE_MS);
     return () => window.clearTimeout(timeout);
-  }, [
-    baselineIdentity,
-    baselineResourceVersion,
-    draftYaml,
-    isEditing,
-    latestObjectIdentity,
-    objectIdentity,
-  ]);
+  }, [baselineIdentity, draftYaml, isEditing, latestObjectIdentity, objectIdentity]);
 
   const exitEditMode = useCallback(() => {
     setIsEditing(false);
     setDraftYaml('');
-    setBaselineIdentity(null);
-    setBaselineResourceVersion(null);
-    setBaselineMergeYaml('');
+    setEditBaseline(null);
     setLintError(null);
     setActionError(null);
     setActionDetails([]);
@@ -826,9 +773,7 @@ export const useYamlTransaction = ({
     const preparedDraft = prepareVisibleDraftYaml(normalizedSeedYaml);
 
     setDraftYaml(preparedDraft);
-    setBaselineIdentity(identityForEditing);
-    setBaselineResourceVersion(identityForEditing.resourceVersion ?? null);
-    setBaselineMergeYaml(preparedDraft);
+    setEditBaseline({ identity: identityForEditing, yaml: preparedDraft });
     setLintError(null);
     setActionError(null);
     setActionDetails([]);
@@ -844,7 +789,6 @@ export const useYamlTransaction = ({
       (current) =>
         current ?? {
           yaml: normalizedSeedYaml,
-          resourceVersion: identityForEditing.resourceVersion ?? null,
         }
     );
     setIsEditing(true);
@@ -904,15 +848,11 @@ export const useYamlTransaction = ({
           prepareVisibleDraftYaml,
         });
 
-      skipNextOverrideDraftSyncRef.current = true;
-      setBaselineIdentity(latestIdentity);
-      setBaselineResourceVersion(latestIdentity.resourceVersion ?? null);
-      setBaselineMergeYaml(preparedLatestYaml);
+      setEditBaseline({ identity: latestIdentity, yaml: preparedLatestYaml });
       setDraftYaml(mergedDraftYaml);
       setLatestObjectIdentity(latestIdentity);
       setManualYamlOverride({
         yaml: normalizedLatestYaml,
-        resourceVersion: latestIdentity.resourceVersion ?? null,
       });
       setLintError(null);
       setActionError(null);
@@ -1031,7 +971,6 @@ export const useYamlTransaction = ({
         });
         setManualYamlOverride({
           yaml: immediateYaml,
-          resourceVersion: appliedResourceVersion,
         });
 
         await verifyAppliedYaml(identity, immediateYaml);
@@ -1068,7 +1007,6 @@ export const useYamlTransaction = ({
       isSaving,
       effectiveIdentity,
       draftYaml,
-      baselineResourceVersion,
       baselineMergeYaml,
       sourceYaml: manualYamlOverride?.yaml ?? yamlContent,
       prepareVisibleDraftYaml,
@@ -1146,7 +1084,6 @@ export const useYamlTransaction = ({
     setProtectedEditMessage,
     isSaving,
     effectiveYamlContent,
-    effectiveIdentity,
     hasRemoteDrift,
     driftForced,
     backendDriftCurrentYaml,

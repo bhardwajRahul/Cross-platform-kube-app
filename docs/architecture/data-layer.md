@@ -68,8 +68,7 @@ the completed `v2` rewrite plan.
   `(sortValue, uid)` + signature (`querypage/cursor.go`). There is **no**
   order-statistics (Rank/At) augmentation — it was only needed by the unbuilt delta
   layer.
-- **On-disk format = the same SoA, mmap'd.** `querypage/columnfile.go` +
-  `columnstore_mmap.go` (zero-copy `unsafe.Slice`/`unsafe.String` over `syscall.Mmap`,
+- **On-disk format = the same SoA, mmap'd.** `querypage/columnstore_mmap.go` (zero-copy `unsafe.Slice`/`unsafe.String` over `syscall.Mmap`,
   portable heap fallback). This is what spill and Cold-serving use.
 - **Serve paths:** typed domains → `resolveMaintainedDirect` (query the persistent store
   in place) or `resolveTypedSnapshotPageViaStore` (rebuild a per-Build store for
@@ -78,8 +77,8 @@ the completed `v2` rewrite plan.
 
 ## Ingestion (owned-reflector LIST+WATCH + projection-at-intake)
 
-- **Project at intake, discard the typed object.** `ingest.ProjectingReflector` borrows
-  client-go's List/Watch/relist/RV machinery and feeds a `ProjectingStore` that keeps
+- **Project at intake, discard the typed object.** `ingest.Manager` creates
+  client-go reflectors for List/Watch/relist/RV handling and feeds a `ProjectingStore` that keeps
   only the projected bundle. `informer.StripManagedFields` (a `WithTransform` on every
   factory) drops `managedFields` before any cache — the core memory lever. Starting
   points: `ingest/manager.go`, `ingest/projecting_store.go`, `informer/projection.go`.

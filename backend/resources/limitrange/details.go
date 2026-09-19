@@ -36,7 +36,7 @@ func (s *Service) LimitRange(ctx context.Context, namespace, name string) (*Limi
 
 	lr, err := client.CoreV1().LimitRanges(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		err = s.logError(err, fmt.Sprintf("Failed to get limit range %s/%s", namespace, name))
+		err = s.deps.LogResourceRequestFailure(err, fmt.Sprintf("Failed to get limit range %s/%s", namespace, name), "get", Identity, logsources.ResourceLoader)
 		return nil, fmt.Errorf("failed to get limit range: %w", err)
 	}
 
@@ -58,10 +58,6 @@ func (s *Service) buildLimitRangeDetails(lr *corev1.LimitRange) *LimitRangeDetai
 	return details
 }
 
-func (s *Service) logError(err error, msg string) error {
-	return s.deps.LogResourceRequestFailure(err, msg, "get", Identity, logsources.ResourceLoader)
-}
-
 func limitRangeItemsFromFacts(facts []LimitRangeItemFacts) []LimitRangeItem {
 	if len(facts) == 0 {
 		return nil
@@ -70,23 +66,12 @@ func limitRangeItemsFromFacts(facts []LimitRangeItemFacts) []LimitRangeItem {
 	for _, fact := range facts {
 		result = append(result, LimitRangeItem{
 			Kind:                 fact.Kind,
-			Max:                  quantityMapStrings(fact.Max),
-			Min:                  quantityMapStrings(fact.Min),
-			Default:              quantityMapStrings(fact.Default),
-			DefaultRequest:       quantityMapStrings(fact.DefaultRequest),
-			MaxLimitRequestRatio: quantityMapStrings(fact.MaxLimitRequestRatio),
+			Max:                  resourcemodel.QuantityMapStrings(fact.Max),
+			Min:                  resourcemodel.QuantityMapStrings(fact.Min),
+			Default:              resourcemodel.QuantityMapStrings(fact.Default),
+			DefaultRequest:       resourcemodel.QuantityMapStrings(fact.DefaultRequest),
+			MaxLimitRequestRatio: resourcemodel.QuantityMapStrings(fact.MaxLimitRequestRatio),
 		})
-	}
-	return result
-}
-
-func quantityMapStrings(values resourcemodel.ResourceQuantityMapFacts) map[string]string {
-	if len(values) == 0 {
-		return nil
-	}
-	result := make(map[string]string, len(values))
-	for key, value := range values {
-		result[key] = value.String()
 	}
 	return result
 }

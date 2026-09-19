@@ -1,4 +1,4 @@
-import { stripClusterScope } from '../clusterScope';
+import { parseClusterScope } from '../clusterScope';
 import { isPermissionDeniedStatus, resolvePermissionDeniedMessage } from '../permissionErrors';
 import {
   RESOURCE_STREAM_MESSAGE_TYPES,
@@ -40,11 +40,10 @@ export type CanonicalResourceStreamMessage =
   | { kind: 'error'; reason: string; permissionDenied: boolean };
 
 export type NormalizedResourceStreamProtocolMessage = {
-  clusterId?: string;
+  clusterId: string;
   clusterName?: string;
   domain: import('./resourceStreamDomains').DoorbellDomain;
   scope: string;
-  routing: 'strict' | 'compatible';
   message: CanonicalResourceStreamMessage;
 };
 
@@ -57,11 +56,15 @@ const hasSignalType = (value: unknown): value is ResourceStreamSignal =>
 
 const normalizeScope = (
   domain: NormalizedResourceStreamProtocolMessage['domain'],
-  scope: unknown
+  scope: unknown,
+  clusterId: string
 ): string | null => {
   if (typeof scope === 'string') {
-    const normalized = stripClusterScope(scope.trim());
-    return normalized || isClusterScopedDomain(domain) ? normalized : null;
+    const parsed = parseClusterScope(scope);
+    if (parsed.isMultiCluster || (parsed.clusterId && parsed.clusterId !== clusterId)) {
+      return null;
+    }
+    return parsed.scope || isClusterScopedDomain(domain) ? parsed.scope : null;
   }
   return (scope === null || scope === undefined) && isClusterScopedDomain(domain) ? '' : null;
 };
@@ -89,6 +92,30 @@ const canonicalSource = (
     ? source
     : undefined;
 
+const legacySignal = (type: WireMessage['type']): ResourceStreamSignal | undefined => {
+  switch (type) {
+    case 'ADDED':
+    case 'MODIFIED':
+    case 'DELETED':
+      return 'changed';
+    case 'RESET':
+    case 'COMPLETE':
+      return 'reset';
+    case 'ERROR':
+      return 'error';
+    default:
+      return undefined;
+  }
+};
+
+const resolveModernSignal = (
+  wire: WireMessage,
+  domain: NormalizedResourceStreamProtocolMessage['domain']
+): ResourceStreamSignal | undefined =>
+  wire.version?.trim() && canonicalSource(domain, wire.source) && hasSignalType(wire.signal)
+    ? wire.signal
+    : undefined;
+
 const canonicalMessage = (
   wire: WireMessage,
   domain: NormalizedResourceStreamProtocolMessage['domain'],
@@ -101,7 +128,7 @@ const canonicalMessage = (
   const errorReason =
     resolvePermissionDeniedMessage(wire.error, wire.errorDetails) || 'stream error';
 
-  const signal = modernSignal;
+  const signal = modernSignal ?? legacySignal(wire.type);
   if (signal === 'changed') {
     return { kind: 'changed', source, version, sequence, resourceVersion };
   }
@@ -126,24 +153,6 @@ const canonicalMessage = (
       return { kind: 'acknowledged' };
     case 'HEARTBEAT':
       return { kind: 'heartbeat' };
-    case 'ADDED':
-    case 'MODIFIED':
-    case 'DELETED':
-      return { kind: 'changed', source, version, sequence, resourceVersion };
-    case 'RESET':
-    case 'COMPLETE':
-      return {
-        kind: 'reset',
-        reason: wire.type === 'COMPLETE' ? 'complete' : 'reset',
-        source,
-        version,
-      };
-    case 'ERROR':
-      return {
-        kind: 'error',
-        reason: errorReason,
-        permissionDenied: isPermissionDeniedStatus(wire.errorDetails),
-      };
     default:
       return null;
   }
@@ -155,8 +164,19 @@ export const normalizeResourceStreamProtocolMessage = (
   if (!isSupportedDomain(wire.domain)) {
     return null;
   }
+  const clusterId = typeof wire.clusterId === 'string' ? wire.clusterId.trim() : '';
+  if (!clusterId) {
+    return null;
+  }
+  if (
+    [wire.version, wire.clusterName].some(
+      (value) => value !== null && value !== undefined && typeof value !== 'string'
+    )
+  ) {
+    return null;
+  }
   const domain = wire.domain;
-  const scope = normalizeScope(domain, wire.scope);
+  const scope = normalizeScope(domain, wire.scope, clusterId);
   if (scope === null) {
     return null;
   }
@@ -164,16 +184,11 @@ export const normalizeResourceStreamProtocolMessage = (
     return null;
   }
 
-  const clusterId = wire.clusterId?.trim() || undefined;
-  const version = wire.version?.trim();
-  const modernSignal =
-    clusterId && version && canonicalSource(domain, wire.source) && hasSignalType(wire.signal)
-      ? wire.signal
-      : undefined;
-  if (!modernSignal && !hasMessageType(wire.type)) {
+  const signal = resolveModernSignal(wire, domain);
+  if (!signal && !hasMessageType(wire.type)) {
     return null;
   }
-  const message = canonicalMessage(wire, domain, modernSignal);
+  const message = canonicalMessage(wire, domain, signal);
   if (!message) {
     return null;
   }
@@ -182,7 +197,6 @@ export const normalizeResourceStreamProtocolMessage = (
     clusterName: wire.clusterName?.trim() || undefined,
     domain,
     scope,
-    routing: modernSignal ? 'strict' : 'compatible',
     message,
   };
 };
@@ -710,6 +724,21 @@ export const transitionResourceStreamProtocol = (
   }
 };
 
+const pendingProtocolHealth = (
+  phase: { errorReason?: string; preservedHealth?: ConfirmedStreamHealth },
+  waitingReason: string
+): { status: ResourceStreamHealthStatus; reason: string } => {
+  if (phase.preservedHealth) {
+    return {
+      status: 'healthy',
+      reason: phase.preservedHealth.delivered ? 'delivering' : 'synchronized',
+    };
+  }
+  return phase.errorReason
+    ? { status: 'unhealthy', reason: phase.errorReason }
+    : { status: 'degraded', reason: waitingReason };
+};
+
 export const computeResourceStreamProtocolHealth = (
   state: ResourceStreamProtocolState,
   connectionStatus: ResourceStreamConnectionStatus,
@@ -722,29 +751,10 @@ export const computeResourceStreamProtocolHealth = (
     case 'permission-blocked':
       return { status: 'unhealthy', reason: state.phase.reason };
     case 'resyncing':
-      if (state.phase.preservedHealth) {
-        return {
-          status: 'healthy',
-          reason: state.phase.preservedHealth.delivered ? 'delivering' : 'synchronized',
-        };
-      }
-      return state.phase.errorReason
-        ? { status: 'unhealthy', reason: state.phase.errorReason }
-        : { status: 'degraded', reason: 'resyncing' };
+      return pendingProtocolHealth(state.phase, 'resyncing');
     case 'awaiting-ack':
-      if (state.phase.preservedHealth) {
-        return {
-          status: 'healthy',
-          reason: state.phase.preservedHealth.delivered ? 'delivering' : 'synchronized',
-        };
-      }
-      return state.phase.errorReason
-        ? { status: 'unhealthy', reason: state.phase.errorReason }
-        : { status: 'degraded', reason: 'awaiting updates' };
     case 'connecting':
-      return state.phase.errorReason
-        ? { status: 'unhealthy', reason: state.phase.errorReason }
-        : { status: 'degraded', reason: 'awaiting updates' };
+      return pendingProtocolHealth(state.phase, 'awaiting updates');
     case 'synchronized':
       return {
         status: 'healthy',

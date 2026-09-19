@@ -147,7 +147,6 @@ const contextMocks = vi.hoisted(() => ({
   isEnabled: true,
   registerSurface: vi.fn(),
   unregisterSurface: vi.fn(),
-  updateSurface: vi.fn(),
   dispatchNativeAction: vi.fn(() => false),
   hasActiveBlockingSurface: vi.fn(() => false),
 }));
@@ -833,7 +832,6 @@ describe('LogViewer active pod synchronisation', () => {
   it('does not render transport-drop warnings as banners', async () => {
     const panelId = 'obj:test:deployment:team-a:api';
     setLogViewerPrefs(panelId, {
-      selectedContainer: '',
       selectedFilters: [],
       autoRefresh: true,
       timestampMode: 'default',
@@ -972,7 +970,6 @@ describe('LogViewer active pod synchronisation', () => {
       defaultScope
     );
     setLogViewerPrefs(panelId, {
-      selectedContainer: '',
       selectedFilters: [],
       autoRefresh: true,
       timestampMode: 'default',
@@ -1068,7 +1065,6 @@ describe('LogViewer active pod synchronisation', () => {
     try {
       const panelId = 'obj:test:pretty-remount-scroll';
       setLogViewerPrefs(panelId, {
-        selectedContainer: '',
         selectedFilters: [],
         autoRefresh: true,
         timestampMode: 'default',
@@ -1416,6 +1412,39 @@ describe('LogViewer active pod synchronisation', () => {
         '2024-05-01T11:00:00Z,web-1,app,info,2,"hello, world"',
       ].join('\n')
     );
+  });
+
+  it('keeps reserved metadata values in CSV when pod and timestamp columns are hidden', async () => {
+    const scope = buildContainerLogsScope('team-a:/v1:pod:api');
+    seedLogSnapshot(
+      [
+        {
+          pod: 'api',
+          container: 'app',
+          line: '{"_pod":"payload-pod","_timestamp":"payload-time"}',
+          timestamp: '2024-05-01T11:00:00Z',
+          isInit: false,
+        },
+      ],
+      scope
+    );
+    await renderViewer({ resourceKind: 'pod', containerLogsScope: scope });
+
+    for (const label of [
+      'Show timestamps from the Kubernetes API',
+      'Parse the JSON into a table',
+      'Copy to clipboard',
+    ]) {
+      await act(async () => {
+        requireValue(
+          container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`),
+          `expected ${label} control`
+        ).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await Promise.resolve();
+      });
+    }
+
+    expect(writeTextMock).toHaveBeenCalledWith('Container,_pod,_timestamp\napp,-,');
   });
 
   it('copies selected log text through the app native-action path', async () => {
@@ -1771,7 +1800,6 @@ describe('LogViewer active pod synchronisation', () => {
   it('supports highlighting ANSI-colored log text in the DOM renderer', async () => {
     const panelId = 'obj:test:highlight-ansi';
     setLogViewerPrefs(panelId, {
-      selectedContainer: '',
       selectedFilters: [],
       autoRefresh: true,
       timestampMode: 'default',
@@ -1817,7 +1845,6 @@ describe('LogViewer active pod synchronisation', () => {
   it('supports no-wrap for ANSI-colored log text in the DOM renderer', async () => {
     const panelId = 'obj:test:nowrap-ansi';
     setLogViewerPrefs(panelId, {
-      selectedContainer: '',
       selectedFilters: [],
       autoRefresh: true,
       timestampMode: 'default',
@@ -2016,7 +2043,6 @@ describe('LogViewer active pod synchronisation', () => {
       'sidecar',
     ]);
     setLogViewerPrefs('obj:test:deployment:team-a:api', {
-      selectedContainer: '',
       selectedFilters: [],
       autoRefresh: true,
       timestampMode: 'default',
@@ -2364,7 +2390,6 @@ describe('LogViewer active pod synchronisation', () => {
 
   it('highlights matching substrings in visible log text without changing backend params', async () => {
     setLogViewerPrefs('obj:test:highlight', {
-      selectedContainer: '',
       selectedFilters: [],
       autoRefresh: true,
       timestampMode: 'default',
@@ -2736,7 +2761,6 @@ describe('LogViewer active pod synchronisation', () => {
 
   it('renders a real backend error instead of an empty-log state', async () => {
     setLogViewerPrefs('obj:test:error', {
-      selectedContainer: '',
       selectedFilters: [],
       autoRefresh: false,
       timestampMode: 'default',
@@ -2787,7 +2811,6 @@ describe('LogViewer active pod synchronisation', () => {
   it('rehydrates LogViewer state from logViewerPrefsCache on mount', async () => {
     const panelId = 'obj:cluster-a:pod:team-a:api';
     setLogViewerPrefs(panelId, {
-      selectedContainer: 'sidecar',
       selectedFilters: ['pod:web-1'],
       autoRefresh: false,
       timestampMode: 'hidden',
@@ -2991,7 +3014,6 @@ describe('LogViewer active pod synchronisation', () => {
     const panelA = 'obj:cluster-a:pod:team-a:api';
     const panelB = 'obj:cluster-b:pod:team-b:web';
     setLogViewerPrefs(panelA, {
-      selectedContainer: '',
       selectedFilters: [],
       autoRefresh: true,
       timestampMode: 'default',
@@ -3008,7 +3030,6 @@ describe('LogViewer active pod synchronisation', () => {
       showPreviousContainerLogs: false,
     });
     setLogViewerPrefs(panelB, {
-      selectedContainer: '',
       selectedFilters: [],
       autoRefresh: true,
       timestampMode: 'default',
@@ -3039,7 +3060,6 @@ describe('LogViewer active pod synchronisation', () => {
     const panelId = 'obj:cluster-a:pod:team-a:api';
     (GetContainerLogsScopeContainers as unknown as ViMock).mockResolvedValue(['app']);
     setLogViewerPrefs(panelId, {
-      selectedContainer: '',
       selectedFilters: ['pod:web-1', 'container:app'],
       autoRefresh: true,
       timestampMode: 'default',
@@ -3072,7 +3092,6 @@ describe('LogViewer active pod synchronisation', () => {
   it('shows invalid regex validation in the regex chip', async () => {
     const panelId = 'obj:cluster-a:pod:team-a:api';
     setLogViewerPrefs(panelId, {
-      selectedContainer: '',
       selectedFilters: [],
       autoRefresh: true,
       timestampMode: 'default',
@@ -3098,7 +3117,6 @@ describe('LogViewer active pod synchronisation', () => {
   it('shows a previous-logs chip and returns to live logs when it is cleared', async () => {
     const panelId = 'obj:cluster-a:pod:team-a:api';
     setLogViewerPrefs(panelId, {
-      selectedContainer: '',
       selectedFilters: [],
       autoRefresh: true,
       timestampMode: 'default',
@@ -3146,7 +3164,6 @@ describe('LogViewer active pod synchronisation', () => {
   it('clears filters and toggles when active filter chips are removed', async () => {
     const panelId = 'obj:cluster-a:pod:team-a:api';
     setLogViewerPrefs(panelId, {
-      selectedContainer: '',
       selectedFilters: [],
       autoRefresh: true,
       timestampMode: 'default',
@@ -3323,7 +3340,6 @@ describe('LogViewer active pod synchronisation', () => {
       isInit: false,
     }));
     setLogViewerPrefs(panelId, {
-      selectedContainer: '',
       selectedFilters: [],
       autoRefresh: true,
       timestampMode: 'default',

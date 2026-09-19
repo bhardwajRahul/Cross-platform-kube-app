@@ -32,7 +32,6 @@ describe('ErrorHandler', () => {
     handler = new ErrorHandlerClass({
       enableLogging: true,
       logToConsole: true,
-      logToServer: false,
     });
     console.groupCollapsed = vi.fn();
     console.error = vi.fn();
@@ -68,6 +67,32 @@ describe('ErrorHandler', () => {
     );
 
     unsubscribe();
+  });
+
+  it.each([
+    ['network disconnected', ErrorCategory.NETWORK, true, ErrorSeverity.WARNING],
+    ['token expired', ErrorCategory.AUTHENTICATION, false, ErrorSeverity.ERROR],
+    ['permission denied', ErrorCategory.PERMISSION, false, ErrorSeverity.ERROR],
+    ['object not found', ErrorCategory.NOT_FOUND, false, ErrorSeverity.INFO],
+    ['invalid input', ErrorCategory.VALIDATION, false, ErrorSeverity.WARNING],
+    ['operation timed out', ErrorCategory.TIMEOUT, true, ErrorSeverity.WARNING],
+    ['too many requests', ErrorCategory.RATE_LIMIT, true, ErrorSeverity.WARNING],
+    ['internal server error', ErrorCategory.SERVER_ERROR, true, ErrorSeverity.CRITICAL],
+    ['unexpected failure', ErrorCategory.UNKNOWN, false, ErrorSeverity.WARNING],
+  ] as const)(
+    'keeps retry and severity policy for %s under a configured default',
+    (message, category, retryable, severity) => {
+      handler.updateOptions({ defaultSeverity: ErrorSeverity.WARNING });
+      expect(handler.describe(message)).toMatchObject({ category, retryable, severity });
+    }
+  );
+
+  it('keeps recovery suggestions independent between notifications', () => {
+    const first = handler.describe('network disconnected');
+    const originalSuggestions = [...(first.suggestions ?? [])];
+    expect(originalSuggestions.length).toBeGreaterThan(0);
+    first.suggestions?.splice(0);
+    expect(handler.describe('network disconnected').suggestions).toEqual(originalSuggestions);
   });
 
   it('reports a caught user-visible error through the centralized telemetry boundary', () => {
@@ -251,22 +276,6 @@ describe('ErrorHandler', () => {
         surface: 'operational',
       })
     );
-  });
-
-  it('supports scoped handlers that merge context and custom message', () => {
-    const scoped = handler.createScoped('object-panel');
-    const details = scoped.handle(
-      'Operation timed out',
-      { object: 'deploy/web' },
-      'Fetch timed out'
-    );
-
-    expect(details.context).toMatchObject({
-      scope: 'object-panel',
-      object: 'deploy/web',
-    });
-    expect(details.userMessage).toBe('Fetch timed out');
-    expect(details.category).toBe(ErrorCategory.TIMEOUT);
   });
 
   it('does not treat token substrings in resource names as auth failures', () => {

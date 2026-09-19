@@ -5,11 +5,7 @@
  * get consistent diagnostics, loading accounting, and orchestrator access.
  */
 
-import {
-  beginBrokerRead,
-  completeBrokerRead,
-  recordBlockedBrokerRead,
-} from '@/core/read-diagnostics';
+import { recordBlockedBrokerRead, runBrokerRead } from '@/core/read-diagnostics';
 import { refreshOrchestrator } from '@/core/refresh';
 import type { RefreshDemand } from '@/core/refresh/refreshRuntime';
 import { getScopedDomainState } from '@/core/refresh/store';
@@ -63,26 +59,11 @@ export const requestData = async <T>({
     };
   }
 
-  const token = beginBrokerRead({
-    broker: 'data-access',
-    resource,
-    adapter,
-    reason,
-    label,
-    scope,
-  });
-
-  try {
-    const data = await read(token);
-    completeBrokerRead({ token, status: 'success' });
-    return {
-      status: 'executed',
-      data,
-    };
-  } catch (error) {
-    completeBrokerRead({ token, status: 'error', error });
-    throw error;
-  }
+  const data = await runBrokerRead(
+    { broker: 'data-access', resource, adapter, reason, label, scope },
+    read
+  );
+  return { status: 'executed', data };
 };
 
 const performRefreshDomainRequest = async (
@@ -166,48 +147,41 @@ export const setRefreshDomainEnabled = ({
   refreshOrchestrator.setScopedDomainEnabled(domain, scope, enabled);
 };
 
+interface RefreshDomainLease {
+  domain: RefreshDomain;
+  scope: string;
+  preserveState?: boolean;
+  demand?: RefreshDemand;
+}
+
+const refreshDomainLeaseOptions = ({
+  preserveState = false,
+  demand = 'snapshot',
+}: RefreshDomainLease): { preserveState: boolean; demand?: RefreshDemand } | undefined => {
+  if (demand !== 'snapshot') {
+    return { preserveState, demand };
+  }
+  return preserveState ? { preserveState } : undefined;
+};
+
 // Reference-counted lease that keeps a scoped refresh domain enabled while any
 // mounted consumer holds it. Use this instead of setRefreshDomainEnabled for
 // component lifecycles so a remounting/concurrent owner is not torn down by an
 // old owner's cleanup.
-export const acquireRefreshDomainLease = ({
-  domain,
-  scope,
-  preserveState = false,
-  demand = 'snapshot',
-}: {
-  domain: RefreshDomain;
-  scope: string;
-  preserveState?: boolean;
-  demand?: RefreshDemand;
-}): void => {
-  let options: { preserveState: boolean; demand?: RefreshDemand } | undefined;
-  if (demand !== 'snapshot') {
-    options = { preserveState, demand };
-  } else if (preserveState) {
-    options = { preserveState };
-  }
-  refreshOrchestrator.acquireScopedDomainLease(domain, scope, options);
+export const acquireRefreshDomainLease = (lease: RefreshDomainLease): void => {
+  refreshOrchestrator.acquireScopedDomainLease(
+    lease.domain,
+    lease.scope,
+    refreshDomainLeaseOptions(lease)
+  );
 };
 
-export const releaseRefreshDomainLease = ({
-  domain,
-  scope,
-  preserveState = false,
-  demand = 'snapshot',
-}: {
-  domain: RefreshDomain;
-  scope: string;
-  preserveState?: boolean;
-  demand?: RefreshDemand;
-}): void => {
-  let options: { preserveState: boolean; demand?: RefreshDemand } | undefined;
-  if (demand !== 'snapshot') {
-    options = { preserveState, demand };
-  } else if (preserveState) {
-    options = { preserveState };
-  }
-  refreshOrchestrator.releaseScopedDomainLease(domain, scope, options);
+export const releaseRefreshDomainLease = (lease: RefreshDomainLease): void => {
+  refreshOrchestrator.releaseScopedDomainLease(
+    lease.domain,
+    lease.scope,
+    refreshDomainLeaseOptions(lease)
+  );
 };
 
 export const resetRefreshDomain = (domain: RefreshDomain, scope: string): void => {

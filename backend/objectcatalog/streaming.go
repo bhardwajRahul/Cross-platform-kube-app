@@ -37,7 +37,7 @@ func newStreamingAggregator(s *Service) *streamingAggregator {
 }
 
 // emit adds a batch of summaries to the aggregator.
-func (a *streamingAggregator) emit(_ int, items []Summary) {
+func (a *streamingAggregator) emit(items []Summary) {
 	if a == nil || len(items) == 0 {
 		return
 	}
@@ -89,9 +89,9 @@ func (a *streamingAggregator) firstFlushLatency() time.Duration {
 }
 
 // emitSummaries adds a batch of summaries to the aggregator.
-func emitSummaries(index int, agg *streamingAggregator, summaries []Summary, err error, handled bool) ([]Summary, bool, error) {
+func emitSummaries(agg *streamingAggregator, summaries []Summary, err error, handled bool) ([]Summary, bool, error) {
 	if handled && agg != nil && err == nil && len(summaries) > 0 {
-		agg.emit(index, summaries)
+		agg.emit(summaries)
 	}
 	return summaries, handled, err
 }
@@ -181,22 +181,6 @@ func (s *Service) streamChunk(items []Summary, kindSet map[string]bool, namespac
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.catalogIndex.appendStreamingChunk(items, kindSet, namespaceSet)
-}
-
-// publishStreamingState updates the streaming state in the service.
-func (s *Service) publishStreamingState(
-	chunks []*summaryChunk,
-	kindSet map[string]bool,
-	namespaceSet map[string]struct{},
-	descriptors []Descriptor,
-	ready bool,
-) {
-	chunkSnapshot := make([]*summaryChunk, len(chunks))
-	copy(chunkSnapshot, chunks)
-
-	s.mu.Lock()
-	s.catalogIndex.publishStreamingState(chunkSnapshot, kindSet, namespaceSet, descriptors, ready)
-	s.mu.Unlock()
 }
 
 // setFirstBatchLatency records the time-to-first-batch measurement.

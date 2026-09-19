@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -207,20 +208,17 @@ type containerLogsInitial struct {
 }
 
 func (s *containerLogsStream) loadInitial(ctx context.Context, limiterSession *TargetSession) (containerLogsInitial, bool) {
-	entries, states, pods, selector, warnings, skipped, reason, err := s.handler.streamer.tail(
+	initial, err := s.handler.streamer.tail(
 		ctx, s.options, limiterSession,
 	)
 	if err != nil {
 		s.handleInitialError(err)
 		return containerLogsInitial{}, false
 	}
-	if s.handler.telemetry != nil && skipped > 0 {
-		s.handler.telemetry.RecordStreamSkippedTargets(s.stream, skipped, reason)
+	if s.handler.telemetry != nil && initial.skippedTargets > 0 {
+		s.handler.telemetry.RecordStreamSkippedTargets(s.stream, initial.skippedTargets, initial.skipReason)
 	}
-	return containerLogsInitial{
-		entries: entries, states: states, pods: pods, selector: selector,
-		warnings: warnings, skippedTargets: skipped, skipReason: reason,
-	}, true
+	return initial, true
 }
 
 func (s *containerLogsStream) handleInitialError(err error) {
@@ -476,7 +474,7 @@ func (d *containerLogsDelivery) handleDrop(drop int) bool {
 
 func (d *containerLogsDelivery) emitWarningUpdate() bool {
 	nextWarnings := composeStreamWarnings(d.selectionWarnings, d.transportDropObserved)
-	if stringSlicesEqual(d.emittedWarnings, nextWarnings) {
+	if slices.Equal(d.emittedWarnings, nextWarnings) {
 		return false
 	}
 	if d.request.writePayload(EventPayload{Warnings: warningPayload(nextWarnings, true)}) != nil {
@@ -575,6 +573,9 @@ func parseRequest(request Request) (Options, error) {
 	if identity.Namespace == "" {
 		return Options{}, errors.New("log scope must reference a namespaced object")
 	}
+	if err := containerlogs.ValidateTargetGVK(identity.GVK); err != nil {
+		return Options{}, err
+	}
 	podFilter := strings.TrimSpace(request.Pod)
 	podInclude := strings.TrimSpace(request.PodInclude)
 	podExclude := strings.TrimSpace(request.PodExclude)
@@ -608,12 +609,7 @@ func parseRequest(request Request) (Options, error) {
 	}
 	selection := containerlogs.ParseScopeSelection(selectedFilters)
 	return Options{
-		ClusterID: func() string {
-			if len(clusterIDs) == 1 {
-				return clusterIDs[0]
-			}
-			return ""
-		}(),
+		ClusterID:        clusterIDs[0],
 		Namespace:        identity.Namespace,
 		Group:            strings.TrimSpace(identity.GVK.Group),
 		Version:          strings.TrimSpace(identity.GVK.Version),

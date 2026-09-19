@@ -1,6 +1,7 @@
 package argocd
 
 import (
+	"github.com/luxury-yacht/app/backend/resources/crdfacts"
 	"sort"
 	"strings"
 
@@ -8,7 +9,6 @@ import (
 	"github.com/luxury-yacht/app/backend/resourcemodel"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // Facts contains only display data; repository credentials, Helm values, and
@@ -148,7 +148,7 @@ func isArgoCD(object *unstructured.Unstructured) bool {
 }
 
 func applicationFacts(clusterID string, object *unstructured.Unstructured) *ApplicationFacts {
-	facts := &ApplicationFacts{Spec: applicationSpec(object.Object, "spec"), Sync: statusOrUnknown(text(object.Object, "status", "sync", "status")), Health: statusOrUnknown(text(object.Object, "status", "health", "status")), HealthMessage: text(object.Object, "status", "health", "message"), Operation: read[Operation](object.Object, "status", "operationState")}
+	facts := &ApplicationFacts{Spec: applicationSpec(object.Object, "spec"), Sync: statusOrUnknown(crdfacts.Text(object.Object, "status", "sync", "status")), Health: statusOrUnknown(crdfacts.Text(object.Object, "status", "health", "status")), HealthMessage: crdfacts.Text(object.Object, "status", "health", "message"), Operation: read[Operation](object.Object, "status", "operationState")}
 	facts.SyncPresentation = statusPresentation(facts.Sync)
 	facts.HealthPresentation = statusPresentation(facts.Health)
 	if facts.Operation != nil {
@@ -156,7 +156,7 @@ func applicationFacts(clusterID string, object *unstructured.Unstructured) *Appl
 	}
 	facts.Revisions, _, _ = unstructured.NestedStringSlice(object.Object, "status", "sync", "revisions")
 	if len(facts.Revisions) == 0 {
-		if revision := text(object.Object, "status", "sync", "revision"); revision != "" {
+		if revision := crdfacts.Text(object.Object, "status", "sync", "revision"); revision != "" {
 			facts.Revisions = []string{revision}
 		}
 	}
@@ -169,20 +169,17 @@ func applicationFacts(clusterID string, object *unstructured.Unstructured) *Appl
 }
 
 func applicationSetOwner(clusterID string, object *unstructured.Unstructured) *resourcemodel.ResourceLink {
-	for _, owner := range object.GetOwnerReferences() {
-		gvk := schema.FromAPIVersionAndKind(owner.APIVersion, owner.Kind)
-		if gvk.Group == "argoproj.io" && gvk.Kind == "ApplicationSet" && gvk.Version != "" {
-			link := resourcemodel.NewNamespacedResourceLink(resourcemodel.ResourceRef{ClusterID: clusterID, Group: gvk.Group, Version: gvk.Version, Kind: gvk.Kind, Namespace: object.GetNamespace(), Name: owner.Name, UID: string(owner.UID)})
-			return &link
-		}
+	links := crdfacts.Owners(clusterID, object, "argoproj.io", "ApplicationSet")
+	if len(links) == 0 {
+		return nil
 	}
-	return nil
+	return &links[0]
 }
 
 func applicationSetFacts(object *unstructured.Unstructured) *ApplicationSetFacts {
-	facts := &ApplicationSetFacts{TemplateName: text(object.Object, "spec", "template", "metadata", "name"), Template: applicationSpec(object.Object, "spec", "template", "spec"), Strategy: text(object.Object, "spec", "strategy", "type"), ApplicationsSync: text(object.Object, "spec", "syncPolicy", "applicationsSync")}
-	facts.PreserveResourcesOnDeletion = boolAt(object.Object, "spec", "syncPolicy", "preserveResourcesOnDeletion")
-	facts.GoTemplate = boolAt(object.Object, "spec", "goTemplate")
+	facts := &ApplicationSetFacts{TemplateName: crdfacts.Text(object.Object, "spec", "template", "metadata", "name"), Template: applicationSpec(object.Object, "spec", "template", "spec"), Strategy: crdfacts.Text(object.Object, "spec", "strategy", "type"), ApplicationsSync: crdfacts.Text(object.Object, "spec", "syncPolicy", "applicationsSync")}
+	facts.PreserveResourcesOnDeletion = crdfacts.Bool(object.Object, "spec", "syncPolicy", "preserveResourcesOnDeletion")
+	facts.GoTemplate = crdfacts.Bool(object.Object, "spec", "goTemplate")
 	generators, _, _ := unstructured.NestedSlice(object.Object, "spec", "generators")
 	facts.Generators = generatorFacts(generators)
 	return facts
@@ -203,7 +200,7 @@ func generatorFacts(generators []any) []Generator {
 		}
 		sort.Strings(keys)
 		for _, kind := range keys {
-			result = append(result, Generator{Type: kind, RepoURL: text(generator, kind, "repoURL"), Revision: text(generator, kind, "revision")})
+			result = append(result, Generator{Type: kind, RepoURL: crdfacts.Text(generator, kind, "repoURL"), Revision: crdfacts.Text(generator, kind, "revision")})
 			nested, _, _ := unstructured.NestedSlice(generator, kind, "generators")
 			result = append(result, generatorFacts(nested)...)
 		}
@@ -231,15 +228,4 @@ func read[T any](object map[string]any, path ...string) *T {
 		return nil
 	}
 	return &result
-}
-func text(object map[string]any, path ...string) string {
-	value, _, _ := unstructured.NestedString(object, path...)
-	return value
-}
-func boolAt(object map[string]any, path ...string) *bool {
-	value, found, _ := unstructured.NestedBool(object, path...)
-	if !found {
-		return nil
-	}
-	return &value
 }

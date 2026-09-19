@@ -64,7 +64,6 @@ func permissionReviewRetryPolicy() k8sretry.Policy {
 
 type ssrrCacheEntry struct {
 	status    *authorizationv1.SubjectRulesReviewStatus
-	cachedAt  time.Time
 	expiresAt time.Time
 }
 
@@ -124,31 +123,23 @@ func (c *SSRRCache) GetRules(ctx context.Context, namespace string) (*authorizat
 }
 
 func (c *SSRRCache) fetchAndStore(ctx context.Context, namespace string) (*authorizationv1.SubjectRulesReviewStatus, error) {
-	type sfResult struct {
-		status *authorizationv1.SubjectRulesReviewStatus
-		err    error
-	}
-
-	val, _, _ := c.sfGroup.Do(namespace, func() (any, error) {
-		status, err := c.fetch(ctx, namespace)
-		return sfResult{status: status, err: err}, nil
+	value, err, _ := c.sfGroup.Do(namespace, func() (any, error) {
+		return c.fetch(ctx, namespace)
 	})
-
-	result := val.(sfResult)
-	if result.err != nil {
-		return nil, result.err
+	if err != nil {
+		return nil, err
 	}
+	status := value.(*authorizationv1.SubjectRulesReviewStatus)
 
 	now := c.now()
 	c.mu.Lock()
 	c.entries[namespace] = ssrrCacheEntry{
-		status:    result.status,
-		cachedAt:  now,
+		status:    status,
 		expiresAt: now.Add(c.ttl),
 	}
 	c.mu.Unlock()
 
-	return result.status, nil
+	return status, nil
 }
 
 func (c *SSRRCache) triggerBackgroundRefresh(namespace string) {
@@ -200,10 +191,10 @@ func MatchRules(rules []authorizationv1.ResourceRule, apiGroup, resource, verb, 
 	}
 
 	for _, rule := range rules {
-		if !matchesVerb(rule.Verbs, verb) {
+		if !matchesWildcard(rule.Verbs, verb) {
 			continue
 		}
-		if !matchesAPIGroup(rule.APIGroups, apiGroup) {
+		if !matchesWildcard(rule.APIGroups, apiGroup) {
 			continue
 		}
 		if !matchesResource(rule.Resources, combinedResource, subresource) {
@@ -217,22 +208,8 @@ func MatchRules(rules []authorizationv1.ResourceRule, apiGroup, resource, verb, 
 	return false
 }
 
-func matchesVerb(ruleVerbs []string, verb string) bool {
-	for _, v := range ruleVerbs {
-		if v == "*" || v == verb {
-			return true
-		}
-	}
-	return false
-}
-
-func matchesAPIGroup(ruleGroups []string, group string) bool {
-	for _, g := range ruleGroups {
-		if g == "*" || g == group {
-			return true
-		}
-	}
-	return false
+func matchesWildcard(values []string, value string) bool {
+	return slices.Contains(values, "*") || slices.Contains(values, value)
 }
 
 // matchesResource implements K8s RBAC ResourceMatches:

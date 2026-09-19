@@ -53,60 +53,57 @@ export function createInitialTabGroupState(): TabGroupState {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+function stripPanelFromGroup(
+  group: TabGroupState['right'],
+  panelId: string
+): TabGroupState['right'] {
+  const tabs = group.tabs.filter((id) => id !== panelId);
+  const activeTab =
+    group.activeTab === panelId || !tabs.includes(group.activeTab ?? '')
+      ? (tabs[tabs.length - 1] ?? null)
+      : group.activeTab;
+  return { tabs, activeTab };
+}
+
+function insertPanelIntoGroup(
+  group: TabGroupState['right'],
+  panelId: string,
+  insertIndex?: number
+) {
+  const tabs = [...group.tabs];
+  tabs.splice(insertIndex ?? tabs.length, 0, panelId);
+  return { tabs, activeTab: panelId };
+}
+
+function removePanelWithAdjacentActivation(
+  group: TabGroupState['right'],
+  panelId: string,
+  preference: AdjacentTabActivationPreference
+) {
+  const removedIndex = group.tabs.indexOf(panelId);
+  const tabs = group.tabs.filter((id) => id !== panelId);
+  return {
+    tabs,
+    activeTab: activateAdjacentTab(tabs, removedIndex, group.activeTab, panelId, preference),
+  };
+}
+
 /**
  * Remove a panel from all groups, returning the new state.
  * This is the internal version that does NOT do adjacent-tab activation;
  * it simply strips the panelId out and cleans up empty floating groups.
  */
 function stripPanelFromAllGroups(state: TabGroupState, panelId: string): TabGroupState {
-  const rightTabs = state.right.tabs.filter((id) => id !== panelId);
-  const bottomTabs = state.bottom.tabs.filter((id) => id !== panelId);
-
-  // For docked groups, if the active tab was removed, pick the last tab or null.
-  let rightActive: string | null;
-
-  if (state.right.activeTab === panelId) {
-    rightActive = rightTabs[rightTabs.length - 1] ?? null;
-  } else if (rightTabs.includes(state.right.activeTab ?? '')) {
-    rightActive = state.right.activeTab;
-  } else {
-    rightActive = rightTabs[rightTabs.length - 1] ?? null;
-  }
-
-  let bottomActive: string | null;
-
-  if (state.bottom.activeTab === panelId) {
-    bottomActive = bottomTabs[bottomTabs.length - 1] ?? null;
-  } else if (bottomTabs.includes(state.bottom.activeTab ?? '')) {
-    bottomActive = state.bottom.activeTab;
-  } else {
-    bottomActive = bottomTabs[bottomTabs.length - 1] ?? null;
-  }
-
-  // For floating groups, remove the panel and destroy empty groups.
   const floating: FloatingTabGroup[] = [];
   for (const group of state.floating) {
-    const tabs = group.tabs.filter((id) => id !== panelId);
-    if (tabs.length === 0) {
-      // Destroy empty floating groups.
-      continue;
+    const remaining = stripPanelFromGroup(group, panelId);
+    if (remaining.tabs.length > 0) {
+      floating.push({ ...group, ...remaining });
     }
-    let activeTab: string | null;
-
-    if (group.activeTab === panelId) {
-      activeTab = tabs[tabs.length - 1] ?? null;
-    } else if (tabs.includes(group.activeTab ?? '')) {
-      activeTab = group.activeTab;
-    } else {
-      activeTab = tabs[tabs.length - 1] ?? null;
-    }
-
-    floating.push({ ...group, tabs, activeTab });
   }
-
   return {
-    right: { tabs: rightTabs, activeTab: rightActive },
-    bottom: { tabs: bottomTabs, activeTab: bottomActive },
+    right: stripPanelFromGroup(state.right, panelId),
+    bottom: stripPanelFromGroup(state.bottom, panelId),
     floating,
   };
 }
@@ -157,29 +154,10 @@ export function addPanelToGroup(
   // Strip from any existing location first.
   const cleaned = stripPanelFromAllGroups(state, panelId);
 
-  if (position === 'right') {
-    const tabs = [...cleaned.right.tabs];
-    if (insertIndex !== undefined) {
-      tabs.splice(insertIndex, 0, panelId);
-    } else {
-      tabs.push(panelId);
-    }
+  if (position === 'right' || position === 'bottom') {
     return {
       ...cleaned,
-      right: { tabs, activeTab: panelId },
-    };
-  }
-
-  if (position === 'bottom') {
-    const tabs = [...cleaned.bottom.tabs];
-    if (insertIndex !== undefined) {
-      tabs.splice(insertIndex, 0, panelId);
-    } else {
-      tabs.push(panelId);
-    }
-    return {
-      ...cleaned,
-      bottom: { tabs, activeTab: panelId },
+      [position]: insertPanelIntoGroup(cleaned[position], panelId, insertIndex),
     };
   }
 
@@ -218,19 +196,9 @@ export function removePanelFromGroup(
   }
 
   if (groupKey === 'right' || groupKey === 'bottom') {
-    const group = state[groupKey];
-    const removedIndex = group.tabs.indexOf(panelId);
-    const newTabs = group.tabs.filter((id) => id !== panelId);
-    const newActive = activateAdjacentTab(
-      newTabs,
-      removedIndex,
-      group.activeTab,
-      panelId,
-      activationPreference
-    );
     return {
       ...state,
-      [groupKey]: { tabs: newTabs, activeTab: newActive },
+      [groupKey]: removePanelWithAdjacentActivation(state[groupKey], panelId, activationPreference),
     };
   }
 
@@ -241,20 +209,10 @@ export function removePanelFromGroup(
       floating.push(group);
       continue;
     }
-    const removedIndex = group.tabs.indexOf(panelId);
-    const newTabs = group.tabs.filter((id) => id !== panelId);
-    if (newTabs.length === 0) {
-      // Destroy empty floating group.
-      continue;
+    const remaining = removePanelWithAdjacentActivation(group, panelId, activationPreference);
+    if (remaining.tabs.length > 0) {
+      floating.push({ ...group, ...remaining });
     }
-    const newActive = activateAdjacentTab(
-      newTabs,
-      removedIndex,
-      group.activeTab,
-      panelId,
-      activationPreference
-    );
-    floating.push({ ...group, tabs: newTabs, activeTab: newActive });
   }
 
   return { ...state, floating };
@@ -407,13 +365,7 @@ export function addPanelToFloatingGroup(
         return group;
       }
       foundTargetGroup = true;
-      const newTabs = [...group.tabs];
-      if (insertIndex !== undefined) {
-        newTabs.splice(insertIndex, 0, panelId);
-      } else {
-        newTabs.push(panelId);
-      }
-      return { ...group, tabs: newTabs, activeTab: panelId };
+      return { ...group, ...insertPanelIntoGroup(group, panelId, insertIndex) };
     }),
   };
 

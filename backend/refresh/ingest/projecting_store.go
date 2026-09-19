@@ -469,12 +469,16 @@ func (s *ProjectingStore) projectAndStore(obj interface{}) error {
 	}
 	projected, err := s.project(obj)
 	if err != nil {
-		if !s.projectErrLogged {
-			s.projectErrLogged = true
-			klog.V(2).Infof("ingest: projection failed for %q, skipping (logged once): %v", key, err)
-		}
+		s.logProjectionError(key, "", err)
 		return nil
 	}
+	s.storeProjectedRow(key, projected)
+	return nil
+}
+
+// Both watch updates and owner corrections deliver the full row before retention
+// strips its Table half. Callers hold the store's write lock throughout.
+func (s *ProjectingStore) storeProjectedRow(key string, projected interface{}) {
 	// Fan the FULL projected value (Table half present) to the sinks BEFORE dropping the
 	// Table half from the stored copy, so the maintained store is fed the row even though
 	// the store no longer keeps it.
@@ -487,7 +491,14 @@ func (s *ProjectingStore) projectAndStore(obj interface{}) error {
 	stored := s.storedValue(projected)
 	s.rows[key] = stored
 	s.addIndexesForKey(key, stored)
-	return nil
+}
+
+func (s *ProjectingStore) logProjectionError(key, operation string, err error) {
+	if s.projectErrLogged {
+		return
+	}
+	s.projectErrLogged = true
+	klog.V(2).Infof("ingest: projection failed for %q%s, skipping (logged once): %v", key, operation, err)
 }
 
 // Add projects obj and stores the projected row under its key. The source
@@ -543,57 +554,37 @@ func (s *ProjectingStore) List() []interface{} {
 // omitted. For a table-only projection (the stored value is not a Bundle) the
 // stored value itself is the table row.
 func (s *ProjectingStore) TableRows() []interface{} {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]interface{}, 0, len(s.rows))
-	for _, row := range s.rows {
-		if table := tableHalf(row); table != nil {
-			out = append(out, table)
-		}
-	}
-	return out
+	return s.projectedRows(tableHalf)
 }
 
 // CatalogRows returns a snapshot slice of the Catalog half of every stored
 // projection (the object-catalog Summary). Rows whose Catalog half is nil — kinds
 // with no catalog projector — are omitted.
 func (s *ProjectingStore) CatalogRows() []interface{} {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]interface{}, 0, len(s.rows))
-	for _, row := range s.rows {
-		if cat := catalogHalf(row); cat != nil {
-			out = append(out, cat)
-		}
-	}
-	return out
+	return s.projectedRows(catalogHalf)
 }
 
 // ObjectMapRows returns a snapshot slice of the ObjectMap half of every stored
 // projection (the object-map graph node). Rows whose ObjectMap half is nil — kinds
 // with no object-map projector — are omitted.
 func (s *ProjectingStore) ObjectMapRows() []interface{} {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]interface{}, 0, len(s.rows))
-	for _, row := range s.rows {
-		if node := objectMapHalf(row); node != nil {
-			out = append(out, node)
-		}
-	}
-	return out
+	return s.projectedRows(objectMapHalf)
 }
 
 // AggregateRows returns a snapshot slice of the Aggregate half of every stored
 // projection (a kind's bespoke aggregation row — the pod kind's PodAggregate). Rows
 // whose Aggregate half is nil — every kind but pods — are omitted.
 func (s *ProjectingStore) AggregateRows() []interface{} {
+	return s.projectedRows(aggregateHalf)
+}
+
+func (s *ProjectingStore) projectedRows(project func(interface{}) interface{}) []interface{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]interface{}, 0, len(s.rows))
 	for _, row := range s.rows {
-		if agg := aggregateHalf(row); agg != nil {
-			out = append(out, agg)
+		if value := project(row); value != nil {
+			out = append(out, value)
 		}
 	}
 	return out
@@ -608,24 +599,10 @@ func (s *ProjectingStore) RowsByIndex(indexName string, values []string) []inter
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	byValue := s.indexes[indexName]
-	if len(byValue) == 0 {
+	keys := indexedKeys(s.indexes[indexName], values)
+	if len(keys) == 0 {
 		return nil
 	}
-	keySet := make(map[string]struct{})
-	for _, value := range values {
-		for key := range byValue[value] {
-			keySet[key] = struct{}{}
-		}
-	}
-	if len(keySet) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(keySet))
-	for key := range keySet {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
 	out := make([]interface{}, 0, len(keys))
 	for _, key := range keys {
 		if row, ok := s.rows[key]; ok {
@@ -633,6 +610,23 @@ func (s *ProjectingStore) RowsByIndex(indexName string, values []string) []inter
 		}
 	}
 	return out
+}
+
+// indexedKeys snapshots the union before callers read or rewrite indexed rows.
+// The caller holds the store lock throughout selection and use of these keys.
+func indexedKeys(byValue map[string]map[string]struct{}, values []string) []string {
+	keySet := make(map[string]struct{})
+	for _, value := range values {
+		for key := range byValue[value] {
+			keySet[key] = struct{}{}
+		}
+	}
+	keys := make([]string, 0, len(keySet))
+	for key := range keySet {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // RewriteBundlesByIndex applies an out-of-band correction to stored Bundles — a
@@ -660,24 +654,10 @@ func (s *ProjectingStore) RewriteBundlesByIndex(
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	byValue := s.indexes[indexName]
-	if len(byValue) == 0 {
+	keys := indexedKeys(s.indexes[indexName], values)
+	if len(keys) == 0 {
 		return nil
 	}
-	keySet := make(map[string]struct{})
-	for _, value := range values {
-		for key := range byValue[value] {
-			keySet[key] = struct{}{}
-		}
-	}
-	if len(keySet) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(keySet))
-	for key := range keySet {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
 	rewritten := make([]Bundle, 0, len(keys))
 	for _, key := range keys {
 		stored, ok := s.rows[key].(Bundle)
@@ -688,13 +668,7 @@ func (s *ProjectingStore) RewriteBundlesByIndex(
 		if !changed {
 			continue
 		}
-		if s.hasSinks() {
-			s.emitUpsert(next)
-		}
-		s.removeIndexesForKey(key, stored)
-		nextStored := s.storedValue(next)
-		s.rows[key] = nextStored
-		s.addIndexesForKey(key, nextStored)
+		s.storeProjectedRow(key, next)
 		rewritten = append(rewritten, next)
 	}
 	return rewritten
@@ -736,23 +710,11 @@ func (s *ProjectingStore) GetByKey(key string) (item interface{}, exists bool, e
 // reflector resumes its watch from; it is recorded for
 // LastStoreSyncResourceVersion.
 func (s *ProjectingStore) Replace(list []interface{}, resourceVersion string) error {
-	next := make(map[string]interface{}, len(list))
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, obj := range list {
-		key, err := keyOf(obj)
-		if err != nil {
-			return cache.KeyError{Obj: obj, Err: err}
-		}
-		projected, err := s.project(obj)
-		if err != nil {
-			if !s.projectErrLogged {
-				s.projectErrLogged = true
-				klog.V(2).Infof("ingest: projection failed for %q during replace, skipping (logged once): %v", key, err)
-			}
-			continue
-		}
-		next[key] = projected
+	next, err := s.projectRows(list, " during replace")
+	if err != nil {
+		return err
 	}
 	prev := s.rows
 	s.rv = resourceVersion
@@ -772,6 +734,25 @@ func (s *ProjectingStore) Replace(list []interface{}, resourceVersion string) er
 	return nil
 }
 
+// Full and namespace relists share projection/error handling; their publication
+// paths keep the distinct bulk versus partition sink contracts. Call under s.mu.
+func (s *ProjectingStore) projectRows(list []interface{}, operation string) (map[string]interface{}, error) {
+	next := make(map[string]interface{}, len(list))
+	for _, obj := range list {
+		key, err := keyOf(obj)
+		if err != nil {
+			return nil, cache.KeyError{Obj: obj, Err: err}
+		}
+		projected, err := s.project(obj)
+		if err != nil {
+			s.logProjectionError(key, operation, err)
+			continue
+		}
+		next[key] = projected
+	}
+	return next, nil
+}
+
 // feedSinksReplace reconciles a relist against every sink: it deletes every key that
 // vanished from the new set, then upserts the whole new set — fanning each projected
 // value's Table and Catalog halves to their respective sinks. It assumes the caller
@@ -784,8 +765,8 @@ func (s *ProjectingStore) feedSinksReplace(prev, next map[string]interface{}) {
 		s.emitDeleteToIncrementalSinks(stored)
 	}
 	tableRows, catalogRows, bundles := replaceRows(next)
-	s.emitReplaceTableRows(tableRows)
-	s.emitReplaceCatalogRows(catalogRows)
+	emitReplaceRows(s.sinks, tableRows)
+	emitReplaceRows(s.catalogSinks, catalogRows)
 	s.emitReplaceBundles(bundles)
 }
 
@@ -836,26 +817,8 @@ func replaceRows(next map[string]interface{}) ([]interface{}, []interface{}, []B
 	return tableRows, catalogRows, bundles
 }
 
-func (s *ProjectingStore) emitReplaceTableRows(rows []interface{}) {
-	if len(s.sinks) == 0 {
-		return
-	}
-	for _, sink := range s.sinks {
-		if bulk, ok := sink.(Replacer); ok {
-			bulk.Replace(rows)
-			continue
-		}
-		for _, row := range rows {
-			sink.Upsert(row)
-		}
-	}
-}
-
-func (s *ProjectingStore) emitReplaceCatalogRows(rows []interface{}) {
-	if len(s.catalogSinks) == 0 {
-		return
-	}
-	for _, sink := range s.catalogSinks {
+func emitReplaceRows(sinks []Sink, rows []interface{}) {
+	for _, sink := range sinks {
 		if bulk, ok := sink.(Replacer); ok {
 			bulk.Replace(rows)
 			continue

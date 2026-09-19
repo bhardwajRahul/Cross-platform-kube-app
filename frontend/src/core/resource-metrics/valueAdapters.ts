@@ -10,7 +10,6 @@ import type {
   ResourceMetricsData,
   ResourceMetricsFreshness,
   ResourceMetricsFreshnessInput,
-  ResourceMetricsSource,
   ResourceMetricValues,
   ResourcePodsMetricValues,
 } from './types';
@@ -110,34 +109,6 @@ export const podRowResourceMetrics = (
   memory: resourceValues(row.memUsage, row.memRequest, row.memLimit),
   freshness: metricFreshnessFromInfo(freshness),
 });
-
-export const podRowCpuValue = (
-  row: PodSnapshotEntry,
-  field: Extract<ResourceMetricField, 'usage' | 'request' | 'limit'>
-): string | undefined => {
-  switch (field) {
-    case 'usage':
-      return metricString(row.cpuUsage);
-    case 'request':
-      return metricString(row.cpuRequest);
-    case 'limit':
-      return metricString(row.cpuLimit);
-  }
-};
-
-export const podRowMemoryValue = (
-  row: PodSnapshotEntry,
-  field: Extract<ResourceMetricField, 'usage' | 'request' | 'limit'>
-): string | undefined => {
-  switch (field) {
-    case 'usage':
-      return metricString(row.memUsage);
-    case 'request':
-      return metricString(row.memRequest);
-    case 'limit':
-      return metricString(row.memLimit);
-  }
-};
 
 export const workloadRowResourceMetrics = (
   row: NamespaceWorkloadSummary | WorkloadMetricRow,
@@ -319,23 +290,4 @@ export const clusterWorkloadUsageValue = (
 ): string | undefined => {
   const item = usage[key];
   return type === 'cpu' ? metricString(item?.cpuUsage) : metricString(item?.memoryUsage);
-};
-
-export const resourceMetricsSourceFromKind = (
-  kind: string | null | undefined
-): ResourceMetricsSource | null => {
-  switch ((kind ?? '').trim().toLowerCase()) {
-    case 'pod':
-      return 'pods';
-    case 'deployment':
-    case 'daemonset':
-    case 'statefulset':
-      return 'namespace-workloads';
-    case 'replicaset':
-      return 'detail-replicaset';
-    case 'node':
-      return 'nodes';
-    default:
-      return null;
-  }
 };

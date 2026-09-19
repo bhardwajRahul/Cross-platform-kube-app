@@ -32,6 +32,7 @@ import {
   getGridTablePersistenceMode,
   subscribeGridTablePersistenceMode,
 } from '@shared/components/tables/persistence/gridTablePersistenceSettings';
+import { useStableSelectedValue } from '@shared/hooks/useStableSelectedValue';
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
@@ -41,8 +42,6 @@ export interface UseGridTablePersistenceParams<T> {
   namespace?: string | null;
   isNamespaceScoped: boolean;
   columns: GridColumnDefinition<T>[];
-  data: T[];
-  keyExtractor: (item: T, index: number) => string;
   filterOptions?: GridTableFilterPersistenceOptions;
   pageSizeOptions?: readonly number[];
   enabled?: boolean;
@@ -142,12 +141,11 @@ export function useGridTablePersistence<T>({
   namespace,
   isNamespaceScoped,
   columns,
-  data,
-  keyExtractor,
-  filterOptions,
+  filterOptions: requestedFilterOptions,
   pageSizeOptions,
   enabled = true,
 }: UseGridTablePersistenceParams<T>): UseGridTablePersistenceResult {
+  const filterOptions = useStableSelectedValue(requestedFilterOptions);
   const [clusterHash, setClusterHash] = useState<string>('');
   const [storageKey, setStorageKey] = useState<string | null>(null);
   const [persistenceMode, setPersistenceMode] = useState<GridTablePersistenceMode>(
@@ -252,8 +250,6 @@ export function useGridTablePersistence<T>({
       const persisted = loadPersistedState(storageKey);
       const pruned = prunePersistedState(persisted, {
         columns,
-        rows: data.length > 0 ? data : undefined,
-        keyExtractor: data.length > 0 ? keyExtractor : undefined,
         filterOptions: {
           ...filterOptions,
           isNamespaceScoped,
@@ -269,16 +265,7 @@ export function useGridTablePersistence<T>({
     return () => {
       active = false;
     };
-  }, [
-    storageKey,
-    hydrated,
-    columns,
-    data,
-    keyExtractor,
-    filterOptions,
-    isNamespaceScoped,
-    pageSizeOptions,
-  ]);
+  }, [storageKey, hydrated, columns, filterOptions, isNamespaceScoped, pageSizeOptions]);
 
   const resetLocalState = useCallback(() => {
     if (storageKey) {
@@ -304,8 +291,6 @@ export function useGridTablePersistence<T>({
       const state = buildPersistedStateForSave({
         columns,
         customColumns,
-        rows: data,
-        keyExtractor,
         columnVisibility,
         columnOrder,
         columnWidths,
@@ -353,8 +338,6 @@ export function useGridTablePersistence<T>({
     hydrated,
     enabled,
     columns,
-    data,
-    keyExtractor,
     columnVisibility,
     columnOrder,
     columnWidths,

@@ -30,7 +30,6 @@ import type { QueryBackedTableState } from './queryBackedTableState';
 import {
   excludeQueryFacetsFromFilterOptions,
   excludeQueryFacetsFromTableState,
-  mergeQueryBackedFilterOptions,
   useQueryBackedTableState,
 } from './queryBackedTableState';
 import type {
@@ -325,11 +324,10 @@ function useTypedQueryLifecycle<
   });
 
   const effectiveFilterOptionOverrides = useMemo(
-    () =>
-      mergeQueryBackedFilterOptions(
-        filterOptionOverrides,
-        excludeQueryFacetsFromFilterOptions(query.filterOptions, excludedQueryFacetKeys)
-      ),
+    () => ({
+      ...filterOptionOverrides,
+      ...excludeQueryFacetsFromFilterOptions(query.filterOptions, excludedQueryFacetKeys),
+    }),
     [excludedQueryFacetKeys, filterOptionOverrides, query.filterOptions]
   );
 
@@ -621,8 +619,7 @@ export function useQueryBackedNamespaceResourceGridTable<
     namespace,
     isNamespaceScoped: namespace !== ALL_NAMESPACES_SCOPE,
     columns: tableParams.columns,
-    data: tableParams.persistenceData ?? [],
-    keyExtractor: resolvedKeyExtractor,
+
     filterOptions: {
       ...tableParams.filterOptions,
       isNamespaceScoped: namespace !== ALL_NAMESPACES_SCOPE,
@@ -735,8 +732,7 @@ export function useQueryBackedClusterResourceGridTable<
     namespace: null,
     isNamespaceScoped: false,
     columns: tableParams.columns,
-    data: tableParams.persistenceData ?? [],
-    keyExtractor: resolvedKeyExtractor,
+
     filterOptions: { ...tableParams.filterOptions, isNamespaceScoped: false },
     pageSizeOptions: TABLE_PAGE_SIZE_OPTIONS,
   });

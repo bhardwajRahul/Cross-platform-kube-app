@@ -3,7 +3,6 @@ package backend
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -39,10 +38,7 @@ func (a *WorkspaceCoordinator) refreshKubeconfigDiscoveryAfterSearchPathChange()
 func (a *WorkspaceCoordinator) GetSelectedKubeconfigs() []string {
 	a.kubeconfigsMu.RLock()
 	defer a.kubeconfigsMu.RUnlock()
-	if len(a.selectedKubeconfigs) > 0 {
-		return append([]string(nil), a.selectedKubeconfigs...)
-	}
-	return []string{}
+	return append([]string{}, a.selectedKubeconfigs...)
 }
 
 // setSelectedKubeconfigsLocked updates the selection snapshot. The caller must
@@ -168,10 +164,7 @@ func (a *WorkspaceCoordinator) clusterIDForSelection(selection string) string {
 	if err != nil {
 		return ""
 	}
-	if clients := a.clusterRuntime.clusterClientsForSelection(parsed); clients != nil && clients.meta.ID != "" {
-		return clients.meta.ID
-	}
-	return a.clusterRuntime.clusterMetaForSelection(parsed).ID
+	return a.clusterIDForParsedSelection(parsed)
 }
 
 // buildSelectionChangeIntent parses and validates a requested selection set.
@@ -182,9 +175,7 @@ func (a *WorkspaceCoordinator) buildSelectionChangeIntent(selections []string, g
 		return intent, nil
 	}
 
-	a.kubeconfigsMu.RLock()
-	previousSelections := append([]string(nil), a.selectedKubeconfigs...)
-	a.kubeconfigsMu.RUnlock()
+	previousSelections := a.GetSelectedKubeconfigs()
 
 	normalized, normalizedStrings, err := a.normalizeSelectionSet(selections)
 	if err != nil {
@@ -202,11 +193,8 @@ func (a *WorkspaceCoordinator) normalizeSelectionSet(selections []string) ([]kub
 	normalizedStrings := make([]string, 0, len(selections))
 	seenContexts := make(map[string]struct{}, len(selections))
 	for _, selection := range selections {
-		parsed, err := a.clusterRuntime.normalizeKubeconfigSelection(selection)
+		parsed, err := a.clusterRuntime.resolveKubeconfigSelection(selection)
 		if err != nil {
-			return nil, nil, err
-		}
-		if err := a.clusterRuntime.validateKubeconfigSelection(parsed); err != nil {
 			return nil, nil, err
 		}
 		selectionKey := parsed.String()
@@ -277,7 +265,7 @@ func (a *WorkspaceCoordinator) executeSelectionChangeWork(
 		return err
 	}
 	refreshStart := time.Now()
-	if err := a.reconcileRefreshSubsystemSelections(intent.normalizedSelections); err != nil {
+	if err := a.refresh.updateRefreshSubsystemSelections(intent.normalizedSelections); err != nil {
 		return err
 	}
 	if phases != nil {
@@ -293,10 +281,6 @@ func (a *WorkspaceCoordinator) executeSelectionChangeWork(
 		phases.objectCatalog = time.Since(catalogStart)
 	}
 	return nil
-}
-
-func (a *WorkspaceCoordinator) reconcileRefreshSubsystemSelections(selections []kubeconfigSelection) error {
-	return a.refresh.updateRefreshSubsystemSelections(selections)
 }
 
 // Runtime reset callers already own the selection mutation boundary.
@@ -433,21 +417,12 @@ func (a *WorkspaceCoordinator) deselectClusters(clusterIDs []string) {
 		return
 	}
 
-	type pathContextKey struct {
-		path    string
-		context string
-	}
-	removalKeys := make(map[pathContextKey]struct{}, len(clusterIDs))
+	removalKeys := make(map[kubeconfigSelectionKey]struct{}, len(clusterIDs))
 	for _, selection := range a.clusterRuntime.selectionsForClusterIDs(clusterIDs) {
-		removalKeys[pathContextKey{
-			path:    kubeconfigPathKey(filepath.Clean(selection.Path)),
-			context: selection.Context,
-		}] = struct{}{}
+		removalKeys[newKubeconfigSelectionKey(selection.Path, selection.Context)] = struct{}{}
 	}
 
-	a.kubeconfigsMu.RLock()
-	currentSelections := append([]string(nil), a.selectedKubeconfigs...)
-	a.kubeconfigsMu.RUnlock()
+	currentSelections := a.GetSelectedKubeconfigs()
 
 	var remainingSelections []string
 	var remainingParsed []kubeconfigSelection
@@ -456,10 +431,7 @@ func (a *WorkspaceCoordinator) deselectClusters(clusterIDs []string) {
 		if err != nil {
 			continue
 		}
-		key := pathContextKey{
-			path:    kubeconfigPathKey(filepath.Clean(parsed.Path)),
-			context: parsed.Context,
-		}
+		key := newKubeconfigSelectionKey(parsed.Path, parsed.Context)
 		if _, removed := removalKeys[key]; !removed {
 			remainingSelections = append(remainingSelections, sel)
 			remainingParsed = append(remainingParsed, parsed)
@@ -502,12 +474,12 @@ func (a *WorkspaceCoordinator) classifyDiscoveredSelections(currentSelections []
 			result.remainingParsed = append(result.remainingParsed, parsed)
 			continue
 		}
-		appendUniqueClusterID(&result.removedClusterIDs, removedSeen, a.clusterIDForRemovedSelection(parsed))
+		appendUniqueClusterID(&result.removedClusterIDs, removedSeen, a.clusterIDForParsedSelection(parsed))
 	}
 	return result
 }
 
-func (a *WorkspaceCoordinator) clusterIDForRemovedSelection(selection kubeconfigSelection) string {
+func (a *WorkspaceCoordinator) clusterIDForParsedSelection(selection kubeconfigSelection) string {
 	if clients := a.clusterRuntime.clusterClientsForSelection(selection); clients != nil && clients.meta.ID != "" {
 		return clients.meta.ID
 	}

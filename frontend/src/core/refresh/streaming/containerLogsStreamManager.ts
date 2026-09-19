@@ -108,47 +108,46 @@ type ProjectedLogBuffer = {
   truncated: boolean;
 };
 
+const createManualLogRefresh = () => {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+};
+
 class ContainerLogsStreamConnection {
   private readonly scope: string;
-  private readonly mode: StreamMode;
   private readonly manager: ContainerLogsStreamManager;
-  private readonly resolve?: () => void;
-  private readonly reject?: (error: Error) => void;
+  private readonly completion: ReturnType<typeof createManualLogRefresh> | null;
   private socket: JSONSocket | null = null;
   private retryTimer: number | null = null;
   private closed = false;
   private attempt = 0;
 
-  constructor(
-    scope: string,
-    mode: StreamMode,
-    manager: ContainerLogsStreamManager,
-    resolve?: () => void,
-    reject?: (error: Error) => void
-  ) {
+  constructor(scope: string, mode: StreamMode, manager: ContainerLogsStreamManager) {
     this.scope = scope;
-    this.mode = mode;
     this.manager = manager;
-    this.resolve = resolve;
-    this.reject = reject;
+    this.completion = mode === 'manual' ? createManualLogRefresh() : null;
   }
 
-  async start(): Promise<void> {
+  start(): Promise<void> {
     this.closed = false;
     this.attempt = 0;
-    await this.openStream();
+    this.openStream();
+    return this.completion?.promise ?? Promise.resolve();
   }
 
-  stop(intentional = true): void {
+  stop(): void {
     this.closed = true;
     if (this.retryTimer !== null) {
       window.clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
     this.closeStream();
-    if (intentional) {
-      this.manager.markIdle(this.scope);
-    }
+    this.completion?.resolve();
   }
 
   private closeStream(): void {
@@ -163,7 +162,7 @@ class ContainerLogsStreamConnection {
     this.socket = null;
   }
 
-  private async openStream(): Promise<void> {
+  private openStream(): void {
     try {
       const socket = JSONStream(CONTAINER_LOGS_STREAM_NAME);
       if (this.closed) {
@@ -179,9 +178,9 @@ class ContainerLogsStreamConnection {
       const message =
         error instanceof Error ? error.message : 'Failed to open container logs stream';
       this.manager.handleStreamError(this.scope, message);
-      if (this.mode === 'manual') {
-        this.reject?.(new Error(message));
-        this.stop(false);
+      if (this.completion !== null) {
+        this.completion?.reject(new Error(message));
+        this.stop();
         return;
       }
       this.scheduleReconnect();
@@ -189,7 +188,7 @@ class ContainerLogsStreamConnection {
   }
 
   private scheduleReconnect(): void {
-    if (this.closed || this.mode === 'manual' || this.retryTimer !== null) {
+    if (this.closed || this.completion !== null || this.retryTimer !== null) {
       return;
     }
     this.closeStream();
@@ -201,7 +200,7 @@ class ContainerLogsStreamConnection {
     );
     this.retryTimer = window.setTimeout(() => {
       this.retryTimer = null;
-      void this.openStream();
+      this.openStream();
     }, delay);
   }
 
@@ -235,11 +234,10 @@ class ContainerLogsStreamConnection {
       if (parsed.scope !== this.scope || parsed.domain !== DOMAIN_NAME) {
         return;
       }
-      this.manager.applyPayload(this.scope, parsed, this.mode);
+      this.manager.applyPayload(this.scope, parsed, this.completion ? 'manual' : 'stream');
 
-      if (this.mode === 'manual' && parsed.reset) {
-        this.resolve?.();
-        this.stop(false);
+      if (this.completion !== null && parsed.reset) {
+        this.stop();
       }
     } catch (error) {
       this.handleProtocolError('Failed to process container logs stream payload', error);
@@ -248,9 +246,9 @@ class ContainerLogsStreamConnection {
 
   private handleProtocolError(message: string, error?: unknown): void {
     this.manager.handleStreamError(this.scope, message, error);
-    if (this.mode === 'manual') {
-      this.reject?.(new Error(message));
-      this.stop(false);
+    if (this.completion !== null) {
+      this.completion?.reject(new Error(message));
+      this.stop();
     }
   }
 
@@ -262,9 +260,9 @@ class ContainerLogsStreamConnection {
     const message = 'Container logs stream connection lost';
     this.manager.handleStreamError(this.scope, message);
 
-    if (this.mode === 'manual') {
-      this.reject?.(new Error(message));
-      this.stop(false);
+    if (this.completion !== null) {
+      this.completion?.reject(new Error(message));
+      this.stop();
       return;
     }
 
@@ -274,8 +272,7 @@ class ContainerLogsStreamConnection {
 
 export class ContainerLogsStreamManager {
   private readonly connections = new Map<string, ContainerLogsStreamConnection>();
-  private readonly buffers = new Map<string, ContainerLogsEntry[]>();
-  private readonly bufferMeta = new Map<string, { total: number; truncated: boolean }>();
+  private readonly buffers = new Map<string, ProjectedLogBuffer>();
   private readonly backendWarnings = new Map<string, string[]>();
   /** Monotonically increasing counter for stable entry keys across buffer truncations. */
   private seqCounter = 0;
@@ -283,11 +280,13 @@ export class ContainerLogsStreamManager {
   private readonly visibility = new StreamVisibilityController<string>({
     captureActive: () => Array.from(this.connections.keys()),
     suspendActive: () => {
-      for (const connection of this.connections.values()) {
-        connection.stop(true);
+      for (const [scope, connection] of this.connections) {
+        connection.stop();
+        this.markIdle(scope);
       }
-      this.connections.clear();
     },
+    // Closed connections retain demand while hidden; explicit stop removes it.
+    resumeItems: () => Array.from(this.connections.keys()),
     resumeItem: (scope) => {
       void this.startStream(scope);
     },
@@ -329,17 +328,13 @@ export class ContainerLogsStreamManager {
       return;
     }
     this.maxBufferSize = size;
-    for (const [scope, entries] of this.buffers) {
+    for (const [scope, buffer] of this.buffers) {
+      const { entries } = buffer;
       if (entries.length <= size) {
         continue;
       }
       const trimmed = entries.slice(entries.length - size);
-      this.buffers.set(scope, trimmed);
-      const previousMeta = this.bufferMeta.get(scope);
-      this.bufferMeta.set(scope, {
-        total: previousMeta?.total ?? entries.length,
-        truncated: true,
-      });
+      this.buffers.set(scope, { entries: trimmed, total: buffer.total, truncated: true });
       const stats = this.buildStats(scope, trimmed.length);
       setScopedDomainState(DOMAIN_NAME, scope, (previous) => {
         const previousPayload = previous.data ?? DEFAULT_PAYLOAD;
@@ -367,12 +362,11 @@ export class ContainerLogsStreamManager {
   stop(scope: string, reset = false): void {
     const connection = this.connections.get(scope);
     if (connection) {
-      connection.stop(true);
+      connection.stop();
       this.connections.delete(scope);
     }
     if (reset) {
       this.buffers.delete(scope);
-      this.bufferMeta.delete(scope);
       this.backendWarnings.delete(scope);
       resetScopedDomainState(DOMAIN_NAME, scope);
     } else {
@@ -383,35 +377,32 @@ export class ContainerLogsStreamManager {
   async refreshOnce(scope: string): Promise<void> {
     this.stop(scope, false);
     this.setLoading(scope, true);
-    return new Promise<void>((resolve, reject) => {
-      const connection = new ContainerLogsStreamConnection(
-        scope,
-        'manual',
-        this,
-        () => {
-          this.markManualCompleted(scope);
-          resolve();
-        },
-        (error) => {
-          this.handleStreamError(scope, error.message);
-          reject(error);
-        }
-      );
-      this.connections.set(scope, connection);
-      void connection.start();
-    }).finally(() => {
-      this.connections.delete(scope);
-    });
+    const connection = new ContainerLogsStreamConnection(scope, 'manual', this);
+    this.connections.set(scope, connection);
+    try {
+      await connection.start();
+      if (this.connections.get(scope) === connection) {
+        this.markManualCompleted(scope);
+      }
+    } finally {
+      if (this.connections.get(scope) === connection) {
+        this.connections.delete(scope);
+      }
+    }
   }
 
   stopAll(reset = false): void {
-    const scopes = Array.from(this.connections.keys());
-    scopes.forEach((scope) => {
-      this.stop(scope, reset);
-    });
+    const scopes = new Set(this.connections.keys());
     if (reset) {
-      this.buffers.clear();
-      this.bufferMeta.clear();
+      for (const scope of this.buffers.keys()) {
+        scopes.add(scope);
+      }
+      for (const scope of this.backendWarnings.keys()) {
+        scopes.add(scope);
+      }
+    }
+    for (const scope of scopes) {
+      this.stop(scope, reset);
     }
   }
 
@@ -478,14 +469,14 @@ export class ContainerLogsStreamManager {
     payload: StreamEventPayload,
     mode: StreamMode
   ): ProjectedLogBuffer {
-    const existing = this.buffers.get(scope) ?? [];
+    const previousBuffer = this.buffers.get(scope);
+    const existing = previousBuffer?.entries ?? [];
     const incoming = this.createIncomingEntries(payload);
-    const previousMeta = this.bufferMeta.get(scope);
     const shouldReplace = Boolean(payload.reset && incoming.length > 0);
-    const previousTotal = previousMeta?.total ?? existing.length;
+    const previousTotal = previousBuffer?.total ?? existing.length;
     let total = this.resolveBufferTotal(previousTotal, incoming.length, shouldReplace, mode);
     let entries = this.mergeBufferEntries(existing, incoming, payload.reset);
-    let truncated = previousMeta?.truncated ?? false;
+    let truncated = previousBuffer?.truncated ?? false;
     if (entries.length > this.maxBufferSize) {
       truncated = true;
       entries = entries.slice(entries.length - this.maxBufferSize);
@@ -565,8 +556,7 @@ export class ContainerLogsStreamManager {
     //   the client already had plenty of log history cached.
     // - reset=false → append, unchanged.
     const buffer = this.projectBuffer(scope, payload, mode);
-    this.buffers.set(scope, buffer.entries);
-    this.bufferMeta.set(scope, { total: buffer.total, truncated: buffer.truncated });
+    this.buffers.set(scope, buffer);
     const generatedAt = payload.generatedAt || Date.now();
     const errorMessage = resolvePermissionDeniedMessage(
       payload.error ?? null,
@@ -594,7 +584,7 @@ export class ContainerLogsStreamManager {
     setScopedDomainState(DOMAIN_NAME, scope, (previous) => ({
       ...previous,
       status: previous.status === 'ready' ? 'ready' : 'idle',
-      stats: this.buildStats(scope, (this.buffers.get(scope) ?? []).length),
+      stats: this.buildStats(scope, this.buffers.get(scope)?.entries.length ?? 0),
       scope,
     }));
     this.clearStreamError(scope);
@@ -605,7 +595,7 @@ export class ContainerLogsStreamManager {
       ...previous,
       status: previous.data ? 'updating' : 'loading',
       error: null,
-      stats: this.buildStats(scope, (this.buffers.get(scope) ?? []).length),
+      stats: this.buildStats(scope, this.buffers.get(scope)?.entries.length ?? 0),
       scope,
     }));
     this.clearStreamError(scope);
@@ -625,7 +615,7 @@ export class ContainerLogsStreamManager {
       status: previous.data ? 'updating' : 'loading',
       error: null,
       isManual,
-      stats: this.buildStats(scope, (this.buffers.get(scope) ?? []).length),
+      stats: this.buildStats(scope, this.buffers.get(scope)?.entries.length ?? 0),
       scope,
     }));
     this.clearStreamError(scope);
@@ -646,9 +636,9 @@ export class ContainerLogsStreamManager {
   }
 
   private buildStats(scope: string, count: number): SnapshotStats | null {
-    const meta = this.bufferMeta.get(scope);
-    const total = meta?.total ?? count;
-    const truncated = meta?.truncated ?? false;
+    const buffer = this.buffers.get(scope);
+    const total = buffer?.total ?? count;
+    const truncated = buffer?.truncated ?? false;
     const warnings = [...(this.backendWarnings.get(scope) ?? [])];
     if (truncated && total > count) {
       warnings.push(`Showing most recent ${count} of ${total} log entries`);

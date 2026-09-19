@@ -5,16 +5,17 @@
  */
 
 import {
+  assertObjectRefHasRequiredIdentity,
   buildRequiredObjectReference,
   type ResolvedObjectReference,
 } from '@shared/utils/objectIdentity';
+import { useMemo } from 'react';
 import type { ObjectMapReference } from '@/core/refresh/types';
 import { errorHandler } from '@/utils/errorHandler';
 
-export const buildResolvedFromMapRef = (
-  ref: ObjectMapReference
-): ResolvedObjectReference | null => {
+const buildResolvedFromMapRef = (ref: ObjectMapReference): ResolvedObjectReference | null => {
   try {
+    assertObjectRefHasRequiredIdentity({ ...ref });
     return buildRequiredObjectReference({
       kind: ref.kind,
       name: ref.name,
@@ -33,3 +34,31 @@ export const buildResolvedFromMapRef = (
     return null;
   }
 };
+
+export const useObjectMapNavigation = (
+  openWithObject: (ref: ResolvedObjectReference, options?: { initialTab: 'map' }) => void,
+  navigateToView: (ref: ResolvedObjectReference) => void
+) =>
+  useMemo(
+    () => ({
+      handleOpenPanel: (ref: ObjectMapReference) => {
+        const resolved = buildResolvedFromMapRef(ref);
+        if (resolved) {
+          openWithObject(resolved);
+        }
+      },
+      handleNavigateView: (ref: ObjectMapReference) => {
+        const resolved = buildResolvedFromMapRef(ref);
+        if (resolved) {
+          navigateToView(resolved);
+        }
+      },
+      handleOpenObjectMap: (ref: ObjectMapReference) => {
+        const resolved = buildResolvedFromMapRef(ref);
+        if (resolved) {
+          openWithObject(resolved, { initialTab: 'map' });
+        }
+      },
+    }),
+    [openWithObject, navigateToView]
+  );

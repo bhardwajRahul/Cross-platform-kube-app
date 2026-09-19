@@ -40,7 +40,9 @@ vi.mock('@/core/settings/appPreferences', () => ({
 }));
 
 import {
+  acquireRefreshDomainLease,
   isDataAccessBlocked,
+  releaseRefreshDomainLease,
   requestContextRefresh,
   requestData,
   requestRefreshDomain,
@@ -56,6 +58,43 @@ describe('dataAccess', () => {
     hoisted.triggerManualRefreshForContext.mockResolvedValue(undefined);
     hoisted.getAutoRefreshEnabled.mockReturnValue(true);
   });
+
+  it.each([
+    { demand: 'snapshot' as const, preserveState: false, expected: undefined },
+    { demand: 'snapshot' as const, preserveState: true, expected: { preserveState: true } },
+    {
+      demand: 'query' as const,
+      preserveState: false,
+      expected: { preserveState: false, demand: 'query' },
+    },
+    {
+      demand: 'query' as const,
+      preserveState: true,
+      expected: { preserveState: true, demand: 'query' },
+    },
+  ])(
+    'balances $demand demand with preserveState=$preserveState across lease acquisition and release',
+    ({ demand, preserveState, expected }) => {
+      const lease = {
+        domain: 'pods' as const,
+        scope: 'cluster-a|namespace:prod',
+        demand,
+        preserveState,
+      };
+      acquireRefreshDomainLease(lease);
+      releaseRefreshDomainLease(lease);
+      expect(hoisted.acquireScopedDomainLease).toHaveBeenCalledWith(
+        lease.domain,
+        lease.scope,
+        expected
+      );
+      expect(hoisted.releaseScopedDomainLease).toHaveBeenCalledWith(
+        lease.domain,
+        lease.scope,
+        expected
+      );
+    }
+  );
 
   it('blocks startup requests when auto-refresh is disabled', async () => {
     hoisted.getAutoRefreshEnabled.mockReturnValue(false);
@@ -283,4 +322,27 @@ describe('dataAccess', () => {
 
     expect(hoisted.triggerManualRefreshForContext).not.toHaveBeenCalled();
   });
+  it.each(['throw', 'reject'] as const)(
+    'settles failed reads before rethrowing the original %s',
+    async (failure) => {
+      resetBrokerReadDiagnosticsForTesting();
+      const error = new Error('read failed');
+      const read = vi.fn(() => {
+        expect(getBrokerReadDiagnosticsSnapshot()[0].inFlightCount).toBe(1);
+        if (failure === 'throw') {
+          throw error;
+        }
+        return Promise.reject(error);
+      });
+      await expect(requestData({ resource: 'pods', reason: 'user', read })).rejects.toBe(error);
+      expect(getBrokerReadDiagnosticsSnapshot()).toEqual([
+        expect.objectContaining({
+          inFlightCount: 0,
+          errorCount: 1,
+          successCount: 0,
+          lastStatus: 'error',
+        }),
+      ]);
+    }
+  );
 });

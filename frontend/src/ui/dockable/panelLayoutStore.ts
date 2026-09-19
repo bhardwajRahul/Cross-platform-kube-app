@@ -25,9 +25,6 @@ export interface PanelLayoutState {
   zIndex: number;
 }
 
-// Reasons for panel closure.
-export type PanelCloseReason = 'dock-conflict' | 'external';
-
 type PanelListener = () => void;
 
 export interface PanelLayoutStore {
@@ -41,13 +38,9 @@ export interface PanelLayoutStore {
   copyPanelLayoutState: (sourcePanelId: string, targetPanelId: string) => void;
   clearPanelState: (panelId: string) => void;
   handoffLayoutBeforeClose: (panelId: string) => void;
+  getGroupLeader: (groupKey: string) => string | undefined;
   setGroupLeader: (groupKey: string, panelId: string) => void;
   clearGroupLeader: (groupKey: string) => void;
-  registerPanelCloseHandler: (panelId: string, handler: (reason: PanelCloseReason) => void) => void;
-  unregisterPanelCloseHandler: (
-    panelId: string,
-    handler: (reason: PanelCloseReason) => void
-  ) => void;
   getAllPanelStates: () => Record<string, PanelLayoutState>;
   restorePanelStates: (states: Record<string, PanelLayoutState>) => void;
   /** Apply updated layout defaults to all open object panels. */
@@ -81,10 +74,20 @@ export interface PanelLayoutStore {
   subscribeTabGroups(listener: () => void): () => void;
 }
 
+const layoutsEqual = (left: PanelLayoutState, right: PanelLayoutState) =>
+  left.position === right.position &&
+  left.isMaximized === right.isMaximized &&
+  left.isOpen === right.isOpen &&
+  left.rightSize.width === right.rightSize.width &&
+  left.rightSize.height === right.rightSize.height &&
+  left.bottomSize.width === right.bottomSize.width &&
+  left.bottomSize.height === right.bottomSize.height &&
+  left.isInitialized === right.isInitialized &&
+  left.zIndex === right.zIndex;
+
 export function createPanelLayoutStore(initialTabGroups?: TabGroupState): PanelLayoutStore {
   const panelStates = new Map<string, PanelLayoutState>();
   const panelListeners = new Map<string, Set<PanelListener>>();
-  const panelCloseHandlers = new Map<string, Set<(reason: PanelCloseReason) => void>>();
   const groupLeaders = new Map<string, string>();
   let zIndexCounter = 1000;
 
@@ -141,14 +144,39 @@ export function createPanelLayoutStore(initialTabGroups?: TabGroupState): PanelL
     });
   };
 
-  const updateState = (panelId: string, updates: Partial<PanelLayoutState>) => {
-    const currentState = getInitialState(panelId);
-    panelStates.set(panelId, { ...currentState, ...updates });
+  const publishState = (panelId: string, next: PanelLayoutState) => {
+    const current = panelStates.get(panelId);
+    // Preserve the hook's no-op render bailout while retaining store notifications.
+    panelStates.set(panelId, current && layoutsEqual(current, next) ? current : next);
     notifyListeners(panelId);
+  };
+
+  const updateState = (panelId: string, updates: Partial<PanelLayoutState>) => {
+    publishState(panelId, { ...getInitialState(panelId), ...updates });
   };
 
   const setPanelOpenState = (panelId: string, isOpen: boolean) => {
     updateState(panelId, isOpen ? { isOpen: true, zIndex: ++zIndexCounter } : { isOpen });
+  };
+
+  const copyPanelLayoutState = (sourcePanelId: string, targetPanelId: string) => {
+    if (sourcePanelId === targetPanelId) {
+      return;
+    }
+    const sourceState = panelStates.get(sourcePanelId);
+    if (!sourceState) {
+      return;
+    }
+    const targetState = getInitialState(targetPanelId);
+    updateState(targetPanelId, {
+      // Copy geometry only; group membership controls dock position.
+      // Copying `position` here can race with tab-group moves and send tabs to
+      // unintended groups when leadership transfers during dock/float actions.
+      rightSize: { ...sourceState.rightSize },
+      bottomSize: { ...sourceState.bottomSize },
+      isMaximized: sourceState.isMaximized,
+      zIndex: Math.max(targetState.zIndex, sourceState.zIndex),
+    });
   };
 
   return {
@@ -175,28 +203,8 @@ export function createPanelLayoutStore(initialTabGroups?: TabGroupState): PanelL
     setPanelPositionById: (panelId: string, position: DockPosition) => {
       updateState(panelId, { position });
     },
-    setPanelOpenById: (panelId: string, isOpen: boolean) => {
-      setPanelOpenState(panelId, isOpen);
-    },
-    copyPanelLayoutState: (sourcePanelId: string, targetPanelId: string) => {
-      if (sourcePanelId === targetPanelId) {
-        return;
-      }
-      const sourceState = panelStates.get(sourcePanelId);
-      if (!sourceState) {
-        return;
-      }
-      const targetState = getInitialState(targetPanelId);
-      updateState(targetPanelId, {
-        // Copy geometry only; group membership controls dock position.
-        // Copying `position` here can race with tab-group moves and send tabs to
-        // unintended groups when leadership transfers during dock/float actions.
-        rightSize: { ...sourceState.rightSize },
-        bottomSize: { ...sourceState.bottomSize },
-        isMaximized: sourceState.isMaximized,
-        zIndex: Math.max(targetState.zIndex, sourceState.zIndex),
-      });
-    },
+    setPanelOpenById: setPanelOpenState,
+    copyPanelLayoutState,
     handoffLayoutBeforeClose: (panelId: string) => {
       const currentGroupKey = getGroupForPanel(tabGroups, panelId);
       if (!currentGroupKey) {
@@ -210,19 +218,10 @@ export function createPanelLayoutStore(initialTabGroups?: TabGroupState): PanelL
       const nextLeader = nextGroup?.tabs[0] ?? null;
 
       if (currentLeader === panelId && nextLeader) {
-        const sourceState = panelStates.get(panelId);
-        if (!sourceState) {
-          return;
-        }
-        const targetState = getInitialState(nextLeader);
-        updateState(nextLeader, {
-          rightSize: { ...sourceState.rightSize },
-          bottomSize: { ...sourceState.bottomSize },
-          isMaximized: sourceState.isMaximized,
-          zIndex: Math.max(targetState.zIndex, sourceState.zIndex),
-        });
+        copyPanelLayoutState(panelId, nextLeader);
       }
     },
+    getGroupLeader: (groupKey) => groupLeaders.get(groupKey),
     setGroupLeader: (groupKey: string, panelId: string) => {
       groupLeaders.set(groupKey, panelId);
     },
@@ -233,23 +232,6 @@ export function createPanelLayoutStore(initialTabGroups?: TabGroupState): PanelL
       setTabGroups((prev) => removePanelFromGroup(prev, panelId));
       panelStates.delete(panelId);
       panelListeners.delete(panelId);
-      panelCloseHandlers.delete(panelId);
-    },
-    registerPanelCloseHandler: (panelId: string, handler: (reason: PanelCloseReason) => void) => {
-      if (!panelCloseHandlers.has(panelId)) {
-        panelCloseHandlers.set(panelId, new Set());
-      }
-      panelCloseHandlers.get(panelId)?.add(handler);
-    },
-    unregisterPanelCloseHandler: (panelId: string, handler: (reason: PanelCloseReason) => void) => {
-      const handlers = panelCloseHandlers.get(panelId);
-      if (!handlers) {
-        return;
-      }
-      handlers.delete(handler);
-      if (handlers.size === 0) {
-        panelCloseHandlers.delete(panelId);
-      }
     },
     getAllPanelStates: () => {
       const states: Record<string, PanelLayoutState> = {};
@@ -260,8 +242,7 @@ export function createPanelLayoutStore(initialTabGroups?: TabGroupState): PanelL
     },
     restorePanelStates: (states: Record<string, PanelLayoutState>) => {
       Object.entries(states).forEach(([panelId, state]) => {
-        panelStates.set(panelId, { ...state });
-        notifyListeners(panelId);
+        publishState(panelId, { ...state });
       });
     },
     applyObjectPanelLayoutDefaults: () => {

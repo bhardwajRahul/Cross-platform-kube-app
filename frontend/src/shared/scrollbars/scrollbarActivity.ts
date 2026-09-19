@@ -2,8 +2,6 @@ import {
   readScrollbarActiveTimeoutMs,
   readScrollbarFadeDurationMs,
   readScrollbarNumberToken,
-  readScrollbarOpacityToken,
-  readScrollbarPxToken,
 } from './tokens';
 
 const SCROLLBAR_ACTIVE_CLASS = 'scrollbar-active';
@@ -45,8 +43,7 @@ const overlayElements = new WeakMap<Element, OverlayScrollbarElements>();
 const overlayGeometryTransitionsDisabled = new WeakSet<Element>();
 const overlayOwnerElements = new WeakMap<Element, HTMLElement>();
 const activeOverlayElements = new Set<Element>();
-const overlayHoverStates = new WeakMap<Element, OverlayHoverState>();
-const hoveredOverlayElements = new Set<Element>();
+const overlayHoverStates = new Map<Element, OverlayHoverState>();
 const opacityAnimations = new WeakMap<
   Element,
   {
@@ -55,7 +52,6 @@ const opacityAnimations = new WeakMap<
     value: number;
   }
 >();
-const resizeObservedOverlayElements = new WeakSet<Element>();
 const pendingOverlayGeometryUpdates = new Set<Element>();
 let initialized = false;
 let overlayResizeObserver: ResizeObserver | undefined;
@@ -97,10 +93,13 @@ const resolveOverlayContainer = (element: HTMLElement): HTMLElement => {
   return element.closest<HTMLElement>(OVERLAY_SCROLLBAR_OWNER_SELECTOR) ?? document.body;
 };
 
+const hasScrollableOverflow = (overflow: string): boolean =>
+  overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay';
+
 const canScrollAxis = (element: HTMLElement, axis: 'horizontal' | 'vertical'): boolean => {
   const styles = getComputedStyle(element);
   const overflow = axis === 'horizontal' ? styles.overflowX : styles.overflowY;
-  const scrollableOverflow = overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay';
+  const scrollableOverflow = hasScrollableOverflow(overflow);
 
   if (!scrollableOverflow) {
     return false;
@@ -121,17 +120,7 @@ const toOverlayCoordinateRect = (rect: DOMRect, container: HTMLElement): DOMRect
   const top = rect.top - containerRect.top + container.scrollTop;
   const width = rect.width;
   const height = rect.height;
-  return {
-    bottom: top + height,
-    height,
-    left,
-    right: left + width,
-    top,
-    width,
-    x: left,
-    y: top,
-    toJSON: () => undefined,
-  } as DOMRect;
+  return toClipRect({ top, left, width, height });
 };
 
 const applyOverlayClip = (element: HTMLElement, rect: DOMRect, clipRect: DOMRect): void => {
@@ -151,38 +140,31 @@ const getOverflowClipRect = (element: HTMLElement): DOMRect => {
   let bottom = Math.min(elementRect.bottom, viewportHeight);
   let left = Math.max(elementRect.left, 0);
 
-  let ancestor = element.parentElement;
-  while (ancestor && ancestor !== document.body && ancestor !== document.documentElement) {
+  for (
+    let ancestor = element.parentElement;
+    ancestor && ancestor !== document.body && ancestor !== document.documentElement;
+    ancestor = ancestor.parentElement
+  ) {
     const styles = getComputedStyle(ancestor);
     const clipsX = styles.overflowX !== 'visible';
     const clipsY = styles.overflowY !== 'visible';
-    if (clipsX || clipsY) {
-      const ancestorRect = ancestor.getBoundingClientRect();
-      if (clipsX) {
-        left = Math.max(left, ancestorRect.left);
-        right = Math.min(right, ancestorRect.right);
-      }
-      if (clipsY) {
-        top = Math.max(top, ancestorRect.top);
-        bottom = Math.min(bottom, ancestorRect.bottom);
-      }
+    if (!clipsX && !clipsY) {
+      continue;
     }
-    ancestor = ancestor.parentElement;
+    const ancestorRect = ancestor.getBoundingClientRect();
+    if (clipsX) {
+      left = Math.max(left, ancestorRect.left);
+      right = Math.min(right, ancestorRect.right);
+    }
+    if (clipsY) {
+      top = Math.max(top, ancestorRect.top);
+      bottom = Math.min(bottom, ancestorRect.bottom);
+    }
   }
 
   const width = Math.max(0, right - left);
   const height = Math.max(0, bottom - top);
-  return {
-    bottom: top + height,
-    height,
-    left,
-    right: left + width,
-    top,
-    width,
-    x: left,
-    y: top,
-    toJSON: () => undefined,
-  } as DOMRect;
+  return toClipRect({ top, left, width, height });
 };
 
 const scheduleOverlayGeometryUpdate = (element: Element): void => {
@@ -229,20 +211,6 @@ const getOverlayResizeObserver = (): ResizeObserver | undefined => {
   return overlayResizeObserver;
 };
 
-const observeOverlayElementResize = (element: Element): void => {
-  if (resizeObservedOverlayElements.has(element)) {
-    return;
-  }
-
-  const observer = getOverlayResizeObserver();
-  if (!observer) {
-    return;
-  }
-
-  observer.observe(element);
-  resizeObservedOverlayElements.add(element);
-};
-
 const setOverlayGeometryTransitions = (element: Element, disabled: boolean): void => {
   const overlay = overlayElements.get(element);
   if (!overlay) {
@@ -257,6 +225,18 @@ const setOverlayGeometryTransitions = (element: Element, disabled: boolean): voi
   ]) {
     overlayElement.classList.toggle('scrollbar-overlay--geometry-updating', disabled);
   }
+};
+
+const createOverlayAxis = (element: HTMLElement, axis: 'horizontal' | 'vertical') => {
+  const thumb = document.createElement('div');
+  thumb.className = `scrollbar-overlay-thumb scrollbar-overlay-thumb--${axis}`;
+  thumb.dataset.scrollbarAxis = axis;
+  const gutter = document.createElement('div');
+  gutter.className = `scrollbar-overlay-gutter scrollbar-overlay-gutter--${axis}`;
+  gutter.dataset.scrollbarAxis = axis;
+  thumb.addEventListener('pointerdown', (event) => startOverlayScrollbarDrag(event, element, axis));
+  gutter.addEventListener('pointerdown', (event) => pageOverlayScrollbar(event, element, axis));
+  return { thumb, gutter };
 };
 
 const ensureOverlayScrollbars = (element: Element) => {
@@ -279,33 +259,10 @@ const ensureOverlayScrollbars = (element: Element) => {
     return existing;
   }
 
-  const verticalThumb = document.createElement('div');
-  verticalThumb.className = 'scrollbar-overlay-thumb scrollbar-overlay-thumb--vertical';
-  verticalThumb.dataset.scrollbarAxis = 'vertical';
-
-  const verticalGutter = document.createElement('div');
-  verticalGutter.className = 'scrollbar-overlay-gutter scrollbar-overlay-gutter--vertical';
-  verticalGutter.dataset.scrollbarAxis = 'vertical';
-
-  const horizontalThumb = document.createElement('div');
-  horizontalThumb.className = 'scrollbar-overlay-thumb scrollbar-overlay-thumb--horizontal';
-  horizontalThumb.dataset.scrollbarAxis = 'horizontal';
-
-  const horizontalGutter = document.createElement('div');
-  horizontalGutter.className = 'scrollbar-overlay-gutter scrollbar-overlay-gutter--horizontal';
-  horizontalGutter.dataset.scrollbarAxis = 'horizontal';
-
-  verticalThumb.addEventListener('pointerdown', (event) =>
-    startOverlayScrollbarDrag(event, element, 'vertical')
-  );
-  horizontalThumb.addEventListener('pointerdown', (event) =>
-    startOverlayScrollbarDrag(event, element, 'horizontal')
-  );
-  verticalGutter.addEventListener('pointerdown', (event) =>
-    pageOverlayScrollbar(event, element, 'vertical')
-  );
-  horizontalGutter.addEventListener('pointerdown', (event) =>
-    pageOverlayScrollbar(event, element, 'horizontal')
+  const { thumb: verticalThumb, gutter: verticalGutter } = createOverlayAxis(element, 'vertical');
+  const { thumb: horizontalThumb, gutter: horizontalGutter } = createOverlayAxis(
+    element,
+    'horizontal'
   );
 
   container.append(verticalGutter, horizontalGutter, verticalThumb, horizontalThumb);
@@ -322,7 +279,7 @@ const ensureOverlayScrollbars = (element: Element) => {
   overlayOwnerElements.set(verticalThumb, element);
   overlayOwnerElements.set(horizontalGutter, element);
   overlayOwnerElements.set(horizontalThumb, element);
-  observeOverlayElementResize(element);
+  getOverlayResizeObserver()?.observe(element);
   return overlay;
 };
 
@@ -331,7 +288,6 @@ const removeOverlayScrollbars = (element: Element): void => {
   if (!overlay) {
     activeOverlayElements.delete(element);
     overlayHoverStates.delete(element);
-    hoveredOverlayElements.delete(element);
     pendingOverlayGeometryUpdates.delete(element);
     overlayGeometryTransitionsDisabled.delete(element);
     return;
@@ -358,13 +314,11 @@ const removeOverlayScrollbars = (element: Element): void => {
   overlayOwnerElements.delete(overlay.horizontalGutter);
   overlayOwnerElements.delete(overlay.horizontalThumb);
   overlayResizeObserver?.unobserve(element);
-  resizeObservedOverlayElements.delete(element);
   pendingOverlayGeometryUpdates.delete(element);
   overlayGeometryTransitionsDisabled.delete(element);
   overlayElements.delete(element);
   activeOverlayElements.delete(element);
   overlayHoverStates.delete(element);
-  hoveredOverlayElements.delete(element);
   if (element instanceof HTMLElement) {
     element.classList.remove(SCROLLBAR_ACTIVE_CLASS);
     clearScrollbarOpacity(element);
@@ -399,10 +353,10 @@ const readOverlayGeometryContext = (
 ): OverlayGeometryContext => ({
   rect: toOverlayCoordinateRect(element.getBoundingClientRect(), overlay.container),
   clipRect: toOverlayCoordinateRect(getOverflowClipRect(element), overlay.container),
-  scrollbarWidth: readScrollbarPxToken('--scrollbar-width', 10),
-  scrollbarHeight: readScrollbarPxToken('--scrollbar-height', 10),
-  thumbInset: readScrollbarPxToken('--scrollbar-thumb-inset', 3),
-  minThumbSize: readScrollbarPxToken('--scrollbar-min-thumb-size', 32),
+  scrollbarWidth: readScrollbarNumberToken('--scrollbar-width', 10),
+  scrollbarHeight: readScrollbarNumberToken('--scrollbar-height', 10),
+  thumbInset: readScrollbarNumberToken('--scrollbar-thumb-inset', 3),
+  minThumbSize: readScrollbarNumberToken('--scrollbar-min-thumb-size', 32),
   hoverScale: readScrollbarNumberToken('--scrollbar-hover-scale', 1.75),
   activeOpacity: getCurrentScrollbarOpacity(element),
   hoverState: overlayHoverStates.get(element),
@@ -441,6 +395,21 @@ const toClipRect = ({
     toJSON: () => undefined,
   }) as DOMRect;
 
+const computeOverlayThumbGeometry = (
+  trackSize: number,
+  viewportSize: number,
+  contentSize: number,
+  scrollOffset: number,
+  minThumbSize: number
+) => {
+  const size = Math.max(
+    minThumbSize,
+    Math.min(trackSize, (viewportSize / contentSize) * trackSize)
+  );
+  const offset = (scrollOffset / Math.max(1, contentSize - viewportSize)) * (trackSize - size);
+  return { size, offset };
+};
+
 const updateVerticalOverlayGeometry = (
   element: HTMLElement,
   overlay: OverlayScrollbarElements,
@@ -455,13 +424,14 @@ const updateVerticalOverlayGeometry = (
   }
 
   const trackHeight = rect.height - thumbInset * 2;
-  const thumbHeight = Math.max(
-    minThumbSize,
-    Math.min(trackHeight, (element.clientHeight / element.scrollHeight) * trackHeight)
+  const { size: thumbHeight, offset } = computeOverlayThumbGeometry(
+    trackHeight,
+    element.clientHeight,
+    element.scrollHeight,
+    element.scrollTop,
+    minThumbSize
   );
-  const maxScrollTop = Math.max(1, element.scrollHeight - element.clientHeight);
-  const thumbTop =
-    rect.top + thumbInset + (element.scrollTop / maxScrollTop) * (trackHeight - thumbHeight);
+  const thumbTop = rect.top + thumbInset + offset;
   const verticalScale = hoverState?.vertical ? hoverScale : 1;
   const gutterWidth = context.scrollbarWidth * verticalScale;
   const gutterInset = thumbInset * verticalScale;
@@ -516,13 +486,14 @@ const updateHorizontalOverlayGeometry = (
   }
 
   const trackWidth = rect.width - thumbInset * 2;
-  const thumbWidth = Math.max(
-    minThumbSize,
-    Math.min(trackWidth, (element.clientWidth / element.scrollWidth) * trackWidth)
+  const { size: thumbWidth, offset } = computeOverlayThumbGeometry(
+    trackWidth,
+    element.clientWidth,
+    element.scrollWidth,
+    element.scrollLeft,
+    minThumbSize
   );
-  const maxScrollLeft = Math.max(1, element.scrollWidth - element.clientWidth);
-  const thumbLeft =
-    rect.left + thumbInset + (element.scrollLeft / maxScrollLeft) * (trackWidth - thumbWidth);
+  const thumbLeft = rect.left + thumbInset + offset;
   const horizontalScale = hoverState?.horizontal ? hoverScale : 1;
   const gutterHeight = context.scrollbarHeight * horizontalScale;
   const gutterInset = thumbInset * horizontalScale;
@@ -615,24 +586,21 @@ const setOverlayHoverState = (
   if (hasHover) {
     overlayGeometryTransitionsDisabled.delete(element);
     overlayHoverStates.set(element, hoverState);
-    hoveredOverlayElements.add(element);
     markScrollbarActive(element);
   } else {
     overlayGeometryTransitionsDisabled.delete(element);
     overlayHoverStates.delete(element);
-    hoveredOverlayElements.delete(element);
     updateOverlayScrollbarGeometry(element);
   }
 };
 
 const clearOverlayHoverStates = (exceptElement?: Element): void => {
-  hoveredOverlayElements.forEach((element) => {
+  overlayHoverStates.forEach((_state, element) => {
     if (element === exceptElement || !(element instanceof HTMLElement)) {
       return;
     }
     overlayGeometryTransitionsDisabled.delete(element);
     overlayHoverStates.delete(element);
-    hoveredOverlayElements.delete(element);
     updateOverlayScrollbarGeometry(element);
   });
 };
@@ -670,43 +638,45 @@ const collectOverlayHoverCandidates = (clientX: number, clientY: number): HTMLEl
   return candidates;
 };
 
+const resolveOverlayHover = (
+  element: HTMLElement,
+  clientX: number,
+  clientY: number,
+  hoverZoneSize: number
+): OverlayHoverState | null => {
+  const rect = element.getBoundingClientRect();
+  const isInside =
+    clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+  if (!isInside) {
+    return null;
+  }
+  const hasVerticalScrollbar = canScrollAxis(element, 'vertical');
+  const hasHorizontalScrollbar = canScrollAxis(element, 'horizontal');
+  let vertical =
+    hasVerticalScrollbar && clientX >= rect.right - hoverZoneSize && clientX <= rect.right;
+  const horizontal =
+    hasHorizontalScrollbar && clientY >= rect.bottom - hoverZoneSize && clientY <= rect.bottom;
+  if (vertical && horizontal) {
+    const distanceToRight = rect.right - clientX;
+    const distanceToBottom = rect.bottom - clientY;
+    vertical = distanceToRight <= distanceToBottom;
+  }
+  return { horizontal: horizontal && !vertical, vertical };
+};
+
 const updateOverlayHoverAtPoint = (clientX: number, clientY: number): void => {
   if (activeDrag) {
     return;
   }
-
-  const hoverZoneSize = readScrollbarPxToken('--scrollbar-hover-zone-size', 16);
+  const hoverZoneSize = readScrollbarNumberToken('--scrollbar-hover-zone-size', 16);
   for (const element of collectOverlayHoverCandidates(clientX, clientY)) {
-    const rect = element.getBoundingClientRect();
-    const isInside =
-      clientX >= rect.left &&
-      clientX <= rect.right &&
-      clientY >= rect.top &&
-      clientY <= rect.bottom;
-    if (!isInside) {
-      continue;
-    }
-
-    const hasVerticalScrollbar = canScrollAxis(element, 'vertical');
-    const hasHorizontalScrollbar = canScrollAxis(element, 'horizontal');
-    let vertical =
-      hasVerticalScrollbar && clientX >= rect.right - hoverZoneSize && clientX <= rect.right;
-    const horizontal =
-      hasHorizontalScrollbar && clientY >= rect.bottom - hoverZoneSize && clientY <= rect.bottom;
-
-    if (vertical && horizontal) {
-      const distanceToRight = rect.right - clientX;
-      const distanceToBottom = rect.bottom - clientY;
-      vertical = distanceToRight <= distanceToBottom;
-    }
-
-    if (vertical || horizontal) {
-      setOverlayHoverState(element, { horizontal: horizontal && !vertical, vertical });
+    const hover = resolveOverlayHover(element, clientX, clientY, hoverZoneSize);
+    if (hover && (hover.vertical || hover.horizontal)) {
+      setOverlayHoverState(element, hover);
       clearOverlayHoverStates(element);
       return;
     }
   }
-
   clearOverlayHoverStates();
 };
 
@@ -767,30 +737,21 @@ function pageOverlayScrollbar(
   markScrollbarActive(element);
 
   const rect = getOverflowClipRect(element);
-  const thumbInset = readScrollbarPxToken('--scrollbar-thumb-inset', 3);
-  if (axis === 'vertical') {
-    const trackHeight = Math.max(1, rect.height - thumbInset * 2);
-    const thumbHeight = Math.max(
-      readScrollbarPxToken('--scrollbar-min-thumb-size', 32),
-      Math.min(trackHeight, (element.clientHeight / element.scrollHeight) * trackHeight)
-    );
-    const maxScrollTop = Math.max(1, element.scrollHeight - element.clientHeight);
-    const thumbTop =
-      rect.top + thumbInset + (element.scrollTop / maxScrollTop) * (trackHeight - thumbHeight);
-    const direction = event.clientY < thumbTop ? -1 : 1;
-    scrollByPixels(element, 0, direction * element.clientHeight);
-  } else {
-    const trackWidth = Math.max(1, rect.width - thumbInset * 2);
-    const thumbWidth = Math.max(
-      readScrollbarPxToken('--scrollbar-min-thumb-size', 32),
-      Math.min(trackWidth, (element.clientWidth / element.scrollWidth) * trackWidth)
-    );
-    const maxScrollLeft = Math.max(1, element.scrollWidth - element.clientWidth);
-    const thumbLeft =
-      rect.left + thumbInset + (element.scrollLeft / maxScrollLeft) * (trackWidth - thumbWidth);
-    const direction = event.clientX < thumbLeft ? -1 : 1;
-    scrollByPixels(element, direction * element.clientWidth, 0);
-  }
+  const thumbInset = readScrollbarNumberToken('--scrollbar-thumb-inset', 3);
+  const vertical = axis === 'vertical';
+  const viewportSize = vertical ? element.clientHeight : element.clientWidth;
+  const trackSize = Math.max(1, (vertical ? rect.height : rect.width) - thumbInset * 2);
+  const { offset } = computeOverlayThumbGeometry(
+    trackSize,
+    viewportSize,
+    vertical ? element.scrollHeight : element.scrollWidth,
+    vertical ? element.scrollTop : element.scrollLeft,
+    readScrollbarNumberToken('--scrollbar-min-thumb-size', 32)
+  );
+  const thumbStart = (vertical ? rect.top : rect.left) + thumbInset + offset;
+  const pointerPosition = vertical ? event.clientY : event.clientX;
+  const delta = (pointerPosition < thumbStart ? -1 : 1) * viewportSize;
+  scrollByPixels(element, vertical ? 0 : delta, vertical ? delta : 0);
 
   updateOverlayScrollbarGeometry(element);
 }
@@ -807,7 +768,7 @@ function startOverlayScrollbarDrag(
   markScrollbarActive(element);
 
   const rect = getOverflowClipRect(element);
-  const thumbInset = readScrollbarPxToken('--scrollbar-thumb-inset', 3);
+  const thumbInset = readScrollbarNumberToken('--scrollbar-thumb-inset', 3);
   const trackSize =
     axis === 'vertical' ? rect.height - thumbInset * 2 : rect.width - thumbInset * 2;
   const maxScroll =
@@ -816,9 +777,12 @@ function startOverlayScrollbarDrag(
       : Math.max(0, element.scrollWidth - element.clientWidth);
   const visibleSize = axis === 'vertical' ? element.clientHeight : element.clientWidth;
   const scrollSize = axis === 'vertical' ? element.scrollHeight : element.scrollWidth;
-  const thumbSize = Math.max(
-    readScrollbarPxToken('--scrollbar-min-thumb-size', 32),
-    Math.min(trackSize, (visibleSize / scrollSize) * trackSize)
+  const { size: thumbSize } = computeOverlayThumbGeometry(
+    trackSize,
+    visibleSize,
+    scrollSize,
+    0,
+    readScrollbarNumberToken('--scrollbar-min-thumb-size', 32)
   );
 
   activeDrag = {
@@ -859,7 +823,7 @@ const getCurrentScrollbarOpacity = (element: Element): number => {
     return computedOpacity;
   }
 
-  return readScrollbarOpacityToken('--scrollbar-thumb-idle-opacity', 0);
+  return readScrollbarNumberToken('--scrollbar-thumb-idle-opacity', 0);
 };
 
 const animateScrollbarOpacity = (
@@ -932,12 +896,8 @@ const canScroll = (element: Element): boolean => {
   const styles = getComputedStyle(element);
   const overflowX = styles.overflowX;
   const overflowY = styles.overflowY;
-  const scrollsX =
-    (overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'overlay') &&
-    element.scrollWidth > element.clientWidth;
-  const scrollsY =
-    (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') &&
-    element.scrollHeight > element.clientHeight;
+  const scrollsX = hasScrollableOverflow(overflowX) && element.scrollWidth > element.clientWidth;
+  const scrollsY = hasScrollableOverflow(overflowY) && element.scrollHeight > element.clientHeight;
   return scrollsX || scrollsY;
 };
 
@@ -948,15 +908,9 @@ const canScrollWithDelta = (element: Element, deltaX: number, deltaY: number): b
 
   const styles = getComputedStyle(element);
   const scrollsX =
-    (styles.overflowX === 'auto' ||
-      styles.overflowX === 'scroll' ||
-      styles.overflowX === 'overlay') &&
-    element.scrollWidth > element.clientWidth;
+    hasScrollableOverflow(styles.overflowX) && element.scrollWidth > element.clientWidth;
   const scrollsY =
-    (styles.overflowY === 'auto' ||
-      styles.overflowY === 'scroll' ||
-      styles.overflowY === 'overlay') &&
-    element.scrollHeight > element.clientHeight;
+    hasScrollableOverflow(styles.overflowY) && element.scrollHeight > element.clientHeight;
 
   const canMoveX =
     scrollsX &&
@@ -967,10 +921,7 @@ const canScrollWithDelta = (element: Element, deltaX: number, deltaY: number): b
     ((deltaY < 0 && element.scrollTop > 0) ||
       (deltaY > 0 && element.scrollTop + element.clientHeight < element.scrollHeight - 1));
 
-  if (Math.abs(deltaX) > Math.abs(deltaY)) {
-    return canMoveX || canMoveY;
-  }
-  return canMoveY || canMoveX;
+  return canMoveX || canMoveY;
 };
 
 const findScrollableAncestor = (target: EventTarget | null): Element | null => {
@@ -1032,7 +983,7 @@ const scheduleScrollbarInactive = (element: Element): void => {
       return;
     }
 
-    const idleOpacity = readScrollbarOpacityToken('--scrollbar-thumb-idle-opacity', 0);
+    const idleOpacity = readScrollbarNumberToken('--scrollbar-thumb-idle-opacity', 0);
     animateScrollbarOpacity(element, idleOpacity, () => {
       if (isScrollbarHeldOpen(element)) {
         return;
@@ -1052,7 +1003,7 @@ const markScrollbarActive = (element: Element): void => {
     return;
   }
 
-  const activeOpacity = readScrollbarOpacityToken('--scrollbar-thumb-active-opacity', 1);
+  const activeOpacity = readScrollbarNumberToken('--scrollbar-thumb-active-opacity', 1);
   if (isOverlayScrollbarElement(element)) {
     ensureOverlayScrollbars(element);
     activeOverlayElements.add(element);
@@ -1222,10 +1173,10 @@ export const __resetScrollbarActivityTrackingForTest = (): void => {
     overlayGeometryFrameId = undefined;
   }
 
-  const elements = new Set<Element>([...activeOverlayElements, ...hoveredOverlayElements]);
+  const elements = new Set<Element>([...activeOverlayElements, ...overlayHoverStates.keys()]);
   elements.forEach(removeOverlayScrollbars);
   activeOverlayElements.clear();
-  hoveredOverlayElements.clear();
+  overlayHoverStates.clear();
   pendingOverlayGeometryUpdates.clear();
   overlayResizeObserver?.disconnect();
   overlayResizeObserver = undefined;

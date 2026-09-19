@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/luxury-yacht/app/backend/resources/common"
+	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -35,12 +36,21 @@ func readyPodNameForEndpoint(ctx context.Context, client kubernetes.Interface, n
 	if endpoint.Conditions.Ready == nil || !*endpoint.Conditions.Ready {
 		return "", false
 	}
-	if endpoint.TargetRef == nil || endpoint.TargetRef.Kind != "Pod" {
+	target := endpoint.TargetRef
+	if target == nil || target.Kind != "Pod" || target.Name == "" {
 		return "", false
 	}
-	pod, err := client.CoreV1().Pods(namespace).Get(ctx, endpoint.TargetRef.Name, metav1.GetOptions{})
+	// Controller-managed EndpointSlices omit apiVersion for core Pod references.
+	if target.APIVersion != "" && target.APIVersion != corev1.SchemeGroupVersion.String() {
+		return "", false
+	}
+	// The forwarding destination and permission check both use the service namespace.
+	if target.Namespace != "" && target.Namespace != namespace {
+		return "", false
+	}
+	pod, err := client.CoreV1().Pods(namespace).Get(ctx, target.Name, metav1.GetOptions{})
 	if err != nil || !common.IsPodReady(pod) {
 		return "", false
 	}
-	return endpoint.TargetRef.Name, true
+	return target.Name, true
 }

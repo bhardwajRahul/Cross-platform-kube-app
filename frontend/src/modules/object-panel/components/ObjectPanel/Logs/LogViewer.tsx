@@ -34,6 +34,7 @@ import { CaseSensitiveIcon, SettingsIcon } from '@shared/components/icons/Shared
 import LoadingSpinner from '@shared/components/LoadingSpinner';
 import ScrollableRegion from '@shared/components/ScrollableRegion';
 import type { GridColumnDefinition } from '@shared/components/tables/GridTable';
+import { compareUtf16Strings } from '@shared/utils/sort';
 import React, { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import {
   readContainerLogs,
@@ -76,13 +77,14 @@ import {
 import { INACTIVE_SCOPE } from '../constants';
 import type { LogDisplayMode, LogTimestampMode } from '../types';
 import { containsAnsi } from './ansi';
+import { buildContainerLogMetadataColumns, containerLogExportValue } from './containerLogColumns';
 import { setContainerLogsStreamScopeParams } from './containerLogsStreamScopeParamsCache';
 import { useAnchoredLogEntries } from './hooks/useAnchoredLogEntries';
 import { useLogMessageRenderer } from './hooks/useLogMessageRenderer';
 import { useLogScrollRestoration } from './hooks/useLogScrollRestoration';
 import { useTerminalTheme } from './hooks/useTerminalTheme';
-import { buildCsv } from './logExport';
 import {
+  classifySelectedLogSources,
   logFilterBackendValues,
   logFilterSelectionForOnlyContainer,
   logFilterSelectionForOnlyPod,
@@ -101,7 +103,6 @@ import {
   setLogViewerScrollPosition,
 } from './logViewerPrefsCache';
 import {
-  ALL_CONTAINERS,
   applyLogViewerPrefs,
   extractLogViewerPrefs,
   initialLogViewerState,
@@ -109,16 +110,8 @@ import {
   type ParsedLogEntry,
 } from './logViewerReducer';
 import ParsedLogTable from './ParsedLogTable';
-import {
-  buildParsedLogDataColumns,
-  PARSED_TIMESTAMP_AUTOSIZE_MAX_WIDTH,
-  PARSED_TIMESTAMP_MIN_WIDTH,
-} from './parsedLogColumns';
-import {
-  deriveParsedLogFieldKeys,
-  formatParsedValue,
-  formatRawOrPrettyJsonLine,
-} from './parsedLogUtils';
+import { buildParsedLogCsv, buildParsedLogDataColumns } from './parsedLogColumns';
+import { deriveParsedLogFieldKeys, formatRawOrPrettyJsonLine } from './parsedLogUtils';
 import { buildStablePodColorMap } from './podColors';
 import RawLogViewer, { type RenderedLogRow } from './RawLogViewer';
 import { getSelectedTextWithinRoot, selectAllTextWithinRoot } from './textSelection';
@@ -145,13 +138,7 @@ interface LogViewerProps {
 }
 
 const CONTAINER_LOGS_DOMAIN = 'container-logs' as const;
-const PARSED_POD_COLUMN_MIN_WIDTH = 80;
-const PARSED_METADATA_AUTOSIZE_MAX_WIDTH = 320;
 const POD_LOG_COLOR_PALETTE_SLOTS = Array.from({ length: 24 }, (_, index) => index + 1);
-const RAW_LOG_VIRTUALIZATION_THRESHOLD = 120;
-const RAW_LOG_VIRTUALIZATION_OVERSCAN = 10;
-const RAW_LOG_ESTIMATE_ROW_HEIGHT = 26;
-const RAW_LOG_VERTICAL_PADDING_PX = 16;
 const EMPTY_CONTAINER_LOG_ENTRIES: ContainerLogsEntry[] = [];
 
 const formatShortTimestamp = (timestamp: string, useLocalTimeZone: boolean): string => {
@@ -534,6 +521,14 @@ const requestFallbackContainerLogs = async ({
     return { kind: 'error', message };
   }
 };
+
+const getWorkloadPodNames = (
+  entries: ContainerLogsEntry[],
+  activePods: string[] | null
+): string[] =>
+  (activePods ?? Array.from(new Set(entries.map((entry) => entry.pod).filter(Boolean))))
+    .slice()
+    .sort(compareUtf16Strings);
 
 const filterEntriesForActivePods = (
   entries: ContainerLogsEntry[],
@@ -920,15 +915,6 @@ const requestLogScopeContainers = async (clusterId: string, scope: string): Prom
   return result.status === 'executed' ? (result.data ?? []) : [];
 };
 
-const applyLogScopeContainers = (
-  dispatch: React.Dispatch<LogViewerAction>,
-  containers: string[],
-  isWorkload: boolean
-): void => {
-  dispatch({ type: 'SET_CONTAINERS', payload: containers });
-  dispatch({ type: 'SET_SELECTED_CONTAINER', payload: isWorkload ? '' : ALL_CONTAINERS });
-};
-
 const getLogViewerCopyFeedback = (copyFeedback: string): 'success' | 'error' | null => {
   if (copyFeedback === 'copied') {
     return 'success';
@@ -978,17 +964,13 @@ const renderLogViewerContent = ({
         scrollContainerRef={logsContentRef}
         wrapText={wrapText}
         renderRow={renderRawLogRow}
-        virtualizationThreshold={RAW_LOG_VIRTUALIZATION_THRESHOLD}
-        virtualizationOverscan={RAW_LOG_VIRTUALIZATION_OVERSCAN}
-        estimateRowHeight={RAW_LOG_ESTIMATE_ROW_HEIGHT}
-        verticalPaddingPx={RAW_LOG_VERTICAL_PADDING_PX}
       />
     );
   }
   return emptyStateMessage;
 };
 
-const LogViewerBlockingState = ({
+const renderLogViewerBlockingState = ({
   loading,
   paused,
   pendingFallback,
@@ -1030,20 +1012,6 @@ const LogViewerBlockingState = ({
   }
   return null;
 };
-
-const shouldShowLogViewerBlockingState = ({
-  loading,
-  paused,
-  pendingFallback,
-  displayError,
-  hasEntries,
-}: {
-  loading: boolean;
-  paused: boolean;
-  pendingFallback: boolean;
-  displayError: string | null;
-  hasEntries: boolean;
-}): boolean => loading || paused || (!pendingFallback && Boolean(displayError) && !hasEntries);
 
 type LogViewerIconItemsOptions = {
   highlightMatches: boolean;
@@ -1385,14 +1353,12 @@ const syncContainerLogsScope = ({
   hasPrimedScopeRef,
   previousActivePodsRef,
   dispatch,
-  isWorkload,
 }: {
   scope: string | null;
   previousScopeRef: { current: string | null };
   hasPrimedScopeRef: { current: boolean };
   previousActivePodsRef: { current: string[] | null };
   dispatch: React.Dispatch<LogViewerAction>;
-  isWorkload: boolean;
 }): void => {
   if (scope === previousScopeRef.current) {
     return;
@@ -1402,7 +1368,7 @@ const syncContainerLogsScope = ({
   hasPrimedScopeRef.current = false;
   previousActivePodsRef.current = null;
   if (hadPreviousScope) {
-    dispatch({ type: 'RESET_FOR_NEW_SCOPE', isWorkload });
+    dispatch({ type: 'RESET_FOR_NEW_SCOPE' });
   }
 };
 
@@ -1642,35 +1608,14 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     () => filterSelectionValues(selectedFilters),
     [selectedFilters]
   );
-  const selectedInitContainers = useMemo(
-    () =>
-      new Set(
-        selectedFilterValues
-          .filter((filterValue) => filterValue.startsWith(INIT_FILTER_PREFIX))
-          .map((filterValue) => filterValue.substring(INIT_FILTER_PREFIX.length))
-      ),
-    [selectedFilterValues]
-  );
-  const selectedRegularContainers = useMemo(
-    () =>
-      new Set(
-        selectedFilterValues
-          .filter((filterValue) => filterValue.startsWith(CONTAINER_FILTER_PREFIX))
-          .map((filterValue) => filterValue.substring(CONTAINER_FILTER_PREFIX.length))
-      ),
-    [selectedFilterValues]
-  );
-  const selectedEphemeralContainers = useMemo(
-    () =>
-      new Set(
-        selectedFilterValues
-          .filter((filterValue) => filterValue.startsWith(DEBUG_FILTER_PREFIX))
-          .map((filterValue) => filterValue.substring(DEBUG_FILTER_PREFIX.length))
-      ),
+  const selectedLogSources = useMemo(
+    () => classifySelectedLogSources(selectedFilterValues),
     [selectedFilterValues]
   );
   const selectedContainerFilterCount =
-    selectedInitContainers.size + selectedRegularContainers.size + selectedEphemeralContainers.size;
+    selectedLogSources.initContainers.size +
+    selectedLogSources.containers.size +
+    selectedLogSources.debugContainers.size;
   const handleSelectPodFilter = useCallback(
     (pod: string) => {
       dispatch({
@@ -1719,7 +1664,6 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     hasPrimedScopeRef,
     previousActivePodsRef,
     dispatch,
-    isWorkload,
   });
 
   const logSnapshot = useRefreshScopedDomain(
@@ -1795,13 +1739,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     return names;
   }, [activePodNames, isWorkload]);
   const workloadPodsForSelector = useMemo(
-    () =>
-      (
-        normalizedActivePods ??
-        Array.from(new Set(logEntries.map((entry) => entry.pod).filter(Boolean)))
-      )
-        .slice()
-        .sort(),
+    () => getWorkloadPodNames(logEntries, normalizedActivePods),
     [logEntries, normalizedActivePods]
   );
 
@@ -2054,12 +1992,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
 
   useEffect(() => {
     if (isWorkload) {
-      const pods = (
-        normalizedActivePods ??
-        Array.from(new Set(logEntries.map((entry) => entry.pod).filter(Boolean)))
-      )
-        .slice()
-        .sort();
+      const pods = getWorkloadPodNames(logEntries, normalizedActivePods);
       dispatch({ type: 'SET_AVAILABLE_PODS', payload: pods });
     }
   }, [isWorkload, logEntries, normalizedActivePods]);
@@ -2441,9 +2374,10 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
 
   // Fetch container inventory for the current log scope.
   useEffect(() => {
+    // Keep the inventory recheck on pod/workload transitions.
+    void isWorkload;
     if (!containerLogsScope) {
       dispatch({ type: 'SET_CONTAINERS', payload: [] });
-      dispatch({ type: 'SET_SELECTED_CONTAINER', payload: '' });
       return;
     }
 
@@ -2453,7 +2387,7 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
         if (isCancelled) {
           return;
         }
-        applyLogScopeContainers(dispatch, containerList, isWorkload);
+        dispatch({ type: 'SET_CONTAINERS', payload: containerList });
       })
       .catch((err) => {
         if (isCancelled) {
@@ -2461,7 +2395,6 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
         }
         console.warn('Failed to fetch containers:', err);
         dispatch({ type: 'SET_CONTAINERS', payload: [] });
-        dispatch({ type: 'SET_SELECTED_CONTAINER', payload: '' });
       });
 
     return () => {
@@ -2497,118 +2430,22 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
       return [];
     }
 
-    const columns: GridColumnDefinition<ParsedLogEntry>[] = [];
-
-    // Always show metadata columns when relevant — don't gate on first entry.
-    // API Timestamp is metadata we add on the client (not part of the log
-    // payload), so in workload mode we color it with the same pod color as
-    // the Pod column — visually grouping the metadata fields for a single
-    // pod together when multiple pods are interleaved.
-    if (timestampMode !== 'hidden') {
-      columns.push({
-        key: '_timestamp',
-        header: 'API Timestamp',
-        sortable: false,
-        minWidth: PARSED_TIMESTAMP_MIN_WIDTH,
-        autoSizeMaxWidth: PARSED_TIMESTAMP_AUTOSIZE_MAX_WIDTH,
-        render: (item: ParsedLogEntry) => {
-          const formatted = item.timestamp
-            ? formatTimestampForMode(
-                item.timestamp,
-                timestampMode,
-                apiTimestampFormat,
-                apiTimestampUseLocalTimeZone
-              )
-            : '-';
-          if (!isWorkload) {
-            return formatted;
-          }
-          return (
-            <span
-              className="pod-color-text"
-              style={
-                {
-                  '--pod-color': podColors[item.pod || ''] || podColors.__fallback__,
-                } as React.CSSProperties
-              }
-            >
-              {formatted}
-            </span>
-          );
-        },
-      });
-    }
-
-    if (isWorkload) {
-      columns.push({
-        key: '_pod',
-        header: 'Pod',
-        sortable: false,
-        minWidth: PARSED_POD_COLUMN_MIN_WIDTH,
-        autoSizeMaxWidth: PARSED_METADATA_AUTOSIZE_MAX_WIDTH,
-        render: (item: ParsedLogEntry) => {
-          const pod = item.pod;
-          return pod ? (
-            <button
-              type="button"
-              className="log-viewer-metadata-button pod-color-text"
-              tabIndex={-1}
-              data-focus-trap-ignore="true"
-              style={
-                {
-                  '--pod-color': podColors[pod] || podColors.__fallback__,
-                } as React.CSSProperties
-              }
-              onClick={(event) => {
-                event.stopPropagation();
-                handleSelectPodFilter(pod);
-              }}
-              title={`Show only logs from pod ${pod}`}
-              aria-label={`Show only logs from pod ${pod}`}
-            >
-              {pod}
-            </button>
-          ) : (
-            '-'
-          );
-        },
-      });
-    }
-
-    columns.push({
-      key: '_container',
-      header: 'Container',
-      sortable: false,
-      minWidth: PARSED_POD_COLUMN_MIN_WIDTH,
-      autoSizeMaxWidth: PARSED_METADATA_AUTOSIZE_MAX_WIDTH,
-      render: (item: ParsedLogEntry) => {
-        const container = item.container;
-        const containerKind = logContainerKind(item);
-        const containerLabel = container ? formatContainerLabel(container, containerKind) : '';
-        return container ? (
-          <button
-            type="button"
-            className="log-viewer-metadata-button pod-color-text"
-            tabIndex={-1}
-            data-focus-trap-ignore="true"
-            style={
-              {
-                '--pod-color': podColors[item.pod || ''] || podColors.__fallback__,
-              } as React.CSSProperties
-            }
-            onClick={(event) => {
-              event.stopPropagation();
-              handleSelectContainerFilter(container, containerKind);
-            }}
-            title={`Show only logs from container ${containerLabel}`}
-            aria-label={`Show only logs from container ${containerLabel}`}
-          >
-            {container}
-          </button>
-        ) : (
-          '-'
-        );
-      },
+    const columns = buildContainerLogMetadataColumns({
+      isWorkload,
+      showTimestamp: timestampMode !== 'hidden',
+      podColors,
+      formatTimestamp: (timestamp) =>
+        formatTimestampForMode(
+          timestamp,
+          timestampMode,
+          apiTimestampFormat,
+          apiTimestampUseLocalTimeZone
+        ),
+      getContainerLabel: (entry) =>
+        formatContainerLabel(entry.container ?? '', logContainerKind(entry)),
+      onSelectPod: handleSelectPodFilter,
+      onSelectContainer: (entry) =>
+        handleSelectContainerFilter(entry.container ?? '', logContainerKind(entry)),
     });
 
     // Promote well-known timestamp and level fields to appear first, then add
@@ -2628,45 +2465,26 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
   ]);
 
   const parsedCsv = useMemo(() => {
-    if (!isParsedView || parsedContainerLogs.length === 0 || tableColumns.length === 0) {
+    if (!isParsedView) {
       return '';
     }
-
-    const getParsedColumnValue = (entry: ParsedLogEntry, key: string): string => {
-      switch (key) {
-        case '_timestamp':
-          return entry.timestamp
-            ? formatTimestampForMode(
-                entry.timestamp,
-                timestampMode,
-                apiTimestampFormat,
-                apiTimestampUseLocalTimeZone
-              )
-            : '-';
-        case '_pod':
-          return entry.pod || '-';
-        case '_container':
-          return entry.container || '-';
-        default:
-          return formatParsedValue(entry.data[key]);
-      }
-    };
-
-    const headerRow = tableColumns.map((column) =>
-      typeof column.header === 'string' ? column.header : column.key
+    return buildParsedLogCsv(parsedContainerLogs, tableColumns, (entry, key) =>
+      containerLogExportValue(entry, key, (timestamp) =>
+        formatTimestampForMode(
+          timestamp,
+          timestampMode,
+          apiTimestampFormat,
+          apiTimestampUseLocalTimeZone
+        )
+      )
     );
-    const dataRows = parsedContainerLogs.map((entry) =>
-      tableColumns.map((column) => getParsedColumnValue(entry, column.key))
-    );
-
-    return buildCsv([headerRow, ...dataRows]);
   }, [
-    apiTimestampFormat,
-    apiTimestampUseLocalTimeZone,
     isParsedView,
     parsedContainerLogs,
     tableColumns,
     timestampMode,
+    apiTimestampFormat,
+    apiTimestampUseLocalTimeZone,
   ]);
 
   const handleCopyContainerLogs = useCallback(async () => {
@@ -2732,24 +2550,14 @@ const LogViewerInner: React.FC<LogViewerProps> = ({
     dispatch({ type: 'TOGGLE_ROW_EXPANSION', payload: rowKey });
   }, []);
 
-  const blockingState = (
-    <LogViewerBlockingState
-      loading={logsLoadingState.loading}
-      paused={showPausedLogsState || shouldShowPausedLogsEmptyState}
-      pendingFallback={pendingFallback}
-      displayError={displayError}
-      hasEntries={logEntries.length > 0}
-    />
-  );
-  if (
-    shouldShowLogViewerBlockingState({
-      loading: logsLoadingState.loading,
-      paused: showPausedLogsState || shouldShowPausedLogsEmptyState,
-      pendingFallback,
-      displayError,
-      hasEntries: logEntries.length > 0,
-    })
-  ) {
+  const blockingState = renderLogViewerBlockingState({
+    loading: logsLoadingState.loading,
+    paused: showPausedLogsState || shouldShowPausedLogsEmptyState,
+    pendingFallback,
+    displayError,
+    hasEntries: logEntries.length > 0,
+  });
+  if (blockingState) {
     return blockingState;
   }
 

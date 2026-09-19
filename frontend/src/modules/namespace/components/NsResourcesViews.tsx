@@ -6,30 +6,14 @@
  * - Renders tabs and their corresponding content components
  * - Uses ErrorBoundary to handle errors in each view
  * - Implements a fallback UI for view rendering errors
- * - Each view is declared once in NS_VIEWS; adding a tab is one entry there.
+ * - Each view is declared once in NAMESPACE_RESOURCE_VIEWS; adding a tab is one entry there.
  */
 
-import BrowseView from '@modules/browse/components/BrowseView';
-import NsViewAutoscaling from '@modules/namespace/components/NsViewAutoscaling';
-import NsViewConfig from '@modules/namespace/components/NsViewConfig';
-import NsViewCustom, {
-  NsViewArgoCD,
-  NsViewCertManager,
-  NsViewExternalSecrets,
-  NsViewPrometheus,
-} from '@modules/namespace/components/NsViewCustom';
-import NsViewEvents from '@modules/namespace/components/NsViewEvents';
-import NsViewHelm from '@modules/namespace/components/NsViewHelm';
-import NsViewMap from '@modules/namespace/components/NsViewMap';
-import NsViewNetwork from '@modules/namespace/components/NsViewNetwork';
-import NsViewQuotas from '@modules/namespace/components/NsViewQuotas';
-import NsViewRBAC from '@modules/namespace/components/NsViewRBAC';
-import NsViewStorage from '@modules/namespace/components/NsViewStorage';
-import NsViewWorkloads from '@modules/namespace/components/NsViewWorkloads';
 import { ErrorBoundary } from '@shared/components/errors/ErrorBoundary';
 import { ErrorSurface } from '@shared/components/errors/ErrorSurface';
 import React from 'react';
 import type { NamespaceViewType } from '@/types/navigation/views';
+import { NAMESPACE_RESOURCE_VIEWS } from './namespaceResourceViews';
 
 const ViewErrorFallback = ({ viewName, reset }: { viewName: string; reset: () => void }) => (
   <div className="namespace-view-error">
@@ -43,35 +27,9 @@ const ViewErrorFallback = ({ viewName, reset }: { viewName: string; reset: () =>
   </div>
 );
 
-// One entry per namespace tab: the error-boundary display name and the view
-// component (every view takes the namespace as its only prop).
-const NS_VIEWS: Partial<
-  Record<NamespaceViewType, { name: string; Component: React.ComponentType<{ namespace: string }> }>
-> = {
-  browse: { name: 'Browse', Component: BrowseView },
-  map: { name: 'Map', Component: NsViewMap },
-  workloads: { name: 'Workloads', Component: NsViewWorkloads },
-  config: { name: 'Config', Component: NsViewConfig },
-  network: { name: 'Network', Component: NsViewNetwork },
-  rbac: { name: 'RBAC', Component: NsViewRBAC },
-  storage: { name: 'Storage', Component: NsViewStorage },
-  autoscaling: { name: 'Autoscaling', Component: NsViewAutoscaling },
-  quotas: { name: 'Quotas', Component: NsViewQuotas },
-  custom: { name: 'Custom Resources', Component: NsViewCustom },
-  argocd: { name: 'Argo CD', Component: NsViewArgoCD },
-  'cert-manager': { name: 'cert-manager', Component: NsViewCertManager },
-  'external-secrets': { name: 'External Secrets', Component: NsViewExternalSecrets },
-  prometheus: { name: 'Prometheus Operator', Component: NsViewPrometheus },
-  helm: { name: 'Helm', Component: NsViewHelm },
-  events: { name: 'Events', Component: NsViewEvents },
-};
-
 interface NamespaceResourcesViewsProps {
   namespace: string;
   activeTab: NamespaceViewType;
-  onTabChange?: (tab: NamespaceViewType) => void;
-
-  // Object panel element to render
 }
 
 /**
@@ -81,9 +39,8 @@ interface NamespaceResourcesViewsProps {
 const NamespaceResourcesViews: React.FC<NamespaceResourcesViewsProps> = ({
   namespace,
   activeTab,
-  onTabChange: _onTabChange,
 }) => {
-  const view = NS_VIEWS[activeTab];
+  const view = NAMESPACE_RESOURCE_VIEWS[activeTab];
 
   return (
     <div className="view-content">

@@ -306,7 +306,6 @@ func (a *RefreshCoordinator) buildRefreshSubsystemForSelection(
 		return a.objectCatalogServiceForCluster(clusterMeta.ID)
 	}
 	cfg.ObjectCatalogNamespaces = a.catalogNamespaceGroups
-	cfg.ObjectCatalogEnabled = func() bool { return true }
 
 	subsystem, err := a.buildRefreshSubsystem(cfg)
 	if err != nil {
@@ -373,7 +372,7 @@ func (a *RefreshCoordinator) buildRefreshMux(
 	}
 
 	// Wrap the base refresh API with aggregate services for multi-cluster domains.
-	aggregateService := newAggregateSnapshotService(clusterOrder, subsystems)
+	aggregateService := newAggregateSnapshotService(subsystems)
 
 	// Wire the workload lifecycle transition: deadline-settled data becomes
 	// operational-but-degraded; a later authoritative sync becomes ready.
@@ -384,7 +383,7 @@ func (a *RefreshCoordinator) buildRefreshMux(
 			a.clusterRuntime.setClusterLifecycleState(clusterID, next)
 		}
 	}
-	aggregateQueue := newAggregateManualQueue(clusterOrder, subsystems)
+	aggregateQueue := newAggregateManualQueue(subsystems)
 	aggregateContainerLogs := newAggregateContainerLogsStreamHandler(subsystems)
 	aggregateResources, err := newAggregateResourceStreamHandler(subsystems, a.logger, sharedTelemetry)
 	if err != nil {
@@ -461,10 +460,10 @@ func (h *refreshAggregateHandlers) Update(clusterOrder []string, subsystems map[
 		}
 	}
 	if h.snapshot != nil {
-		h.snapshot.Update(clusterOrder, subsystems)
+		h.snapshot.Update(subsystems)
 	}
 	if h.manual != nil {
-		h.manual.UpdateConfig(clusterOrder, subsystems)
+		h.manual.UpdateConfig(subsystems)
 	}
 	if h.containerLogs != nil {
 		h.containerLogs.Update(subsystems)

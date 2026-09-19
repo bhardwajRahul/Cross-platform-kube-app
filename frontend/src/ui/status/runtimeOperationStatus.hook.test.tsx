@@ -123,6 +123,7 @@ describe('useRuntimeOperationStatus', () => {
 
     emit('portforward:status', {
       sessionId: 'pf-a',
+      clusterId: 'cluster-a',
       status: 'reconnecting',
       statusReason: 'pod replaced',
     });
@@ -145,6 +146,46 @@ describe('useRuntimeOperationStatus', () => {
     expect(rows?.portForwardSessions.map((session) => session.id)).toEqual(['pf-a']);
   });
 
+  it.each([
+    { resource: 'runtime-operations', read: runtime.listOperations },
+    { resource: 'shell-sessions', read: runtime.listShells },
+  ])('continues hydration after $resource fails', async ({ resource, read }) => {
+    const failure = new Error('initial read failed');
+    read.mockRejectedValueOnce(failure);
+
+    await render();
+
+    expect(onInitialReadError).toHaveBeenCalledWith(failure, resource);
+    expect(runtime.listOperations).toHaveBeenCalledTimes(1);
+    expect(runtime.listShells).toHaveBeenCalledTimes(1);
+    expect(runtime.listForwards).toHaveBeenCalledTimes(1);
+    expect(rows?.portForwardSessions.map((session) => session.id)).toEqual(['pf-a']);
+    expect(runtime.listOperations.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.listShells.mock.invocationCallOrder[0]
+    );
+    expect(runtime.listShells.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.listForwards.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('does not start port-forward hydration after unmounting during the shell read', async () => {
+    let resolveShells: ((sessions: never[]) => void) | undefined;
+    runtime.listShells.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveShells = resolve;
+        })
+    );
+    await render();
+    expect(runtime.listShells).toHaveBeenCalledTimes(1);
+    expect(runtime.listForwards).not.toHaveBeenCalled();
+
+    unmount();
+    await act(async () => requireValue(resolveShells, 'pending shell read')([]));
+
+    expect(runtime.listForwards).not.toHaveBeenCalled();
+  });
+
   it('unsubscribes and stops the initial read sequence when unmounted', async () => {
     let resolveOperations: ((operations: (typeof operation)[]) => void) | undefined;
     runtime.listOperations.mockImplementationOnce(
@@ -162,6 +203,78 @@ describe('useRuntimeOperationStatus', () => {
       expect(cancel).toHaveBeenCalledTimes(1);
     }
     await act(async () => requireValue(resolveOperations, 'pending operations read')([operation]));
+    expect(runtime.listShells).not.toHaveBeenCalled();
+    expect(runtime.listForwards).not.toHaveBeenCalled();
+  });
+  it('does not restore operations removed by an event while the initial registry read is pending', async () => {
+    let finish: (value: (typeof operation)[]) => void = () => undefined;
+    runtime.listOperations.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    await render();
+    emit('runtime-operations:list', []);
+    await act(async () => finish([operation]));
+    expect(rows?.portForwardSessions).toEqual([]);
+  });
+
+  it('preserves a newer full port-forward list over a late initial snapshot', async () => {
+    let finish: (value: (typeof forward)[]) => void = () => undefined;
+    runtime.listForwards.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    await render();
+    const replacement = { ...forward, podName: 'replacement', localPort: 9090 };
+    emit('portforward:list', [replacement]);
+    await act(async () => finish([forward]));
+    expect(rows?.portForwardSessions).toMatchObject([replacement]);
+  });
+
+  it('applies status-only events received before the initial port-forward details arrive', async () => {
+    let finish: (value: (typeof forward)[]) => void = () => undefined;
+    runtime.listForwards.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    await render();
+    emit('portforward:status', {
+      sessionId: forward.id,
+      clusterId: forward.clusterId,
+      status: 'reconnecting',
+      podName: 'replacement',
+      localPort: 9090,
+    });
+    emit('portforward:status', {
+      sessionId: forward.id,
+      clusterId: forward.clusterId,
+      status: 'active',
+    });
+    expect(rows?.portForwardSessions).toEqual([]);
+    await act(async () => finish([forward]));
+    expect(rows?.portForwardSessions).toMatchObject([
+      { ...forward, podName: 'replacement', localPort: 9090 },
+    ]);
+  });
+
+  it('does not report or continue a rejected initial read after unmount', async () => {
+    let reject: (error: Error) => void = () => undefined;
+    runtime.listOperations.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, rejectPromise) => {
+          reject = rejectPromise;
+        })
+    );
+    await render();
+    unmount();
+    await act(async () => reject(new Error('read failed after close')));
+    expect(onInitialReadError).not.toHaveBeenCalled();
     expect(runtime.listShells).not.toHaveBeenCalled();
     expect(runtime.listForwards).not.toHaveBeenCalled();
   });

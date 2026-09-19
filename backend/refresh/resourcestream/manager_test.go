@@ -17,8 +17,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
-	appslisters "k8s.io/client-go/listers/apps/v1"
-	"k8s.io/client-go/tools/cache"
 
 	"github.com/stretchr/testify/require"
 
@@ -80,6 +78,39 @@ func resumeForTest(t *testing.T, manager *Manager, domain, scope string, since u
 		return nil, false
 	}
 	return manager.ResumeSelector(selector, since)
+}
+
+func TestManagerRejectsUnscopedAndForeignSubscriptionIdentity(t *testing.T) {
+	manager := NewManager(nil, nil, nil, snapshot.ClusterMeta{ClusterID: "c1"}, nil, nil)
+	t.Cleanup(manager.Stop)
+	selector, err := ParseStreamSelector("c1", domainPods, "namespace:default")
+	require.NoError(t, err)
+	sub, err := manager.SubscribeSelector(selector)
+	require.NoError(t, err)
+	for _, version := range []string{"1", "2"} {
+		manager.broadcast(domainPods, []string{selector.CanonicalScope()}, Update{
+			Type: MessageTypeModified, Domain: domainPods, ClusterID: "c1",
+			ResourceVersion: version,
+			Ref:             refPtr(resourcemodel.ResourceRef{ClusterID: "c1", Version: "v1", Kind: "Pod", Namespace: "default", Name: "pod-a"}),
+		})
+		require.Equal(t, version, requireNextUpdate(t, sub).Sequence)
+	}
+	for _, clusterID := range []string{"", " ", "c2"} {
+		t.Run("cluster="+clusterID, func(t *testing.T) {
+			invalid := selector
+			invalid.ClusterID = clusterID
+			foreignSub, err := manager.SubscribeSelector(invalid)
+			require.Error(t, err)
+			require.Nil(t, foreignSub)
+			updates, ok := manager.ResumeSelector(invalid, 1)
+			require.False(t, ok)
+			require.Empty(t, updates)
+		})
+	}
+	updates, ok := manager.ResumeSelector(selector, 1)
+	require.True(t, ok)
+	require.Len(t, updates, 1)
+	require.Equal(t, "2", updates[0].Sequence)
 }
 
 type scopedListWatchStub struct {
@@ -340,7 +371,7 @@ func TestManagerRBACUpdateBroadcasts(t *testing.T) {
 		},
 	}
 
-	manager.streamObjectRowFromDescriptor(role, MessageTypeAdded, rolepkg.StreamDescriptor)
+	manager.broadcastObjectFromDescriptor(role, MessageTypeAdded, rolepkg.StreamDescriptor)
 
 	select {
 	case update := <-sub.Updates:
@@ -463,6 +494,13 @@ func TestManagerEvictsResumeBufferWhenLastSubscriberCancels(t *testing.T) {
 
 	require.NotContains(t, manager.buffers, key)
 	require.NotContains(t, manager.sequences, key)
+
+	replacement, err := subscribeForTest(t, manager, domainPods, "namespace:default")
+	require.NoError(t, err)
+	t.Cleanup(replacement.Cancel)
+	sub.Cancel()
+	manager.broadcast(domainPods, []string{"namespace:default"}, update)
+	require.Equal(t, "1", requireNextUpdate(t, replacement).Sequence)
 }
 
 func TestManagerClusterRBACUpdateBroadcasts(t *testing.T) {
@@ -483,7 +521,7 @@ func TestManagerClusterRBACUpdateBroadcasts(t *testing.T) {
 		},
 	}
 
-	manager.streamObjectRowFromDescriptor(role, MessageTypeAdded, clusterrole.StreamDescriptor)
+	manager.broadcastObjectFromDescriptor(role, MessageTypeAdded, clusterrole.StreamDescriptor)
 
 	select {
 	case update := <-sub.Updates:
@@ -515,7 +553,7 @@ func TestManagerQuotasUpdateBroadcasts(t *testing.T) {
 		},
 	}
 
-	manager.streamObjectRowFromDescriptor(quota, MessageTypeAdded, resourcequota.StreamDescriptor)
+	manager.broadcastObjectFromDescriptor(quota, MessageTypeAdded, resourcequota.StreamDescriptor)
 
 	select {
 	case update := <-sub.Updates:
@@ -547,7 +585,7 @@ func TestManagerClusterConfigUpdateBroadcasts(t *testing.T) {
 		Provisioner: "kubernetes.io/no-provisioner",
 	}
 
-	manager.streamObjectRowFromDescriptor(storageClass, MessageTypeAdded, storageclass.StreamDescriptor)
+	manager.broadcastObjectFromDescriptor(storageClass, MessageTypeAdded, storageclass.StreamDescriptor)
 
 	select {
 	case update := <-sub.Updates:
@@ -585,7 +623,7 @@ func TestManagerStorageUpdateBroadcasts(t *testing.T) {
 		},
 	}
 
-	manager.streamObjectRowFromDescriptor(pvc, MessageTypeAdded, persistentvolumeclaim.StreamDescriptor)
+	manager.broadcastObjectFromDescriptor(pvc, MessageTypeAdded, persistentvolumeclaim.StreamDescriptor)
 
 	select {
 	case update := <-sub.Updates:
@@ -619,7 +657,7 @@ func TestManagerClusterStorageUpdateBroadcasts(t *testing.T) {
 		},
 	}
 
-	manager.streamObjectRowFromDescriptor(pv, MessageTypeAdded, persistentvolume.StreamDescriptor)
+	manager.broadcastObjectFromDescriptor(pv, MessageTypeAdded, persistentvolume.StreamDescriptor)
 
 	select {
 	case update := <-sub.Updates:
@@ -1348,10 +1386,10 @@ func TestManagerHPADeleteRefreshesTargetWorkloadRow(t *testing.T) {
 		},
 	}
 	manager := &Manager{
-		clusterMeta:      snapshot.ClusterMeta{ClusterID: "c1", ClusterName: "cluster"},
-		logger:           applog.Noop,
-		deploymentLister: testsupport.NewDeploymentLister(t, deployment),
-		subscribers:      make(map[string]map[string]map[uint64]*subscription),
+		clusterMeta:    snapshot.ClusterMeta{ClusterID: "c1", ClusterName: "cluster"},
+		logger:         applog.Noop,
+		workloadIngest: deploymentIngestWith(t, deployment),
+		subscribers:    make(map[string]map[string]map[uint64]*subscription),
 	}
 	sub, err := subscribeForTest(t, manager, domainWorkloads, "namespace:default")
 	require.NoError(t, err)
@@ -1384,10 +1422,10 @@ func TestManagerHPAUpdateRefreshesOldAndNewTargets(t *testing.T) {
 	newHPA.ResourceVersion = "11"
 	newHPA.Spec.ScaleTargetRef.Name = "web-new"
 	manager := &Manager{
-		clusterMeta:      snapshot.ClusterMeta{ClusterID: "c1", ClusterName: "cluster"},
-		logger:           applog.Noop,
-		deploymentLister: testsupport.NewDeploymentLister(t, oldDeployment, newDeployment),
-		subscribers:      make(map[string]map[string]map[uint64]*subscription),
+		clusterMeta:    snapshot.ClusterMeta{ClusterID: "c1", ClusterName: "cluster"},
+		logger:         applog.Noop,
+		workloadIngest: deploymentIngestWith(t, oldDeployment, newDeployment),
+		subscribers:    make(map[string]map[string]map[uint64]*subscription),
 	}
 	sub, err := subscribeForTest(t, manager, domainWorkloads, "namespace:default")
 	require.NoError(t, err)
@@ -1735,10 +1773,10 @@ func TestManagerWorkloadUpdateFromPod(t *testing.T) {
 	}
 
 	manager := &Manager{
-		clusterMeta:      snapshot.ClusterMeta{ClusterID: "c1", ClusterName: "cluster"},
-		logger:           applog.Noop,
-		deploymentLister: deploymentListerWith(deployment),
-		subscribers:      make(map[string]map[string]map[uint64]*subscription),
+		clusterMeta:    snapshot.ClusterMeta{ClusterID: "c1", ClusterName: "cluster"},
+		logger:         applog.Noop,
+		workloadIngest: deploymentIngestWith(t, deployment),
+		subscribers:    make(map[string]map[string]map[uint64]*subscription),
 	}
 
 	sub, err := subscribeForTest(t, manager, domainWorkloads, "namespace:default")
@@ -1771,10 +1809,10 @@ func TestManagerWorkloadUpdateFromCompletedOwnedPod(t *testing.T) {
 	}
 
 	manager := &Manager{
-		clusterMeta:      snapshot.ClusterMeta{ClusterID: "c1", ClusterName: "cluster"},
-		logger:           applog.Noop,
-		deploymentLister: deploymentListerWith(deployment),
-		subscribers:      make(map[string]map[string]map[uint64]*subscription),
+		clusterMeta:    snapshot.ClusterMeta{ClusterID: "c1", ClusterName: "cluster"},
+		logger:         applog.Noop,
+		workloadIngest: deploymentIngestWith(t, deployment),
+		subscribers:    make(map[string]map[string]map[uint64]*subscription),
 	}
 
 	sub, err := subscribeForTest(t, manager, domainWorkloads, "namespace:default")
@@ -1825,14 +1863,26 @@ func TestManagerDeletesStandaloneWorkloadRowWhenPodCompletes(t *testing.T) {
 	}
 }
 
-func deploymentListerWith(items ...*appsv1.Deployment) appslisters.DeploymentLister {
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
-		cache.NamespaceIndex: cache.MetaNamespaceIndexFunc,
-	})
-	for _, item := range items {
-		_ = indexer.Add(item)
+type deploymentIngestReader struct {
+	store *ingest.ProjectingStore
+}
+
+func (r deploymentIngestReader) Rows(gvr schema.GroupVersionResource) []interface{} {
+	if gvr != snapshot.DeploymentGVR {
+		return nil
 	}
-	return appslisters.NewDeploymentLister(indexer)
+	return r.store.List()
+}
+
+func deploymentIngestWith(t *testing.T, items ...*appsv1.Deployment) workloadBundleReader {
+	t.Helper()
+	store := ingest.NewProjectingStore(snapshot.NewDeploymentIngestProjector(
+		snapshot.ClusterMeta{ClusterID: "c1", ClusterName: "cluster"},
+	))
+	for _, item := range items {
+		require.NoError(t, store.Add(item))
+	}
+	return deploymentIngestReader{store: store}
 }
 
 // Informer tests may start their LIST before cleanup closes the watch.
