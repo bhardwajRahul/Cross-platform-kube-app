@@ -23,9 +23,9 @@ maximize and restore.
 - Native panel windows reuse the workspace window chrome: macOS uses the
   transparent full-size titlebar with native traffic-light controls. Windows
   and Linux use a frameless window with minimize, maximize/restore, and close
-  controls in the outer `AppHeader`; Windows also enables WebView2 non-client
-  drag regions while retaining Wails' standard frameless decorations. Linux
-  clears the framework's initial internal-name title. The outer `AppHeader`
+  controls in the shared `WindowHeader`. Windows keeps WebView2 non-client
+  regions disabled so Wails can handle DOM resizing before dragging. Linux
+  clears the framework's initial internal-name title. The shared `WindowHeader`
   remains the drag/maximize surface, while the inner
   `DockablePanelHeader` remains tab and panel controls only. Workspace status,
   favorites, and command-palette controls do not render in the panel window.
@@ -56,6 +56,21 @@ maximize and restore.
 
 ## Placement and Uniqueness
 
+- Within each renderer, its cluster-scoped tab groups are the single writable
+  placement projection. Geometry stores contain size, maximize, open, and focus
+  state; object state contains local references, active views, and pending native
+  opens. Neither keeps a second dock edge or native-window location index.
+- `useRestoreWorkspacePanels` installs group membership before restoring object
+  content for retained panels, dock-back, panel-tab insertion, and cluster-view
+  insertion. A mounting `DockablePanel` preserves that membership while its
+  geometry initializes; the initial closed geometry must not remove the group.
+- `PanelLayoutLifecycle` releases the owning cluster's geometry after committed
+  object removal in both renderer roles. Focus and debug readers use their
+  provider's layout context; there is no globally selected layout store.
+- Each renderer mounts `DockablePanelLayer` inside its content surface. React
+  owns the portal destination and its replacement during reconstruction or
+  suspension. Panel geometry and offset cleanup follow that connected host;
+  the provider must not discover and append a one-time DOM container.
 - Prefer the active compatible docked group when opening a new object.
 - A new panel whose default is Floating creates a uniquely isolated, transient,
   hidden one-tab source group, then asks the native coordinator to transfer it.
@@ -94,8 +109,24 @@ maximize and restore.
 
 ## Acknowledged Handoffs
 
+`internal/appwindow/transfer_lifecycle.go` owns admission/replay rejection,
+source/target acknowledgement phases, deadline replacement, and terminal cleanup
+for group, panel-tab, and cluster-view transfers. Each protocol uses a typed
+instance and retains its existing ID namespace: a tab opening a native window
+deliberately shares its ID with the group opening acknowledgement. Protocol
+adapters own preparation, authenticated callers, placement commits, and rollback.
+Their existing locks cover lifecycle and directory changes; the lifecycle adds
+no mutex or backend dependency. Timeout callbacks re-enter the adapter's failure
+path. Cluster transfers release their locks before native window closure.
+Live native snapshots are separate from pending group operations; the registry
+binds each pending operation to its window independently of published content.
+
 Float, dock-back, panel-tab moves, and cluster-tab moves are acknowledged
 transactions. Check source guards and flush its latest snapshot before transfer.
+Directory reads started before a target stages or settles a transfer must not
+remove the target's reconstructed panels. Invalidate those reads per cluster and
+fetch a current snapshot; once settled, later authoritative moves still evict
+the old renderer's copy.
 The source stays mounted while the target reconstructs the panels. The shared
 backend directory commits physical placement only after destination readiness.
 Opening an already-open object focuses the existing placement. Every app window

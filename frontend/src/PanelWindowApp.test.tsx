@@ -54,6 +54,7 @@ vi.mock('@modules/object-panel/components/ObjectPanel/ObjectPanel', () => ({
 vi.mock('@modules/object-panel/contexts/ObjectPanelStateContext', () => ({
   ObjectPanelStateProvider: PassThrough,
   useObjectPanelActiveTabs: () => new Map([['panel-pod', 'events']]),
+  useLocalPanelSnapshots: () => ({}),
   useObjectPanelState: () => ({
     openPanels: mocks.openPanels,
     onRowClick: mocks.onRowClick,
@@ -62,6 +63,8 @@ vi.mock('@modules/object-panel/contexts/ObjectPanelStateContext', () => ({
 }));
 vi.mock('@shared/components/tabs/dragCoordinator', () => ({ TabDragProvider: PassThrough }));
 vi.mock('@ui/dockable', () => ({
+  DockablePanelLayer: () => null,
+  useDockablePanelContext: () => ({ discardPanelLayouts: vi.fn() }),
   DockablePanelProvider: ({ children, ...props }: { children: ReactNode }) => {
     mocks.dockProviderProps = props;
     return <>{children}</>;
@@ -71,11 +74,9 @@ vi.mock('@ui/errors', () => ({
   AppErrorBoundary: PassThrough,
   PanelErrorBoundary: PassThrough,
 }));
-vi.mock('@ui/layout/AppHeader', () => ({
-  default: ({ mode, clusterName }: { mode: string; clusterName?: string }) => (
-    <div data-testid="app-header" data-mode={mode}>
-      {clusterName}
-    </div>
+vi.mock('@ui/layout/WindowHeader', () => ({
+  default: ({ clusterName }: { clusterName?: string }) => (
+    <div data-testid="app-header">{clusterName}</div>
   ),
 }));
 vi.mock('@ui/shortcuts', () => ({ KeyboardProvider: PassThrough }));
@@ -229,9 +230,6 @@ describe('PanelWindowApp', () => {
         floating: [],
       },
     });
-    expect(container.querySelector('[data-testid="app-header"]')?.getAttribute('data-mode')).toBe(
-      'panel'
-    );
     expect(mocks.objectPanelProps).toMatchObject({
       panelId: 'panel-pod',
       defaultPosition: 'right',
