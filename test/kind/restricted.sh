@@ -4,15 +4,9 @@
 
 set -euo pipefail
 
-for cmd in kind kubectl; do
-  if ! command -v "$cmd" &>/dev/null; then
-    echo "Error: '${cmd}' is not installed." >&2
-    exit 1
-  fi
-done
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KUBECONFIG_DIR="${HOME}/.kube"
+source "${SCRIPT_DIR}/common.sh"
+require_commands kind kubectl
 
 CLUSTER_NAME="restricted-cluster"
 CONFIG_FILE="${SCRIPT_DIR}/clusters/restricted.yaml"
@@ -36,10 +30,6 @@ LEGACY_SERVICE_ACCOUNT="restricted-viewer"
 LEGACY_ROLE_BINDING="restricted-viewer-view"
 LEGACY_CLUSTER_ROLE_BINDING="restricted-viewer-view"
 
-cluster_exists() {
-  kind get clusters 2>/dev/null | grep -qx "${CLUSTER_NAME}"
-}
-
 context_exists() {
   local kubeconfig="$1"
   local context="$2"
@@ -48,11 +38,11 @@ context_exists() {
 }
 
 admin_kctl() {
-  kubectl --kubeconfig "${ADMIN_KUBECONFIG}" --context "${ADMIN_CONTEXT}" "$@"
+  kubectl_for "${ADMIN_KUBECONFIG}" "${ADMIN_CONTEXT}" "$@"
 }
 
 restricted_kctl() {
-  kubectl --kubeconfig "${RESTRICTED_KUBECONFIG}" --context "${RESTRICTED_CONTEXT}" "$@"
+  kubectl_for "${RESTRICTED_KUBECONFIG}" "${RESTRICTED_CONTEXT}" "$@"
 }
 
 ensure_admin_context() {
@@ -73,19 +63,21 @@ ensure_admin_context() {
 }
 
 install_restricted_rbac() {
+  local namespaces namespace
   echo "Installing restricted RBAC..."
 
-  admin_kctl create namespace "${IDENTITY_NAMESPACE}" --dry-run=client -o yaml | admin_kctl apply -f -
-  admin_kctl create namespace "${VERIFY_TEST_NAMESPACE}" --dry-run=client -o yaml | admin_kctl apply -f -
+  ensure_namespace "${ADMIN_KUBECONFIG}" "${ADMIN_CONTEXT}" "${IDENTITY_NAMESPACE}"
+  ensure_namespace "${ADMIN_KUBECONFIG}" "${ADMIN_CONTEXT}" "${VERIFY_TEST_NAMESPACE}"
   admin_kctl -n "${IDENTITY_NAMESPACE}" create serviceaccount "${RESTRICTED_SERVICE_ACCOUNT}" --dry-run=client -o yaml | admin_kctl apply -f -
   admin_kctl delete clusterrolebinding "${LEGACY_CLUSTER_ROLE_BINDING}" --ignore-not-found
   admin_kctl -n "${LEGACY_RESTRICTED_NAMESPACE}" delete rolebinding "${LEGACY_ROLE_BINDING}" --ignore-not-found
   admin_kctl -n "${LEGACY_RESTRICTED_NAMESPACE}" delete serviceaccount "${LEGACY_SERVICE_ACCOUNT}" --ignore-not-found
 
+  namespaces="$(managed_namespaces)"
   while IFS= read -r namespace; do
     [[ -n "${namespace}" ]] || continue
     bind_restricted_namespace "${namespace}"
-  done < <(managed_namespaces)
+  done <<< "${namespaces}"
 }
 
 managed_namespaces() {
@@ -159,23 +151,16 @@ verify_restricted_access() {
 }
 
 start_cluster() {
+  local existing_clusters
   if [[ ! -f "${CONFIG_FILE}" ]]; then
     echo "Error: cluster config not found: ${CONFIG_FILE}" >&2
     exit 1
   fi
 
+  existing_clusters="$(kind get clusters)"
   mkdir -p "${KUBECONFIG_DIR}"
 
-  if cluster_exists; then
-    echo "Cluster '${CLUSTER_NAME}' already exists, refreshing admin kubeconfig."
-    kind export kubeconfig --name "${CLUSTER_NAME}" --kubeconfig "${ADMIN_KUBECONFIG}"
-  else
-    echo "Creating cluster '${CLUSTER_NAME}' from restricted.yaml..."
-    kind create cluster \
-      --name "${CLUSTER_NAME}" \
-      --config "${CONFIG_FILE}" \
-      --kubeconfig "${ADMIN_KUBECONFIG}"
-  fi
+  ensure_kind_cluster "${CLUSTER_NAME}" "${CONFIG_FILE}" "${ADMIN_KUBECONFIG}" "${existing_clusters}" "admin kubeconfig"
 
   ensure_admin_context
   install_restricted_rbac
@@ -190,12 +175,9 @@ start_cluster() {
 }
 
 stop_cluster() {
-  if cluster_exists; then
-    echo "Deleting cluster '${CLUSTER_NAME}'..."
-    kind delete cluster --name "${CLUSTER_NAME}"
-  else
-    echo "Cluster '${CLUSTER_NAME}' does not exist, skipping."
-  fi
+  local existing_clusters
+  existing_clusters="$(kind get clusters)"
+  delete_kind_cluster "${CLUSTER_NAME}" "${ADMIN_KUBECONFIG}" "${existing_clusters}"
 
   rm -f "${ADMIN_KUBECONFIG}" "${RESTRICTED_KUBECONFIG}"
   echo "Removed kubeconfigs:"
