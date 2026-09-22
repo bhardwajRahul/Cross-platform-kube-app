@@ -118,6 +118,18 @@ the completed `v2` rewrite plan.
      (`pod_owner_heal_test.go`) — so the heal and the projector cannot drift.
   The tell in review: a `New*IngestProjector` signature growing another kind's
   lister/store without one of these shapes.
+- **Runtime-discovered sources share ingest ownership.** The existing typed CRD
+  informer supplies definitions; initial admission waits for discovery's preferred
+  served version. Ingest compares the source specification, definition UID and
+  permitted namespace partitions before allocating replacement stores/reflectors.
+  Permission checks happen outside both definition-selection and lifecycle locks,
+  with admission rechecked before commit so a delayed check cannot restore an
+  older definition. Replacement cancels and joins its predecessor before starting;
+  incomplete definitions retain the predecessor. Terminal shutdown rejects new
+  admissions. These sources hold catalog projections rather than full objects.
+  The detail-cache sink runs before catalog notification, and retirement evicts
+  responses for the old source. YAML and visible-page/export hydration continue
+  to read live API payloads; catalog projections do not replace those reads.
 - **Kept-as-typed-informer (documented):** ReplicaSet (pod-owner resolution), CRDs (CR
   discovery), events, gateway-API ×8, HPA, namespaces — each justified in `factory.go`.
 

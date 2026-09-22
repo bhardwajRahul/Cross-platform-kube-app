@@ -9,6 +9,7 @@ package objectcatalog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/luxury-yacht/app/backend/capabilities"
 	"github.com/luxury-yacht/app/backend/internal/applog"
 	"github.com/luxury-yacht/app/backend/internal/config"
+	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/ingest"
 	"github.com/luxury-yacht/app/backend/resourcemodel"
 	"github.com/luxury-yacht/app/backend/resources/common"
@@ -49,7 +51,7 @@ func TestCatalogReactiveResyncCadenceWithoutSharedFactory(t *testing.T) {
 			svc := newTestWatchService()
 			svc.opts.EnableReactiveUpdates = test.reactive
 			svc.opts.ResyncInterval = test.interval
-			svc.deps.CustomResourceSource = &catalogWatchSourceStub{}
+			svc.deps.IngestSource = &fakeCatalogIngestSource{}
 			require.Equal(t, test.want, svc.fullResyncInterval(), "custom-only reactive catalogs use the same safety-net cadence")
 		})
 	}
@@ -794,7 +796,6 @@ func (b *blockingIngestSource) AddCatalogSink(schema.GroupVersionResource, inges
 func (b *blockingIngestSource) RegisterDynamicCatalogReflector(schema.GroupVersionResource, schema.GroupVersionKind, ingest.CatalogProjector, bool) bool {
 	return false
 }
-func (b *blockingIngestSource) StopReflectorFor(schema.GroupVersionResource)  {}
 func (b *blockingIngestSource) HasSyncedFor(schema.GroupVersionResource) bool { return false }
 func (b *blockingIngestSource) Tracks(schema.GroupVersionResource) bool       { return false }
 
@@ -811,7 +812,6 @@ func (*controlledIngestSource) AddCatalogSink(schema.GroupVersionResource, inges
 func (*controlledIngestSource) RegisterDynamicCatalogReflector(schema.GroupVersionResource, schema.GroupVersionKind, ingest.CatalogProjector, bool) bool {
 	return false
 }
-func (*controlledIngestSource) StopReflectorFor(schema.GroupVersionResource) {}
 func (s *controlledIngestSource) HasSyncedFor(schema.GroupVersionResource) bool {
 	return s.synced.Load()
 }
@@ -841,7 +841,7 @@ func newControlledIngestCatalogService(source IngestSource, waitTimeout time.Dur
 		Telemetry:    recorder,
 		IngestSource: source,
 	}, &Options{
-		IngestSyncWaitTimeout: waitTimeout,
+		SourceSyncWaitTimeout: waitTimeout,
 		ResyncInterval:        time.Hour,
 	}), recorder
 }
@@ -854,12 +854,11 @@ func (r *recordingTelemetry) count() int {
 
 // TestSyncWaitsForCachesBetweenPreflightAndCollect pins the catalog startup overlap:
 // discovery and the RBAC preflight are pure API calls and must run BEFORE the
-// informer-cache wait (so they overlap the factory's ~10s initial sync); only the
-// collect — which reads listers — runs after the wait. A wait failure must abort the
-// sync: collecting from unsynced listers would publish an incomplete catalog as
-// authoritative.
+// informer settle wait (so they overlap the factory's ~10s initial sync); only the
+// collect — which reads listers — runs after the wait. Cancellation during the
+// wait aborts the sync before any collect.
 func TestSyncWaitsForCachesBetweenPreflightAndCollect(t *testing.T) {
-	newFixture := func(waitForCaches func(context.Context) error, order *[]string, mu *sync.Mutex) *Service {
+	newFixture := func(readiness InformerReadiness, order *[]string, mu *sync.Mutex) *Service {
 		record := func(step string) {
 			mu.Lock()
 			*order = append(*order, step)
@@ -867,13 +866,13 @@ func TestSyncWaitsForCachesBetweenPreflightAndCollect(t *testing.T) {
 		}
 
 		scheme := runtime.NewScheme()
-		deployGVK := schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
-		scheme.AddKnownTypeWithName(deployGVK, &unstructured.Unstructured{})
-		scheme.AddKnownTypeWithName(deployGVK.GroupVersion().WithKind("DeploymentList"), &unstructured.UnstructuredList{})
+		replicaSetGVK := schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "ReplicaSet"}
+		scheme.AddKnownTypeWithName(replicaSetGVK, &unstructured.Unstructured{})
+		scheme.AddKnownTypeWithName(replicaSetGVK.GroupVersion().WithKind("ReplicaSetList"), &unstructured.UnstructuredList{})
 		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
-			{Group: "apps", Version: "v1", Resource: "deployments"}: "DeploymentList",
+			{Group: "apps", Version: "v1", Resource: "replicasets"}: "ReplicaSetList",
 		})
-		dyn.PrependReactor("list", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		dyn.PrependReactor("list", "replicasets", func(k8stesting.Action) (bool, runtime.Object, error) {
 			record("collect")
 			return false, nil, nil
 		})
@@ -883,7 +882,7 @@ func TestSyncWaitsForCachesBetweenPreflightAndCollect(t *testing.T) {
 		hooked := &hookedPreferredDiscovery{
 			preferredDiscovery: &preferredDiscovery{FakeDiscovery: baseDiscovery, resources: []*metav1.APIResourceList{{
 				GroupVersion: "apps/v1",
-				APIResources: []metav1.APIResource{{Name: "deployments", Namespaced: true, Kind: "Deployment", Verbs: []string{"list"}}},
+				APIResources: []metav1.APIResource{{Name: "replicasets", Namespaced: true, Kind: "ReplicaSet", Verbs: []string{"list"}}},
 			}}},
 			onDiscover: func() { record("discover") },
 		}
@@ -893,19 +892,21 @@ func TestSyncWaitsForCachesBetweenPreflightAndCollect(t *testing.T) {
 				KubernetesClient: &discoveryOverrideClient{Clientset: client, discovery: hooked},
 				DynamicClient:    dyn,
 			},
-			WaitForCaches: waitForCaches,
+			InformerReadiness: readiness,
 		}, nil)
 	}
 
 	t.Run("wait sits between discovery and collect", func(t *testing.T) {
 		var mu sync.Mutex
 		var order []string
-		svc := newFixture(func(context.Context) error {
+		var requested [][]string
+		svc := newFixture(informerReadinessStub{settled: func(keys []string) bool {
 			mu.Lock()
 			order = append(order, "wait")
+			requested = append(requested, keys)
 			mu.Unlock()
-			return nil
-		}, &order, &mu)
+			return true
+		}}, &order, &mu)
 
 		if err := svc.sync(context.Background()); err != nil {
 			t.Fatalf("sync failed: %v", err)
@@ -936,26 +937,51 @@ func TestSyncWaitsForCachesBetweenPreflightAndCollect(t *testing.T) {
 		if !(index("collect") >= 0 && index("wait") < index("collect")) {
 			t.Fatalf("the collect must run AFTER the cache wait, order %v", order)
 		}
+		require.Equal(t, [][]string{{"apps/replicasets"}}, requested,
+			"the wait must ask the factory only about the informers collection reads")
 	})
 
-	t.Run("wait failure aborts the sync before any collect", func(t *testing.T) {
+	t.Run("canceled wait aborts the sync before any collect", func(t *testing.T) {
 		var mu sync.Mutex
 		var order []string
-		waitErr := errors.New("caches unavailable")
-		svc := newFixture(func(context.Context) error { return waitErr }, &order, &mu)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		svc := newFixture(informerReadinessStub{settled: func([]string) bool {
+			cancel()
+			return false
+		}}, &order, &mu)
 
-		err := svc.sync(context.Background())
-		if err == nil || !errors.Is(err, waitErr) {
-			t.Fatalf("expected sync to fail with the cache-wait error, got %v", err)
+		err := svc.sync(ctx)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected sync to stop with the wait's cancellation, got %v", err)
 		}
 		mu.Lock()
 		defer mu.Unlock()
 		for _, s := range order {
 			if s == "collect" {
-				t.Fatalf("no collect may run when the cache wait failed, order %v", order)
+				t.Fatalf("no collect may run when the cache wait was canceled, order %v", order)
 			}
 		}
 	})
+}
+
+// informerReadinessStub reports every requested informer with one readiness
+// state and, when settled is set, delegates the settle check to it.
+type informerReadinessStub struct {
+	settled   func(keys []string) bool
+	readiness refresh.ResourceReadiness
+}
+
+func (s informerReadinessStub) ResourcesSettled(keys []string) bool {
+	return s.settled == nil || s.settled(keys)
+}
+
+func (s informerReadinessStub) ResourceReadiness(keys []string) map[string]refresh.ResourceReadiness {
+	states := make(map[string]refresh.ResourceReadiness, len(keys))
+	for _, key := range keys {
+		states[key] = s.readiness
+	}
+	return states
 }
 
 func TestCatalogContinuesWithPartialSyncWhenTrackedIngestNeverStarts(t *testing.T) {
@@ -988,7 +1014,7 @@ func TestCatalogIngestTimeoutWarningEmittedOncePerService(t *testing.T) {
 
 	for range 2 {
 		run := &catalogSync{service: svc, descriptors: descriptors}
-		require.NoError(t, run.waitForIngest(context.Background()))
+		require.NoError(t, run.waitForCaches(context.Background()))
 	}
 
 	require.Len(t, logger.warnings, 1,
@@ -1207,4 +1233,80 @@ func TestSyncKeepsPublishedFamilyUntilRecollectionFinishes(t *testing.T) {
 	require.Len(t, final.Items, 1)
 	require.Equal(t, "AppProject", final.Items[0].Ref.Kind)
 	require.Equal(t, "cluster-1", final.Items[0].Ref.ClusterID)
+}
+
+// Readers must see the last publication while the replacement is assembled,
+// including when an empty query store falls back to the items snapshot.
+func TestCatalogReplacementStaysPrivateUntilPublication(t *testing.T) {
+	for _, cold := range []bool{true, false} {
+		t.Run(fmt.Sprintf("cold=%t", cold), func(t *testing.T) {
+			svc := NewService(Dependencies{ClusterID: "c1"}, nil)
+			desc := widgetDesc()
+			old := summaryFromObject("c1", desc, widgetObject("default", "old", "1"))
+			key := catalogKey(desc, "default", "old")
+			svc.items[key] = old
+			svc.lastSeen[key] = time.Now()
+			svc.catalogIndex.rebuildCacheFromItems(svc.items, []Descriptor{desc})
+			svc.catalogIndex.cachesReady = !cold
+			run := newCatalogSync(svc, svc.now())
+			run.descriptors = []Descriptor{desc}
+			run.prepare(t.Context())
+			next := summaryFromObject("c1", desc, widgetObject("default", "new", "2"))
+			run.succeeded[desc.GVR().String()] = []Summary{next}
+			descriptors := run.applyCollectionResults()
+			require.Equal(t, []Summary{old}, svc.Snapshot(), "unfinished replacement must not mutate the published snapshot")
+			require.Equal(t, []Summary{old}, svc.Query(QueryOptions{}).Items)
+			run.publish(descriptors, nil)
+			require.Equal(t, []Summary{next}, svc.Snapshot())
+			require.Equal(t, []Summary{next}, svc.Query(QueryOptions{}).Items)
+		})
+	}
+}
+
+func (*blockingIngestSource) ReadDynamicCatalogSource(schema.GroupResource) (ingest.DynamicCatalogSnapshot, bool) {
+	return ingest.DynamicCatalogSnapshot{}, false
+}
+func (*blockingIngestSource) SubscribeDynamicCatalogChanges(func(ingest.DynamicCatalogChange)) func() {
+	return func() {}
+}
+
+func (*controlledIngestSource) ReadDynamicCatalogSource(schema.GroupResource) (ingest.DynamicCatalogSnapshot, bool) {
+	return ingest.DynamicCatalogSnapshot{}, false
+}
+func (*controlledIngestSource) SubscribeDynamicCatalogChanges(func(ingest.DynamicCatalogChange)) func() {
+	return func() {}
+}
+
+func (*blockingIngestSource) IsDynamicCatalogGeneration(schema.GroupResource, uint64) bool {
+	return false
+}
+
+func (*controlledIngestSource) IsDynamicCatalogGeneration(schema.GroupResource, uint64) bool {
+	return false
+}
+
+func (*blockingIngestSource) ReconcileDiscoveredResource(schema.GroupVersionResource) bool {
+	return false
+}
+
+func (*controlledIngestSource) ReconcileDiscoveredResource(schema.GroupVersionResource) bool {
+	return false
+}
+
+func (source *blockingIngestSource) SubscribeCatalogSink(gvr schema.GroupVersionResource, sink ingest.Sink) func() {
+	source.AddCatalogSink(gvr, sink)
+	return func() {}
+}
+
+func (source *controlledIngestSource) SubscribeCatalogSink(gvr schema.GroupVersionResource, sink ingest.Sink) func() {
+	source.AddCatalogSink(gvr, sink)
+	return func() {}
+}
+
+func (*blockingIngestSource) PartitionReadinessFor(schema.GroupVersionResource) []ingest.PartitionReadiness {
+	return nil
+}
+
+func (*controlledIngestSource) PartitionReadinessFor(schema.GroupVersionResource) []ingest.PartitionReadiness {
+	return nil
 }

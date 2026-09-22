@@ -16,6 +16,8 @@ import (
 	"github.com/luxury-yacht/app/backend/internal/config"
 	"github.com/luxury-yacht/app/backend/internal/parallel"
 	"github.com/luxury-yacht/app/backend/internal/timeutil"
+	"github.com/luxury-yacht/app/backend/refresh"
+	"github.com/luxury-yacht/app/backend/refresh/permissions"
 	"github.com/luxury-yacht/app/backend/resourcemodel"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -36,11 +38,15 @@ func (s *Service) collectResource(ctx context.Context, desc Descriptor, namespac
 	if summaries, handled, err := s.collectViaSharedInformer(desc, namespaces, agg); handled {
 		return summaries, err
 	}
+	confirmedCRD := s.deps.IngestSource != nil && s.deps.IngestSource.ReconcileDiscoveredResource(desc.GVR())
+	if summaries, handled, err := s.collectViaDynamicIngest(ctx, desc, namespaces, agg); handled {
+		return summaries, err
+	}
 	summaries, err := s.listResource(ctx, desc, namespaces, agg)
 	if err != nil {
 		return nil, err
 	}
-	if planCollectionSource(desc).promotable {
+	if !confirmedCRD && planCollectionSource(desc).promotable {
 		s.maybePromote(desc, len(summaries))
 	}
 	return summaries, nil
@@ -66,8 +72,11 @@ func (s *Service) collectViaAPIExtensionsInformer(desc Descriptor, agg *streamin
 	if s.deps.APIExtensionsInformerFactory == nil {
 		return emitSummaries(agg, nil, nil, false)
 	}
-	lister := s.deps.APIExtensionsInformerFactory.Apiextensions().V1().CustomResourceDefinitions().Lister()
-	items, err := lister.List(labels.Everything())
+	definitions := s.deps.APIExtensionsInformerFactory.Apiextensions().V1().CustomResourceDefinitions()
+	if !definitions.Informer().HasSynced() {
+		return s.collectWithoutSyncedInformer(desc, agg)
+	}
+	items, err := definitions.Lister().List(labels.Everything())
 	if err != nil {
 		return emitSummaries(agg, nil, err, true)
 	}
@@ -89,12 +98,7 @@ func (s *Service) collectViaCoreSharedInformer(
 		// No permission - fall back to listResource which handles 403 gracefully.
 		return emitSummaries(agg, nil, nil, false)
 	}
-	listFn := sharedInformerLister(s.deps.InformerFactory, sharedInformerGroupResources[gr])
-	if listFn == nil {
-		return emitSummaries(agg, nil, nil, false)
-	}
-	summaries, err := s.collectFromNamespacedLister(desc, namespaces, listFn)
-	return emitSummaries(agg, summaries, err, true)
+	return s.collectFromInformer(desc, namespaces, sharedInformerFor(s.deps.InformerFactory, sharedInformerGroupResources[gr]), agg)
 }
 
 func (s *Service) collectViaGatewayInformer(
@@ -106,12 +110,42 @@ func (s *Service) collectViaGatewayInformer(
 	if s.deps.GatewayInformerFactory == nil {
 		return emitSummaries(agg, nil, nil, false)
 	}
-	listFn := gatewayInformerLister(s.deps.GatewayInformerFactory, gatewayInformerGroupResources[gr])
-	if listFn == nil {
+	return s.collectFromInformer(desc, namespaces, gatewayInformerFor(s.deps.GatewayInformerFactory, gatewayInformerGroupResources[gr]), agg)
+}
+
+// collectFromInformer reads a resolved informer's cache once its initial LIST has
+// synced. A nil informer did not resolve, so collection lists the API instead.
+func (s *Service) collectFromInformer(desc Descriptor, namespaces []string, informer genericInformer, agg *streamingAggregator) ([]Summary, bool, error) {
+	if informer == nil {
 		return emitSummaries(agg, nil, nil, false)
 	}
-	summaries, err := s.collectFromNamespacedLister(desc, namespaces, listFn)
+	if !informer.Informer().HasSynced() {
+		return s.collectWithoutSyncedInformer(desc, agg)
+	}
+	summaries, err := s.collectFromNamespacedLister(desc, namespaces, genericListerFunc(informer.Lister()))
 	return emitSummaries(agg, summaries, err, true)
+}
+
+// collectWithoutSyncedInformer handles an informer whose initial LIST has not
+// synced; its empty cache is not authoritative absence. An informer that will
+// never sync (forbidden watch, created after its factory started) is replaced by
+// a live LIST, as when the permission check denies the informer. One still
+// syncing fails the kind like an unsynced ingest store: it keeps its published
+// rows, and the failed-sync retry reads the cache once it has synced.
+func (s *Service) collectWithoutSyncedInformer(desc Descriptor, agg *streamingAggregator) ([]Summary, bool, error) {
+	if s.informerUnavailable(desc) {
+		return emitSummaries(agg, nil, nil, false)
+	}
+	return emitSummaries(agg, nil, fmt.Errorf("catalog informer for %s is not synced", desc.GVR()), true)
+}
+
+func (s *Service) informerUnavailable(desc Descriptor) bool {
+	readiness := s.deps.InformerReadiness
+	if readiness == nil {
+		return false
+	}
+	key := permissions.ResourceKey(desc.Group, desc.Resource)
+	return readiness.ResourceReadiness([]string{key})[key] == refresh.ResourceReadinessUnavailable
 }
 
 func (s *Service) collectFromNamespacedLister(desc Descriptor, namespaces []string, list func(namespace string) ([]metav1.Object, error)) ([]Summary, error) {
@@ -142,13 +176,18 @@ func (s *Service) summariesFromObjects(desc Descriptor, objs []metav1.Object) []
 }
 
 func (s *Service) listResource(ctx context.Context, desc Descriptor, namespaces []string, agg *streamingAggregator) ([]Summary, error) {
+	return s.listResourceTargets(ctx, desc, listTargets(desc, namespaces), agg)
+}
+
+// Targets are resolved API scopes: an empty string means all namespaces and
+// must not be normalized again as a user-provided namespace filter.
+func (s *Service) listResourceTargets(ctx context.Context, desc Descriptor, targets []string, agg *streamingAggregator) ([]Summary, error) {
 	dynamicClient := s.deps.Common.DynamicClient
 	if dynamicClient == nil {
 		return nil, errors.New("dynamic client not available")
 	}
 
 	namespaceable := dynamicClient.Resource(desc.GVR())
-	targets := listTargets(desc, namespaces)
 
 	if len(targets) == 0 {
 		return nil, nil
@@ -266,8 +305,14 @@ func (s *Service) listCatalogPageWithRetry(
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
+	timeout := s.opts.ListRequestTimeout
+	if timeout <= 0 {
+		timeout = config.ResourceFetchCallTimeout
+	}
 	for attempt := range config.ObjectCatalogListRetryMaxAttempts {
-		list, err := resourceInterface.List(ctx, options)
+		requestCtx, cancel := context.WithTimeout(ctx, timeout)
+		list, err := resourceInterface.List(requestCtx, options)
+		cancel()
 		if err == nil {
 			return list, false, nil
 		}
@@ -339,14 +384,8 @@ func (s *Service) namespaceWorkerLimit(targetCount int) int {
 	return limit
 }
 
-// maybePromote consolidates a dynamic (CRD-backed) kind onto the one ingest path once its
-// object count crosses the promotion threshold: it registers an on-demand dynamic reflector
-// with the ingest manager (which LIST+WATCHes the kind and projects each object to the same
-// Summary buildSummary produces) plus a Catalog-half sink for incremental updates, then
-// records the gvr so collectViaIngest serves it once the reflector has synced. Below the
-// threshold — or with no ingest source — the kind keeps being listed per collect, so a
-// reflector is only ever created on demand. The projection IS buildSummary, so the
-// ingest-served Summaries are byte-identical to the list path's.
+// maybePromote retains the existing threshold policy for dynamic resources whose
+// CRD definition is not visible. Confirmed CRDs are admitted independently of count.
 func (s *Service) maybePromote(desc Descriptor, itemCount int) {
 	if s.opts.InformerPromotionThreshold <= 0 || itemCount < s.opts.InformerPromotionThreshold {
 		return
@@ -356,52 +395,16 @@ func (s *Service) maybePromote(desc Descriptor, itemCount int) {
 		return
 	}
 	gvr := desc.GVR()
-	if s.isDynamicallyIngested(gvr) {
+	if _, exists := source.ReadDynamicCatalogSource(gvr.GroupResource()); exists {
 		return
 	}
 	gvk := schema.GroupVersionKind{Group: desc.Group, Version: desc.Version, Kind: desc.Kind}
-	project := func(obj metav1.Object) interface{} { return s.buildSummary(desc, obj) }
+	clusterID := s.clusterID
+	project := func(obj metav1.Object) interface{} { return summaryFromObject(clusterID, desc, obj) }
 	if !source.RegisterDynamicCatalogReflector(gvr, gvk, project, desc.Namespaced) {
 		return
 	}
-	source.AddCatalogSink(gvr, ingestCatalogSink{service: s, gvr: gvr})
-	s.markDynamicallyIngested(gvr)
 	s.logInfo(fmt.Sprintf("catalog descriptor %s promoted to the ingest path", gvr.String()))
-}
-
-// isDynamicallyIngested reports whether the catalog has promoted gvr onto the ingest path.
-func (s *Service) isDynamicallyIngested(gvr schema.GroupVersionResource) bool {
-	s.dynamicMu.RLock()
-	defer s.dynamicMu.RUnlock()
-	_, ok := s.dynamicIngested[gvr]
-	return ok
-}
-
-// markDynamicallyIngested records that gvr now serves from the ingest path.
-func (s *Service) markDynamicallyIngested(gvr schema.GroupVersionResource) {
-	s.dynamicMu.Lock()
-	defer s.dynamicMu.Unlock()
-	s.dynamicIngested[gvr] = struct{}{}
-}
-
-// stopDynamicReflectors tears down every on-demand dynamic reflector the catalog promoted,
-// asking the ingest manager to stop each, so the reflectors do not outlive the catalog. It
-// is a no-op when no kind was promoted or no ingest source is configured.
-func (s *Service) stopDynamicReflectors() {
-	source := s.deps.IngestSource
-	s.dynamicMu.Lock()
-	gvrs := make([]schema.GroupVersionResource, 0, len(s.dynamicIngested))
-	for gvr := range s.dynamicIngested {
-		gvrs = append(gvrs, gvr)
-	}
-	s.dynamicIngested = make(map[schema.GroupVersionResource]struct{})
-	s.dynamicMu.Unlock()
-	if source == nil {
-		return
-	}
-	for _, gvr := range gvrs {
-		source.StopReflectorFor(gvr)
-	}
 }
 
 func (s *Service) buildSummary(desc Descriptor, item metav1.Object) Summary {

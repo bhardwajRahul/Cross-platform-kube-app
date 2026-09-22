@@ -23,13 +23,27 @@ Keep `catalog-first`. Do not turn that into `catalog-only`.
   the displaced run; retiring an older generation cannot stop the new catalog.
 - If discovery is degraded, preserve known identity where safe and surface
   degraded confidence instead of acting on ambiguous objects.
-- After discovery and permission preflight, collection waits up to the ingest
-  startup deadline for each tracked ingest-owned GVR in that discovery result
-  to settle. This set comes from discovery rather than the catalog's
-  permission-allowed subset; stores outside the discovery result do not gate.
-  If the deadline expires, collection continues with the settled resources,
-  reports the unsynced descriptors through the partial-sync diagnostic, and
-  enters the failed-sync retry cadence instead of blocking the catalog run loop.
+- After discovery and permission preflight, collection waits, bounded by one
+  startup deadline, for the sources that discovery result reads: each tracked
+  ingest-owned GVR, and the informers behind shared, Gateway API and CRD kinds.
+  Informers use the factory's settle contract (synced, permanently failed such
+  as a forbidden watch, or past the factory's sync deadline), never raw client-go
+  cache sync: the shared factory always starts cluster-wide ReplicaSet, HPA v1
+  and Event informers, and a namespace-only identity can never sync them. The
+  set comes from discovery rather than the catalog's permission-allowed subset;
+  sources outside the discovery result, such as the Event informer, do not gate.
+  A settled informer can still be unsynced, and its empty cache is not
+  authoritative absence, so collection reads an informer cache only after it
+  has synced. The factory's `ResourceReadiness` decides the rest: an
+  unavailable informer (forbidden watch, or created after the factory started)
+  is replaced by a live LIST, as when the permission check denies it; a pending
+  or degraded informer fails its kind like an unsynced ingest store. Do not
+  live-LIST a still-syncing informer: that duplicates its initial LIST on large
+  clusters, and a row deleted before the informer syncs would survive until
+  the full resync. If the deadline expires, collection continues with the
+  settled resources, reports unsynced descriptors through the partial-sync
+  diagnostic, and enters the failed-sync retry cadence instead of blocking the
+  catalog run loop.
 - Metadata controls that describe the object universe, such as namespace, Kind,
   and API-group filters, use catalog-derived metadata rather than the current
   row slice. The core API group uses the non-empty `"(core)"` query value and a
@@ -52,7 +66,8 @@ Keep `catalog-first`. Do not turn that into `catalog-only`.
   published query rows, counts, facets, and readiness until collection finishes;
   it publishes the replacement, including retained failed descriptors, before
   broadcasting its completion signal. A kind still being collected is not an
-  authoritative deletion.
+  authoritative deletion. Collection's working maps remain private until they
+  are swapped into the published state under the catalog write lock.
 - Frontend catalog state resets structural scope changes before React commits,
   so prior rows cannot enter the destination view's replay cache. Custom-resource
   hydration decorates only current catalog membership by full identity and UID,
@@ -82,27 +97,47 @@ signaling completion.
 
 ## Watch-to-query ordering
 
-Custom-resource membership consumes the refresh subsystem's existing,
-permission-gated dynamic informers through `CustomResourceSource`. Keep this
-interface in the catalog package to avoid importing the stream manager that
-already consumes catalog signals. Deliver callbacks outside manager locks and
-limit them to enqueueing identities; publication later signals that same manager.
+Runtime-discovered resource watches belong to the refresh generation's ingest
+manager. Confirmed generic CRDs are admitted independently of object count;
+non-CRD APIs and resources without visible CRD definitions retain the 5,000-object
+promotion threshold. Existing registry, shared-informer and Gateway sources take
+precedence. Catalog owns discovery and supplies its preferred served version,
+but never owns or stops a watch. Streaming consumes catalog signals; catalog does
+not read stream-manager object caches.
 
-Subscribe before the initial catalog LIST so changes during collection cannot
-fall between the initial snapshot and change delivery. Notifications enqueue
-full object identity; after acquiring catalog publication ownership, resolve
-that identity against the current informer store. An old delete must not erase
-a replacement object. An unsynced, unauthorized, or retired source is not
-authoritative absence; retain membership and use the existing resync recovery path.
+Subscribe before initial collection. Read only actually synced namespace
+partitions from ingest; pending or LIST-only partitions use catalog's paginated
+LIST with `ResourceFetchCallTimeout` for each API request, renewed for each page
+and retry. The complete multi-namespace collection has no separate deadline;
+caller cancellation still stops it. A failed kind retains prior rows and reports
+partial health without canceling unrelated kinds. Dynamic sources do not gate global ingest readiness.
+A namespace without WATCH permission can still contribute LIST-authorized rows.
+Ingest partition readiness includes permission-skipped namespaces even when no
+reflector runs for them. Catalog health exposes unavailable watches through the
+existing query issues and snapshot warnings, which feed Browse and Diagnostics.
+A watch warning does not make successfully collected LIST rows incomplete.
 
-The informer may use a different served version than discovery prefers. Read the
-source using its original version, then resolve group/resource to the catalog's
-descriptor for publication and deletion keys. Version drift alone must not
-trigger a full catalog LIST. Coalesce identity-only notifications before the
-bounded payload queue: startup replay retains one pending read per distinct
-identity, including across UID replacement. Pending memory scales with distinct
-identities awaiting reconciliation, not the number of notifications; draining
-releases that batch before resolving current source state.
+Callbacks never wait for the catalog publication lock. Coalesce contended
+reconciliation by GVR, acquire publication ownership, then reread the current
+source. Check source generations before applying incremental changes and object
+UIDs before deletion. A queued event from a retired source cannot substitute its
+old payload for a replacement's current state. Synced namespace baselines replace
+only those partitions; preserve pending and LIST-only partitions.
+
+Initial watch admission waits for discovery's preferred served version. While a
+version change is being reconciled, the watch may use a different served version;
+translate its group/resource to the catalog descriptor for query identity. CRD
+arrival, deletion and changes to served versions, scope, names, UID or API
+establishment invalidate discovery and request collection through the existing
+full-resync boundary. A CRD Add waits for Established before requesting that
+collection; its establishment update supplies the request. Full resync reuses
+the recovery and atomic publication contract. Before introducing affected-kind
+collection, measure a warm full pass with realistic object counts and record
+API LIST requests separately from in-memory work, including aggregated APIs
+when present. Routine metadata, schema and status-reason updates still update
+the CRD's own row without triggering a full recollection. Confirmed deletion
+retires the matching definition UID and reconciles rows, counts, facets and
+finalizer findings.
 
 Gateway API collection and incremental handlers derive from the same resource
 registry and reuse the Gateway informer factory. Publish catalog membership,
@@ -117,8 +152,8 @@ safety-net interval use the same reactive-mode condition, including catalogs
 whose only watch source is custom resources.
 
 Catalog retirement cancels the notifier before joining it, removes its informer
-handlers, and unsubscribes from custom-resource changes before completing. It
-does not stop the subsystem's shared watch producers.
+handlers, and detaches static and dynamic ingest subscriptions before completing.
+Detachment joins in-flight delivery without stopping the generation's producers.
 
 ## Layer Model
 
@@ -182,6 +217,12 @@ and that an unavailable source retains rows. Exercise startup deletion, blocked
 handler registration, cancellation and publication-before-signal through the
 real owners. Table consumption must meet the shared
 [freshness evidence requirements](data-freshness.md#required-evidence-for-resource-source-changes).
+
+Restricted-identity changes must cover a namespace-only identity that is denied
+the cluster-wide ReplicaSet, HPA and Event informers, through the production
+subsystem: the catalog must still complete its first collection and publish the
+rows that identity can read. Custom-resource permission tests alone do not
+establish startup.
 
 ## Discovered resource families
 

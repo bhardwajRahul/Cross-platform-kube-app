@@ -7,20 +7,19 @@
 package objectcatalog
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/luxury-yacht/app/backend/capabilities"
 	"github.com/luxury-yacht/app/backend/internal/applog"
+	"github.com/luxury-yacht/app/backend/refresh"
 	"github.com/luxury-yacht/app/backend/refresh/ingest"
 	"github.com/luxury-yacht/app/backend/refresh/permissions"
 	"github.com/luxury-yacht/app/backend/refresh/querypage"
 	"github.com/luxury-yacht/app/backend/resourcemodel"
 	"github.com/luxury-yacht/app/backend/resources/common"
 	apiextinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	informers "k8s.io/client-go/informers"
 	gatewayinformers "sigs.k8s.io/gateway-api/pkg/client/informers/externalversions"
@@ -56,7 +55,8 @@ type HealthStatus struct {
 	// DeniedResources lists resource types (kubectl-style `resource[.group]`)
 	// whose lists were RBAC-forbidden during the last sync — so an RBAC-blocked
 	// catalog is distinguishable from an empty cluster. Sorted.
-	DeniedResources []string `json:"deniedResources,omitempty"`
+	DeniedResources  []string `json:"deniedResources,omitempty"`
+	WatchUnavailable []string `json:"watchUnavailable,omitempty"`
 }
 
 // Summary represents the lightweight metadata captured for each Kubernetes object.
@@ -142,13 +142,12 @@ type Dependencies struct {
 	GatewayInformerFactory       gatewayinformers.SharedInformerFactory // Gateway API informer factory
 	PermissionChecker            permissions.ListWatchChecker           // optional; if nil, assumes all permissions granted
 	IngestSource                 IngestSource                           // optional; supplies catalog rows for ingest-owned kinds
-	CustomResourceSource         CustomResourceSource                   // optional; reuses the cluster's existing custom-resource watches
 	ClusterID                    string                                 // stable identifier for the source cluster
-	// WaitForCaches blocks until the informer caches the collect reads from are
-	// synced. sync() calls it between the RBAC preflight and the collect fan-out, so
+	// InformerReadiness reports when the informers collection reads have settled.
+	// sync() waits on it between the RBAC preflight and the collect fan-out, so
 	// discovery + preflight (pure API calls) overlap the factory's initial sync
 	// instead of running after it. nil skips the wait (tests, no factory).
-	WaitForCaches func(ctx context.Context) error
+	InformerReadiness InformerReadiness
 	// AllowedNamespaces is the cluster's namespace scope
 	// (docs/architecture/namespace-scope.md): when non-empty, collection of
 	// namespaced kinds runs per configured namespace instead of
@@ -157,37 +156,31 @@ type Dependencies struct {
 	AllowedNamespaces []string
 }
 
-// CustomResourceSource owns permission-gated custom-resource watches for one
-// cluster. Notifications carry full identity; reads return current informer state
-// so a delayed event cannot overwrite a newer list or a recreated object.
-type CustomResourceSource interface {
-	SubscribeCustomResourceChanges(func(resourcemodel.ResourceRef)) func()
-	// A nil object with ready=true is an authoritative deletion. ready=false
-	// means the watch does not cover this identity or has not finished its list.
-	WatchedCustomResource(resourcemodel.ResourceRef) (metav1.Object, bool)
+// InformerReadiness is the informer factory's startup and data-readiness
+// contract. A resource is settled once its informer has synced, failed
+// permanently (for example a forbidden watch) or passed the factory's sync
+// deadline, so a settled informer is not necessarily synced. ResourceReadiness
+// tells a still-syncing informer (pending, degraded) from one that will never
+// sync (unavailable). Keys use permissions.ResourceKey format.
+type InformerReadiness interface {
+	ResourcesSettled(keys []string) bool
+	ResourceReadiness(keys []string) map[string]refresh.ResourceReadiness
 }
 
-// IngestSource supplies the object-catalog Summaries for ingest-owned (cut) kinds,
-// whose objects are no longer cached by the shared informer factory. The catalog
-// reads cut kinds' rows from CatalogRows on a full collect, and stays current
-// between collects via the Catalog-half sink registered through AddCatalogSink.
-// *ingest.IngestManager satisfies it. Reads return Summaries the catalog's own
-// projector built at intake (see SummaryProjector), so they are byte-equivalent to
-// the shared-informer collect path.
+// IngestSource supplies catalog projections from generation-owned sources.
+// Catalog subscriptions detach without retiring the underlying watches.
 type IngestSource interface {
+	PartitionReadinessFor(schema.GroupVersionResource) []ingest.PartitionReadiness
+	ReconcileDiscoveredResource(schema.GroupVersionResource) bool
+	ReadDynamicCatalogSource(schema.GroupResource) (ingest.DynamicCatalogSnapshot, bool)
+	SubscribeDynamicCatalogChanges(func(ingest.DynamicCatalogChange)) func()
+	IsDynamicCatalogGeneration(schema.GroupResource, uint64) bool
 	CatalogRows(gvr schema.GroupVersionResource) []interface{}
-	AddCatalogSink(gvr schema.GroupVersionResource, sink ingest.Sink) bool
-	// RegisterDynamicCatalogReflector starts an on-demand reflector for a dynamic
-	// (CRD-backed) kind, projecting each object to its catalog Summary via project. The
-	// catalog calls it when a CR kind crosses its promotion threshold (maybePromote),
-	// consolidating the former catalog-owned dynamic informer onto the ingest path.
+	SubscribeCatalogSink(gvr schema.GroupVersionResource, sink ingest.Sink) func()
+	// Threshold admission applies only when discovery has no visible CRD definition.
 	RegisterDynamicCatalogReflector(gvr schema.GroupVersionResource, gvk schema.GroupVersionKind, project ingest.CatalogProjector, namespaced bool) bool
-	// StopReflectorFor stops and evicts the on-demand reflector for gvr, the teardown half
-	// of the dynamic path (stopDynamicReflectors).
-	StopReflectorFor(gvr schema.GroupVersionResource)
-	// HasSyncedFor reports whether gvr's store has synced, so the catalog serves a promoted
-	// dynamic kind from CatalogRows only once its reflector's initial relist has landed
-	// (else it keeps listing — no empty flash).
+	// HasSyncedFor supplies the static-source readiness gate. Dynamic collection
+	// reads actual per-namespace readiness from ReadDynamicCatalogSource instead.
 	HasSyncedFor(gvr schema.GroupVersionResource) bool
 	// Tracks reports whether the ingest source owns a store for gvr. Static cut kinds
 	// with a tracked store participate in the catalog's pre-collection readiness gate;
@@ -211,7 +204,8 @@ type TelemetryRecorder interface {
 type Options struct {
 	ResyncInterval             time.Duration // interval between resyncs
 	FailedSyncRetryInterval    time.Duration // short retry after a failed/incomplete sync (default config.ObjectCatalogFailedSyncRetryInterval)
-	IngestSyncWaitTimeout      time.Duration // maximum initial wait for tracked ingest stores before collecting partial data (default config.RefreshInformerSyncDeadline)
+	SourceSyncWaitTimeout      time.Duration // maximum wait per sync for informers and tracked ingest stores before collecting partial data (default config.RefreshInformerSyncDeadline)
+	ListRequestTimeout         time.Duration // budget for one API LIST request, independently renewed for each page and retry
 	PageSize                   int           // number of items per page
 	ListWorkers                int           // number of workers for listing resources
 	NamespaceWorkers           int           // number of workers for processing namespaces
