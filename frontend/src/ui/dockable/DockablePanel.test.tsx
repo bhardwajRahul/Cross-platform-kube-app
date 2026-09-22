@@ -72,8 +72,10 @@ const renderPanel = async (ui: React.ReactElement<{ children?: React.ReactNode }
       ) : (
         <KeyboardProvider>
           <DockablePanelProvider>
-            <DockablePanelTestHost />
-            <ZoomProvider>{ui}</ZoomProvider>
+            <ZoomProvider>
+              <DockablePanelTestHost />
+              {ui}
+            </ZoomProvider>
           </DockablePanelProvider>
         </KeyboardProvider>
       );
@@ -892,6 +894,24 @@ describe('DockablePanel', () => {
     expect((document.activeElement as HTMLElement | null)?.getAttribute('aria-label')).toBe(
       'Dock panel to bottom'
     );
+
+    const lastPanelControl = document.querySelector<HTMLElement>(
+      '.dockable-panel__controls .dockable-panel__control-btn:last-child'
+    );
+    await act(async () => {
+      lastPanelControl?.focus();
+      lastPanelControl?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+      );
+    });
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Resize panel width');
+
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+      );
+    });
+    expect(document.activeElement).toBe(groupedTabs[0]);
 
     unmount();
   });
