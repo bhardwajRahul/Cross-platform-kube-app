@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -247,9 +248,7 @@ func (a *WorkspaceCoordinator) executeSelectionChangeWork(
 	}
 
 	clientSyncStart := time.Now()
-	if err := a.syncClusterClientPoolWithContext(workCtx, intent.normalizedSelections); err != nil {
-		return err
-	}
+	clientErr := a.syncClusterClientPoolWithContext(workCtx, intent.normalizedSelections)
 	if phases != nil {
 		phases.clientSync = time.Since(clientSyncStart)
 	}
@@ -258,15 +257,15 @@ func (a *WorkspaceCoordinator) executeSelectionChangeWork(
 	}
 
 	if !intent.selectionChanged {
-		return nil
+		return clientErr
 	}
 
 	if err := workCtx.Err(); err != nil {
 		return err
 	}
 	refreshStart := time.Now()
-	if err := a.refresh.updateRefreshSubsystemSelections(intent.normalizedSelections); err != nil {
-		return err
+	if err := a.publishConnectedClusterSelections(intent.normalizedSelections); err != nil {
+		return errors.Join(clientErr, err)
 	}
 	if phases != nil {
 		phases.refresh = time.Since(refreshStart)
@@ -280,7 +279,7 @@ func (a *WorkspaceCoordinator) executeSelectionChangeWork(
 	if phases != nil {
 		phases.objectCatalog = time.Since(catalogStart)
 	}
-	return nil
+	return clientErr
 }
 
 // Runtime reset callers already own the selection mutation boundary.
@@ -293,18 +292,8 @@ func (a *WorkspaceCoordinator) clearKubeconfigSelection(persist bool) error {
 
 // clearClusterRuntime retires the clients after empty selection has committed.
 func (a *WorkspaceCoordinator) clearClusterRuntime() {
-	removed := a.clusterRuntime.clearClusterClientPool()
-	for _, item := range removed {
-		if item.authManager != nil {
-			item.authManager.Shutdown()
-		}
-	}
-	for _, item := range removed {
-		if a.operations != nil {
-			a.operations.StopCluster(item.clusterID)
-		}
-		a.removeClusterWorkspaceState(item.clusterID)
-	}
+	a.cleanupRemovedClusterClients(a.clusterRuntime.clearClusterClientPool())
+	a.cleanupUnselectedClusterStates(nil)
 	a.refresh.teardownRefreshSubsystem()
 }
 
