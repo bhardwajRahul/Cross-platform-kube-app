@@ -217,6 +217,13 @@ export const CLUSTER_PERMISSIONS: PermissionSpecList[] = [
     ],
   },
   {
+    feature: PERMISSION_FEATURES.clusterIdentities,
+    specs: [
+      { kind: 'RoleBinding', verb: 'list' },
+      { kind: 'ClusterRoleBinding', verb: 'list' },
+    ],
+  },
+  {
     feature: PERMISSION_FEATURES.clusterRBAC,
     specs: [
       { kind: 'ClusterRole', verb: 'list' },

@@ -1,6 +1,10 @@
 ### Added
 
+- Added Cluster → Identities outside Resources, showing users and groups referenced by visible RBAC bindings, with direct binding counts, grant scopes, and links to source bindings. User and Group badges open read-only Details panels with binding and role links.
+
 ### Changed
+
+- Role and ClusterRole Details show a Permissions table with one row per resource and every verb the role grants it, similar to `kubectl describe`. Grants limited to named objects are marked. ClusterRole "Used by" lists all its bindings in one place, with namespaces shown for RoleBindings.
 
 ### Fixed
 

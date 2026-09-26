@@ -21,6 +21,8 @@ vi.mock('@/core/data-access', () => ({
 }));
 
 import { eventBus } from '@/core/events';
+import { getScopedFeaturesForView } from '@/core/refresh/components/diagnostics/diagnosticsPanelConfig';
+import { buildPermissionRows } from '@/core/refresh/components/diagnostics/diagnosticsRowModel';
 import { PERMISSION_FEATURES } from './permissionFeatures';
 import { POD_PERMISSIONS, WORKLOAD_PERMISSIONS } from './permissionSpecs';
 import {
@@ -474,6 +476,80 @@ describe('queryNamespacesPermissions transient errors', () => {
 });
 
 describe('queryClusterPermissions', () => {
+  it('shows only cluster-wide binding list checks for Identities while retaining RBAC diagnostics', async () => {
+    mockSuccessfulQueryPermissions();
+    hoisted.readQueryPermissions.mockImplementation(async (queries: QueryPayloadItem[]) => ({
+      results: queries.map((query) => ({
+        ...query,
+        allowed: !['ServiceAccount', 'RoleBinding'].includes(query.resourceKind),
+        source: 'ssar',
+        reason: '',
+        error: '',
+      })),
+    }));
+    queryClusterPermissions('cluster-a');
+    queryClusterPermissions('cluster-b');
+    await queryNamespacesPermissions([{ clusterId: 'cluster-a', namespace: 'payments' }]);
+    await vi.waitFor(() =>
+      expect(
+        getUserPermissionMap().get(
+          getPermissionKey('ClusterRoleBinding', 'list', null, null, 'cluster-a')
+        )?.pending
+      ).toBe(false)
+    );
+    const rowsFor = (tab: 'identities' | 'rbac' | 'browse') =>
+      buildPermissionRows({
+        permissionMap: getUserPermissionMap(),
+        capabilityDescriptorIndex: new Map(),
+        scopedFeatures: getScopedFeaturesForView('cluster', tab, 'rbac'),
+        viewType: 'cluster',
+        selectedClusterId: 'cluster-a',
+      });
+    expect(
+      rowsFor('identities').map(({ resource, verb, scope, isDenied, clusterId, feature }) => ({
+        resource,
+        verb,
+        scope,
+        isDenied,
+        clusterId,
+        feature,
+      }))
+    ).toEqual([
+      {
+        resource: 'ClusterRoleBinding',
+        verb: 'list',
+        scope: 'Cluster',
+        isDenied: false,
+        clusterId: 'cluster-a',
+        feature: PERMISSION_FEATURES.clusterIdentities,
+      },
+      {
+        resource: 'RoleBinding',
+        verb: 'list',
+        scope: 'Cluster',
+        isDenied: true,
+        clusterId: 'cluster-a',
+        feature: PERMISSION_FEATURES.clusterIdentities,
+      },
+    ]);
+    expect(rowsFor('rbac')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          resource: 'ClusterRoleBinding',
+          verb: 'list',
+          feature: PERMISSION_FEATURES.clusterRBAC,
+        }),
+        expect.objectContaining({ resource: 'ClusterRole', verb: 'delete' }),
+      ])
+    );
+    expect(rowsFor('rbac').some((row) => row.resource === 'RoleBinding')).toBe(false);
+    const sharedKey = getPermissionKey('ClusterRoleBinding', 'list', null, null, 'cluster-a');
+    expect(rowsFor('browse').find((row) => row.id === sharedKey)?.feature).toBe(
+      PERMISSION_FEATURES.clusterRBAC
+    );
+    expect(getUserPermissionMap().get(sharedKey)?.feature).toBe(PERMISSION_FEATURES.clusterRBAC);
+  });
+
   it('does not cache cluster-not-active responses as permission errors', async () => {
     hoisted.requestData.mockImplementation(async (options: PermissionReadRequest) => ({
       status: 'executed',

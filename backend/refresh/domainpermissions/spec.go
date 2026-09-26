@@ -424,6 +424,12 @@ var policySpecs = []policySpec{
 		},
 	},
 	{
+		Domain:  "cluster-identities",
+		Mode:    ModeAny,
+		Reason:  "identity source bindings",
+		Runtime: []Resource{fromIdentity(rolebinding.Identity), fromIdentity(clusterrolebinding.Identity)},
+	},
+	{
 		Domain:  "cluster-rbac",
 		Mode:    ModeAny,
 		Reason:  "rbac.authorization.k8s.io",

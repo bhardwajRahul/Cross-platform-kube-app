@@ -556,6 +556,52 @@ export interface ClusterExternalSecretFacts {
   template?: ExternalSecretFacts;
 }
 
+export interface ClusterIdentitiesSnapshot {
+  clusterId: string;
+  clusterName: string;
+  provider: ResourceQueryProvider;
+  table: string;
+  queryIdentity?: string;
+  continue?: string;
+  previous?: string;
+  self?: string;
+  cursorInvalid?: boolean;
+  anchor?: ResourceQueryAnchorResult;
+  pageStartRank?: number;
+  total: number;
+  unfilteredTotal: number;
+  totalIsExact: boolean;
+  kinds?: Array<string>;
+  namespaces?: Array<string>;
+  facetValues?: Array<ResourceQueryFacetValues>;
+  facetsExact: boolean;
+  completeness?: ResourceQueryCompleteness;
+  issues?: Array<ResourceQueryIssue>;
+  dynamic?: ResourceQueryDynamicRef;
+  capabilities: ResourceQueryCapabilities;
+  rows: Array<ClusterIdentity> | null;
+}
+
+export interface ClusterIdentity {
+  clusterId: string;
+  kind: string;
+  name: string;
+  bindings: Array<ClusterIdentityBinding> | null;
+  grantScopes: Array<string> | null;
+}
+
+export interface ClusterIdentityBinding {
+  clusterId: string;
+  group: string;
+  version: string;
+  kind: string;
+  resource?: string;
+  namespace?: string;
+  name?: string;
+  uid?: string;
+  role?: ResourceRef;
+}
+
 export interface ClusterNodeSnapshotEntry {
   ref: CanonicalResourceRef;
   status: string;
@@ -2082,6 +2128,7 @@ export const REFRESH_DOMAINS = [
   'namespaces',
   'namespace-metrics',
   'cluster-overview',
+  'cluster-identities',
   'cluster-attention',
   'catalog',
   'catalog-diff',
@@ -2217,6 +2264,22 @@ export const REFRESH_DOMAIN_POLICIES = [
       timing: { interval: 10000, cooldown: 1000, timeout: 10 },
       priority: 3,
       registrationOrder: 3,
+      scheduled: true,
+    },
+  },
+  {
+    domain: 'cluster-identities',
+    category: 'cluster',
+    cachePolicy: 'snapshot-cache',
+    sourceClocks: ['object'],
+    backend: { registration: 'list', permission: 'runtime', resourceStream: false, bypassSingleflight: false },
+    frontend: {
+      refresherName: 'cluster-identities',
+      orchestrator: 'doorbell-snapshot',
+      diagnosticsStream: 'resources',
+      timing: { interval: 10000, cooldown: 1000, timeout: 10 },
+      priority: null,
+      registrationOrder: 30,
       scheduled: true,
     },
   },
@@ -2881,6 +2944,7 @@ export interface BackendDomainPayloadMap {
   namespaces: NamespaceSnapshotPayload;
   'namespace-metrics': NamespaceMetricsSnapshotPayload;
   'cluster-overview': ClusterOverviewSnapshotPayload;
+  'cluster-identities': ClusterIdentitiesSnapshot;
   'cluster-attention': ClusterAttentionSnapshot;
   catalog: CatalogSnapshotPayload;
   'catalog-diff': CatalogSnapshotPayload;

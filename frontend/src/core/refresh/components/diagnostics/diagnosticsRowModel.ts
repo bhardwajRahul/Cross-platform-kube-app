@@ -7,6 +7,8 @@
  */
 
 import {
+  ALL_NAMESPACE_PERMISSIONS,
+  CLUSTER_PERMISSIONS,
   getPermissionKey,
   PERMISSION_FEATURES,
   type PermissionFeatureKey,
@@ -536,11 +538,43 @@ const permissionActivityFields = (activity: CapabilityDescriptorActivityDetails 
   lastError: activity?.lastError ?? null,
 });
 
+const permissionFeatureForView = (
+  status: PermissionStatus,
+  scopedFeatureSet: Set<PermissionFeatureKey>
+): PermissionFeatureKey | undefined => {
+  if (scopedFeatureSet.size === 0 || (status.feature && scopedFeatureSet.has(status.feature))) {
+    return status.feature;
+  }
+  // Shared grants use the matching view feature for filtering and display;
+  // the cached status keeps the last query's feature as provenance.
+  const specLists = status.descriptor.namespace ? ALL_NAMESPACE_PERMISSIONS : CLUSTER_PERMISSIONS;
+  return (
+    specLists.find(
+      (list) =>
+        scopedFeatureSet.has(list.feature) &&
+        list.specs.some(
+          (spec) =>
+            getPermissionKey(
+              spec.kind,
+              spec.verb,
+              status.descriptor.namespace,
+              spec.subresource ?? null,
+              status.descriptor.clusterId,
+              spec.group,
+              spec.version
+            ) === status.id
+        )
+    )?.feature ?? status.feature
+  );
+};
+
 const buildPermissionRow = (
   status: PermissionStatus,
-  capabilityDescriptorIndex: Map<string, CapabilityDescriptorActivityDetails>
+  capabilityDescriptorIndex: Map<string, CapabilityDescriptorActivityDetails>,
+  scopedFeatureSet: Set<PermissionFeatureKey>
 ): PermissionRow => {
   const activity = capabilityDescriptorIndex.get(status.id);
+  const feature = permissionFeatureForView(status, scopedFeatureSet);
   return {
     clusterId: status.descriptor.clusterId,
     scope: activity?.scope ?? status.descriptor.namespace ?? 'Cluster',
@@ -551,8 +585,8 @@ const buildPermissionRow = (
     isDenied: !status.pending && !status.allowed,
     reason: status.reason ?? status.error ?? undefined,
     id: status.id,
-    feature: status.feature,
-    featureLabel: permissionFeatureLabel(status.feature) ?? undefined,
+    feature,
+    featureLabel: permissionFeatureLabel(feature) ?? undefined,
     descriptorNamespace: status.descriptor.namespace ?? null,
     ...permissionActivityFields(activity),
     descriptorKey: status.id,
@@ -567,17 +601,17 @@ interface PermissionRowFilter {
   selectedClusterId?: string | null;
 }
 
+const permissionRowMatchesFeature = (
+  row: PermissionRow,
+  scopedFeatureSet: Set<PermissionFeatureKey>
+): boolean => Boolean(row.feature && scopedFeatureSet.has(row.feature));
+
 const permissionRowMatchesClusterView = (
   row: PermissionRow,
   scopedFeatureSet: Set<PermissionFeatureKey>
 ): boolean =>
   row.scope === 'Cluster' ||
-  Boolean(
-    row.descriptorNamespace &&
-      row.feature !== null &&
-      row.feature !== undefined &&
-      scopedFeatureSet.has(row.feature)
-  );
+  Boolean(row.descriptorNamespace && permissionRowMatchesFeature(row, scopedFeatureSet));
 
 const permissionRowMatchesNamespaceView = (
   row: PermissionRow,
@@ -594,7 +628,7 @@ const permissionRowMatchesFilter = (row: PermissionRow, filter: PermissionRowFil
     return false;
   }
   const matchesFeature =
-    !filter.hasFeatureFilters || Boolean(row.feature && filter.scopedFeatureSet.has(row.feature));
+    !filter.hasFeatureFilters || permissionRowMatchesFeature(row, filter.scopedFeatureSet);
   if (!matchesFeature) {
     return false;
   }
@@ -631,7 +665,7 @@ export const buildPermissionRows = (params: {
       : null;
 
   const allPermissionRows = Array.from(permissionMap.values()).map((status) =>
-    buildPermissionRow(status, capabilityDescriptorIndex)
+    buildPermissionRow(status, capabilityDescriptorIndex, scopedFeatureSet)
   );
   const filter = {
     scopedFeatureSet,
