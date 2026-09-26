@@ -97,17 +97,6 @@ const buildColumns = (
   );
 };
 
-const filterOptionOverrides = {
-  searchPlaceholder: 'Search identities...',
-  customActions: (
-    <Tooltip
-      trigger="click"
-      triggerLabel="About identities"
-      content="Users and groups are derived from visible RBAC bindings, not a complete account directory. Binding counts show direct references; group membership and effective access are not inferred."
-    />
-  ),
-};
-
 export default function ClusterViewIdentities() {
   const { selectedClusterId } = useKubeconfig();
   const { openWithIdentity } = useObjectPanel();
@@ -128,7 +117,6 @@ export default function ClusterViewIdentities() {
     showKindDropdown: true,
     showNamespaceFilters: false,
     filterAccessors: { getKind: (row) => row.kind },
-    filterOptionOverrides,
     diagnosticsLabel: 'Cluster Identities',
   });
   return (
