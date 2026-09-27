@@ -7,7 +7,6 @@
   z-index: var(--z-index-app-menu);
   --wails-draggable: no-drag;
   app-region: no-drag;
-  margin-top: 0.2rem;
 }
 
 .app-menu-section {

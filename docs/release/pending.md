@@ -1,7 +1,7 @@
 ### Added
 
-- The app header now shows the active scope (cluster or namespace) and view.
-- New Identities view shows Users and Groups, derived from RBAC objects. Click on a User or Group for more detail.
+- The new Identities view shows Users and Groups, derived from RBAC objects. Click on a User or Group for more detail.
+- The app header shows the active scope (cluster or namespace) and view.
 
 ### Changed
 
