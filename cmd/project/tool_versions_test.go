@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"go/version"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/mod/modfile"
 )
 
 func TestReadToolVersionsUsesSingleCanonicalWailsVersion(t *testing.T) {
@@ -103,7 +106,20 @@ func TestCanonicalToolVersionsMatchCompatibilityMetadata(t *testing.T) {
 	}
 
 	goMod := readTestFile(t, filepath.Join(repoRoot, "go.mod"))
-	assertContains(t, goMod, "\ngo "+versions.Go+"\n", "Go directive")
+	module, err := modfile.Parse("go.mod", []byte(goMod), nil)
+	if err != nil {
+		t.Fatalf("parse go.mod: %v", err)
+	}
+	if module.Go == nil {
+		t.Fatal("go.mod is missing its minimum Go version")
+	}
+	if !version.IsValid("go" + versions.Go) {
+		t.Fatalf("invalid Go toolchain version %q in mise.toml", versions.Go)
+	}
+	// The module declares a minimum version; Mise may pin a newer toolchain.
+	if version.Compare("go"+versions.Go, "go"+module.Go.Version) < 0 {
+		t.Errorf("Go toolchain %s in mise.toml is older than go.mod minimum %s", versions.Go, module.Go.Version)
+	}
 	assertContains(t, goMod, "\tgithub.com/wailsapp/wails/v3 v"+versions.Wails+"\n", "Wails module")
 
 	var frontendConfig struct {
