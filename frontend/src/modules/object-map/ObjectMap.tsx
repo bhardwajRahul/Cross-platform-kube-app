@@ -23,6 +23,7 @@ import {
   filterSelectionFromDropdownValues,
   filterSelectionToDropdownValues,
   type MultiSelectFilterSelection,
+  multiSelectFilterTriggerLabel,
 } from '@shared/components/dropdowns/multiSelectFilterSelection';
 import {
   AutoFitIcon,
@@ -121,7 +122,6 @@ type ObjectMapToolbarProps = {
   kindOptions: DropdownOption[];
   onKindsChange: (value: string | string[]) => void;
   renderFilterOption: (option: DropdownOption, isSelected: boolean) => React.ReactNode;
-  renderKindsValue: (value: string | string[], options: DropdownOption[]) => React.ReactNode;
   searchQuery: string;
   normalizedSearchQuery: string;
   searchMatchCount: number;
@@ -145,7 +145,6 @@ const ObjectMapToolbar: React.FC<ObjectMapToolbarProps> = ({
   kindOptions,
   onKindsChange,
   renderFilterOption,
-  renderKindsValue,
   searchQuery,
   normalizedSearchQuery,
   searchMatchCount,
@@ -168,6 +167,7 @@ const ObjectMapToolbar: React.FC<ObjectMapToolbarProps> = ({
     searchIndex
   );
   const viewportControlsReady = Boolean(viewportControls);
+  const checkedKinds = filterSelectionToDropdownValues(selectedKinds, kindOptions);
 
   return (
     <div
@@ -190,18 +190,16 @@ const ObjectMapToolbar: React.FC<ObjectMapToolbarProps> = ({
             id={`${elementIdPrefix}-object-map-kind-filter`}
             name="object-map-kind-filter"
             multiple
-            size="compact"
             searchable
             showBulkActions
             placeholder="All kinds"
-            value={filterSelectionToDropdownValues(selectedKinds, kindOptions)}
+            value={checkedKinds}
             options={kindOptions}
             disabled={kindOptions.length === 0}
             onChange={onKindsChange}
-            dropdownClassName="dropdown-filter-menu"
             ariaLabel="Filter map kinds"
             renderOption={renderFilterOption}
-            renderValue={renderKindsValue}
+            renderValue={() => multiSelectFilterTriggerLabel('Kinds', selectedKinds, checkedKinds)}
           />
         </div>
         <input
@@ -639,20 +637,6 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
     []
   );
 
-  const renderKindsValue = useCallback((value: string | string[], _options: DropdownOption[]) => {
-    let count: number;
-
-    if (Array.isArray(value)) {
-      count = value.length;
-    } else if (value) {
-      count = 1;
-    } else {
-      count = 0;
-    }
-
-    return count > 0 ? `Kinds (${count})` : 'Kinds';
-  }, []);
-
   const disableAutoFitForManualViewport = useCallback(() => {
     model.setAutoFit(false);
   }, [model]);
@@ -878,7 +862,6 @@ const ObjectMap: React.FC<ObjectMapProps> = ({
           kindOptions={visibleState.kindOptions}
           onKindsChange={handleKindsChange}
           renderFilterOption={renderFilterOption}
-          renderKindsValue={renderKindsValue}
           searchQuery={searchQuery}
           normalizedSearchQuery={visibleState.normalizedSearchQuery}
           searchMatchCount={visibleState.searchMatches.length}

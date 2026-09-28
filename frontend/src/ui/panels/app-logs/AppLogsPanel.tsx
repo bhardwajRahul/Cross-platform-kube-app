@@ -18,6 +18,7 @@ import {
   filterSelectionToDropdownValues,
   isNarrowingFilterSelection,
   type MultiSelectFilterSelection,
+  multiSelectFilterTriggerLabel,
   pruneFilterSelectionToOptions,
 } from '@shared/components/dropdowns/multiSelectFilterSelection';
 import IconBar, { type IconBarItem } from '@shared/components/IconBar/IconBar';
@@ -835,12 +836,16 @@ function AppLogsPanel({ isOpen, onClose }: Readonly<AppLogsPanelProps>) {
             value={filterSelectionToDropdownValues(clusterFilter, clusterOptions, 'exact')}
             onChange={handleClusterDropdownChange}
             multiple
-            size="small"
             showBulkActions
             ariaLabel="Filter by cluster"
-            dropdownClassName="dropdown-filter-menu"
             renderOption={renderClusterOption}
-            renderValue={() => 'Clusters'}
+            renderValue={(value) =>
+              multiSelectFilterTriggerLabel(
+                'Clusters',
+                clusterFilter,
+                normalizeDropdownValue(value)
+              )
+            }
           />
 
           <Dropdown
@@ -848,12 +853,16 @@ function AppLogsPanel({ isOpen, onClose }: Readonly<AppLogsPanelProps>) {
             value={filterSelectionToDropdownValues(componentFilter, componentOptions)}
             onChange={handleComponentDropdownChange}
             multiple
-            size="small"
             showBulkActions
             ariaLabel="Filter by component"
-            dropdownClassName="dropdown-filter-menu"
             renderOption={renderLogFilterOption}
-            renderValue={() => 'Components'}
+            renderValue={(value) =>
+              multiSelectFilterTriggerLabel(
+                'Components',
+                componentFilter,
+                normalizeDropdownValue(value)
+              )
+            }
           />
 
           <Dropdown
@@ -861,12 +870,16 @@ function AppLogsPanel({ isOpen, onClose }: Readonly<AppLogsPanelProps>) {
             value={filterSelectionToDropdownValues(logLevelFilter, LOG_LEVEL_BASE_OPTIONS)}
             onChange={handleLogLevelDropdownChange}
             multiple
-            size="small"
             showBulkActions
             ariaLabel="Filter by log level"
-            dropdownClassName="dropdown-filter-menu"
             renderOption={renderLogFilterOption}
-            renderValue={() => 'Log Levels'}
+            renderValue={(value) =>
+              multiSelectFilterTriggerLabel(
+                'Log Levels',
+                logLevelFilter,
+                normalizeDropdownValue(value)
+              )
+            }
           />
 
           <div className="app-logs-filter-group">
